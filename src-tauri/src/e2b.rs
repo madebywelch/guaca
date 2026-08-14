@@ -309,15 +309,23 @@ impl E2bClient {
     /// ones that would otherwise stack up a second copy.
     pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         for command in [
-            daemon("Xvfb", "Xvfb :0 -ac -screen 0 1280x800x24 -dpi 96 -nolisten tcp"),
-            daemon("xfce4-session", "env DISPLAY=:0 startxfce4"),
-            // x11vnc daemonises itself with -bg, so it needs no help staying up.
+            daemon(
+                "pgrep -x Xvfb",
+                "Xvfb",
+                "Xvfb :0 -ac -screen 0 1280x800x24 -dpi 96 -nolisten tcp",
+            ),
+            daemon("pgrep -x xfce4-session", "xfce4", "env DISPLAY=:0 startxfce4"),
+            // x11vnc daemonises itself with -bg, so it is started directly.
             format!(
                 "pgrep -x x11vnc >/dev/null || x11vnc -bg -display :0 -forever -shared \
-                 -rfbport {RAW_VNC_PORT} -nopw >/tmp/guac-x11vnc.log 2>&1"
+                 -rfbport {RAW_VNC_PORT} -nopw >/tmp/guac-x11vnc.log 2>&1 ; sleep 1"
             ),
+            // Guarded on the port rather than the process: novnc_proxy is a
+            // shell script, so its executable name is the interpreter's and
+            // `pgrep -x` cannot see it.
             daemon(
-                "novnc_proxy",
+                &port_open(VNC_PORT),
+                "novnc",
                 &format!(
                     "/opt/noVNC/utils/novnc_proxy --vnc localhost:{RAW_VNC_PORT} \
                      --listen {VNC_PORT} --web /opt/noVNC"
@@ -344,11 +352,17 @@ impl E2bClient {
         };
 
         if alive {
-            // Asked of the sandbox rather than assumed: the desktop is four
-            // processes, and a URL offered before they are up renders as a
-            // broken frame, which reads as a bug rather than as "not started".
+            // Asked of the port, not of the process list. A process that exists
+            // is not the same as one that is serving, and this check used to
+            // match the shell running it: the desktop was reported up when
+            // nothing was listening, so the viewer was handed a dead address
+            // and drew a black rectangle.
             let up = self
-                .run(sandbox, envd_token, "pgrep -f novnc_proxy >/dev/null && echo up || echo down")
+                .run(
+                    sandbox,
+                    envd_token,
+                    &format!("{} 2>/dev/null && echo up || echo down", port_open(VNC_PORT)),
+                )
                 .await
                 .map(|o| o.stdout.trim() == "up")
                 .unwrap_or(false);
@@ -391,20 +405,37 @@ fn create_body(agent: &str) -> serde_json::Value {
     })
 }
 
-/// A command that starts a long-lived process and returns immediately.
+/// A command that starts a long-lived process if `guard` says it is not up.
 ///
-/// Three things are load-bearing and were each learned the hard way. `setsid`
-/// puts the process in its own session, without which it is killed the moment
-/// the shell that started it exits: noVNC reported itself running and had
-/// vanished a second later, leaving the viewer black. Redirecting all three
-/// streams stops it holding envd's response open, which hangs the call until it
-/// times out. And `pgrep` first keeps a second copy from stacking up, because
-/// the pane asks for a desktop without tracking whether it already has one.
-fn daemon(process: &str, command: &str) -> String {
+/// Every part of this is load-bearing and each was learned from a failure.
+///
+/// `setsid` puts the process in its own session. Without it the process dies
+/// the moment the shell that started it exits, so noVNC reported itself running
+/// and had vanished a second later.
+///
+/// Redirecting all three streams stops it holding envd's reply open. envd keeps
+/// a call open until the process releases them, so a daemon started without
+/// this hangs the command that launched it until it times out.
+///
+/// The guard must be one that cannot match the shell performing it. `pgrep -f`
+/// cannot be used at all here: the pattern and the command being guarded both
+/// appear in that shell's own command line, so the check matches itself, every
+/// guard reports the process already up, and nothing is ever started. Even the
+/// usual `[n]ovnc_proxy` bracket trick fails, because the real path is in the
+/// same command line. What is safe is `pgrep -x`, which matches the executable
+/// name and therefore only ever sees `bash` for the caller, and asking the port
+/// directly, which is the honest question for a service anyway.
+fn daemon(guard: &str, name: &str, command: &str) -> String {
     format!(
-        "pgrep -f {process} >/dev/null || \
-         (setsid {command} >/tmp/guac-{process}.log 2>&1 </dev/null &) ; sleep 1"
+        "{guard} >/dev/null 2>&1 || \
+         (setsid {command} >/tmp/guac-{name}.log 2>&1 </dev/null &) ; sleep 1"
     )
+}
+
+/// A test for "is something serving here", using bash's own /dev/tcp so nothing
+/// needs to be installed in the sandbox.
+fn port_open(port: u16) -> String {
+    format!("(exec 3<>/dev/tcp/127.0.0.1/{port})")
 }
 
 /// envd's address for one sandbox.
@@ -512,11 +543,30 @@ mod tests {
         // Without setsid the process dies with its shell, and without the
         // redirections it holds the RPC open until the call times out. Both
         // failures look like a desktop that never appears.
-        let command = daemon("novnc_proxy", "/opt/noVNC/utils/novnc_proxy --listen 6080");
+        let command = daemon("pgrep -x Xvfb", "Xvfb", "Xvfb :0");
         assert!(command.contains("setsid"), "a process that dies with its shell never serves");
         assert!(command.contains("</dev/null"), "holding stdin hangs the call that started it");
         assert!(command.contains(">/tmp/"), "holding stdout hangs it too");
-        assert!(command.starts_with("pgrep -f novnc_proxy"), "a second copy must not stack up");
+    }
+
+    #[test]
+    fn no_guard_can_match_the_shell_that_is_running_it() {
+        // The desktop silently started nothing at all because of this. Both the
+        // guard pattern and the command being guarded appear in the command line
+        // of the shell doing the matching, so any `pgrep -f` matches itself and
+        // reports the process already up. The bracket trick does not save it
+        // either, because the real path is in that same line.
+        let commands = [
+            daemon("pgrep -x Xvfb", "Xvfb", "Xvfb :0"),
+            daemon(&port_open(6080), "novnc", "/opt/noVNC/utils/novnc_proxy --listen 6080"),
+        ];
+        for command in commands {
+            assert!(
+                !command.contains("pgrep -f"),
+                "pgrep -f matches the checking shell and starts nothing: {command}"
+            );
+        }
+        assert_eq!(port_open(6080), "(exec 3<>/dev/tcp/127.0.0.1/6080)");
     }
 
     #[test]

@@ -69,8 +69,21 @@ export function ComputerPane({ agent }: Props) {
     setChecked(false);
     setOpen(false);
     setLines([]);
+    // Reset too. A call still in flight when the operator switched agents left
+    // this true for the new pane, which disabled its only button permanently
+    // and made the terminal swallow every command silently.
+    setBusy(false);
+    setError(null);
     if (configured) void look();
   }, [look, configured]);
+
+  // Sandboxes expire on their own, so a pane left open goes stale: it kept
+  // showing a desktop that had been reclaimed, and clicking it did nothing.
+  useEffect(() => {
+    if (!configured) return;
+    const timer = setInterval(() => void look(), 15000);
+    return () => clearInterval(timer);
+  }, [configured, look]);
 
   useEffect(() => {
     const node = logRef.current;
@@ -234,9 +247,11 @@ export function ComputerPane({ agent }: Props) {
             <p className="computer__note">{error}</p>
           ) : (
             <p className="computer__note">
-              {running
-                ? "Running. Start the desktop to watch it, or use the terminal."
-                : "No computer yet. Agents get one the first time they run a command."}
+              {busy
+                ? "Building a machine. This takes a few seconds."
+                : running
+                  ? "Running, but the desktop is not up. Start it to watch, or use the terminal."
+                  : "No computer yet. Agents get one the first time they run a command."}
             </p>
           )}
           <div className="computer__actions">
