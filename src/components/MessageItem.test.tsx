@@ -180,6 +180,34 @@ describe("an agent's own record of what it did", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("does not draw a note update as a message to nobody", () => {
+    // update_notes has no recipients, so falling through to the send renderer
+    // drew it as "Sent to no one" with the note body as the message.
+    show(
+      record({
+        type: "toolCall",
+        name: "update_notes",
+        arguments: { content: "Smith handles verification." },
+        outcome: { status: "ok", summary: "Notes saved (28 characters)." },
+      }),
+    );
+    expect(screen.queryByText(/no one/)).toBeNull();
+    expect(screen.getByText(/updated its notes/)).toBeTruthy();
+  });
+
+  it("names an unrecognised tool rather than guessing it was a send", () => {
+    show(
+      record({
+        type: "toolCall",
+        name: "run_code",
+        arguments: { source: "print(1)" },
+        outcome: { status: "ok", summary: "exit 0" },
+      }),
+    );
+    expect(screen.queryByText(/no one/)).toBeNull();
+    expect(screen.getByText(/used run_code/)).toBeTruthy();
+  });
+
   it("surfaces a guard stop as a centred notice", () => {
     show(record({ type: "notice", kind: "guardStop", text: "hop limit (8) reached" }));
     expect(screen.getByText("hop limit (8) reached")).toBeTruthy();

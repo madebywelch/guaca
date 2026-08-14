@@ -1024,3 +1024,53 @@ async fn the_directory_never_lists_agents_from_another_group() {
         "an agent in another group must not appear in the directory, got {joined:?}"
     );
 }
+
+#[tokio::test]
+async fn a_reply_sent_through_the_tool_does_not_demand_another() {
+    // Models answer their correspondent by calling `send_message` at them
+    // rather than replying in plain text. If that counts as a fresh approach,
+    // the answer demands an answer and the exchange only ends when the guard
+    // fires: a two-agent introduction was observed reaching hop 7 of 8, stopped
+    // by the dedup rule rather than by anyone running out of things to say.
+    let stub = serve(|body| {
+        let last = body["messages"]
+            .as_array()
+            .and_then(|m| m.last())
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        if has_tool_result(body) {
+            Script::Say("noted".into())
+        } else if last.contains("hello from manager") {
+            // Chef answers Manager the way the real models do.
+            Script::SendTo { recipients: vec!["Manager".into()], text: "hello back".into() }
+        } else if last.contains("hello back") {
+            Script::Say("ok".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    let feed = h.feed();
+    let deepest = feed.iter().map(|e| e.hop).max().unwrap_or(0);
+    assert_eq!(
+        feed.len(),
+        2,
+        "one approach and one answer is the whole exchange; anything more means the \
+         answer demanded an answer. Got {:?}",
+        feed.iter().map(|e| (e.hop, e.expects_reply)).collect::<Vec<_>>()
+    );
+    assert_eq!(deepest, 2, "the exchange must not travel past the answer");
+
+    let answer = feed.iter().find(|e| e.hop == 2).expect("the answer must have been delivered");
+    assert!(
+        !answer.expects_reply,
+        "an answer sent through the tool must not demand another, or the cascade re-arms"
+    );
+}

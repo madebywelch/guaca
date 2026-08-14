@@ -13,7 +13,7 @@ pub mod events;
 pub mod guard;
 pub mod prompt;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -489,6 +489,8 @@ impl Runtime {
         let config = self.config();
         let mut collected_text = String::new();
         let mut tool_parts: Vec<Part> = Vec::new();
+        // Peers written to through `send_message` during this turn.
+        let mut addressed: HashSet<AgentId> = HashSet::new();
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -548,8 +550,17 @@ impl Runtime {
             });
 
             for call in &completion.tool_calls {
-                let (result, part) =
-                    self.execute_tool(&card, run_id, inbound_hop, cause, call).await;
+                let (result, part) = self
+                    .execute_tool(
+                        &card,
+                        run_id,
+                        inbound_hop,
+                        cause,
+                        reply_target,
+                        &mut addressed,
+                        call,
+                    )
+                    .await;
                 tool_parts.push(part);
                 messages.push(ChatMessage::Tool { tool_call_id: call.id.clone(), content: result });
             }
@@ -600,6 +611,7 @@ impl Runtime {
                 cause,
                 mode,
                 reply_target,
+                &addressed,
                 collected_text,
                 tool_parts,
             );
@@ -629,6 +641,7 @@ impl Runtime {
         cause: Option<MessageId>,
         mode: ReplyMode,
         reply_target: Option<Participant>,
+        addressed: &HashSet<AgentId>,
         text: String,
         mut tool_parts: Vec<Part>,
     ) {
@@ -637,7 +650,17 @@ impl Runtime {
         let mut hop = inbound_hop;
         let mut to = Participant::Human;
 
-        if mode == ReplyMode::ToPeer {
+        // An agent that already answered this peer with `send_message` has said
+        // its piece. The text it trails afterwards is commentary on its own
+        // turn, and delivering that as a second message is how one turn put two
+        // near-identical messages in the peer's channel. It goes to the
+        // operator instead, where it is still readable.
+        let already_answered = matches!(
+            reply_target,
+            Some(Participant::Agent { id }) if addressed.contains(&id)
+        );
+
+        if mode == ReplyMode::ToPeer && !already_answered {
             if let Some(Participant::Agent { id: peer }) = reply_target {
                 // An automatic reply still travels a hop and still counts
                 // against the pair budget, otherwise two agents could bounce
@@ -738,12 +761,18 @@ impl Runtime {
 
     // ---- tools -----------------------------------------------------------
 
+    #[allow(clippy::too_many_arguments)]
     async fn execute_tool(
         &self,
         card: &AgentCard,
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
+        // Who this turn is answering, so a send aimed at them is recognised as
+        // a reply rather than a fresh approach.
+        reply_target: Option<Participant>,
+        // Peers this turn has already written to. See `emit_reply`.
+        addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
     ) -> (String, Part) {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
@@ -822,7 +851,16 @@ impl Runtime {
             }
 
             ToolInvocation::SendMessage { to, text } => {
-                let deliveries = self.send_to_peers(card, run_id, inbound_hop, cause, &to, &text);
+                let deliveries = self.send_to_peers(
+                    card,
+                    run_id,
+                    inbound_hop,
+                    cause,
+                    reply_target,
+                    addressed,
+                    &to,
+                    &text,
+                );
                 let rendered = tools::render_deliveries(&deliveries);
                 let queued =
                     deliveries.iter().filter(|d| matches!(d, Delivery::Queued { .. })).count();
@@ -849,12 +887,15 @@ impl Runtime {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn send_to_peers(
         &self,
         card: &AgentCard,
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
+        reply_target: Option<Participant>,
+        addressed: &mut HashSet<AgentId>,
         recipients: &[String],
         text: &str,
     ) -> Vec<Delivery> {
@@ -933,6 +974,18 @@ impl Runtime {
                         continue;
                     };
 
+                    // An agent answering its correspondent through this tool is
+                    // still answering, so the message must not demand an answer
+                    // back. Marking it as a fresh approach re-arms the cascade
+                    // that `emit_reply`'s asymmetry exists to end: the peer
+                    // replies, this agent replies to that, and the exchange only
+                    // stops when the guard's dedup or hop limit fires. Two
+                    // agents introducing themselves reached hop 7 of 8 that way.
+                    let answering = matches!(
+                        reply_target,
+                        Some(Participant::Agent { id }) if id == target.id
+                    );
+
                     let envelope = Envelope {
                         id: MessageId::new(),
                         run_id,
@@ -942,14 +995,17 @@ impl Runtime {
                         parts: vec![Part::text(text)],
                         trust: Trust::Peer,
                         hop,
-                        expects_reply: true,
+                        expects_reply: !answering,
                         cause,
                         created_at: now_ms(),
                     };
 
                     self.track_inflight(run_id, 1);
                     match self.deliver(envelope) {
-                        Ok(()) => out.push(Delivery::Queued { to: target.name.clone() }),
+                        Ok(()) => {
+                            addressed.insert(target.id);
+                            out.push(Delivery::Queued { to: target.name.clone() })
+                        }
                         Err(err) => {
                             self.track_inflight(run_id, -1);
                             out.push(Delivery::Refused {
