@@ -86,7 +86,7 @@ describe("ActivityFlow", () => {
 
   it("draws one arrow per message, in order", () => {
     const { container } = render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
-    expect(container.querySelectorAll(".flow__node")).toHaveLength(CONVERSATION.length);
+    expect(container.querySelectorAll(".flow__row")).toHaveLength(CONVERSATION.length);
   });
 
   it("labels each arrow with who sent it and to whom", () => {
@@ -105,10 +105,14 @@ describe("ActivityFlow", () => {
   });
 
   it("is reachable from the keyboard", () => {
+    // Each row is a real button, so focus and Enter come from the platform
+    // rather than from a tabindex and a key handler on an SVG group.
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
     const node = screen.getByLabelText(/Critic to Manager/);
-    expect(node.getAttribute("tabindex")).toBe("0");
-    fireEvent.keyDown(node, { key: "Enter" });
+    expect(node.tagName).toBe("BUTTON");
+    node.focus();
+    expect(document.activeElement).toBe(node);
+    fireEvent.click(node);
     expect(within(screen.getByRole("dialog")).getByText("here are the holes")).toBeTruthy();
   });
 
@@ -127,12 +131,12 @@ describe("ActivityFlow", () => {
     expect(container.querySelectorAll(".flow__divider")).toHaveLength(2);
   });
 
-  it("shows an excerpt when an arrow is hovered", () => {
+  it("shows what was said without needing a click", () => {
+    // The whole reason the board was turned upright: an arrow with no room for
+    // a word meant reading a conversation one click at a time.
     render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
-    const node = screen.getByLabelText(/Manager to Critic/);
-    expect(screen.queryByText(/please review/)).toBeNull();
-    fireEvent.mouseEnter(node);
     expect(screen.getByText(/please review/)).toBeTruthy();
+    expect(screen.getByText(/here are the holes/)).toBeTruthy();
   });
 
   it("invites a first message when nothing has happened", () => {
