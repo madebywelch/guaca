@@ -15,9 +15,11 @@ interface Props {
  * pointer landing in the middle of it. Maximised, the same desktop accepts
  * input and the operator can take over.
  *
- * The frame is Daytona's own noVNC client, embedded straight from the sandbox's
- * preview URL with its token in the query string. That is Daytona's scheme, not
- * a workaround; an iframe cannot send an auth header.
+ * The frame is Daytona's own noVNC client, but it is not loaded from Daytona
+ * directly. Daytona puts an interstitial in front of every preview request, so
+ * loading it straight returned the warning page in place of noVNC's stylesheet
+ * and scripts. Both views therefore come through `guaccomputer://`, which Rust
+ * forwards with the header that suppresses it.
  */
 export function ComputerPane({ agent }: Props) {
   const [computer, setComputer] = useState<Computer | null>(null);
@@ -122,7 +124,6 @@ export function ComputerPane({ agent }: Props) {
               key={`${computer?.sandboxId}:${view}:${open}`}
               title={`${agent.name}'s computer`}
               src={view === "screen" ? `${url}&view_only=${open ? 0 : 1}` : url}
-              sandbox="allow-scripts allow-same-origin allow-forms"
             />
             {!open && (
               // Covers the frame so a stray click cannot type into the agent's

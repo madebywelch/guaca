@@ -21,7 +21,9 @@
 //! header. That is Daytona's own scheme, not a workaround: the cookie form is
 //! rejected outright.
 
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +33,45 @@ const VNC_PORT: u16 = 6080;
 const TERMINAL_PORT: u16 = 22222;
 
 const API_BASE: &str = "https://app.daytona.io/api";
+
+/// Daytona serves an "are you sure" interstitial in front of every preview URL,
+/// and it is served for *every* request, not just the first document. Without
+/// this header noVNC's own stylesheet and scripts come back as copies of that
+/// warning page, and the desktop renders as unstyled text. An iframe cannot set
+/// a header, which is the whole reason `proxy_get` below exists.
+const SKIP_WARNING: (&str, &str) = ("X-Daytona-Skip-Preview-Warning", "true");
 const TOOLBOX_BASE: &str = "https://proxy.app.daytona.io/toolbox";
+
+/// Preview tokens, kept per sandbox and port.
+///
+/// noVNC pulls about thirty files to draw one desktop, and asking Daytona for a
+/// fresh token before each of them turned one screen into thirty round trips.
+/// The lifetime is deliberately short: Daytona resets a sandbox's tokens when it
+/// restarts, so a stale one has to expire rather than be trusted forever, and a
+/// rejected request clears the entry immediately.
+type TokenCache = Mutex<HashMap<(String, u16), (String, Instant)>>;
+
+fn token_cache() -> &'static TokenCache {
+    static CACHE: OnceLock<TokenCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+const TOKEN_TTL: Duration = Duration::from_secs(120);
+
+/// The URI scheme the webview loads an agent's computer through. Every request
+/// on it is forwarded by `app.rs` with the interstitial suppressed.
+pub const COMPUTER_SCHEME: &str = "guaccomputer";
+
+/// Percent-encodes the few characters a preview token could contain that would
+/// otherwise terminate the query it is embedded in.
+fn urlencode(raw: &str) -> String {
+    raw.chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
+            other => format!("%{:02X}", other as u32),
+        })
+        .collect()
+}
 
 /// Stops a sandbox nobody is watching. Minutes, not hours: an idle desktop is
 /// billed the same as a busy one.
@@ -73,9 +113,25 @@ struct SandboxRow {
     state: String,
 }
 
+/// One file fetched from inside a sandbox, on its way to the webview.
+#[derive(Debug, Clone)]
+pub struct ProxiedFile {
+    pub status: u16,
+    pub content_type: String,
+    pub body: Vec<u8>,
+}
+
+/// The proxy host for one sandbox port. Stable for the life of the sandbox,
+/// unlike a signed URL, whose host changes on every call.
+pub fn preview_host(sandbox: &str, port: u16) -> String {
+    format!("https://{port}-{sandbox}.daytonaproxy01.net")
+}
+
+/// Only the token is taken from this. The host is derived from the sandbox and
+/// port instead, because `preview_host` has to produce the same address for the
+/// proxy and for the WebSocket, and one source for it is fewer than two.
 #[derive(Debug, Deserialize)]
 struct PreviewRow {
-    url: String,
     token: String,
 }
 
@@ -191,6 +247,77 @@ impl DaytonaClient {
             .await
     }
 
+    /// Fetches one file from inside a sandbox's preview, with the interstitial
+    /// suppressed and the preview token attached.
+    ///
+    /// Returns the status alongside the body so the caller can pass a 404
+    /// through as a 404 rather than turning every miss into an error page.
+    pub async fn proxy_get(
+        &self,
+        sandbox: &str,
+        port: u16,
+        path: &str,
+        query: Option<&str>,
+    ) -> Result<ProxiedFile, DaytonaError> {
+        let token = self.cached_token(sandbox, port).await?;
+        let host = preview_host(sandbox, port);
+        let url = match query {
+            Some(q) if !q.is_empty() => format!("{host}/{path}?{q}"),
+            _ => format!("{host}/{path}"),
+        };
+
+        let response = self
+            .http
+            .get(&url)
+            .header(SKIP_WARNING.0, SKIP_WARNING.1)
+            .header("x-daytona-preview-token", &token)
+            .send()
+            .await
+            .map_err(|e| DaytonaError::Transport(e.to_string()))?;
+
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let body =
+            response.bytes().await.map_err(|e| DaytonaError::Transport(e.to_string()))?.to_vec();
+
+        // A rejected token is almost always one Daytona rotated under us when
+        // the sandbox restarted. Dropping it means the next request fetches a
+        // fresh one instead of the whole desktop failing until a relaunch.
+        if status == 401 || status == 403 {
+            self.forget_token(sandbox, port);
+        }
+
+        Ok(ProxiedFile { status, content_type, body })
+    }
+
+    async fn cached_token(&self, sandbox: &str, port: u16) -> Result<String, DaytonaError> {
+        let key = (sandbox.to_string(), port);
+        if let Ok(cache) = token_cache().lock() {
+            if let Some((token, taken)) = cache.get(&key) {
+                if taken.elapsed() < TOKEN_TTL {
+                    return Ok(token.clone());
+                }
+            }
+        }
+
+        let token = self.preview(sandbox, port).await?.token;
+        if let Ok(mut cache) = token_cache().lock() {
+            cache.insert(key, (token.clone(), Instant::now()));
+        }
+        Ok(token)
+    }
+
+    fn forget_token(&self, sandbox: &str, port: u16) {
+        if let Ok(mut cache) = token_cache().lock() {
+            cache.remove(&(sandbox.to_string(), port));
+        }
+    }
+
     /// The whole picture for one sandbox: state, and the two URLs if it is up.
     ///
     /// Preview URLs are fetched only for a running sandbox. Asking for one
@@ -202,22 +329,23 @@ impl DaytonaClient {
             Computer { sandbox_id: sandbox.to_string(), state, vnc_url: None, terminal_url: None };
 
         if computer.is_running() {
-            // `view_only` and `autoconnect` are noVNC's own parameters. The pane
-            // decides whether the operator can take control by re-rendering with
-            // a different value, so the URL carries the read-only default.
+            // Both documents load through our own scheme so the interstitial can
+            // be skipped. noVNC's RFB socket is pointed straight at Daytona
+            // instead: a custom scheme cannot carry a WebSocket, and the socket
+            // does not get the interstitial anyway, only documents do.
             let vnc = self.preview(sandbox, VNC_PORT).await?;
+            let socket =
+                format!("websockify%3FDAYTONA_SANDBOX_AUTH_KEY%3D{}", urlencode(&vnc.token));
             computer.vnc_url = Some(format!(
-                "{}/vnc.html?DAYTONA_SANDBOX_AUTH_KEY={}&autoconnect=1&resize=scale&reconnect=1",
-                vnc.url.trim_end_matches('/'),
-                vnc.token
+                "{scheme}://localhost/{sandbox}/{VNC_PORT}/vnc.html\
+                 ?autoconnect=1&resize=scale&reconnect=1\
+                 &host={port}-{sandbox}.daytonaproxy01.net&port=443&encrypt=1&path={socket}",
+                scheme = COMPUTER_SCHEME,
+                port = VNC_PORT,
             ));
 
-            let terminal = self.preview(sandbox, TERMINAL_PORT).await?;
-            computer.terminal_url = Some(format!(
-                "{}/?DAYTONA_SANDBOX_AUTH_KEY={}",
-                terminal.url.trim_end_matches('/'),
-                terminal.token
-            ));
+            computer.terminal_url =
+                Some(format!("{COMPUTER_SCHEME}://localhost/{sandbox}/{TERMINAL_PORT}/"));
         }
 
         Ok(computer)
@@ -232,6 +360,21 @@ mod tests {
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
         assert!(DaytonaClient::new("   ").is_none());
         assert!(DaytonaClient::new("dtn_x").is_some());
+    }
+
+    #[test]
+    fn a_preview_host_is_derived_from_the_sandbox_and_port() {
+        // The proxy and the WebSocket must agree on the address, so this is the
+        // one place it is built.
+        assert_eq!(preview_host("abc-123", 6080), "https://6080-abc-123.daytonaproxy01.net");
+    }
+
+    #[test]
+    fn a_token_is_encoded_before_it_is_put_in_a_query() {
+        // The token is embedded inside noVNC's own `path` parameter, so a stray
+        // & or = would silently truncate the socket address.
+        assert_eq!(urlencode("abc_123-x.y~z"), "abc_123-x.y~z");
+        assert_eq!(urlencode("a&b=c d"), "a%26b%3Dc%20d");
     }
 
     #[test]
