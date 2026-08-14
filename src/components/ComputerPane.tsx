@@ -14,6 +14,10 @@ interface Line {
   command: string;
   output: string;
   failed: boolean;
+  /** Still waiting. The first command on a cold agent makes a sandbox first,
+      which takes seconds, and a prompt that just says "running" reads as
+      broken. */
+  pending: boolean;
 }
 
 let lineSeq = 0;
@@ -88,28 +92,34 @@ export function ComputerPane({ agent }: Props) {
   const send = async () => {
     const next = command.trim();
     if (!next || busy) return;
+
+    // Echoed before the call, not after it. Waiting in silence for a command
+    // that takes seconds is indistinguishable from a terminal that is broken.
+    const id = lineSeq++;
+    setLines((prior) => [
+      ...prior,
+      { id, command: next, output: "", failed: false, pending: true },
+    ]);
     setBusy(true);
     setCommand("");
+
+    const settle = (output: string, failed: boolean) =>
+      setLines((prior) =>
+        prior.map((line) => (line.id === id ? { ...line, output, failed, pending: false } : line)),
+      );
+
     try {
       const result = await api.runOnAgentComputer(agent.id, next);
       const body = [result.stdout, result.stderr && `stderr: ${result.stderr}`]
         .filter(Boolean)
         .join("\n")
         .trimEnd();
-      setLines((prior) => [
-        ...prior,
-        {
-          id: lineSeq++,
-          command: next,
-          output: body || (result.exitCode === 0 ? "" : `exit ${result.exitCode}`),
-          failed: result.exitCode !== 0,
-        },
-      ]);
+      settle(
+        body || (result.exitCode === 0 ? "(no output)" : `exit ${result.exitCode}`),
+        result.exitCode !== 0,
+      );
     } catch (caught) {
-      setLines((prior) => [
-        ...prior,
-        { id: lineSeq++, command: next, output: errorMessage(caught), failed: true },
-      ]);
+      settle(errorMessage(caught), true);
     } finally {
       setBusy(false);
     }
@@ -172,10 +182,14 @@ export function ComputerPane({ agent }: Props) {
                 <div className="computer__cmd">
                   <span aria-hidden="true">$</span> {line.command}
                 </div>
-                {line.output && (
-                  <pre className="computer__out" data-failed={line.failed ? "true" : undefined}>
-                    {line.output}
-                  </pre>
+                {line.pending ? (
+                  <pre className="computer__out computer__out--pending">working…</pre>
+                ) : (
+                  line.output && (
+                    <pre className="computer__out" data-failed={line.failed ? "true" : undefined}>
+                      {line.output}
+                    </pre>
+                  )
                 )}
               </div>
             ))}

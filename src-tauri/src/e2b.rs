@@ -309,21 +309,22 @@ impl E2bClient {
     /// ones that would otherwise stack up a second copy.
     pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         for command in [
-            "pgrep -x Xvfb >/dev/null || (Xvfb :0 -ac -screen 0 1280x800x24 -retro \
-             -dpi 96 -nolisten tcp -nolisten unix >/tmp/xvfb.log 2>&1 &) ; sleep 1",
-            "pgrep -x xfce4-session >/dev/null || (DISPLAY=:0 startxfce4 \
-             >/tmp/xfce.log 2>&1 &) ; sleep 1",
-            &format!(
-                "pgrep -x x11vnc >/dev/null || (x11vnc -bg -display :0 -forever -wait 50 \
-                 -shared -rfbport {RAW_VNC_PORT} -nopw >/tmp/x11vnc.log 2>&1) ; sleep 1"
+            daemon("Xvfb", "Xvfb :0 -ac -screen 0 1280x800x24 -dpi 96 -nolisten tcp"),
+            daemon("xfce4-session", "env DISPLAY=:0 startxfce4"),
+            // x11vnc daemonises itself with -bg, so it needs no help staying up.
+            format!(
+                "pgrep -x x11vnc >/dev/null || x11vnc -bg -display :0 -forever -shared \
+                 -rfbport {RAW_VNC_PORT} -nopw >/tmp/guac-x11vnc.log 2>&1"
             ),
-            &format!(
-                "pgrep -f novnc_proxy >/dev/null || (cd /opt/noVNC/utils && ./novnc_proxy \
-                 --vnc localhost:{RAW_VNC_PORT} --listen {VNC_PORT} --web /opt/noVNC \
-                 >/tmp/novnc.log 2>&1 &) ; sleep 1"
+            daemon(
+                "novnc_proxy",
+                &format!(
+                    "/opt/noVNC/utils/novnc_proxy --vnc localhost:{RAW_VNC_PORT} \
+                     --listen {VNC_PORT} --web /opt/noVNC"
+                ),
             ),
         ] {
-            self.run(sandbox, envd_token, command).await?;
+            self.run(sandbox, envd_token, &command).await?;
         }
         Ok(())
     }
@@ -388,6 +389,22 @@ fn create_body(agent: &str) -> serde_json::Value {
         "network": { "allowPublicTraffic": false },
         "metadata": { "guac": "true", "guac-agent": agent },
     })
+}
+
+/// A command that starts a long-lived process and returns immediately.
+///
+/// Three things are load-bearing and were each learned the hard way. `setsid`
+/// puts the process in its own session, without which it is killed the moment
+/// the shell that started it exits: noVNC reported itself running and had
+/// vanished a second later, leaving the viewer black. Redirecting all three
+/// streams stops it holding envd's response open, which hangs the call until it
+/// times out. And `pgrep` first keeps a second copy from stacking up, because
+/// the pane asks for a desktop without tracking whether it already has one.
+fn daemon(process: &str, command: &str) -> String {
+    format!(
+        "pgrep -f {process} >/dev/null || \
+         (setsid {command} >/tmp/guac-{process}.log 2>&1 </dev/null &) ; sleep 1"
+    )
 }
 
 /// envd's address for one sandbox.
@@ -489,6 +506,18 @@ fn decode(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_daemon_is_detached_from_the_shell_that_starts_it() {
+        // Without setsid the process dies with its shell, and without the
+        // redirections it holds the RPC open until the call times out. Both
+        // failures look like a desktop that never appears.
+        let command = daemon("novnc_proxy", "/opt/noVNC/utils/novnc_proxy --listen 6080");
+        assert!(command.contains("setsid"), "a process that dies with its shell never serves");
+        assert!(command.contains("</dev/null"), "holding stdin hangs the call that started it");
+        assert!(command.contains(">/tmp/"), "holding stdout hangs it too");
+        assert!(command.starts_with("pgrep -f novnc_proxy"), "a second copy must not stack up");
+    }
 
     #[test]
     fn a_new_sandbox_is_created_with_both_locks_and_a_network() {
