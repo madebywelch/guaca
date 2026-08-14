@@ -1,9 +1,9 @@
 import type { CSSProperties } from "react";
 
 import type { Activity, Lifecycle } from "../lib/types";
-import { EggBody, eggParts, lookupEgg } from "./catalog";
+import { drawCharacter, lookupCharacter } from "./catalog";
 
-/** Where the egg is looking. Used to make a send visibly aimed at someone. */
+/** Where the character is looking. Used to make a send visibly aimed at someone. */
 export type Look = "up" | "down" | null;
 
 /** A one-off reaction: winding up to throw, or being hit by something. */
@@ -32,14 +32,14 @@ function phase(seed: string): number {
 }
 
 /**
- * An agent's face.
+ * An agent's character.
  *
- * All agents share one egg; eyes, mouth, and accessory carry the difference.
- * Behaviour is layered on top of that, in rough order of loudness:
+ * The drawing is the catalog's business; this owns behaviour, layered in rough
+ * order of loudness:
  *
  * - idle: a slow breath, and a glance around every several seconds
  * - thinking: a gentle wobble and quicker, wandering glances
- * - look: eyes and head aim up or down at whoever is being addressed
+ * - look: eyes and body aim up or down at whoever is being addressed
  * - gesture: a wind-up on send, a knock-back on receive
  */
 export function AgentAvatar({
@@ -54,8 +54,7 @@ export function AgentAvatar({
   says = null,
   title,
 }: Props) {
-  const preset = lookupEgg(avatar);
-  const { eyes, mouth, accessory } = eggParts(preset);
+  const character = lookupCharacter(avatar);
   const busy = activity?.state === "thinking";
 
   const style = {
@@ -72,13 +71,10 @@ export function AgentAvatar({
       data-lifecycle={lifecycle}
       data-look={look ?? undefined}
       data-gesture={gesture ?? undefined}
-      title={title ?? preset.label}
+      title={title ?? character.label}
     >
-      <svg viewBox="0 0 64 64" className="egg" aria-hidden="true">
-        <EggBody />
-        {eyes}
-        {mouth}
-        {accessory}
+      <svg viewBox="0 0 64 64" className="avatar__body" aria-hidden="true">
+        {drawCharacter(character)}
       </svg>
       {says && (
         <span className="avatar__says" aria-hidden="true">

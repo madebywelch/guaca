@@ -28,7 +28,7 @@ describe("roleOf", () => {
     expect(sender.facing).toBe("b");
   });
 
-  it("keeps both eggs facing each other through the flight", () => {
+  it("keeps both characters facing each other through the flight", () => {
     // This is what makes it read as an exchange rather than two unrelated
     // animations that happen to overlap.
     for (const phase of ["aim", "flight"] as const) {

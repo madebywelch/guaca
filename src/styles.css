@@ -180,6 +180,37 @@ button {
   justify-content: space-between;
 }
 
+/* A group header. Reads as a label rather than a control, because clicking it
+   is a secondary action: the primary thing in the rail is still the agent. */
+.rail__group-head {
+  width: 100%;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
+  padding: 0.75rem 1rem 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  text-align: left;
+}
+
+.rail__group-head:hover {
+  color: var(--rail-text);
+}
+
+/* The wall between groups, drawn once between them rather than around each, so
+   the rail reads as a list with divisions and not a stack of cards. */
+.rail__group + .rail__group {
+  margin-top: 0.15rem;
+  border-top: 1px solid var(--rail-edge);
+}
+
 .rail__hash {
   display: inline-block;
   width: 1.15rem;
@@ -196,6 +227,9 @@ button {
   flex-direction: column;
 }
 
+/* The wire is the track a thrown message travels along, so it is drawn only
+   while something is on it. Left on permanently it is a hairline ruled through
+   the middle of every character in the rail, which is what it used to be. */
 .rail__body::before {
   content: "";
   position: absolute;
@@ -205,6 +239,13 @@ button {
   width: 1px;
   background: linear-gradient(to bottom, var(--rail-wire) 0%, var(--rail-wire) 88%, transparent);
   pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease;
+}
+
+.rail__body[data-live="true"]::before {
+  opacity: 1;
+  transition-duration: 90ms;
 }
 
 .rail__list {
@@ -334,8 +375,9 @@ button {
 /* ==========================================================================
    Avatars
 
-   Every agent is the same egg. Colour comes from the accent; everything else
-   is derived, so one choice produces a coherent character.
+   Every agent is a different ingredient, drawn to one spec in catalog.tsx. The
+   accent picks the hue and the rest of the tones derive from it, so one choice
+   produces a coherent character rather than a body and a set of unrelated parts.
 
    Behaviour, in order of loudness: a slow breath at rest, a glance around every
    few seconds, quicker glances and an occasional full turn while thinking, an
@@ -344,12 +386,12 @@ button {
    ========================================================================== */
 
 .avatar {
-  --egg-fill: var(--accent, var(--flesh));
-  --egg-shade: color-mix(in oklab, var(--accent, var(--flesh)) 60%, #33240f);
-  --egg-deep: color-mix(in oklab, var(--accent, var(--flesh)) 32%, #1c150b);
-  --egg-light: #ffffff;
-  --egg-white: #fdfdf5;
-  --egg-ink: #1c2a1b;
+  --char-fill: var(--accent, var(--flesh));
+  --char-light: color-mix(in oklab, var(--accent, var(--flesh)) 46%, #ffffff);
+  --char-shade: color-mix(in oklab, var(--accent, var(--flesh)) 62%, #33240f);
+  --char-deep: color-mix(in oklab, var(--accent, var(--flesh)) 36%, #17200f);
+  --char-white: #fdfdf5;
+  --char-ink: #17210f;
 
   display: inline-grid;
   place-items: center;
@@ -365,26 +407,26 @@ button {
 .avatar--md { width: 2.25rem; height: 2.25rem; }
 .avatar--lg { width: 3.4rem; height: 3.4rem; }
 
-.egg {
+.avatar__body {
   width: 100%;
   height: 100%;
   overflow: visible;
   transform-origin: center 78%;
-  animation: egg-breathe 4.4s ease-in-out infinite;
+  animation: breathe 4.4s ease-in-out infinite;
   animation-delay: var(--phase, 0s);
 }
 
-@keyframes egg-breathe {
+@keyframes breathe {
   0%, 100% { transform: scale(1, 1) translateY(0); }
   50% { transform: scale(1.015, 0.985) translateY(1.5%); }
 }
 
 /* Thinking is a change of behaviour, not a spinner bolted on beside the face. */
-.avatar[data-busy="true"] .egg {
-  animation: egg-think 1.9s ease-in-out infinite;
+.avatar[data-busy="true"] .avatar__body {
+  animation: think 1.9s ease-in-out infinite;
 }
 
-@keyframes egg-think {
+@keyframes think {
   0%, 100% { transform: rotate(-2.5deg); }
   50% { transform: rotate(2.5deg); }
 }
@@ -397,7 +439,7 @@ button {
 
 /* --- eyes ---------------------------------------------------------------- */
 
-.egg__eye {
+.avatar__eye {
   /* Without fill-box the origin is the whole drawing, and a blink slides the
      eyes off the face instead of closing them. */
   transform-box: fill-box;
@@ -411,7 +453,7 @@ button {
   96% { transform: scaleY(0.1); }
 }
 
-.egg__pupil {
+.avatar__pupil {
   transform-box: fill-box;
   transform-origin: center;
   animation: glance 9s ease-in-out infinite;
@@ -426,31 +468,20 @@ button {
   88% { transform: translate(0, 0); }
 }
 
-.avatar[data-busy="true"] .egg__pupil {
+.avatar[data-busy="true"] .avatar__pupil {
   animation: glance 2.6s ease-in-out infinite;
-}
-
-.egg__blip {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: blip 2.1s ease-in-out infinite;
-}
-
-@keyframes blip {
-  0%, 100% { opacity: 0.5; }
-  50% { opacity: 1; }
 }
 
 /* --- aimed look ---------------------------------------------------------- */
 
-/* Fixing the pupils beats letting the idle glance wander while the egg is
+/* Fixing the pupils beats letting the idle glance wander while the agent is
    supposed to be addressing someone in particular. */
-.avatar[data-look] .egg__pupil {
+.avatar[data-look] .avatar__pupil {
   animation: none;
 }
 
-.avatar[data-look="up"] .egg__pupil { transform: translate(0, -1.9px); }
-.avatar[data-look="down"] .egg__pupil { transform: translate(0, 1.9px); }
+.avatar[data-look="up"] .avatar__pupil { transform: translate(0, -1.9px); }
+.avatar[data-look="down"] .avatar__pupil { transform: translate(0, 1.9px); }
 
 .avatar[data-look="up"] { transform: rotate(-7deg) translateY(-1px); }
 .avatar[data-look="down"] { transform: rotate(7deg) translateY(1px); }
@@ -459,10 +490,10 @@ button {
 
 /* Matches AIM_MS in lib/choreography.ts: a slow wind-up, then the release. */
 .avatar[data-gesture="send"] {
-  animation: egg-throw 650ms cubic-bezier(0.34, 0.9, 0.3, 1);
+  animation: wind-up 650ms cubic-bezier(0.34, 0.9, 0.3, 1);
 }
 
-@keyframes egg-throw {
+@keyframes wind-up {
   0% { transform: rotate(0) scale(1); }
   14% { transform: rotate(-6deg) scale(0.99); }
   46% { transform: rotate(-17deg) scale(0.94); }
@@ -473,10 +504,10 @@ button {
 
 /* Matches CATCH_MS: knocked back, then a couple of settling wobbles. */
 .avatar[data-gesture="receive"] {
-  animation: egg-catch 700ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  animation: knock-back 700ms cubic-bezier(0.2, 0.9, 0.3, 1);
 }
 
-@keyframes egg-catch {
+@keyframes knock-back {
   0% { transform: translateX(0) scale(1, 1); }
   14% { transform: translateX(3px) scale(0.88, 1.12) rotate(4deg); }
   38% { transform: translateX(-2.5px) scale(1.1, 0.9) rotate(-3deg); }

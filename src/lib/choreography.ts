@@ -8,14 +8,14 @@ import type { AgentId } from "./types";
  *
  * The runtime is real-time: a fan-out to four agents lands four messages within
  * a few milliseconds of each other. Animating them the moment they arrive means
- * four parcels crossing at once and every egg reacting simultaneously, which is
- * over before the eye can follow it.
+ * four parcels crossing at once and every character reacting simultaneously, which
+ * is over before the eye can follow it.
  *
  * So delivery and choreography are decoupled. Messages are already delivered by
  * the time they reach here; this only decides when the drawing of each one
  * plays. Each message gets a visible beat of its own:
  *
- *   aim     both eggs turn to face each other, sender shouts
+ *   aim     both characters turn to face each other, sender shouts
  *   flight  the parcel crosses the wire
  *   catch   the recipient takes the hit and settles
  *
