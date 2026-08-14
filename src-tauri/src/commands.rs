@@ -97,16 +97,16 @@ pub fn list_groups(state: State<'_, AppState>) -> Reply<Vec<Group>> {
 
 #[tauri::command]
 pub fn create_group(state: State<'_, AppState>, draft: GroupDraft) -> Reply<Group> {
-    let name = draft.validate()?;
-    let group = state.runtime.store().create_group(&name)?;
+    let clean = draft.validate()?;
+    let group = state.runtime.store().create_group(&clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(group)
 }
 
 #[tauri::command]
-pub fn rename_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) -> Reply<Group> {
-    let name = draft.validate()?;
-    let group = state.runtime.store().rename_group(id, &name)?;
+pub fn update_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) -> Reply<Group> {
+    let clean = draft.validate()?;
+    let group = state.runtime.store().update_group(id, &clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(group)
 }

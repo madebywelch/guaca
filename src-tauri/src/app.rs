@@ -89,7 +89,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_groups,
             commands::create_group,
-            commands::rename_group,
+            commands::update_group,
             commands::delete_group,
             commands::list_agents,
             commands::create_agent,

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { errorMessage, type Group } from "../lib/types";
+import { errorMessage, type Group, type GroupDraft } from "../lib/types";
 
 interface Props {
   /** Absent means create. */
@@ -11,17 +11,25 @@ interface Props {
 }
 
 /**
- * Create, rename or delete a group.
+ * A group's name, its wall, and the inference settings its agents inherit.
  *
- * Deliberately thin: a group is a name and a wall. Everything interesting about
- * it — who is inside, who they can reach — is decided by the agents' own group
- * field and enforced in the Rust runtime.
+ * Every field except the name is an override. Left blank, it inherits the app
+ * default, which is why the placeholders show what would be used instead of a
+ * value: an operator has to be able to tell "this group uses the app model"
+ * apart from "this group pins that exact model".
  */
 export function GroupEditor({ group, onClose }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
-  const [name, setName] = useState(group?.name ?? "");
+  const settings = useStore((s) => s.settings);
+
+  const [draft, setDraft] = useState<GroupDraft>({
+    name: group?.name ?? "",
+    baseUrl: group?.baseUrl ?? "",
+    defaultModel: group?.defaultModel ?? "",
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -29,12 +37,16 @@ export function GroupEditor({ group, onClose }: Props) {
     nameRef.current?.select();
   }, []);
 
+  const patch = (next: Partial<GroupDraft>) => setDraft((d) => ({ ...d, ...next }));
+
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      if (group) await api.renameGroup(group.id, name);
-      else await api.createGroup(name);
+      // `apiKey` is only sent when the operator typed one. Sending the redacted
+      // hint back would overwrite the real key with its own placeholder.
+      if (group) await api.updateGroup(group.id, draft);
+      else await api.createGroup(draft);
       await refreshAgents();
       onClose();
     } catch (caught) {
@@ -52,8 +64,8 @@ export function GroupEditor({ group, onClose }: Props) {
       await refreshAgents();
       onClose();
     } catch (caught) {
-      // The common failure is a group that still holds agents, and the message
-      // from Rust already says how many and what to do, so it is shown as-is.
+      // The usual failure is a group that still holds agents. The message from
+      // Rust already says how many and what to do, so it is shown as written.
       setError(errorMessage(caught));
       setBusy(false);
     }
@@ -66,12 +78,12 @@ export function GroupEditor({ group, onClose }: Props) {
         className="dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={group ? "Edit group" : "New group"}
+        aria-label={group ? "Group settings" : "New group"}
       >
-        <h2 className="dialog__title">{group ? "Edit group" : "New group"}</h2>
+        <h2 className="dialog__title">{group ? draft.name || group.name : "New group"}</h2>
         <p className="dialog__lede" style={{ marginTop: 0 }}>
-          Agents in different groups cannot see or message each other. Moving an agent between
-          groups changes who it can reach.
+          Agents in different groups cannot see or message each other. Everything below is inherited
+          from the app settings unless this group sets it.
         </p>
 
         <label className="field">
@@ -79,14 +91,56 @@ export function GroupEditor({ group, onClose }: Props) {
           <input
             className="input input--mono"
             ref={nameRef}
-            value={name}
+            value={draft.name}
             maxLength={48}
             placeholder="Research"
-            onChange={(event) => setName(event.target.value)}
+            onChange={(event) => patch({ name: event.target.value })}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && name.trim()) void save();
+              if (event.key === "Enter" && draft.name.trim()) void save();
             }}
           />
+        </label>
+
+        <label className="field">
+          <span className="field__label">Model</span>
+          <input
+            className="input input--mono"
+            value={draft.defaultModel ?? ""}
+            placeholder={settings?.defaultModel || "inherit"}
+            onChange={(event) => patch({ defaultModel: event.target.value })}
+          />
+          <span className="field__hint">
+            Used by every agent in this group that does not name its own model.
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field__label">Inference endpoint</span>
+          <input
+            className="input input--mono"
+            value={draft.baseUrl ?? ""}
+            placeholder={settings?.baseUrl || "inherit"}
+            onChange={(event) => patch({ baseUrl: event.target.value })}
+          />
+          <span className="field__hint">
+            Any OpenAI-compatible base URL. One group can run against a local server while another
+            uses a hosted one.
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field__label">API key</span>
+          <input
+            className="input input--mono"
+            type="password"
+            value={draft.apiKey ?? ""}
+            placeholder={group?.apiKeySet ? `set · ${group.apiKeyHint}` : "inherit"}
+            onChange={(event) => patch({ apiKey: event.target.value })}
+          />
+          <span className="field__hint">
+            Only needed when this group's endpoint uses a different key. Leave blank to keep the
+            stored one.
+          </span>
         </label>
 
         {error && (
@@ -96,16 +150,34 @@ export function GroupEditor({ group, onClose }: Props) {
         )}
 
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          {group && (
-            <button
-              type="button"
-              className="btn btn--danger"
-              disabled={busy}
-              onClick={() => void remove()}
-            >
-              Delete
-            </button>
-          )}
+          {group &&
+            (confirmDelete ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  disabled={busy}
+                  onClick={() => void remove()}
+                >
+                  Delete {group.name}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Keep
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--danger"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Delete
+              </button>
+            ))}
           <span style={{ flex: 1 }} />
           <button type="button" className="btn" onClick={onClose}>
             Cancel
@@ -113,7 +185,7 @@ export function GroupEditor({ group, onClose }: Props) {
           <button
             type="button"
             className="btn btn--primary"
-            disabled={busy || !name.trim()}
+            disabled={busy || !draft.name.trim()}
             onClick={() => void save()}
           >
             {group ? "Save" : "Create"}

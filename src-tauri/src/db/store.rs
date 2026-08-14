@@ -14,7 +14,7 @@ use rusqlite::{params, OptionalExtension, Row};
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
-use crate::domain::group::Group;
+use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, GroupId, MessageId};
 use crate::domain::now_ms;
 
@@ -247,7 +247,8 @@ impl Store {
         let mut stmt = conn.prepare(
             "SELECT g.id, g.name, g.created_at,
                     (SELECT count(*) FROM agents a
-                      WHERE a.group_id = g.id AND a.lifecycle <> 'terminated')
+                      WHERE a.group_id = g.id AND a.lifecycle <> 'terminated'),
+                    g.base_url, g.api_key, g.default_model
                FROM groups g
               ORDER BY g.created_at, g.rowid",
         )?;
@@ -259,31 +260,76 @@ impl Store {
         Ok(out)
     }
 
-    pub fn create_group(&self, name: &str) -> Result<Group, StoreError> {
+    pub fn create_group(&self, draft: &CleanGroup) -> Result<Group, StoreError> {
         let conn = self.conn()?;
-        let group = Group {
-            id: GroupId::new(),
-            name: name.to_string(),
-            agent_count: 0,
-            created_at: now_ms(),
-        };
+        let id = GroupId::new();
         conn.execute(
-            "INSERT INTO groups (id,name,created_at) VALUES (?1,?2,?3)",
-            params![group.id.to_string(), group.name, group.created_at],
+            "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                id.to_string(),
+                draft.name,
+                now_ms(),
+                draft.base_url.clone().flatten(),
+                draft.api_key.clone().flatten(),
+                draft.default_model.clone().flatten(),
+            ],
         )
-        .map_err(|e| classify(e, name))?;
-        Ok(group)
+        .map_err(|e| classify(e, &draft.name))?;
+        self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))
     }
 
-    pub fn rename_group(&self, id: GroupId, name: &str) -> Result<Group, StoreError> {
+    /// Applies an operator edit. An override the draft does not mention is left
+    /// exactly as it was, which is what lets the UI show a redacted key without
+    /// erasing it on the next save.
+    pub fn update_group(&self, id: GroupId, draft: &CleanGroup) -> Result<Group, StoreError> {
         let conn = self.conn()?;
         let changed = conn
-            .execute("UPDATE groups SET name=?2 WHERE id=?1", params![id.to_string(), name])
-            .map_err(|e| classify(e, name))?;
+            .execute(
+                "UPDATE groups
+                    SET name=?2,
+                        base_url      = CASE WHEN ?3 THEN ?4 ELSE base_url END,
+                        api_key       = CASE WHEN ?5 THEN ?6 ELSE api_key END,
+                        default_model = CASE WHEN ?7 THEN ?8 ELSE default_model END
+                  WHERE id=?1",
+                params![
+                    id.to_string(),
+                    draft.name,
+                    draft.base_url.is_some(),
+                    draft.base_url.clone().flatten(),
+                    draft.api_key.is_some(),
+                    draft.api_key.clone().flatten(),
+                    draft.default_model.is_some(),
+                    draft.default_model.clone().flatten(),
+                ],
+            )
+            .map_err(|e| classify(e, &draft.name))?;
         if changed == 0 {
             return Err(StoreError::GroupNotFound(id));
         }
         self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))
+    }
+
+    /// A group's raw inference overrides, key included.
+    ///
+    /// Separate from `list_groups` on purpose: that shape crosses IPC and must
+    /// never carry the key, and this one never leaves the runtime.
+    pub fn group_inference(&self, id: GroupId) -> Result<GroupInference, StoreError> {
+        let conn = self.conn()?;
+        let found = conn
+            .query_row(
+                "SELECT base_url, api_key, default_model FROM groups WHERE id=?1",
+                params![id.to_string()],
+                |row| {
+                    Ok(GroupInference {
+                        base_url: row.get(0)?,
+                        api_key: row.get(1)?,
+                        default_model: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(found.unwrap_or_default())
     }
 
     pub fn get_group(&self, id: GroupId) -> Result<Option<Group>, StoreError> {
@@ -508,6 +554,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
 
 fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
     let id_raw: String = row.get(0)?;
+    let api_key: Option<String> = row.get(5)?;
 
     Ok((|| {
         Ok(Group {
@@ -517,6 +564,10 @@ fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
             name: row.get(1)?,
             created_at: row.get(2)?,
             agent_count: row.get::<_, i64>(3)?.max(0) as u32,
+            base_url: row.get(4)?,
+            default_model: row.get(6)?,
+            api_key_set: api_key.as_deref().is_some_and(|k| !k.trim().is_empty()),
+            api_key_hint: crate::config::hint_for(api_key.as_deref().unwrap_or_default()),
         })
     })())
 }

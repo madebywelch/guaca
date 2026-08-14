@@ -26,7 +26,18 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
 vi.mock("./lib/ipc", () => ({
   api: {
     listAgents: () => listAgents(),
-    listGroups: async () => [],
+    listGroups: async () => [
+      {
+        id: "00000000-0000-4000-8000-000000000001",
+        name: "Everyone",
+        agentCount: 3,
+        createdAt: 0,
+        baseUrl: null,
+        defaultModel: null,
+        apiKeySet: false,
+        apiKeyHint: "",
+      },
+    ],
     agentActivity: async () => ({}),
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),

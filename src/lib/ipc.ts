@@ -17,6 +17,7 @@ import type {
   AgentId,
   Envelope,
   Group,
+  GroupDraft,
   GroupId,
   RunId,
   Settings,
@@ -29,10 +30,9 @@ const EVENT_CHANNEL = "guac://event";
 export const api = {
   listGroups: () => invoke<Group[]>("list_groups"),
 
-  createGroup: (name: string) => invoke<Group>("create_group", { draft: { name } }),
+  createGroup: (draft: GroupDraft) => invoke<Group>("create_group", { draft }),
 
-  renameGroup: (id: GroupId, name: string) =>
-    invoke<Group>("rename_group", { id, draft: { name } }),
+  updateGroup: (id: GroupId, draft: GroupDraft) => invoke<Group>("update_group", { id, draft }),
 
   /** Refused while the group still holds agents; the error carries which. */
   deleteGroup: (id: GroupId) => invoke<void>("delete_group", { id }),

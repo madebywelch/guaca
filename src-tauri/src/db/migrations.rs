@@ -144,6 +144,19 @@ CREATE UNIQUE INDEX agents_live_name_unique
     WHERE lifecycle <> 'terminated';
 "#,
     ),
+    (
+        5,
+        r#"
+-- A group is where a crew's inference settings belong. One group can run on a
+-- local endpoint and another on a hosted one, and an agent inside a group still
+-- overrides the model for itself. NULL means "inherit", which is why these are
+-- nullable rather than defaulted: an empty string is a real value an operator
+-- could set, and the two must stay distinguishable.
+ALTER TABLE groups ADD COLUMN base_url      TEXT;
+ALTER TABLE groups ADD COLUMN api_key       TEXT;
+ALTER TABLE groups ADD COLUMN default_model TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -257,6 +270,20 @@ mod tests {
         let avatar: String =
             conn.query_row("SELECT avatar FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
         assert_eq!(avatar, "avocado", "the rename must not drop the value");
+    }
+
+    #[test]
+    fn group_inference_settings_start_empty_and_mean_inherit() {
+        // NULL and "" have to stay distinguishable: one means "use the app
+        // default", the other is a value an operator deliberately blanked.
+        let mut conn = memory();
+        run(&mut conn).unwrap();
+        let model: Option<String> = conn
+            .query_row("SELECT default_model FROM groups WHERE id=?1", [DEFAULT_GROUP_ID], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(model, None, "a fresh group must inherit rather than pin a model");
     }
 
     #[test]

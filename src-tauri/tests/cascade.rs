@@ -18,6 +18,7 @@ use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Part, Participant};
+use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{RecordingSink, UiEvent};
@@ -209,7 +210,15 @@ fn harness_in_groups(stub: &Stub, placed: &[(&str, Option<&str>)], limits: Guard
     for (name, group) in placed {
         let group_id = group.map(|label| {
             *groups.entry(label).or_insert_with(|| {
-                store.create_group(label).expect("group name is unique in a fresh store").id
+                store
+                    .create_group(&CleanGroup {
+                        name: (*label).to_string(),
+                        base_url: None,
+                        default_model: None,
+                        api_key: None,
+                    })
+                    .expect("group name is unique in a fresh store")
+                    .id
             })
         });
         let mut d = draft(name, &["testing"]);
@@ -1072,5 +1081,84 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
     assert!(
         !answer.expects_reply,
         "an answer sent through the tool must not demand another, or the cascade re-arms"
+    );
+}
+
+#[tokio::test]
+async fn a_group_can_pin_a_model_without_touching_the_other_group() {
+    // Settings resolve agent over group over app. The point of the chain is
+    // that two crews can run on different models at once, so this checks what
+    // the model actually received rather than what was configured.
+    let stub = serve(|_| Script::Say("ok".into())).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("guac.db")).unwrap();
+    let pinned = store
+        .create_group(&CleanGroup {
+            name: "Local".into(),
+            base_url: None,
+            default_model: Some(Some("local/qwen".into())),
+            api_key: None,
+        })
+        .unwrap();
+
+    // One agent inherits its group's model, one names its own, one is in the
+    // default group and inherits the app default.
+    let mut inherits = draft("Inherits", &["testing"]);
+    inherits.group_id = Some(pinned.id);
+    inherits.model = String::new();
+    let inherits = store.create_agent(&inherits).unwrap();
+
+    let mut overrides = draft("Overrides", &["testing"]);
+    overrides.group_id = Some(pinned.id);
+    overrides.model = "explicit/model".into();
+    let overrides = store.create_agent(&overrides).unwrap();
+
+    let mut elsewhere = draft("Elsewhere", &["testing"]);
+    elsewhere.model = String::new();
+    let elsewhere = store.create_agent(&elsewhere).unwrap();
+
+    let config = AppConfig {
+        version: guac_lib::config::CURRENT_VERSION,
+        inference: InferenceConfig {
+            base_url: stub.base_url.clone(),
+            api_key: "sk-test".into(),
+            default_model: "app/default".into(),
+            request_timeout_secs: 10,
+            ..Default::default()
+        },
+        limits: GuardLimits::default(),
+    };
+    let sink = RecordingSink::new();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        config,
+        Workspace::new(dir.path().join("workspace")),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+    let h = Harness { runtime, sink, ids: HashMap::new(), _dir: dir };
+
+    for id in [inherits.id, overrides.id, elsewhere.id] {
+        let run = h.runtime.send_from_human(id, "hello").unwrap();
+        h.settle(run).await;
+    }
+
+    let models: Vec<String> = stub
+        .transcript
+        .lock()
+        .iter()
+        .filter_map(|body| body["model"].as_str().map(|s| s.to_string()))
+        .collect();
+
+    assert!(models.contains(&"local/qwen".to_string()), "group model must apply, got {models:?}");
+    assert!(
+        models.contains(&"explicit/model".to_string()),
+        "an agent must still be able to override its group, got {models:?}"
+    );
+    assert!(
+        models.contains(&"app/default".to_string()),
+        "a group with no model must still inherit the app default, got {models:?}"
     );
 }

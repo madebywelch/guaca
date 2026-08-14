@@ -137,8 +137,6 @@ pub enum DraftError {
     NameTooLong { max: usize },
     #[error("color must be a #rrggbb hex string, got {got:?}")]
     BadColor { got: String },
-    #[error("model must not be blank")]
-    BlankModel,
     #[error("avatar must not be blank")]
     BlankAvatar,
     #[error("an agent named {name:?} already exists")]
@@ -166,10 +164,10 @@ impl AgentDraft {
             return Err(DraftError::BlankAvatar);
         }
 
+        // Blank is legal and means "inherit": the group's model, or the app
+        // default if the group does not name one. Requiring a model here was
+        // what made a group-level model impossible to express.
         let model = self.model.trim();
-        if model.is_empty() {
-            return Err(DraftError::BlankModel);
-        }
 
         let color = normalize_color(&self.color)
             .ok_or_else(|| DraftError::BadColor { got: self.color.clone() })?;
@@ -261,10 +259,12 @@ mod tests {
     }
 
     #[test]
-    fn blank_model_is_rejected() {
+    fn a_blank_model_is_allowed_and_means_inherit() {
+        // The runtime resolves agent over group over app default, so a blank
+        // model here is how an agent says "whatever my group is using".
         let mut d = draft();
         d.model = "  ".into();
-        assert_eq!(d.validate(), Err(DraftError::BlankModel));
+        assert_eq!(d.validate().unwrap().model, "");
     }
 
     #[test]

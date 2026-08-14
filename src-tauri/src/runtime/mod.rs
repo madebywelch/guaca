@@ -20,7 +20,7 @@ use std::sync::Arc;
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, Notify};
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, InferenceConfig};
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{AgentCard, DirectoryEntry, Lifecycle};
 use crate::domain::envelope::{
@@ -488,6 +488,17 @@ impl Runtime {
 
         let config = self.config();
         let mut collected_text = String::new();
+        // Settings resolve agent over group over app. An agent that names its own
+        // model keeps it; otherwise the group's choice applies; otherwise the
+        // app default. The endpoint resolves the same way, so one crew can run
+        // against a local server while another uses a hosted one.
+        let inference = self.inference_for(&card, &config);
+        let model = if card.model.trim().is_empty() {
+            inference.default_model.clone()
+        } else {
+            card.model.clone()
+        };
+
         let mut tool_parts: Vec<Part> = Vec::new();
         // Peers written to through `send_message` during this turn.
         let mut addressed: HashSet<AgentId> = HashSet::new();
@@ -506,7 +517,7 @@ impl Runtime {
             }
 
             let request = ChatRequest {
-                model: card.model.clone(),
+                model: model.clone(),
                 messages: messages.clone(),
                 tools: tools::specs(),
                 temperature: None,
@@ -516,7 +527,7 @@ impl Runtime {
             let completion = self
                 .inner
                 .llm
-                .stream_chat(&config.inference, &request, |token| {
+                .stream_chat(&inference, &request, |token| {
                     events.emit(UiEvent::StreamDelta {
                         message_id: stream_id,
                         channel_id: out_channel,
@@ -1029,6 +1040,23 @@ impl Runtime {
     /// `send_to_peers` resolves names against exactly the same scope, so an
     /// agent cannot address a peer it was never shown. An agent whose own card
     /// has gone sees nobody, which fails closed.
+    /// The inference settings one agent's turn should use.
+    ///
+    /// Layered rather than replaced: a group that overrides only the model
+    /// still uses the app's endpoint and key, so setting one field does not
+    /// silently blank the others.
+    fn inference_for(&self, card: &AgentCard, config: &AppConfig) -> InferenceConfig {
+        match self.inner.store.group_inference(card.group_id) {
+            Ok(overrides) => overrides.apply(&config.inference),
+            Err(err) => {
+                // A group that cannot be read must not take its agents offline;
+                // the app defaults are a working fallback.
+                tracing::warn!(agent = %card.name, %err, "group settings unreadable, using app defaults");
+                config.inference.clone()
+            }
+        }
+    }
+
     fn roster_excluding(&self, me: AgentId) -> Vec<DirectoryEntry> {
         let agents = self.inner.store.list_agents().unwrap_or_default();
         let Some(group) = agents.iter().find(|c| c.id == me).map(|c| c.group_id) else {

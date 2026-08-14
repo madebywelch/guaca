@@ -153,7 +153,9 @@ impl AppConfig {
     }
 }
 
-fn hint_for(key: &str) -> String {
+/// Last four characters of a key, for showing that one is set without showing
+/// what it is. Shared with groups, which redact theirs the same way.
+pub fn hint_for(key: &str) -> String {
     let key = key.trim();
     if key.is_empty() {
         return String::new();

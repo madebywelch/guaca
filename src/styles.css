@@ -180,27 +180,61 @@ button {
   justify-content: space-between;
 }
 
-/* A group header. Reads as a label rather than a control, because clicking it
-   is a secondary action: the primary thing in the rail is still the agent. */
+/* A group header. Reads as a label, not a control: the primary thing in the
+   rail is still the agent. The gear is the only part that acts. */
 .rail__group-head {
-  width: 100%;
-  background: none;
-  border: 0;
   font-family: var(--font-mono);
   font-size: 0.6rem;
   font-weight: 500;
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--rail-muted);
-  padding: 0.75rem 1rem 0.3rem;
+  padding: 0.75rem 0.6rem 0.3rem 1rem;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  text-align: left;
+  gap: 0.45rem;
 }
 
-.rail__group-head:hover {
+.rail__group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Shown only when the group pins a model, because the useful thing to know at
+   a glance is which crews are not on the default. */
+.rail__group-pin {
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--rail-muted);
+  background: var(--rail-raised);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__group-count {
+  margin-left: auto;
+}
+
+.rail__gear {
+  background: none;
+  border: 0;
+  padding: 0 0.15rem;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: var(--rail-muted);
+  opacity: 0.55;
+  transition: opacity 120ms ease, color 120ms ease;
+}
+
+.rail__group-head:hover .rail__gear,
+.rail__gear:focus-visible {
+  opacity: 1;
   color: var(--rail-text);
 }
 

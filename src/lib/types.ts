@@ -51,6 +51,19 @@ export interface Group {
   /** Live agents in it. Terminated ones are excluded. */
   agentCount: number;
   createdAt: number;
+  /** `null` means inherit the app default. Settings resolve agent → group → app. */
+  baseUrl: string | null;
+  defaultModel: string | null;
+  apiKeySet: boolean;
+  apiKeyHint: string;
+}
+
+/** Absent fields are left as they were; empty strings clear the override. */
+export interface GroupDraft {
+  name: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  apiKey?: string;
 }
 
 export interface AgentCard {

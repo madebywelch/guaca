@@ -187,11 +187,6 @@ export function Sidebar({
         activity
       </button>
 
-      <div className="rail__section">
-        <span>Agents</span>
-        <span>{agents.length}</span>
-      </div>
-
       {/* The wire lives on this wrapper rather than on the scroll container, so
           it runs the full height of the rail down to the footer instead of
           stopping wherever the list happens to end. It is only drawn while a
@@ -218,29 +213,40 @@ export function Sidebar({
             );
           })}
 
-          {/* Groups only appear once there is more than one. A single group is
-              the default every agent starts in, and labelling it would be
-              chrome explaining a choice the operator has not made yet. */}
-          {groups.length > 1
-            ? groups.map((group) => {
-                const members = agents.filter((a) => a.groupId === group.id);
-                return (
-                  <div key={group.id} className="rail__group">
-                    <button
-                      type="button"
-                      className="rail__group-head"
-                      onClick={() => onEditGroup(group)}
-                      title={`${group.name} — rename or delete`}
-                    >
-                      <span>{group.name}</span>
-                      <span>{members.length}</span>
-                    </button>
-                    {members.map(row)}
-                    {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
-                  </div>
-                );
-              })
-            : agents.map(row)}
+          {/* Every group gets a header, including the only one, because the
+              gear on it is where that group's model and endpoint live. */}
+          {groups.map((group) => {
+            const members = agents.filter((a) => a.groupId === group.id);
+            return (
+              <div key={group.id} className="rail__group">
+                <div className="rail__group-head">
+                  <span className="rail__group-name">{group.name}</span>
+                  {group.defaultModel && (
+                    <span className="rail__group-pin" title={`Runs on ${group.defaultModel}`}>
+                      {group.defaultModel}
+                    </span>
+                  )}
+                  <span className="rail__group-count">{members.length}</span>
+                  <button
+                    type="button"
+                    className="rail__gear"
+                    onClick={() => onEditGroup(group)}
+                    title={`${group.name} settings`}
+                    aria-label={`${group.name} settings`}
+                  >
+                    ⚙
+                  </button>
+                </div>
+                {members.map(row)}
+                {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
+              </div>
+            );
+          })}
+
+          {/* Anything whose group did not come back still gets drawn. The rail
+              hiding an agent is worse than the rail looking untidy, and an
+              empty group list used to hide every agent at once. */}
+          {agents.filter((a) => !groups.some((g) => g.id === a.groupId)).map(row)}
 
           {agents.length === 0 && <p className="rail__empty">No agents yet.</p>}
         </div>
@@ -263,7 +269,7 @@ export function Sidebar({
           <span aria-hidden="true" className="rail__hash">
             ⚙
           </span>
-          Settings
+          App settings
         </button>
       </div>
     </nav>
