@@ -166,6 +166,16 @@ ALTER TABLE groups ADD COLUMN default_model TEXT;
 ALTER TABLE agents ADD COLUMN sandbox_id TEXT;
 "#,
     ),
+    (
+        7,
+        r#"
+-- Computers moved from Daytona to E2B, whose sandboxes have internet access
+-- without a plan upgrade. The ids left behind name sandboxes on a provider this
+-- build no longer talks to, so they are cleared rather than left to 404 on
+-- every check.
+UPDATE agents SET sandbox_id = NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

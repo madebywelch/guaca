@@ -1689,9 +1689,73 @@ button {
   gap: 0.4rem;
 }
 
-.computer__foot {
-  clear: both;
+/* The terminal. Not an embedded shell: each line is one call to the same
+   command runner the agent's own tool uses. */
+.computer__term {
   display: flex;
-  justify-content: flex-end;
-  padding: 0 0 0.4rem;
+  flex-direction: column;
+  height: 15rem;
+}
+
+.computer[data-open="true"] .computer__term {
+  height: 24rem;
+}
+
+.computer__log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.6rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+}
+
+.computer__cmd {
+  color: var(--rail-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.computer__cmd span {
+  color: var(--flesh-soft);
+  opacity: 0.7;
+}
+
+.computer__out {
+  margin: 0.1rem 0 0.5rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--rail-muted);
+  font: inherit;
+}
+
+.computer__out[data-failed="true"] {
+  color: #e2a08a;
+}
+
+.computer__prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-top: 1px solid var(--rail-edge);
+  padding: 0.4rem 0.7rem;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--flesh-soft);
+}
+
+.computer__prompt input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  font: inherit;
+  color: var(--rail-text);
+}
+
+.computer__prompt input::placeholder {
+  color: var(--rail-muted);
+  opacity: 0.7;
 }

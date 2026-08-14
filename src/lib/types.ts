@@ -66,14 +66,20 @@ export interface GroupDraft {
   apiKey?: string;
 }
 
-/** An agent's sandbox: a desktop and a terminal it can be watched using. */
+/** An agent's sandbox: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
   sandboxId: string;
-  /** Daytona's own word: `started`, `stopped`, `creating`, `error`, … */
+  /** `running` or `stopped`. E2B reclaims idle sandboxes rather than parking them. */
   state: string;
-  /** Absent unless the sandbox is running. */
+  /** Absent until the desktop processes are up inside the sandbox. */
   vncUrl: string | null;
-  terminalUrl: string | null;
+}
+
+/** One command's result, from the agent's computer. */
+export interface Output {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
 }
 
 export interface AgentCard {
@@ -118,8 +124,8 @@ export interface GuardLimits {
 }
 
 export interface Settings {
-  daytonaKeySet: boolean;
-  daytonaKeyHint: string;
+  e2bKeySet: boolean;
+  e2bKeyHint: string;
   baseUrl: string;
   defaultModel: string;
   apiKeySet: boolean;
@@ -130,7 +136,7 @@ export interface Settings {
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
 export interface SettingsPatch {
-  daytonaApiKey?: string;
+  e2bApiKey?: string;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;

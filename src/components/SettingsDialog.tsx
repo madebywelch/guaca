@@ -54,7 +54,7 @@ export function SettingsDialog({ onClose }: Props) {
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
   const [apiKey, setApiKey] = useState("");
-  const [daytonaKey, setDaytonaKey] = useState("");
+  const [e2bKey, setE2bKey] = useState("");
   const [limits, setLimits] = useState<GuardLimits>(
     settings?.limits ?? { maxHops: 8, maxStepsPerRun: 60, maxFanoutPerCall: 8, maxSendsPerPair: 6 },
   );
@@ -81,7 +81,7 @@ export function SettingsDialog({ onClose }: Props) {
         limits,
         // Omitted when blank, so saving without retyping keeps the stored key.
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-        ...(daytonaKey.trim() ? { daytonaApiKey: daytonaKey.trim() } : {}),
+        ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
       });
       setSettings(next);
       setApiKey("");
@@ -103,7 +103,7 @@ export function SettingsDialog({ onClose }: Props) {
         baseUrl,
         defaultModel: model,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-        ...(daytonaKey.trim() ? { daytonaApiKey: daytonaKey.trim() } : {}),
+        ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
       });
       setStatus({ tone: "ok", text: result });
     } catch (error) {
@@ -155,16 +155,14 @@ export function SettingsDialog({ onClose }: Props) {
         </label>
 
         <label className="field">
-          <span className="field__label">Daytona API key</span>
+          <span className="field__label">E2B API key</span>
           <input
             className="input input--mono"
             type="password"
-            value={daytonaKey}
-            placeholder={
-              settings?.daytonaKeySet ? `Stored ${settings.daytonaKeyHint}` : "dtn_… (optional)"
-            }
+            value={e2bKey}
+            placeholder={settings?.e2bKeySet ? `Stored ${settings.e2bKeyHint}` : "e2b_… (optional)"}
             autoComplete="off"
-            onChange={(event) => setDaytonaKey(event.target.value)}
+            onChange={(event) => setE2bKey(event.target.value)}
           />
           <span className="field__hint">
             Gives every agent its own computer: a desktop and a terminal in a sandbox, shown in the

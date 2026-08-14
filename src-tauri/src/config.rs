@@ -95,16 +95,16 @@ pub struct AppConfig {
     pub inference: InferenceConfig,
     pub limits: GuardLimits,
     #[serde(default)]
-    pub daytona: DaytonaConfig,
+    pub e2b: E2bConfig,
 }
 
 /// Credentials for the sandboxes agents run their computers in.
 ///
-/// App-wide rather than per group: it is one Daytona account, and a sandbox is
+/// App-wide rather than per group: it is one E2B account, and a sandbox is
 /// billed to it no matter which crew asked for one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-pub struct DaytonaConfig {
+pub struct E2bConfig {
     pub api_key: String,
 }
 
@@ -144,8 +144,8 @@ pub fn migrate(config: &mut AppConfig) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactedConfig {
-    pub daytona_key_set: bool,
-    pub daytona_key_hint: String,
+    pub e2b_key_set: bool,
+    pub e2b_key_hint: String,
     pub base_url: String,
     pub default_model: String,
     pub api_key_set: bool,
@@ -157,8 +157,8 @@ pub struct RedactedConfig {
 impl AppConfig {
     pub fn redacted(&self) -> RedactedConfig {
         RedactedConfig {
-            daytona_key_set: !self.daytona.api_key.trim().is_empty(),
-            daytona_key_hint: hint_for(&self.daytona.api_key),
+            e2b_key_set: !self.e2b.api_key.trim().is_empty(),
+            e2b_key_hint: hint_for(&self.e2b.api_key),
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
             api_key_set: !self.inference.api_key.trim().is_empty(),

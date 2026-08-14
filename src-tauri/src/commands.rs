@@ -12,11 +12,11 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
-use crate::daytona::{Computer, DaytonaClient, DaytonaError};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{AgentId, GroupId, RunId};
+use crate::e2b::{Computer, E2bClient, E2bError, Output};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -81,13 +81,13 @@ impl From<crate::domain::group::GroupError> for CommandError {
     }
 }
 
-impl From<DaytonaError> for CommandError {
-    fn from(err: DaytonaError) -> Self {
+impl From<E2bError> for CommandError {
+    fn from(err: E2bError) -> Self {
         match err {
             // Its own kind so the UI can offer to open settings rather than
             // showing a failure for something that was simply never set up.
-            DaytonaError::NoKey => CommandError::new("daytonaUnconfigured", err.to_string()),
-            other => CommandError::new("daytona", other.to_string()),
+            E2bError::NoKey => CommandError::new("computerUnconfigured", err.to_string()),
+            other => CommandError::new("computer", other.to_string()),
         }
     }
 }
@@ -102,10 +102,9 @@ type Reply<T> = Result<T, CommandError>;
 
 // ---- computers -----------------------------------------------------------
 
-/// The Daytona client, or a clear reason there is not one.
-fn daytona(state: &State<'_, AppState>) -> Reply<DaytonaClient> {
-    DaytonaClient::new(&state.runtime.config().daytona.api_key)
-        .ok_or_else(|| DaytonaError::NoKey.into())
+/// The E2B client, or a clear reason there is not one.
+fn computers(state: &State<'_, AppState>) -> Reply<E2bClient> {
+    E2bClient::new(&state.runtime.config().e2b.api_key).ok_or_else(|| E2bError::NoKey.into())
 }
 
 fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
@@ -125,18 +124,16 @@ pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Op
     let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
         return Ok(None);
     };
-    let client = daytona(&state)?;
+    let client = computers(&state)?;
 
-    match client.describe(&sandbox).await {
-        Ok(computer) => Ok(Some(computer)),
-        // A sandbox deleted from Daytona's side leaves a dangling id. Clearing
-        // it turns a permanent error into an offer to provision a new one.
-        Err(DaytonaError::Api { status: 404, .. }) => {
-            state.runtime.store().set_agent_sandbox(id, None)?;
-            Ok(None)
-        }
-        Err(err) => Err(err.into()),
+    let computer = client.describe(&sandbox).await?;
+    // E2B reclaims idle sandboxes, and a reclaimed one leaves a dangling id.
+    // Clearing it turns a dead end into an offer to make a new one.
+    if !computer.is_running() {
+        state.runtime.store().set_agent_sandbox(id, None)?;
+        return Ok(None);
     }
+    Ok(Some(computer))
 }
 
 /// Gives an agent a computer, or wakes the one it already has.
@@ -146,7 +143,7 @@ pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Op
 #[tauri::command]
 pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
     let card = agent_card(&state, id)?;
-    let client = daytona(&state)?;
+    let client = computers(&state)?;
 
     let sandbox = match card.sandbox_id {
         Some(existing) => existing,
@@ -159,9 +156,14 @@ pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Re
         }
     };
 
-    if client.state(&sandbox).await? != "started" {
-        client.start(&sandbox).await?;
-    }
+    // A reclaimed sandbox cannot be restarted, so a fresh one takes its place.
+    let sandbox = if client.is_alive(&sandbox).await? {
+        sandbox
+    } else {
+        let fresh = client.create(&card.name).await?;
+        state.runtime.store().set_agent_sandbox(id, Some(&fresh))?;
+        fresh
+    };
     client.start_desktop(&sandbox).await?;
 
     let computer = client.describe(&sandbox).await?;
@@ -169,18 +171,20 @@ pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Re
     Ok(computer)
 }
 
+/// Runs one command on an agent's computer on the operator's behalf.
+///
+/// The same call the agent's own tool makes, so the terminal in the pane and
+/// the agent are looking at exactly one machine through one mechanism.
 #[tauri::command]
-pub async fn stop_agent_computer(
+pub async fn run_on_agent_computer(
     state: State<'_, AppState>,
     id: AgentId,
-) -> Reply<Option<Computer>> {
+    command: String,
+) -> Reply<Output> {
     let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
-        return Ok(None);
+        return Err(CommandError::new("notFound", "that agent has no computer yet"));
     };
-    let client = daytona(&state)?;
-    client.stop(&sandbox).await?;
-    state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Some(client.describe(&sandbox).await?))
+    Ok(computers(&state)?.run(&sandbox, &command).await?)
 }
 
 /// Destroys the sandbox and everything on its disk.
@@ -189,7 +193,7 @@ pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> R
     let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
         return Ok(());
     };
-    daytona(&state)?.delete(&sandbox).await?;
+    computers(&state)?.kill(&sandbox).await?;
     state.runtime.store().set_agent_sandbox(id, None)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -364,7 +368,7 @@ pub struct SettingsPatch {
     pub default_model: Option<String>,
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
-    pub daytona_api_key: Option<String>,
+    pub e2b_api_key: Option<String>,
 }
 
 #[tauri::command]
@@ -378,8 +382,8 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
     if let Some(base_url) = patch.base_url {
         config.inference.base_url = config::normalize_base_url(&base_url)?;
     }
-    if let Some(key) = patch.daytona_api_key {
-        config.daytona.api_key = key.trim().to_string();
+    if let Some(key) = patch.e2b_api_key {
+        config.e2b.api_key = key.trim().to_string();
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();

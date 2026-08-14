@@ -18,6 +18,7 @@ use crate::llm::openrouter::{ToolCall, ToolSpec};
 pub const DIRECTORY: &str = "directory";
 pub const SEND_MESSAGE: &str = "send_message";
 pub const UPDATE_NOTES: &str = "update_notes";
+pub const RUN_COMMAND: &str = "run_command";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -63,6 +64,27 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: RUN_COMMAND.to_string(),
+            description: "Run a shell command on your own computer: a Linux machine with a \
+                          terminal, a filesystem and internet access, kept between turns. Use it \
+                          to look things up (`curl`), read and write files, install packages, \
+                          and run code. This is how you reach anything you do not already know. \
+                          The first call may take a few seconds while the machine starts."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "A bash command, e.g. `curl -s wttr.in/Charleston?format=3`."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to one or more other agents. Delivery is asynchronous \
                           and non-blocking: this returns as soon as the messages are queued. \
@@ -98,11 +120,15 @@ pub enum ToolInvocation {
     Directory,
     SendMessage { to: Vec<String>, text: String },
     UpdateNotes { content: String },
+    RunCommand { command: String },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
-    #[error("unknown tool {name:?}. Available tools: directory, send_message, update_notes.")]
+    #[error(
+        "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
+         run_command."
+    )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
     BadJson { name: String, detail: String },
@@ -112,6 +138,8 @@ pub enum ToolParseError {
     MissingText,
     #[error("update_notes needs a `content` string")]
     MissingContent,
+    #[error("run_command needs a non-empty `command` string")]
+    MissingCommand,
 }
 
 impl ToolParseError {
@@ -122,13 +150,18 @@ impl ToolParseError {
             ToolParseError::UnknownTool { name } => {
                 format!(
                     "Error: no tool named {name:?}. You can call `directory`, `send_message`, \
-                     or `update_notes`."
+                     `update_notes`, or `run_command`."
                 )
             }
             ToolParseError::BadJson { name, detail } => format!(
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
             ),
+            ToolParseError::MissingCommand => {
+                "Error: `command` must be a non-empty string, for example \
+                 {\"command\": \"curl -s wttr.in/Charleston?format=3\"}."
+                    .to_string()
+            }
             ToolParseError::MissingRecipients => {
                 "Error: `to` must be a non-empty array of exact agent names. Call `directory` to \
                  see them."
@@ -162,6 +195,18 @@ struct SendArgs {
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
+        RUN_COMMAND => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: RUN_COMMAND.to_string(),
+                detail: e.to_string(),
+            })?;
+            match value.get("command").or_else(|| value.get("cmd")) {
+                Some(serde_json::Value::String(command)) if !command.trim().is_empty() => {
+                    Ok(ToolInvocation::RunCommand { command: command.clone() })
+                }
+                _ => Err(ToolParseError::MissingCommand),
+            }
+        }
         UPDATE_NOTES => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: UPDATE_NOTES.to_string(),
@@ -305,9 +350,26 @@ mod tests {
     }
 
     #[test]
+    fn a_command_is_parsed_from_either_spelling() {
+        // Models reach for `cmd` about as often as `command`, and refusing one
+        // of them wastes a whole turn on a rejection.
+        for field in ["command", "cmd"] {
+            let parsed = parse(&call(RUN_COMMAND, &format!("{{\"{field}\": \"echo hi\"}}")));
+            assert_eq!(parsed, Ok(ToolInvocation::RunCommand { command: "echo hi".into() }));
+        }
+    }
+
+    #[test]
+    fn an_empty_command_is_refused_with_an_example() {
+        let err = parse(&call(RUN_COMMAND, "{\"command\": \"   \"}")).unwrap_err();
+        assert_eq!(err, ToolParseError::MissingCommand);
+        assert!(err.guidance().contains("curl"), "the model needs to see a usable call");
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs();
-        assert_eq!(specs.len(), 3);
+        assert_eq!(specs.len(), 4, "directory, run_command, send_message, update_notes");
         for spec in &specs {
             assert_eq!(
                 spec.parameters["additionalProperties"], false,

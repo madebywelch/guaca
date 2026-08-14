@@ -861,6 +861,31 @@ impl Runtime {
                 }
             }
 
+            ToolInvocation::RunCommand { command } => {
+                let outcome = self.run_on_computer(card, &command).await;
+                let (rendered, outcome) = match outcome {
+                    Ok(output) => {
+                        let summary = format!(
+                            "exit {}, {} bytes out",
+                            output.exit_code,
+                            output.stdout.len() + output.stderr.len()
+                        );
+                        (output.rendered(), ToolOutcome::Ok { summary })
+                    }
+                    // Reported to the model rather than raised: a machine that
+                    // will not start is something the agent has to work around
+                    // and tell the operator about, not a dead turn.
+                    Err(err) => (
+                        format!("Error: your computer is not available ({err})."),
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
+                };
+                (
+                    rendered,
+                    Part::ToolCall { name: tools::RUN_COMMAND.to_string(), arguments, outcome },
+                )
+            }
+
             ToolInvocation::SendMessage { to, text } => {
                 let deliveries = self.send_to_peers(
                     card,
@@ -1040,6 +1065,43 @@ impl Runtime {
     /// `send_to_peers` resolves names against exactly the same scope, so an
     /// agent cannot address a peer it was never shown. An agent whose own card
     /// has gone sees nobody, which fails closed.
+    /// Runs a command on the agent's own computer, making one for it if this is
+    /// the first time it has asked.
+    ///
+    /// Provisioning lazily is what lets an agent simply have a computer: there
+    /// is nothing to switch on, and an agent that never runs a command never
+    /// costs a sandbox.
+    async fn run_on_computer(
+        &self,
+        card: &AgentCard,
+        command: &str,
+    ) -> Result<crate::e2b::Output, crate::e2b::E2bError> {
+        let config = self.config();
+        let client =
+            crate::e2b::E2bClient::new(&config.e2b.api_key).ok_or(crate::e2b::E2bError::NoKey)?;
+
+        let existing = match &card.sandbox_id {
+            Some(id) if client.is_alive(id).await.unwrap_or(false) => Some(id.clone()),
+            _ => None,
+        };
+
+        let sandbox = match existing {
+            Some(id) => id,
+            None => {
+                let fresh = client.create(&card.name).await?;
+                // Recorded before the command runs, so a sandbox is never
+                // created and then forgotten with the bill still running.
+                if let Err(err) = self.inner.store.set_agent_sandbox(card.id, Some(&fresh)) {
+                    tracing::error!(%err, "could not record the agent's sandbox");
+                }
+                self.inner.events.emit(UiEvent::AgentsChanged);
+                fresh
+            }
+        };
+
+        client.run(&sandbox, command).await
+    }
+
     /// The inference settings one agent's turn should use.
     ///
     /// Layered rather than replaced: a group that overrides only the model

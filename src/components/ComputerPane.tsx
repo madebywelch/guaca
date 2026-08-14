@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { type AgentCard, type Computer, errorMessage } from "../lib/types";
@@ -7,19 +7,28 @@ interface Props {
   agent: AgentCard;
 }
 
+interface Line {
+  /** The log is append-only, but an index key still breaks if it ever is not. */
+  id: number;
+  command: string;
+  output: string;
+  failed: boolean;
+}
+
+let lineSeq = 0;
+
 /**
  * An agent's computer, in the corner of its channel.
  *
- * Two sizes, and the difference is not just scale. Minimised it is a live but
- * read-only picture: the operator watches what the agent is doing without their
- * pointer landing in the middle of it. Maximised, the same desktop accepts
- * input and the operator can take over.
+ * Two views of one machine. The screen is E2B's noVNC, embedded straight from
+ * the sandbox's public URL: minimised it is a live but read-only picture behind
+ * a transparent veil, so a stray click cannot land in the agent's desktop;
+ * maximised it accepts input and the operator can take over.
  *
- * The frame is Daytona's own noVNC client, but it is not loaded from Daytona
- * directly. Daytona puts an interstitial in front of every preview request, so
- * loading it straight returned the warning page in place of noVNC's stylesheet
- * and scripts. Both views therefore come through `guaccomputer://`, which Rust
- * forwards with the header that suppresses it.
+ * The terminal is not an embedded shell. It runs commands through exactly the
+ * call the agent's own `run_command` tool makes, so the operator and the agent
+ * are looking at one machine through one mechanism rather than two that can
+ * disagree about what is on it.
  */
 export function ComputerPane({ agent }: Props) {
   const [computer, setComputer] = useState<Computer | null>(null);
@@ -28,6 +37,9 @@ export function ComputerPane({ agent }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
+  const [lines, setLines] = useState<Line[]>([]);
+  const [command, setCommand] = useState("");
+  const logRef = useRef<HTMLDivElement>(null);
 
   const look = useCallback(async () => {
     try {
@@ -46,16 +58,14 @@ export function ComputerPane({ agent }: Props) {
     setComputer(null);
     setChecked(false);
     setOpen(false);
+    setLines([]);
     void look();
   }, [look]);
 
-  // A sandbox reports `creating` or `starting` before it can serve a desktop,
-  // so the pane polls itself up rather than leaving a dead frame on screen.
   useEffect(() => {
-    if (!computer || computer.state === "started" || computer.state === "stopped") return;
-    const timer = setTimeout(() => void look(), 2000);
-    return () => clearTimeout(timer);
-  }, [computer, look]);
+    const node = logRef.current;
+    if (node) node.scrollTop = node.scrollHeight;
+  }, [lines]);
 
   const act = async (run: () => Promise<Computer | null>) => {
     setBusy(true);
@@ -69,127 +79,174 @@ export function ComputerPane({ agent }: Props) {
     }
   };
 
+  const send = async () => {
+    const next = command.trim();
+    if (!next || busy) return;
+    setBusy(true);
+    setCommand("");
+    try {
+      const result = await api.runOnAgentComputer(agent.id, next);
+      const body = [result.stdout, result.stderr && `stderr: ${result.stderr}`]
+        .filter(Boolean)
+        .join("\n")
+        .trimEnd();
+      setLines((prior) => [
+        ...prior,
+        {
+          id: lineSeq++,
+          command: next,
+          output: body || (result.exitCode === 0 ? "" : `exit ${result.exitCode}`),
+          failed: result.exitCode !== 0,
+        },
+      ]);
+    } catch (caught) {
+      setLines((prior) => [
+        ...prior,
+        { id: lineSeq++, command: next, output: errorMessage(caught), failed: true },
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!checked) return null;
 
-  const running = computer?.state === "started";
-  const url = view === "screen" ? computer?.vncUrl : computer?.terminalUrl;
+  const running = computer?.state === "running";
 
   return (
-    <>
-      <div className="computer" data-open={open ? "true" : undefined}>
-        <div className="computer__bar">
-          <span className="computer__title">Computer</span>
-          {computer && (
-            <span className="computer__state" data-state={computer.state}>
-              {computer.state}
-            </span>
-          )}
+    <div className="computer" data-open={open ? "true" : undefined}>
+      <div className="computer__bar">
+        <span className="computer__title">Computer</span>
+        {computer && (
+          <span className="computer__state" data-state={computer.state}>
+            {computer.state}
+          </span>
+        )}
 
-          {running && (
-            <>
-              <button
-                type="button"
-                className="computer__tab"
-                aria-pressed={view === "screen"}
-                onClick={() => setView("screen")}
-              >
-                Screen
-              </button>
-              <button
-                type="button"
-                className="computer__tab"
-                aria-pressed={view === "terminal"}
-                onClick={() => setView("terminal")}
-              >
-                Terminal
-              </button>
-              <button
-                type="button"
-                className="computer__tab"
-                onClick={() => setOpen((o) => !o)}
-                title={open ? "Shrink to a preview" : "Take control"}
-              >
-                {open ? "Minimise" : "Take control"}
-              </button>
-            </>
-          )}
-        </div>
-
-        {running && url ? (
-          <div className="computer__screen">
-            <iframe
-              // Remounting on the mode switch is deliberate: noVNC decides
-              // whether it listens for input when it connects, so flipping
-              // view_only on a live connection would do nothing.
-              key={`${computer?.sandboxId}:${view}:${open}`}
-              title={`${agent.name}'s computer`}
-              src={view === "screen" ? `${url}&view_only=${open ? 0 : 1}` : url}
-            />
-            {!open && (
-              // Covers the frame so a stray click cannot type into the agent's
-              // desktop while it is only meant to be watched.
-              <button
-                type="button"
-                className="computer__veil"
-                onClick={() => setOpen(true)}
-                aria-label="Take control of this computer"
-              />
-            )}
-          </div>
-        ) : (
-          <div className="computer__empty">
-            {error ? (
-              <p className="computer__note">{error}</p>
-            ) : (
-              <p className="computer__note">
-                {computer
-                  ? computer.state === "stopped"
-                    ? "Asleep. Its disk is kept."
-                    : `${computer.state}…`
-                  : "No computer yet."}
-              </p>
-            )}
-            <div className="computer__actions">
-              <button
-                type="button"
-                className="btn btn--primary"
-                disabled={busy}
-                onClick={() => void act(() => api.startAgentComputer(agent.id))}
-              >
-                {busy ? "Working…" : computer ? "Wake" : "Give one"}
-              </button>
-              {computer && (
-                <button
-                  type="button"
-                  className="btn btn--ghost"
-                  disabled={busy}
-                  onClick={() =>
-                    void act(async () => {
-                      await api.deleteAgentComputer(agent.id);
-                      return null;
-                    })
-                  }
-                >
-                  Destroy
-                </button>
-              )}
-            </div>
-          </div>
+        {running && (
+          <>
+            <button
+              type="button"
+              className="computer__tab"
+              aria-pressed={view === "screen"}
+              onClick={() => setView("screen")}
+            >
+              Screen
+            </button>
+            <button
+              type="button"
+              className="computer__tab"
+              aria-pressed={view === "terminal"}
+              onClick={() => setView("terminal")}
+            >
+              Terminal
+            </button>
+            <button
+              type="button"
+              className="computer__tab"
+              onClick={() => setOpen((o) => !o)}
+              title={open ? "Shrink to a preview" : "Make it bigger"}
+            >
+              {open ? "Minimise" : "Expand"}
+            </button>
+          </>
         )}
       </div>
 
-      {running && (
-        <div className="computer__foot">
-          <button
-            type="button"
-            className="btn btn--ghost"
-            disabled={busy}
-            onClick={() => void act(() => api.stopAgentComputer(agent.id))}
-          >
-            Put to sleep
-          </button>
+      {running && view === "terminal" ? (
+        <div className="computer__term">
+          <div className="computer__log" ref={logRef}>
+            {lines.length === 0 && (
+              <p className="computer__note">
+                The same machine the agent uses. Anything you leave here, it will find.
+              </p>
+            )}
+            {lines.map((line) => (
+              <div key={line.id}>
+                <div className="computer__cmd">
+                  <span aria-hidden="true">$</span> {line.command}
+                </div>
+                {line.output && (
+                  <pre className="computer__out" data-failed={line.failed ? "true" : undefined}>
+                    {line.output}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="computer__prompt">
+            <span aria-hidden="true">$</span>
+            <input
+              value={command}
+              spellCheck={false}
+              placeholder={busy ? "running…" : "curl -s wttr.in/Charleston?format=3"}
+              onChange={(event) => setCommand(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void send();
+              }}
+            />
+          </div>
+        </div>
+      ) : running && computer?.vncUrl ? (
+        <div className="computer__screen">
+          <iframe
+            // Remounting on the mode switch is deliberate: noVNC decides whether
+            // it listens for input when it connects, so flipping view_only on a
+            // live connection would do nothing.
+            key={`${computer.sandboxId}:${open}`}
+            title={`${agent.name}'s computer`}
+            src={`${computer.vncUrl}&view_only=${open ? 0 : 1}`}
+          />
+          {!open && (
+            // Covers the frame so a stray click cannot type into the agent's
+            // desktop while it is only meant to be watched.
+            <button
+              type="button"
+              className="computer__veil"
+              onClick={() => setOpen(true)}
+              aria-label="Take control of this computer"
+            />
+          )}
+        </div>
+      ) : (
+        <div className="computer__empty">
+          {error ? (
+            <p className="computer__note">{error}</p>
+          ) : (
+            <p className="computer__note">
+              {running
+                ? "Running. Start the desktop to watch it, or use the terminal."
+                : "No computer yet. Agents get one the first time they run a command."}
+            </p>
+          )}
+          <div className="computer__actions">
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy}
+              onClick={() => void act(() => api.startAgentComputer(agent.id))}
+            >
+              {busy ? "Working…" : running ? "Start the desktop" : "Give one"}
+            </button>
+            {computer && (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={busy}
+                onClick={() =>
+                  void act(async () => {
+                    await api.deleteAgentComputer(agent.id);
+                    setLines([]);
+                    return null;
+                  })
+                }
+              >
+                Destroy
+              </button>
+            )}
+          </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

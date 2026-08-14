@@ -48,6 +48,19 @@ pub fn system_prompt(
         out.push('\n');
     }
 
+    // Stated plainly and early, because an agent that is only handed a tool
+    // schema does not connect it to what it can do: asked to check the weather,
+    // one with a working machine still answered that it had no way to look
+    // anything up.
+    out.push_str("\n## Your computer\n");
+    out.push_str(
+        "You have your own Linux machine. Call `run_command` to use it: it has a shell, a \
+         filesystem that persists between turns, and working internet access. Anything you do \
+         not already know, you can go and find out rather than declining. Look things up with \
+         `curl`, install what you need, write and run code. Say what you ran and what it \
+         returned rather than presenting the result as something you simply knew.\n",
+    );
+
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should colour how it reads everything after.
     out.push_str("\n## Your notes\n");
@@ -272,6 +285,18 @@ mod tests {
         );
         assert!(prompt.contains("- Chef (cooking, menus)"));
         assert!(prompt.contains("- Host (no stated skills)"));
+    }
+
+    #[test]
+    fn every_agent_is_told_it_has_a_computer() {
+        // The failure this exists to stop: an agent with a working machine
+        // replying that it cannot access live data.
+        let prompt = system_prompt(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("run_command"), "the tool has to be named, not just offered");
+        assert!(
+            prompt.to_lowercase().contains("internet"),
+            "an agent that does not know it can reach the network will decline instead of looking"
+        );
     }
 
     #[test]
