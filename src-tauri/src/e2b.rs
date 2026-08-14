@@ -33,6 +33,11 @@ const DESKTOP_TEMPLATE: &str = "desktop";
 const VNC_PORT: u16 = 6080;
 /// The VNC server noVNC bridges to. Never exposed publicly.
 const RAW_VNC_PORT: u16 = 5900;
+/// The host the webview loads an agent's desktop from. Named here because the
+/// window's CSP has to allow exactly this, and the two silently disagreeing is
+/// a blocked iframe that looks identical to a desktop that failed to start.
+pub const VIEWER_HOST: &str = "127.0.0.1";
+
 /// envd, the agent daemon inside every sandbox.
 const ENVD_PORT: u16 = 49983;
 
@@ -372,7 +377,7 @@ impl E2bClient {
                 // sandboxes refuse public traffic without a header, and the
                 // token that carries it must not reach the webview.
                 computer.vnc_url = Some(format!(
-                    "http://127.0.0.1:{viewer_port}/{sandbox}/{VNC_PORT}/vnc.html\
+                    "http://{VIEWER_HOST}:{viewer_port}/{sandbox}/{VNC_PORT}/vnc.html\
                      ?autoconnect=1&resize=scale&reconnect=1"
                 ));
             }
@@ -537,6 +542,23 @@ fn decode(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_is_allowed_to_frame_the_viewer() {
+        // The viewer moved from E2B's own host to a loopback proxy and the CSP
+        // was left behind, so the webview blocked the iframe outright. Every
+        // check at the HTTP layer passed, because curl does not enforce CSP,
+        // and the screen stayed black.
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let csp = conf["app"]["security"]["csp"].as_str().unwrap_or_default();
+        let frame_src =
+            csp.split(';').find(|part| part.trim().starts_with("frame-src")).unwrap_or_default();
+        assert!(
+            frame_src.contains(VIEWER_HOST),
+            "the window must be allowed to frame {VIEWER_HOST}, got {frame_src:?}"
+        );
+    }
 
     #[test]
     fn a_daemon_is_detached_from_the_shell_that_starts_it() {

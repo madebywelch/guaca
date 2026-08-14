@@ -40,6 +40,12 @@ pub enum StoreError {
     GroupNotEmpty { name: String, agents: u32 },
 }
 
+/// Guards the one-time-per-file setup inside `Store::open`.
+fn bootstrap_lock() -> &'static parking_lot::Mutex<()> {
+    static LOCK: std::sync::OnceLock<parking_lot::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| parking_lot::Mutex::new(()))
+}
+
 /// The group an agent lands in when nothing says otherwise. Parsed from the
 /// migration's pinned constant so the two can never drift apart.
 fn default_group_id() -> GroupId {
@@ -81,6 +87,15 @@ impl Store {
         // Without it every read queues behind the writer and the window
         // stutters whenever a cascade is running.
         {
+            // One thread at a time, process-wide. Both steps below take an
+            // exclusive lock on the file, and SQLite reports a shared vs
+            // exclusive conflict *inside one process* as a deadlock rather than
+            // waiting, so a busy timeout does not save the losers. Racing here
+            // used to fail on the journal_mode switch alone; once the migration
+            // list grew long enough to hold the lock for a few milliseconds, the
+            // same race started failing there too.
+            let _serialised = bootstrap_lock().lock();
+
             let mut bootstrap = rusqlite::Connection::open(path)?;
             // Needed before the migration below, so a second process opening
             // the same database waits for the write lock rather than failing.
