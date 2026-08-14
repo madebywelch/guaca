@@ -176,6 +176,20 @@ ALTER TABLE agents ADD COLUMN sandbox_id TEXT;
 UPDATE agents SET sandbox_id = NULL;
 "#,
     ),
+    (
+        8,
+        r#"
+-- Sandboxes are now created locked: envd refuses commands without a token, and
+-- the public URLs refuse traffic without another. An id on its own no longer
+-- reaches anything, so the tokens live beside it.
+ALTER TABLE agents ADD COLUMN sandbox_envd_token    TEXT;
+ALTER TABLE agents ADD COLUMN sandbox_traffic_token TEXT;
+
+-- The sandboxes recorded before this have no tokens and cannot be reached, so
+-- they are released rather than left as ids that fail on every use.
+UPDATE agents SET sandbox_id = NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

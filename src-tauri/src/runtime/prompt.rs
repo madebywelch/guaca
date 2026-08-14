@@ -214,6 +214,8 @@ mod tests {
         AgentCard {
             group_id: GroupId::new(),
             sandbox_id: None,
+            sandbox_envd_token: None,
+            sandbox_traffic_token: None,
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),

@@ -14,7 +14,7 @@ pub mod guard;
 pub mod prompt;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use parking_lot::{Mutex, RwLock};
@@ -81,6 +81,8 @@ struct Inner {
     inflight: Mutex<HashMap<RunId, usize>>,
     /// Per-agent notes on disk.
     workspace: Workspace,
+    /// Loopback port of the computer viewer. Zero until it is listening.
+    viewer_port: AtomicU16,
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
@@ -124,10 +126,23 @@ impl Runtime {
                 activity: Mutex::new(HashMap::new()),
                 inflight: Mutex::new(HashMap::new()),
                 workspace,
+                viewer_port: AtomicU16::new(0),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 events,
             }),
         }
+    }
+
+    /// The loopback port the computer viewer is listening on, once it is up.
+    ///
+    /// Stored here because the UI has to build viewer URLs and the runtime is
+    /// what the commands already hold.
+    pub fn set_viewer_port(&self, port: u16) {
+        self.inner.viewer_port.store(port, Ordering::SeqCst);
+    }
+
+    pub fn viewer_port(&self) -> u16 {
+        self.inner.viewer_port.load(Ordering::SeqCst)
     }
 
     pub fn store(&self) -> &Store {
@@ -862,7 +877,12 @@ impl Runtime {
             }
 
             ToolInvocation::RunCommand { command } => {
-                let outcome = self.run_on_computer(card, &command).await;
+                let outcome = match self.ensure_computer(card).await {
+                    Ok((client, sandbox)) => {
+                        client.run(&sandbox.id, &sandbox.envd_token, &command).await
+                    }
+                    Err(err) => Err(err),
+                };
                 let (rendered, outcome) = match outcome {
                     Ok(output) => {
                         let summary = format!(
@@ -1065,41 +1085,89 @@ impl Runtime {
     /// `send_to_peers` resolves names against exactly the same scope, so an
     /// agent cannot address a peer it was never shown. An agent whose own card
     /// has gone sees nobody, which fails closed.
-    /// Runs a command on the agent's own computer, making one for it if this is
-    /// the first time it has asked.
+    /// The agent's computer, made or replaced if there is not a live one.
     ///
-    /// Provisioning lazily is what lets an agent simply have a computer: there
-    /// is nothing to switch on, and an agent that never runs a command never
-    /// costs a sandbox.
-    async fn run_on_computer(
+    /// The single place a sandbox is provisioned, so the agent's tool, the
+    /// operator's terminal and the desktop button cannot disagree about which
+    /// machine an agent has. Lazy on purpose: there is nothing to switch on,
+    /// and an agent that never runs a command never costs a sandbox.
+    pub async fn ensure_computer(
         &self,
         card: &AgentCard,
-        command: &str,
-    ) -> Result<crate::e2b::Output, crate::e2b::E2bError> {
+    ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox), crate::e2b::E2bError> {
         let config = self.config();
         let client =
             crate::e2b::E2bClient::new(&config.e2b.api_key).ok_or(crate::e2b::E2bError::NoKey)?;
 
-        let existing = match &card.sandbox_id {
-            Some(id) if client.is_alive(id).await.unwrap_or(false) => Some(id.clone()),
+        // A sandbox recorded without its tokens predates them and cannot be
+        // reached, so it counts as absent rather than as something to retry.
+        let existing = match (&card.sandbox_id, &card.sandbox_envd_token) {
+            (Some(id), Some(envd)) if client.is_alive(id).await.unwrap_or(false) => {
+                Some(crate::e2b::Sandbox {
+                    id: id.clone(),
+                    envd_token: envd.clone(),
+                    traffic_token: card.sandbox_traffic_token.clone().unwrap_or_default(),
+                })
+            }
             _ => None,
         };
 
-        let sandbox = match existing {
-            Some(id) => id,
-            None => {
-                let fresh = client.create(&card.name).await?;
-                // Recorded before the command runs, so a sandbox is never
-                // created and then forgotten with the bill still running.
-                if let Err(err) = self.inner.store.set_agent_sandbox(card.id, Some(&fresh)) {
-                    tracing::error!(%err, "could not record the agent's sandbox");
-                }
-                self.inner.events.emit(UiEvent::AgentsChanged);
-                fresh
-            }
+        if let Some(sandbox) = existing {
+            return Ok((client, sandbox));
+        }
+
+        let fresh = client.create(&card.name).await?;
+
+        // A sandbox that cannot be written down is a sandbox nobody can reach
+        // and nobody will stop paying for, so it is killed rather than left.
+        // Failing to read the create reply once already orphaned three of them.
+        if let Err(err) = self
+            .inner
+            .store
+            .set_agent_sandbox(card.id, Some((&fresh.id, &fresh.envd_token, &fresh.traffic_token)))
+        {
+            tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
+            let _ = client.kill(&fresh.id).await;
+            return Err(crate::e2b::E2bError::Protocol(format!(
+                "the sandbox could not be recorded and was released ({err})"
+            )));
+        }
+
+        self.inner.events.emit(UiEvent::AgentsChanged);
+        Ok((client, fresh))
+    }
+
+    /// Kills every sandbox this app made that no agent still refers to.
+    ///
+    /// A crash between creating a sandbox and recording it, or an agent deleted
+    /// while its machine was up, leaves something running that nothing in the
+    /// app can see. Only sandboxes labelled by Guac are touched.
+    pub async fn sweep_computers(&self) -> Result<usize, crate::e2b::E2bError> {
+        let config = self.config();
+        let Some(client) = crate::e2b::E2bClient::new(&config.e2b.api_key) else {
+            return Ok(0);
         };
 
-        client.run(&sandbox, command).await
+        let known: std::collections::HashSet<String> = self
+            .inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|c| c.sandbox_id)
+            .collect();
+
+        let mut swept = 0;
+        for sandbox in client.list_ours().await? {
+            if known.contains(&sandbox) {
+                continue;
+            }
+            tracing::info!(%sandbox, "releasing a sandbox no agent refers to");
+            if client.kill(&sandbox).await.is_ok() {
+                swept += 1;
+            }
+        }
+        Ok(swept)
     }
 
     /// The inference settings one agent's turn should use.

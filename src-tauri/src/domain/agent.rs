@@ -78,9 +78,15 @@ pub struct AgentCard {
     /// Free-text capability lines. This is what peers actually read when they
     /// decide who to talk to, so it is the highest-leverage field on the card.
     pub skills: Vec<String>,
-    /// The Daytona sandbox this agent uses as its computer, once it has been
-    /// given one. Never set by an operator edit.
+    /// The sandbox this agent uses as its computer, once it has been given one,
+    /// and the tokens that reach it. Never set by an operator edit.
     pub sandbox_id: Option<String>,
+    /// Never sent to the webview in a form it could use directly; the viewer
+    /// goes through the local proxy, which holds these.
+    #[serde(skip_serializing)]
+    pub sandbox_envd_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub sandbox_traffic_token: Option<String>,
     pub lifecycle: Lifecycle,
     /// Bumped on every update. A2A's Update phase exists so peers can detect
     /// that a card changed under them; the version is what makes that possible.
@@ -298,6 +304,8 @@ mod tests {
             system_prompt: "SECRET INSTRUCTIONS".into(),
             skills: vec!["delegation".into()],
             sandbox_id: None,
+            sandbox_envd_token: None,
+            sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
             version: 1,
             created_at: 0,

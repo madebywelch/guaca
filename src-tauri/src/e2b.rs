@@ -76,6 +76,17 @@ impl Computer {
     }
 }
 
+/// A freshly created sandbox, with the two tokens that reach it.
+///
+/// Kept together because they are useless apart: an id without its tokens names
+/// a machine nothing is allowed to talk to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Sandbox {
+    pub id: String,
+    pub envd_token: String,
+    pub traffic_token: String,
+}
+
 /// The result of one command.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -116,10 +127,24 @@ impl Output {
 
 /// Only the id is taken. Liveness comes from whether a sandbox appears in the
 /// running list at all, which is the one signal E2B reports consistently.
+///
+/// The field is named explicitly rather than derived: E2B spells it `sandboxID`
+/// with a capital D, and `rename_all = "camelCase"` produces `sandboxId`, which
+/// matches nothing. That mismatch created a sandbox, failed to read its id, and
+/// left it running with nobody holding a reference to it.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SandboxRow {
+    #[serde(rename = "sandboxID", alias = "sandboxId", alias = "sandbox_id")]
     sandbox_id: String,
+    /// Present only when the sandbox was created as secure. envd refuses every
+    /// request without it.
+    #[serde(default, rename = "envdAccessToken")]
+    envd_token: Option<String>,
+    /// Present only when public traffic is restricted.
+    #[serde(default, rename = "trafficAccessToken")]
+    traffic_token: Option<String>,
+    #[serde(default)]
+    metadata: std::collections::HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,18 +195,22 @@ impl E2bClient {
 
     /// Creates a sandbox for one agent.
     ///
-    /// Internet access is switched on deliberately: without it an agent cannot
-    /// look anything up, which is the failure that ended the previous provider.
-    pub async fn create(&self, agent: &str) -> Result<String, E2bError> {
-        let body = serde_json::json!({
-            "templateID": DESKTOP_TEMPLATE,
-            "timeout": SANDBOX_TTL_SECS,
-            "allow_internet_access": true,
-            "metadata": { "guac": "true", "guac-agent": agent },
-        });
-        let row: SandboxRow =
-            self.control(self.http.post(format!("{API_BASE}/sandboxes")).json(&body)).await?;
-        Ok(row.sandbox_id)
+    /// Internet access is on deliberately: without it an agent cannot look
+    /// anything up, which is the failure that ended the previous provider.
+    ///
+    /// Both locks are on too. `secure` makes envd refuse commands without a
+    /// token, and `allow_public_traffic: false` does the same for the sandbox's
+    /// public URLs. Left open, an agent's desktop is reachable by anyone who
+    /// learns its id, and these desktops are meant to hold logged-in sessions.
+    pub async fn create(&self, agent: &str) -> Result<Sandbox, E2bError> {
+        let row: SandboxRow = self
+            .control(self.http.post(format!("{API_BASE}/sandboxes")).json(&create_body(agent)))
+            .await?;
+        Ok(Sandbox {
+            id: row.sandbox_id,
+            envd_token: row.envd_token.unwrap_or_default(),
+            traffic_token: row.traffic_token.unwrap_or_default(),
+        })
     }
 
     /// Whether this sandbox is still alive.
@@ -192,6 +221,20 @@ impl E2bClient {
         let rows: Vec<SandboxRow> =
             self.control(self.http.get(format!("{API_BASE}/sandboxes"))).await?;
         Ok(rows.iter().any(|r| r.sandbox_id == sandbox))
+    }
+
+    /// Every sandbox this app made, whether or not anything still refers to it.
+    ///
+    /// Used to sweep up: a sandbox nobody holds a reference to bills exactly as
+    /// much as one in use, and is invisible from inside the app.
+    pub async fn list_ours(&self) -> Result<Vec<String>, E2bError> {
+        let rows: Vec<SandboxRow> =
+            self.control(self.http.get(format!("{API_BASE}/sandboxes"))).await?;
+        Ok(rows
+            .into_iter()
+            .filter(|r| r.metadata.get("guac").map(String::as_str) == Some("true"))
+            .map(|r| r.sandbox_id)
+            .collect())
     }
 
     pub async fn kill(&self, sandbox: &str) -> Result<(), E2bError> {
@@ -219,7 +262,12 @@ impl E2bClient {
     /// envelopes rather than one document, and the useful parts arrive as
     /// separate events: `data` carries base64 stdout and stderr, `end` carries
     /// the exit code.
-    pub async fn run(&self, sandbox: &str, command: &str) -> Result<Output, E2bError> {
+    pub async fn run(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+        command: &str,
+    ) -> Result<Output, E2bError> {
         let request = serde_json::json!({
             "process": {
                 // Through a login shell so PATH and the usual environment are
@@ -236,6 +284,7 @@ impl E2bClient {
             .post(format!("{}/process.Process/Start", envd_base(sandbox)))
             .header("content-type", "application/connect+json")
             .header("connect-protocol-version", "1")
+            .header("X-Access-Token", envd_token)
             .body(envelope(&serde_json::to_vec(&request).unwrap_or_default()))
             .send()
             .await
@@ -258,7 +307,7 @@ impl E2bClient {
     /// Every step is idempotent by construction, because the pane asks for a
     /// desktop without tracking whether it has asked before. `pgrep` guards the
     /// ones that would otherwise stack up a second copy.
-    pub async fn start_desktop(&self, sandbox: &str) -> Result<(), E2bError> {
+    pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         for command in [
             "pgrep -x Xvfb >/dev/null || (Xvfb :0 -ac -screen 0 1280x800x24 -retro \
              -dpi 96 -nolisten tcp -nolisten unix >/tmp/xvfb.log 2>&1 &) ; sleep 1",
@@ -274,13 +323,18 @@ impl E2bClient {
                  >/tmp/novnc.log 2>&1 &) ; sleep 1"
             ),
         ] {
-            self.run(sandbox, command).await?;
+            self.run(sandbox, envd_token, command).await?;
         }
         Ok(())
     }
 
     /// State plus, once the desktop answers, somewhere to watch it.
-    pub async fn describe(&self, sandbox: &str) -> Result<Computer, E2bError> {
+    pub async fn describe(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+        viewer_port: u16,
+    ) -> Result<Computer, E2bError> {
         let alive = self.is_alive(sandbox).await?;
         let mut computer = Computer {
             sandbox_id: sandbox.to_string(),
@@ -293,14 +347,17 @@ impl E2bClient {
             // processes, and a URL offered before they are up renders as a
             // broken frame, which reads as a bug rather than as "not started".
             let up = self
-                .run(sandbox, "pgrep -f novnc_proxy >/dev/null && echo up || echo down")
+                .run(sandbox, envd_token, "pgrep -f novnc_proxy >/dev/null && echo up || echo down")
                 .await
                 .map(|o| o.stdout.trim() == "up")
                 .unwrap_or(false);
 
             if up {
+                // Through the local viewer, never straight at E2B: these
+                // sandboxes refuse public traffic without a header, and the
+                // token that carries it must not reach the webview.
                 computer.vnc_url = Some(format!(
-                    "https://{VNC_PORT}-{sandbox}.e2b.app/vnc.html\
+                    "http://127.0.0.1:{viewer_port}/{sandbox}/{VNC_PORT}/vnc.html\
                      ?autoconnect=1&resize=scale&reconnect=1"
                 ));
             }
@@ -308,6 +365,29 @@ impl E2bClient {
 
         Ok(computer)
     }
+}
+
+/// The body that creates a locked-down desktop.
+///
+/// Built here rather than inline so the shape can be asserted. E2B accepts
+/// three different casings across this one object and silently ignores a field
+/// it does not recognise: `allow_public_traffic` at the top level is accepted
+/// and does nothing, and the sandbox comes back with no traffic token and its
+/// ports open to anyone who learns the id. The nesting below is the form that
+/// actually locks it.
+fn create_body(agent: &str) -> serde_json::Value {
+    serde_json::json!({
+        "templateID": DESKTOP_TEMPLATE,
+        "timeout": SANDBOX_TTL_SECS,
+        // Without this an agent cannot look anything up, which is the failure
+        // that ended the previous provider.
+        "allow_internet_access": true,
+        // envd refuses commands without the token it returns.
+        "secure": true,
+        // The public ports refuse traffic without the other token it returns.
+        "network": { "allowPublicTraffic": false },
+        "metadata": { "guac": "true", "guac-agent": agent },
+    })
 }
 
 /// envd's address for one sandbox.
@@ -409,6 +489,25 @@ fn decode(raw: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_new_sandbox_is_created_with_both_locks_and_a_network() {
+        // Every one of these has been wrong at least once, and each failure is
+        // silent: E2B accepts an unrecognised field and returns a sandbox with
+        // no token and its ports wide open.
+        let body = create_body("Manager");
+        assert_eq!(body["secure"], true, "envd must refuse anonymous commands");
+        assert_eq!(
+            body["network"]["allowPublicTraffic"], false,
+            "the top-level spelling is accepted and ignored; only this one locks the ports"
+        );
+        assert_eq!(
+            body["allow_internet_access"], true,
+            "an agent that cannot look things up is the bug"
+        );
+        assert_eq!(body["metadata"]["guac"], "true", "the sweeper finds orphans by this label");
+        assert_eq!(body["metadata"]["guac-agent"], "Manager");
+    }
 
     #[test]
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {

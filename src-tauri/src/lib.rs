@@ -5,6 +5,7 @@ pub mod db;
 pub mod domain;
 pub mod e2b;
 pub mod llm;
+pub mod proxy;
 pub mod runtime;
 pub mod workspace;
 

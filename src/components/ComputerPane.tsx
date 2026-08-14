@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import { type AgentCard, type Computer, errorMessage } from "../lib/types";
 
 interface Props {
@@ -31,6 +32,7 @@ let lineSeq = 0;
  * disagree about what is on it.
  */
 export function ComputerPane({ agent }: Props) {
+  const settings = useStore((s) => s.settings);
   const [computer, setComputer] = useState<Computer | null>(null);
   const [view, setView] = useState<"screen" | "terminal">("screen");
   const [open, setOpen] = useState(false);
@@ -40,6 +42,10 @@ export function ComputerPane({ agent }: Props) {
   const [lines, setLines] = useState<Line[]>([]);
   const [command, setCommand] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
+
+  // Nothing at all until there is a key. Offering to give an agent a computer
+  // that cannot be made is worse than not mentioning computers.
+  const configured = settings?.e2bKeySet === true;
 
   const look = useCallback(async () => {
     try {
@@ -59,8 +65,8 @@ export function ComputerPane({ agent }: Props) {
     setChecked(false);
     setOpen(false);
     setLines([]);
-    void look();
-  }, [look]);
+    if (configured) void look();
+  }, [look, configured]);
 
   useEffect(() => {
     const node = logRef.current;
@@ -109,7 +115,7 @@ export function ComputerPane({ agent }: Props) {
     }
   };
 
-  if (!checked) return null;
+  if (!configured || !checked) return null;
 
   const running = computer?.state === "running";
 

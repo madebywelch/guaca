@@ -128,6 +128,8 @@ impl Store {
             system_prompt: draft.system_prompt.clone(),
             skills: draft.skills.clone(),
             sandbox_id: None,
+            sandbox_envd_token: None,
+            sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
             version: 1,
             created_at: now,
@@ -209,7 +211,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -226,7 +228,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -242,16 +244,42 @@ impl Store {
     /// Deliberately not part of `update_agent`: provisioning is not an operator
     /// edit and must not bump the card version, which peers use to notice that
     /// an agent changed under them.
-    pub fn set_agent_sandbox(&self, id: AgentId, sandbox: Option<&str>) -> Result<(), StoreError> {
+    pub fn set_agent_sandbox(
+        &self,
+        id: AgentId,
+        sandbox: Option<(&str, &str, &str)>,
+    ) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE agents SET sandbox_id=?2 WHERE id=?1",
-            params![id.to_string(), sandbox],
+            "UPDATE agents SET sandbox_id=?2, sandbox_envd_token=?3, sandbox_traffic_token=?4
+               WHERE id=?1",
+            params![
+                id.to_string(),
+                sandbox.map(|s| s.0),
+                sandbox.map(|s| s.1),
+                sandbox.map(|s| s.2),
+            ],
         )?;
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
         }
         Ok(())
+    }
+
+    /// The traffic token for a sandbox, by sandbox id.
+    ///
+    /// The viewer proxy holds no state of its own: it is handed a sandbox in a
+    /// URL and asks here, so a token never has to travel through the webview.
+    pub fn sandbox_traffic_token(&self, sandbox: &str) -> Result<Option<String>, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn
+            .query_row(
+                "SELECT sandbox_traffic_token FROM agents WHERE sandbox_id=?1",
+                params![sandbox],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
     }
 
     // ---- groups ----------------------------------------------------------
@@ -564,6 +592,8 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
                     .map_err(|e| StoreError::Corrupt(format!("bad group id {raw:?}: {e}")))?
             },
             sandbox_id: row.get(12)?,
+            sandbox_envd_token: row.get(13)?,
+            sandbox_traffic_token: row.get(14)?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,

@@ -121,70 +121,47 @@ fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::
 /// rather than as an error.
 #[tauri::command]
 pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Computer>> {
-    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
+    let card = agent_card(&state, id)?;
+    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
         return Ok(None);
     };
     let client = computers(&state)?;
 
-    let computer = client.describe(&sandbox).await?;
-    // E2B reclaims idle sandboxes, and a reclaimed one leaves a dangling id.
-    // Clearing it turns a dead end into an offer to make a new one.
-    if !computer.is_running() {
+    if !client.is_alive(&sandbox).await? {
+        // E2B reclaims idle sandboxes, and a reclaimed one leaves a dangling
+        // id. Clearing it turns a dead end into an offer to make a new one.
         state.runtime.store().set_agent_sandbox(id, None)?;
         return Ok(None);
     }
-    Ok(Some(computer))
+    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
 }
 
-/// Gives an agent a computer, or wakes the one it already has.
-///
-/// Idempotent on purpose: the UI calls this to show a desktop without having to
-/// know whether the sandbox exists, is stopped, or is already up.
+/// Gives an agent a computer, or brings the desktop up on the one it has.
 #[tauri::command]
 pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
     let card = agent_card(&state, id)?;
-    let client = computers(&state)?;
+    let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
 
-    let sandbox = match card.sandbox_id {
-        Some(existing) => existing,
-        None => {
-            let created = client.create(&card.name).await?;
-            // Recorded before anything else can fail, so a sandbox is never
-            // created and then forgotten with the bill still running.
-            state.runtime.store().set_agent_sandbox(id, Some(&created))?;
-            created
-        }
-    };
-
-    // A reclaimed sandbox cannot be restarted, so a fresh one takes its place.
-    let sandbox = if client.is_alive(&sandbox).await? {
-        sandbox
-    } else {
-        let fresh = client.create(&card.name).await?;
-        state.runtime.store().set_agent_sandbox(id, Some(&fresh))?;
-        fresh
-    };
-    client.start_desktop(&sandbox).await?;
-
-    let computer = client.describe(&sandbox).await?;
+    client.start_desktop(&sandbox.id, &sandbox.envd_token).await?;
+    let computer =
+        client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(computer)
 }
 
 /// Runs one command on an agent's computer on the operator's behalf.
 ///
-/// The same call the agent's own tool makes, so the terminal in the pane and
-/// the agent are looking at exactly one machine through one mechanism.
+/// Goes through the same path the agent's own tool takes, so the terminal in
+/// the pane and the agent are looking at exactly one machine.
 #[tauri::command]
 pub async fn run_on_agent_computer(
     state: State<'_, AppState>,
     id: AgentId,
     command: String,
 ) -> Reply<Output> {
-    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
-        return Err(CommandError::new("notFound", "that agent has no computer yet"));
-    };
-    Ok(computers(&state)?.run(&sandbox, &command).await?)
+    let card = agent_card(&state, id)?;
+    let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
+    Ok(client.run(&sandbox.id, &sandbox.envd_token, &command).await?)
 }
 
 /// Destroys the sandbox and everything on its disk.
