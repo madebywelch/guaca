@@ -872,10 +872,26 @@ impl Runtime {
         let mut out = Vec::new();
 
         for name in recipients {
-            let found = directory.iter().find(|c| c.name.eq_ignore_ascii_case(name.trim()));
+            let trimmed = name.trim();
+            // Scoped to the sender's group, exactly like `roster_excluding`. A
+            // name belonging to an agent in another group must not resolve, and
+            // must not be distinguishable from a name belonging to nobody:
+            // confirming that the agent exists would leak the roster across the
+            // boundary the group is there to draw.
+            let found = directory
+                .iter()
+                .find(|c| c.group_id == card.group_id && c.name.eq_ignore_ascii_case(trimmed));
 
             let target = match found {
                 None => {
+                    if directory.iter().any(|c| c.name.eq_ignore_ascii_case(trimmed)) {
+                        // The operator gets to see what the model may not.
+                        tracing::debug!(
+                            from = %card.name,
+                            recipient = trimmed,
+                            "refused a send addressed outside the sender's group"
+                        );
+                    }
                     out.push(Delivery::Refused {
                         to: name.clone(),
                         reason: Refusal::UnknownRecipient { recipient: name.clone() }.explain(),
@@ -951,13 +967,20 @@ impl Runtime {
 
     // ---- lookups ---------------------------------------------------------
 
+    /// The peers one agent can see: its own group, discoverable, not itself.
+    ///
+    /// The group filter is the isolation boundary, not a display convenience.
+    /// `send_to_peers` resolves names against exactly the same scope, so an
+    /// agent cannot address a peer it was never shown. An agent whose own card
+    /// has gone sees nobody, which fails closed.
     fn roster_excluding(&self, me: AgentId) -> Vec<DirectoryEntry> {
-        self.inner
-            .store
-            .list_agents()
-            .unwrap_or_default()
+        let agents = self.inner.store.list_agents().unwrap_or_default();
+        let Some(group) = agents.iter().find(|c| c.id == me).map(|c| c.group_id) else {
+            return Vec::new();
+        };
+        agents
             .into_iter()
-            .filter(|c| c.id != me && c.lifecycle.is_discoverable())
+            .filter(|c| c.id != me && c.group_id == group && c.lifecycle.is_discoverable())
             .map(|c| c.directory_entry())
             .collect()
     }

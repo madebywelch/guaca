@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod envelope;
+pub mod group;
 pub mod ids;
 
 use std::time::{SystemTime, UNIX_EPOCH};

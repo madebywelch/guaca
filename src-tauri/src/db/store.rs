@@ -14,7 +14,8 @@ use rusqlite::{params, OptionalExtension, Row};
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
-use crate::domain::ids::{AgentId, MessageId};
+use crate::domain::group::Group;
+use crate::domain::ids::{AgentId, GroupId, MessageId};
 use crate::domain::now_ms;
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
@@ -33,6 +34,16 @@ pub enum StoreError {
     AgentNotFound(AgentId),
     #[error("an agent named {0:?} already exists")]
     DuplicateName(String),
+    #[error("no group with id {0}")]
+    GroupNotFound(GroupId),
+    #[error("{name:?} still has {agents} agent(s); move or delete them before deleting the group")]
+    GroupNotEmpty { name: String, agents: u32 },
+}
+
+/// The group an agent lands in when nothing says otherwise. Parsed from the
+/// migration's pinned constant so the two can never drift apart.
+fn default_group_id() -> GroupId {
+    migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
 }
 
 /// Maps SQLite's unique-constraint failure onto a domain error, so callers get
@@ -109,6 +120,7 @@ impl Store {
         let now = now_ms();
         let card = AgentCard {
             id: AgentId::new(),
+            group_id: draft.group_id.unwrap_or_else(default_group_id),
             name: draft.name.clone(),
             avatar: draft.avatar.clone(),
             color: draft.color.clone(),
@@ -122,8 +134,8 @@ impl Store {
         };
 
         conn.execute(
-            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
             params![
                 card.id.to_string(),
                 card.name,
@@ -136,6 +148,7 @@ impl Store {
                 card.version,
                 card.created_at,
                 card.updated_at,
+                card.group_id.to_string(),
             ],
         )
         .map_err(|e| classify(e, &card.name))?;
@@ -152,9 +165,13 @@ impl Store {
         let now = now_ms();
         let changed = conn
             .execute(
+                // `coalesce` is what makes an omitted group mean "do not move
+                // it" rather than "move it to the default", which would
+                // silently relocate an agent on an unrelated edit.
                 "UPDATE agents
                     SET name=?2, avatar=?3, color=?4, model=?5, system_prompt=?6, skills=?7,
-                        version = version + 1, updated_at=?8
+                        version = version + 1, updated_at=?8,
+                        group_id = coalesce(?9, group_id)
                   WHERE id=?1",
                 params![
                     id.to_string(),
@@ -165,6 +182,7 @@ impl Store {
                     draft.system_prompt,
                     serde_json::to_string(&draft.skills).unwrap_or_else(|_| "[]".into()),
                     now,
+                    draft.group_id.map(|g| g.to_string()),
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -190,7 +208,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -207,7 +225,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -216,6 +234,89 @@ impl Store {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    // ---- groups ----------------------------------------------------------
+
+    /// Every group, with its live agent count, oldest first.
+    ///
+    /// The default group sorts first because it was created at timestamp 0 by
+    /// the migration, which is what keeps it at the top of the rail.
+    pub fn list_groups(&self) -> Result<Vec<Group>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT g.id, g.name, g.created_at,
+                    (SELECT count(*) FROM agents a
+                      WHERE a.group_id = g.id AND a.lifecycle <> 'terminated')
+               FROM groups g
+              ORDER BY g.created_at, g.rowid",
+        )?;
+        let rows = stmt.query_map([], row_to_group)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    pub fn create_group(&self, name: &str) -> Result<Group, StoreError> {
+        let conn = self.conn()?;
+        let group = Group {
+            id: GroupId::new(),
+            name: name.to_string(),
+            agent_count: 0,
+            created_at: now_ms(),
+        };
+        conn.execute(
+            "INSERT INTO groups (id,name,created_at) VALUES (?1,?2,?3)",
+            params![group.id.to_string(), group.name, group.created_at],
+        )
+        .map_err(|e| classify(e, name))?;
+        Ok(group)
+    }
+
+    pub fn rename_group(&self, id: GroupId, name: &str) -> Result<Group, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn
+            .execute("UPDATE groups SET name=?2 WHERE id=?1", params![id.to_string(), name])
+            .map_err(|e| classify(e, name))?;
+        if changed == 0 {
+            return Err(StoreError::GroupNotFound(id));
+        }
+        self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))
+    }
+
+    pub fn get_group(&self, id: GroupId) -> Result<Option<Group>, StoreError> {
+        Ok(self.list_groups()?.into_iter().find(|g| g.id == id))
+    }
+
+    /// Deletes an empty group.
+    ///
+    /// Refuses while it still holds live agents rather than moving them
+    /// somewhere: relocating agents would quietly put them inside a boundary
+    /// they were deliberately kept out of, and deleting them would destroy work
+    /// on what reads like a tidy-up. The operator decides.
+    pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
+        let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
+        if group.agent_count > 0 {
+            return Err(StoreError::GroupNotEmpty { name: group.name, agents: group.agent_count });
+        }
+        let conn = self.conn()?;
+        // Terminated agents keep pointing at the group so their transcripts
+        // still render, so the row cannot go while any of them remain.
+        let remaining: i64 = conn.query_row(
+            "SELECT count(*) FROM agents WHERE group_id=?1",
+            params![id.to_string()],
+            |r| r.get(0),
+        )?;
+        if remaining > 0 {
+            return Err(StoreError::GroupNotEmpty {
+                name: group.name,
+                agents: remaining.max(0) as u32,
+            });
+        }
+        conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
+        Ok(())
     }
 
     // ---- messages --------------------------------------------------------
@@ -393,9 +494,29 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             system_prompt: row.get(5)?,
             skills,
             lifecycle,
+            group_id: {
+                let raw: String = row.get(11)?;
+                raw.parse::<GroupId>()
+                    .map_err(|e| StoreError::Corrupt(format!("bad group id {raw:?}: {e}")))?
+            },
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
+        })
+    })())
+}
+
+fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
+    let id_raw: String = row.get(0)?;
+
+    Ok((|| {
+        Ok(Group {
+            id: id_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {id_raw:?}: {e}")))?,
+            name: row.get(1)?,
+            created_at: row.get(2)?,
+            agent_count: row.get::<_, i64>(3)?.max(0) as u32,
         })
     })())
 }
@@ -464,6 +585,7 @@ mod tests {
 
     fn draft(name: &str) -> CleanDraft {
         CleanDraft {
+            group_id: None,
             name: name.into(),
             avatar: "avocado".into(),
             color: "#7fb069".into(),

@@ -9,6 +9,7 @@ vi.mock("../lib/ipc", () => ({ openExternal: vi.fn() }));
 function card(id: string, name: string): AgentCard {
   return {
     id,
+    groupId: "00000000-0000-4000-8000-000000000001",
     name,
     avatar: "plain",
     color: "#c7d96b",

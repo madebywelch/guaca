@@ -84,7 +84,72 @@ CREATE INDEX messages_flow
     WHERE to_kind <> 'system';
 "#,
     ),
+    (
+        4,
+        r#"
+CREATE TABLE groups (
+    id         TEXT    PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX groups_name_unique ON groups (lower(name));
+
+-- Every agent belongs to exactly one group, so there has to be one before the
+-- column can be NOT NULL. This id is fixed rather than generated: the default
+-- group is the one the UI hides while it is the only one, and a known id means
+-- that check never depends on row order.
+INSERT INTO groups (id, name, created_at)
+VALUES ('00000000-0000-4000-8000-000000000001', 'Everyone', 0);
+
+-- Rebuilt rather than ALTERed. SQLite refuses to ADD COLUMN when the column
+-- carries both a REFERENCES clause and a non-NULL default, so the alternative
+-- was to drop the foreign key and hope nothing ever writes a dangling group.
+-- The rebuild is the documented way to add a constraint and behaves the same
+-- whichever way `foreign_keys` happens to be set; migrations run on the
+-- bootstrap connection, where it is off, which is what that procedure wants.
+CREATE TABLE agents_new (
+    id            TEXT    PRIMARY KEY,
+    name          TEXT    NOT NULL,
+    avatar        TEXT    NOT NULL,
+    color         TEXT    NOT NULL,
+    model         TEXT    NOT NULL,
+    system_prompt TEXT    NOT NULL,
+    skills        TEXT    NOT NULL DEFAULT '[]',
+    lifecycle     TEXT    NOT NULL,
+    version       INTEGER NOT NULL DEFAULT 1,
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    group_id      TEXT    NOT NULL REFERENCES groups(id)
+);
+
+INSERT INTO agents_new
+    (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,
+       '00000000-0000-4000-8000-000000000001'
+  FROM agents;
+
+DROP TABLE agents;
+ALTER TABLE agents_new RENAME TO agents;
+
+CREATE INDEX agents_group ON agents (group_id);
+
+-- Names are addressable identifiers: an agent messages a peer by name, and
+-- resolution is scoped to the sender's group. Uniqueness has to be scoped the
+-- same way, or the scope of the index and the scope of the lookup disagree.
+-- Global uniqueness would also stop two isolated groups from each having a
+-- Manager, which is the obvious thing to want.
+CREATE UNIQUE INDEX agents_live_name_unique
+    ON agents (group_id, lower(name))
+    WHERE lifecycle <> 'terminated';
+"#,
+    ),
 ];
+
+/// The group every agent starts in, and the one the UI keeps out of the way
+/// while it is the only one. Pinned so the check is an id comparison rather
+/// than a name match or a count.
+pub const DEFAULT_GROUP_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
@@ -206,8 +271,8 @@ mod tests {
     fn live_agent_names_are_unique_case_insensitively() {
         let mut conn = memory();
         run(&mut conn).unwrap();
-        let insert = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at)
-                      VALUES (?1,?2,'avocado','#000','m','','[]',?3,1,0,0)";
+        let insert = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+                      VALUES (?1,?2,'avocado','#000','m','','[]',?3,1,0,0,'00000000-0000-4000-8000-000000000001')";
         conn.execute(insert, rusqlite::params!["a", "Manager", "active"]).unwrap();
         let clash = conn.execute(insert, rusqlite::params!["b", "manager", "active"]);
         assert!(clash.is_err(), "case-different duplicate must be rejected");
@@ -217,11 +282,54 @@ mod tests {
     fn deleting_an_agent_frees_its_name() {
         let mut conn = memory();
         run(&mut conn).unwrap();
-        let insert = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at)
-                      VALUES (?1,?2,'avocado','#000','m','','[]',?3,1,0,0)";
+        let insert = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+                      VALUES (?1,?2,'avocado','#000','m','','[]',?3,1,0,0,'00000000-0000-4000-8000-000000000001')";
         conn.execute(insert, rusqlite::params!["a", "Manager", "terminated"]).unwrap();
         conn.execute(insert, rusqlite::params!["b", "Manager", "active"])
             .expect("a terminated agent must not hold its name hostage");
+    }
+
+    #[test]
+    fn existing_agents_are_moved_into_the_default_group() {
+        // The upgrade path that matters: a database written before groups
+        // existed must come out the other side with every agent in one.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take(3) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0)",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let group: String =
+            conn.query_row("SELECT group_id FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
+        assert_eq!(group, DEFAULT_GROUP_ID, "an agent must never be left without a group");
+    }
+
+    #[test]
+    fn agent_names_are_unique_per_group_rather_than_globally() {
+        // Two isolated groups each wanting a Manager is the ordinary case, and
+        // the old global index made it impossible.
+        let mut conn = memory();
+        run(&mut conn).unwrap();
+        conn.execute("INSERT INTO groups (id,name,created_at) VALUES ('g2','Research',0)", [])
+            .unwrap();
+        let insert = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+                      VALUES (?1,?2,'avocado','#000','m','','[]','active',1,0,0,?3)";
+
+        conn.execute(insert, rusqlite::params!["a", "Manager", DEFAULT_GROUP_ID]).unwrap();
+        conn.execute(insert, rusqlite::params!["b", "Manager", "g2"])
+            .expect("the same name in another group must be allowed");
+        let clash = conn.execute(insert, rusqlite::params!["c", "manager", "g2"]);
+        assert!(clash.is_err(), "a duplicate inside one group must still be rejected");
     }
 
     #[test]

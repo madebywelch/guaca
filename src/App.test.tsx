@@ -26,6 +26,7 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
 vi.mock("./lib/ipc", () => ({
   api: {
     listAgents: () => listAgents(),
+    listGroups: async () => [],
     agentActivity: async () => ({}),
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
@@ -44,6 +45,7 @@ const { useStore } = await import("./lib/store");
 function agent(name: string): AgentCard {
   return {
     id: `id-${name}`,
+    groupId: "00000000-0000-4000-8000-000000000001",
     name,
     avatar: "avocado",
     color: "#c7d96b",

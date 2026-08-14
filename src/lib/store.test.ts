@@ -37,6 +37,7 @@ function envelope(overrides: Partial<Envelope> = {}): Envelope {
 const AGENTS: AgentCard[] = [
   {
     id: "manager",
+    groupId: "00000000-0000-4000-8000-000000000001",
     name: "Manager",
     avatar: "avocado",
     color: "#c7d96b",
@@ -50,6 +51,7 @@ const AGENTS: AgentCard[] = [
   },
   {
     id: "chef",
+    groupId: "00000000-0000-4000-8000-000000000001",
     name: "Chef",
     avatar: "chilli",
     color: "#e2674a",

@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { ACCENTS, EGG_GROUPS, EGGS, suggestAccent, suggestEgg } from "../avatars/catalog";
+import {
+  ACCENTS,
+  CHARACTER_GROUPS,
+  CHARACTERS,
+  suggestAccent,
+  suggestCharacter,
+} from "../avatars/catalog";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
@@ -17,13 +23,15 @@ const PROMPT_PLACEHOLDER =
 
 export function AgentEditor({ agent, onClose }: Props) {
   const agents = useStore((s) => s.agents);
+  const groups = useStore((s) => s.groups);
   const settings = useStore((s) => s.settings);
   const select = useStore((s) => s.select);
   const refreshAgents = useStore((s) => s.refreshAgents);
 
   const [draft, setDraft] = useState<AgentDraft>(() => ({
     name: agent?.name ?? "",
-    avatar: agent?.avatar ?? suggestEgg(agents.map((a) => a.avatar)),
+    groupId: agent?.groupId,
+    avatar: agent?.avatar ?? suggestCharacter(agents.map((a) => a.avatar)),
     color: agent?.color ?? suggestAccent(agents.map((a) => a.color)),
     model: agent?.model ?? settings?.defaultModel ?? "",
     systemPrompt: agent?.systemPrompt ?? "",
@@ -171,13 +179,13 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         <div className="field">
           <span className="field__label">Character</span>
-          {EGG_GROUPS.map((group) => (
+          {CHARACTER_GROUPS.map((group) => (
             <div key={group} style={{ marginBottom: "0.55rem" }}>
               <span className="hint" style={{ display: "block", marginBottom: "0.25rem" }}>
                 {group}
               </span>
               <div className="picker">
-                {EGGS.filter((entry) => entry.group === group).map((entry) => (
+                {CHARACTERS.filter((entry) => entry.group === group).map((entry) => (
                   <button
                     key={entry.key}
                     type="button"
@@ -200,6 +208,29 @@ export function AgentEditor({ agent, onClose }: Props) {
             </div>
           ))}
         </div>
+
+        {/* Only shown once a second group exists. With one group there is no
+            choice to make, and the field would be asking about a boundary the
+            operator has not drawn yet. */}
+        {groups.length > 1 && (
+          <label className="field">
+            <span className="field__label">Group</span>
+            <select
+              className="input input--mono"
+              value={draft.groupId ?? groups[0]?.id ?? ""}
+              onChange={(event) => patch({ groupId: event.target.value })}
+            >
+              {groups.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.name}
+                </option>
+              ))}
+            </select>
+            <span className="field__hint">
+              Agents can only see and message others in the same group.
+            </span>
+          </label>
+        )}
 
         <label className="field">
           <span className="field__label">Model</span>

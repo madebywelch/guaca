@@ -14,7 +14,8 @@ use tauri::State;
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
-use crate::domain::ids::{AgentId, RunId};
+use crate::domain::group::{Group, GroupDraft};
+use crate::domain::ids::{AgentId, GroupId, RunId};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -45,7 +46,12 @@ impl From<crate::db::StoreError> for CommandError {
         use crate::db::StoreError;
         match err {
             StoreError::DuplicateName(_) => CommandError::new("duplicateName", err.to_string()),
-            StoreError::AgentNotFound(_) => CommandError::new("notFound", err.to_string()),
+            StoreError::AgentNotFound(_) | StoreError::GroupNotFound(_) => {
+                CommandError::new("notFound", err.to_string())
+            }
+            // Its own kind: the UI can offer to move the agents, which it
+            // cannot do for a generic storage failure.
+            StoreError::GroupNotEmpty { .. } => CommandError::new("groupNotEmpty", err.to_string()),
             other => CommandError::new("storage", other.to_string()),
         }
     }
@@ -68,6 +74,12 @@ impl From<crate::domain::agent::DraftError> for CommandError {
     }
 }
 
+impl From<crate::domain::group::GroupError> for CommandError {
+    fn from(err: crate::domain::group::GroupError) -> Self {
+        CommandError::new("validation", err.to_string())
+    }
+}
+
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
         CommandError::new("config", err.to_string())
@@ -75,6 +87,38 @@ impl From<config::ConfigError> for CommandError {
 }
 
 type Reply<T> = Result<T, CommandError>;
+
+// ---- groups --------------------------------------------------------------
+
+#[tauri::command]
+pub fn list_groups(state: State<'_, AppState>) -> Reply<Vec<Group>> {
+    Ok(state.runtime.store().list_groups()?)
+}
+
+#[tauri::command]
+pub fn create_group(state: State<'_, AppState>, draft: GroupDraft) -> Reply<Group> {
+    let name = draft.validate()?;
+    let group = state.runtime.store().create_group(&name)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(group)
+}
+
+#[tauri::command]
+pub fn rename_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) -> Reply<Group> {
+    let name = draft.validate()?;
+    let group = state.runtime.store().rename_group(id, &name)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(group)
+}
+
+/// Deletes an empty group. Refused while it still holds agents; see
+/// `Store::delete_group` for why they are not relocated.
+#[tauri::command]
+pub fn delete_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
+    state.runtime.store().delete_group(id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
 
 // ---- agents --------------------------------------------------------------
 

@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::AgentId;
+use super::ids::{AgentId, GroupId};
 
 /// Where an agent is in its lifecycle.
 ///
@@ -62,6 +62,9 @@ impl Lifecycle {
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {
     pub id: AgentId,
+    /// The isolation boundary this agent sits in. Peers outside it are not
+    /// listed by `directory` and cannot be addressed; see `domain::group`.
+    pub group_id: GroupId,
     pub name: String,
     /// Key into the frontend avatar catalog, not a drawing. Storing the key
     /// means a character can be redrawn entirely without touching stored data.
@@ -113,6 +116,10 @@ pub struct DirectoryEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDraft {
+    /// Absent means "leave it where it is" on update, and "the default group"
+    /// on create. The UI omits it entirely until a second group exists.
+    #[serde(default)]
+    pub group_id: Option<GroupId>,
     pub name: String,
     pub avatar: String,
     pub color: String,
@@ -168,6 +175,7 @@ impl AgentDraft {
             .ok_or_else(|| DraftError::BadColor { got: self.color.clone() })?;
 
         Ok(CleanDraft {
+            group_id: self.group_id,
             name: name.to_string(),
             avatar: avatar.to_string(),
             color,
@@ -185,6 +193,7 @@ impl AgentDraft {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CleanDraft {
+    pub group_id: Option<GroupId>,
     pub name: String,
     pub avatar: String,
     pub color: String,
@@ -214,6 +223,7 @@ mod tests {
 
     fn draft() -> AgentDraft {
         AgentDraft {
+            group_id: None,
             name: "  Manager  ".into(),
             avatar: "avocado".into(),
             color: "#7FB069".into(),
@@ -277,6 +287,7 @@ mod tests {
     fn directory_entry_never_leaks_the_system_prompt() {
         let card = AgentCard {
             id: AgentId::new(),
+            group_id: GroupId::new(),
             name: "Manager".into(),
             avatar: "avocado".into(),
             color: "#7fb069".into(),

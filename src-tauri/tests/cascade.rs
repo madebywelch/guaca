@@ -181,6 +181,7 @@ struct Harness {
 
 fn draft(name: &str, skills: &[&str]) -> CleanDraft {
     CleanDraft {
+        group_id: None,
         name: name.into(),
         avatar: "avocado".into(),
         color: "#7fb069".into(),
@@ -191,12 +192,29 @@ fn draft(name: &str, skills: &[&str]) -> CleanDraft {
 }
 
 fn harness(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
+    // No group named, so every agent lands in the default one and can reach
+    // every other. This is the control for the isolation tests below.
+    let placed: Vec<(&str, Option<&str>)> = names.iter().map(|n| (*n, None)).collect();
+    harness_in_groups(stub, &placed, limits)
+}
+
+/// Places each agent in the named group, creating groups on demand. `None`
+/// means the default group.
+fn harness_in_groups(stub: &Stub, placed: &[(&str, Option<&str>)], limits: GuardLimits) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
+    let mut groups: HashMap<&str, guac_lib::domain::ids::GroupId> = HashMap::new();
     let mut ids = HashMap::new();
-    for name in names {
-        let card = store.create_agent(&draft(name, &["testing"])).unwrap();
+    for (name, group) in placed {
+        let group_id = group.map(|label| {
+            *groups.entry(label).or_insert_with(|| {
+                store.create_group(label).expect("group name is unique in a fresh store").id
+            })
+        });
+        let mut d = draft(name, &["testing"]);
+        d.group_id = group_id;
+        let card = store.create_agent(&d).unwrap();
         ids.insert(name.to_string(), card.id);
     }
 
@@ -223,6 +241,27 @@ fn harness(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
     runtime.start_all().unwrap();
 
     Harness { runtime, sink, ids, _dir: dir }
+}
+
+/// Every `role: "tool"` message the stub was sent, in order. This is how a test
+/// sees what the model was actually told, which for a refusal is the assertion
+/// that matters: a silently dropped message and a reported one look identical
+/// from the outside.
+fn tool_results(stub: &Stub) -> Vec<String> {
+    stub.transcript
+        .lock()
+        .iter()
+        .flat_map(|body| {
+            body["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 impl Harness {
@@ -887,5 +926,101 @@ async fn agents_run_concurrently_rather_than_one_after_another() {
     assert!(
         elapsed < Duration::from_millis(900),
         "four 300ms peers took {elapsed:?}; they are not running concurrently"
+    );
+}
+
+// ---- group isolation -----------------------------------------------------
+
+#[tokio::test]
+async fn an_agent_cannot_message_a_peer_in_another_group() {
+    // Chef exists, is live, and is addressed by its exact name. The only thing
+    // stopping the message is the group boundary.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello".into() }
+        }
+    })
+    .await;
+
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", Some("Front")), ("Chef", Some("Back"))],
+        GuardLimits::default(),
+    );
+    let run = h.runtime.send_from_human(h.id("Manager"), "Message Chef.").unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub);
+    assert!(
+        results.iter().any(|r| r.contains("no agent named Chef")),
+        "a peer in another group must be indistinguishable from one that never existed, \
+         otherwise the refusal itself leaks the roster across the boundary, got {results:?}"
+    );
+    assert!(h.feed().is_empty(), "nothing may cross a group boundary");
+    assert!(
+        h.channel_texts("Chef").is_empty(),
+        "the recipient's channel must not have received the message"
+    );
+}
+
+#[tokio::test]
+async fn agents_in_the_same_group_still_reach_each_other() {
+    // The control for the test above: the boundary must not be a blanket ban.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Sent.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "service".into() }
+        }
+    })
+    .await;
+
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", Some("Front")), ("Chef", Some("Front"))],
+        GuardLimits::default(),
+    );
+    let run = h.runtime.send_from_human(h.id("Manager"), "Message Chef.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Chef").iter().any(|t| t.contains("service")),
+        "an agent must still reach a peer inside its own group, got {:?}",
+        h.channel_texts("Chef")
+    );
+}
+
+#[tokio::test]
+async fn the_directory_never_lists_agents_from_another_group() {
+    // The boundary has to hold at discovery too. Refusing the send but naming
+    // the peer in the directory would hand the model a roster it can only be
+    // frustrated by, and leak who exists elsewhere.
+    let stub =
+        serve(
+            |body| {
+                if has_tool_result(body) {
+                    Script::Say("Noted.".into())
+                } else {
+                    Script::Directory
+                }
+            },
+        )
+        .await;
+
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", Some("Front")), ("Sous", Some("Front")), ("Chef", Some("Back"))],
+        GuardLimits::default(),
+    );
+    let run = h.runtime.send_from_human(h.id("Manager"), "Who else is here?").unwrap();
+    h.settle(run).await;
+
+    let joined = tool_results(&stub).join("\n");
+    assert!(joined.contains("Sous"), "a peer in the same group must be listed, got {joined:?}");
+    assert!(
+        !joined.contains("Chef"),
+        "an agent in another group must not appear in the directory, got {joined:?}"
     );
 }

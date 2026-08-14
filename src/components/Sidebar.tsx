@@ -4,11 +4,13 @@ import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
-import type { Activity, AgentCard, AgentId } from "../lib/types";
+import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 
 interface Props {
   onNewAgent: () => void;
   onEditAgent: (agent: AgentCard) => void;
+  onNewGroup: () => void;
+  onEditGroup: (group: Group) => void;
   onOpenSettings: () => void;
 }
 
@@ -16,8 +18,15 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
-export function Sidebar({ onNewAgent, onEditAgent, onOpenSettings }: Props) {
+export function Sidebar({
+  onNewAgent,
+  onEditAgent,
+  onNewGroup,
+  onEditGroup,
+  onOpenSettings,
+}: Props) {
   const agents = useLiveAgents();
+  const groups = useStore((s) => s.groups);
   const activity = useStore((s) => s.activity);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
@@ -117,6 +126,49 @@ export function Sidebar({ onNewAgent, onEditAgent, onOpenSettings }: Props) {
     }
   };
 
+  /** One agent row. Shared by the flat and grouped layouts. */
+  const row = (agent: AgentCard) => {
+    const role = roleOf(staged, agent.id);
+    const label = meta(agent.id, activity[agent.id]);
+
+    return (
+      <button
+        key={agent.id}
+        type="button"
+        ref={(node) => {
+          if (node) rowRefs.current.set(agent.id, node);
+          else rowRefs.current.delete(agent.id);
+        }}
+        className="agent-row"
+        aria-current={selected === agent.id}
+        data-lifecycle={agent.lifecycle}
+        style={{ "--accent": agent.color } as React.CSSProperties}
+        onClick={() => void select(agent.id)}
+        onDoubleClick={() => onEditAgent(agent)}
+        // Right-clicking an agent is only ever on the way to editing it.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onEditAgent(agent);
+        }}
+      >
+        <AgentAvatar
+          avatar={agent.avatar}
+          color={agent.color}
+          activity={activity[agent.id]}
+          lifecycle={agent.lifecycle}
+          seed={agent.id}
+          gesture={role.gesture}
+          look={facing(agent.id, role.facing ?? undefined)}
+          says={role.says}
+        />
+        <span className="agent-row__name">{agent.name}</span>
+        <span className="agent-row__meta" data-state={label.kind}>
+          {label.text}
+        </span>
+      </button>
+    );
+  };
+
   return (
     <nav className="rail" aria-label="Agents">
       <div className="rail__brand" data-tauri-drag-region>
@@ -142,8 +194,9 @@ export function Sidebar({ onNewAgent, onEditAgent, onOpenSettings }: Props) {
 
       {/* The wire lives on this wrapper rather than on the scroll container, so
           it runs the full height of the rail down to the footer instead of
-          stopping wherever the list happens to end. */}
-      <div className="rail__body">
+          stopping wherever the list happens to end. It is only drawn while a
+          message is on it; see the rule in styles.css. */}
+      <div className="rail__body" data-live={inFlight.length > 0 ? "true" : undefined}>
         <div className="rail__list" ref={listRef}>
           {inFlight.map((pulse) => {
             const from = rowCenters.get(pulse.from);
@@ -165,42 +218,29 @@ export function Sidebar({ onNewAgent, onEditAgent, onOpenSettings }: Props) {
             );
           })}
 
-          {agents.map((agent) => {
-            const role = roleOf(staged, agent.id);
-            const label = meta(agent.id, activity[agent.id]);
-
-            return (
-              <button
-                key={agent.id}
-                type="button"
-                ref={(node) => {
-                  if (node) rowRefs.current.set(agent.id, node);
-                  else rowRefs.current.delete(agent.id);
-                }}
-                className="agent-row"
-                aria-current={selected === agent.id}
-                data-lifecycle={agent.lifecycle}
-                style={{ "--accent": agent.color } as React.CSSProperties}
-                onClick={() => void select(agent.id)}
-                onDoubleClick={() => onEditAgent(agent)}
-              >
-                <AgentAvatar
-                  avatar={agent.avatar}
-                  color={agent.color}
-                  activity={activity[agent.id]}
-                  lifecycle={agent.lifecycle}
-                  seed={agent.id}
-                  gesture={role.gesture}
-                  look={facing(agent.id, role.facing ?? undefined)}
-                  says={role.says}
-                />
-                <span className="agent-row__name">{agent.name}</span>
-                <span className="agent-row__meta" data-state={label.kind}>
-                  {label.text}
-                </span>
-              </button>
-            );
-          })}
+          {/* Groups only appear once there is more than one. A single group is
+              the default every agent starts in, and labelling it would be
+              chrome explaining a choice the operator has not made yet. */}
+          {groups.length > 1
+            ? groups.map((group) => {
+                const members = agents.filter((a) => a.groupId === group.id);
+                return (
+                  <div key={group.id} className="rail__group">
+                    <button
+                      type="button"
+                      className="rail__group-head"
+                      onClick={() => onEditGroup(group)}
+                      title={`${group.name} — rename or delete`}
+                    >
+                      <span>{group.name}</span>
+                      <span>{members.length}</span>
+                    </button>
+                    {members.map(row)}
+                    {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
+                  </div>
+                );
+              })
+            : agents.map(row)}
 
           {agents.length === 0 && <p className="rail__empty">No agents yet.</p>}
         </div>
@@ -212,6 +252,12 @@ export function Sidebar({ onNewAgent, onEditAgent, onOpenSettings }: Props) {
             +
           </span>
           New agent
+        </button>
+        <button type="button" className="btn btn--rail" onClick={onNewGroup}>
+          <span aria-hidden="true" className="rail__hash">
+            +
+          </span>
+          New group
         </button>
         <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
           <span aria-hidden="true" className="rail__hash">

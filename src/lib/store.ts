@@ -15,6 +15,7 @@ import type {
   AgentCard,
   AgentId,
   Envelope,
+  Group,
   MessageId,
   Participant,
   Settings,
@@ -43,6 +44,7 @@ export interface Pulse {
 
 interface State {
   agents: AgentCard[];
+  groups: Group[];
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -82,6 +84,7 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
 
 export const useStore = create<State>((set, get) => ({
   agents: [],
+  groups: [],
   activity: {},
   lastActive: {},
   settings: null,
@@ -92,13 +95,14 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, activity, lastActive, settings] = await Promise.all([
+    const [agents, groups, activity, lastActive, settings] = await Promise.all([
       api.listAgents(),
+      api.listGroups(),
       api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
     ]);
-    set({ agents, activity, lastActive, settings });
+    set({ agents, groups, activity, lastActive, settings });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
@@ -108,8 +112,10 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async refreshAgents() {
-    const agents = await api.listAgents();
-    set({ agents });
+    // Groups come back with the roster because an agent moving between them
+    // changes both counts, and one refresh keeps the two consistent on screen.
+    const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
+    set({ agents, groups });
 
     // If the open channel was just deleted, fall back rather than showing a
     // dead pane.

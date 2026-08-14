@@ -5,6 +5,7 @@
  */
 
 export type AgentId = string;
+export type GroupId = string;
 export type MessageId = string;
 export type RunId = string;
 
@@ -39,8 +40,22 @@ export interface Envelope {
   createdAt: number;
 }
 
+/**
+ * An isolation boundary. Agents in different groups cannot see or message each
+ * other; the wall is enforced in the Rust runtime, not here. The UI keeps
+ * groups out of the way entirely while only the default one exists.
+ */
+export interface Group {
+  id: GroupId;
+  name: string;
+  /** Live agents in it. Terminated ones are excluded. */
+  agentCount: number;
+  createdAt: number;
+}
+
 export interface AgentCard {
   id: AgentId;
+  groupId: GroupId;
   name: string;
   avatar: string;
   color: string;
@@ -54,6 +69,8 @@ export interface AgentCard {
 }
 
 export interface AgentDraft {
+  /** Omitted means "leave it where it is" on update, "default group" on create. */
+  groupId?: GroupId;
   name: string;
   avatar: string;
   color: string;

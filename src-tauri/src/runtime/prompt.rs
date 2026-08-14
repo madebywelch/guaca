@@ -195,10 +195,11 @@ mod tests {
     use super::*;
     use crate::domain::agent::Lifecycle;
     use crate::domain::envelope::{Part, Trust};
-    use crate::domain::ids::{MessageId, RunId};
+    use crate::domain::ids::{GroupId, MessageId, RunId};
 
     fn card(name: &str) -> AgentCard {
         AgentCard {
+            group_id: GroupId::new(),
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),

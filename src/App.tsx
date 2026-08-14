@@ -3,11 +3,12 @@ import { useEffect, useState } from "react";
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
 import { ChannelView } from "./components/ChannelView";
+import { GroupEditor } from "./components/GroupEditor";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { api, onRuntimeEvent } from "./lib/ipc";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "./lib/store";
-import { type AgentCard, type AgentDraft, errorMessage } from "./lib/types";
+import { type AgentCard, type AgentDraft, errorMessage, type Group } from "./lib/types";
 
 /**
  * A crew that demonstrates the point of the app on first run: one agent whose
@@ -64,6 +65,7 @@ export default function App() {
   const select = useStore((s) => s.select);
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
+  const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [ready, setReady] = useState(false);
   const [seeding, setSeeding] = useState(false);
@@ -126,6 +128,8 @@ export default function App() {
       <Sidebar
         onNewAgent={() => setEditing("new")}
         onEditAgent={(agent) => setEditing(agent)}
+        onNewGroup={() => setEditingGroup("new")}
+        onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
       />
 
@@ -188,6 +192,12 @@ export default function App() {
         <AgentEditor
           agent={editing === "new" ? undefined : editing}
           onClose={() => setEditing(null)}
+        />
+      )}
+      {editingGroup && (
+        <GroupEditor
+          group={editingGroup === "new" ? undefined : editingGroup}
+          onClose={() => setEditingGroup(null)}
         />
       )}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
