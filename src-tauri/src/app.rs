@@ -12,6 +12,7 @@ use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
 use crate::llm::openrouter::LlmClient;
+use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
 use crate::runtime::Runtime;
 use crate::workspace::Workspace;
@@ -74,6 +75,25 @@ pub fn run() {
                 sink,
             );
             let started = runtime.start_all()?;
+
+            // The viewer for agents' computers. Loopback only: it holds the
+            // tokens that reach a running machine.
+            let viewer_port = tauri::async_runtime::block_on(proxy::start(runtime.store().clone()))
+                .map_err(|e| format!("could not start the computer viewer: {e}"))?;
+            runtime.set_viewer_port(viewer_port);
+
+            // Anything this app left running that no agent still refers to is
+            // released, since a forgotten sandbox bills exactly like a used one.
+            {
+                let runtime = runtime.clone();
+                tauri::async_runtime::spawn(async move {
+                    match runtime.sweep_computers().await {
+                        Ok(0) => {}
+                        Ok(n) => tracing::info!(released = n, "released orphaned sandboxes"),
+                        Err(err) => tracing::warn!(%err, "could not sweep sandboxes"),
+                    }
+                });
+            }
 
             tracing::info!(
                 db = %db_path.display(),
