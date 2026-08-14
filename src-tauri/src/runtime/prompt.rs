@@ -200,6 +200,7 @@ mod tests {
     fn card(name: &str) -> AgentCard {
         AgentCard {
             group_id: GroupId::new(),
+            sandbox_id: None,
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),

@@ -66,9 +66,21 @@ export interface GroupDraft {
   apiKey?: string;
 }
 
+/** An agent's sandbox: a desktop and a terminal it can be watched using. */
+export interface Computer {
+  sandboxId: string;
+  /** Daytona's own word: `started`, `stopped`, `creating`, `error`, … */
+  state: string;
+  /** Absent unless the sandbox is running. */
+  vncUrl: string | null;
+  terminalUrl: string | null;
+}
+
 export interface AgentCard {
   id: AgentId;
   groupId: GroupId;
+  /** Set once the agent has been given a computer. */
+  sandboxId: string | null;
   name: string;
   avatar: string;
   color: string;
@@ -106,6 +118,8 @@ export interface GuardLimits {
 }
 
 export interface Settings {
+  daytonaKeySet: boolean;
+  daytonaKeyHint: string;
   baseUrl: string;
   defaultModel: string;
   apiKeySet: boolean;
@@ -116,6 +130,7 @@ export interface Settings {
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
 export interface SettingsPatch {
+  daytonaApiKey?: string;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;

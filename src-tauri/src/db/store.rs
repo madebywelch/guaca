@@ -127,6 +127,7 @@ impl Store {
             model: draft.model.clone(),
             system_prompt: draft.system_prompt.clone(),
             skills: draft.skills.clone(),
+            sandbox_id: None,
             lifecycle: Lifecycle::Active,
             version: 1,
             created_at: now,
@@ -208,7 +209,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -225,7 +226,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -234,6 +235,23 @@ impl Store {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    /// Records which sandbox is this agent's computer.
+    ///
+    /// Deliberately not part of `update_agent`: provisioning is not an operator
+    /// edit and must not bump the card version, which peers use to notice that
+    /// an agent changed under them.
+    pub fn set_agent_sandbox(&self, id: AgentId, sandbox: Option<&str>) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET sandbox_id=?2 WHERE id=?1",
+            params![id.to_string(), sandbox],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        Ok(())
     }
 
     // ---- groups ----------------------------------------------------------
@@ -545,6 +563,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
                 raw.parse::<GroupId>()
                     .map_err(|e| StoreError::Corrupt(format!("bad group id {raw:?}: {e}")))?
             },
+            sandbox_id: row.get(12)?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,

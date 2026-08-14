@@ -157,6 +157,15 @@ ALTER TABLE groups ADD COLUMN api_key       TEXT;
 ALTER TABLE groups ADD COLUMN default_model TEXT;
 "#,
     ),
+    (
+        6,
+        r#"
+-- The sandbox an agent uses as its computer. NULL means it has never been
+-- given one. Stored rather than looked up by label so a rename or a Daytona
+-- listing hiccup cannot detach an agent from work it left on a disk.
+ALTER TABLE agents ADD COLUMN sandbox_id TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

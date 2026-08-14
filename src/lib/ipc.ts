@@ -15,6 +15,7 @@ import type {
   AgentCard,
   AgentDraft,
   AgentId,
+  Computer,
   Envelope,
   Group,
   GroupDraft,
@@ -28,6 +29,17 @@ import type {
 const EVENT_CHANNEL = "guac://event";
 
 export const api = {
+  /** `null` when the agent has never been given a computer. */
+  agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
+
+  /** Creates or wakes the sandbox, and brings the desktop up. Idempotent. */
+  startAgentComputer: (id: AgentId) => invoke<Computer>("start_agent_computer", { id }),
+
+  stopAgentComputer: (id: AgentId) => invoke<Computer | null>("stop_agent_computer", { id }),
+
+  /** Destroys the sandbox and everything on its disk. */
+  deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
+
   listGroups: () => invoke<Group[]>("list_groups"),
 
   createGroup: (draft: GroupDraft) => invoke<Group>("create_group", { draft }),

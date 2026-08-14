@@ -237,6 +237,7 @@ fn harness_in_groups(stub: &Stub, placed: &[(&str, Option<&str>)], limits: Guard
             ..Default::default()
         },
         limits,
+        daytona: Default::default(),
     };
 
     let sink = RecordingSink::new();
@@ -1128,6 +1129,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
             ..Default::default()
         },
         limits: GuardLimits::default(),
+        daytona: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(

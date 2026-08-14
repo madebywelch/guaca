@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
+use crate::daytona::{Computer, DaytonaClient, DaytonaError};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
@@ -80,6 +81,17 @@ impl From<crate::domain::group::GroupError> for CommandError {
     }
 }
 
+impl From<DaytonaError> for CommandError {
+    fn from(err: DaytonaError) -> Self {
+        match err {
+            // Its own kind so the UI can offer to open settings rather than
+            // showing a failure for something that was simply never set up.
+            DaytonaError::NoKey => CommandError::new("daytonaUnconfigured", err.to_string()),
+            other => CommandError::new("daytona", other.to_string()),
+        }
+    }
+}
+
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
         CommandError::new("config", err.to_string())
@@ -87,6 +99,101 @@ impl From<config::ConfigError> for CommandError {
 }
 
 type Reply<T> = Result<T, CommandError>;
+
+// ---- computers -----------------------------------------------------------
+
+/// The Daytona client, or a clear reason there is not one.
+fn daytona(state: &State<'_, AppState>) -> Reply<DaytonaClient> {
+    DaytonaClient::new(&state.runtime.config().daytona.api_key)
+        .ok_or_else(|| DaytonaError::NoKey.into())
+}
+
+fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
+    state
+        .runtime
+        .store()
+        .get_agent(id)?
+        .ok_or_else(|| CommandError::new("notFound", format!("no agent with id {id}")))
+}
+
+/// What an agent's computer is doing right now.
+///
+/// `None` means it has never been given one, which the UI shows as an offer
+/// rather than as an error.
+#[tauri::command]
+pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Computer>> {
+    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
+        return Ok(None);
+    };
+    let client = daytona(&state)?;
+
+    match client.describe(&sandbox).await {
+        Ok(computer) => Ok(Some(computer)),
+        // A sandbox deleted from Daytona's side leaves a dangling id. Clearing
+        // it turns a permanent error into an offer to provision a new one.
+        Err(DaytonaError::Api { status: 404, .. }) => {
+            state.runtime.store().set_agent_sandbox(id, None)?;
+            Ok(None)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Gives an agent a computer, or wakes the one it already has.
+///
+/// Idempotent on purpose: the UI calls this to show a desktop without having to
+/// know whether the sandbox exists, is stopped, or is already up.
+#[tauri::command]
+pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
+    let card = agent_card(&state, id)?;
+    let client = daytona(&state)?;
+
+    let sandbox = match card.sandbox_id {
+        Some(existing) => existing,
+        None => {
+            let created = client.create(&card.name).await?;
+            // Recorded before anything else can fail, so a sandbox is never
+            // created and then forgotten with the bill still running.
+            state.runtime.store().set_agent_sandbox(id, Some(&created))?;
+            created
+        }
+    };
+
+    if client.state(&sandbox).await? != "started" {
+        client.start(&sandbox).await?;
+    }
+    client.start_desktop(&sandbox).await?;
+
+    let computer = client.describe(&sandbox).await?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(computer)
+}
+
+#[tauri::command]
+pub async fn stop_agent_computer(
+    state: State<'_, AppState>,
+    id: AgentId,
+) -> Reply<Option<Computer>> {
+    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
+        return Ok(None);
+    };
+    let client = daytona(&state)?;
+    client.stop(&sandbox).await?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(Some(client.describe(&sandbox).await?))
+}
+
+/// Destroys the sandbox and everything on its disk.
+#[tauri::command]
+pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
+        return Ok(());
+    };
+    daytona(&state)?.delete(&sandbox).await?;
+    state.runtime.store().set_agent_sandbox(id, None)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
 
 // ---- groups --------------------------------------------------------------
 
@@ -257,6 +364,7 @@ pub struct SettingsPatch {
     pub default_model: Option<String>,
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
+    pub daytona_api_key: Option<String>,
 }
 
 #[tauri::command]
@@ -269,6 +377,9 @@ pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
 fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), CommandError> {
     if let Some(base_url) = patch.base_url {
         config.inference.base_url = config::normalize_base_url(&base_url)?;
+    }
+    if let Some(key) = patch.daytona_api_key {
+        config.daytona.api_key = key.trim().to_string();
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();
