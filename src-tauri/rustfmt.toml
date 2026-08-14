@@ -1,0 +1,4 @@
+# Matches the frontend's 100-column limit so the two halves of the repo read the
+# same way in a side-by-side diff.
+max_width = 100
+use_small_heuristics = "Max"

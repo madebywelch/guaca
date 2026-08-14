@@ -1,0 +1,903 @@
+//! SQLite-backed persistence.
+//!
+//! One pool, WAL mode, plain SQL. There is no ORM because there are two tables
+//! and eleven queries, and hiding those behind a query builder would add a
+//! dependency and remove the ability to read what actually hits the disk.
+
+use std::collections::HashMap;
+use std::path::Path;
+
+use r2d2::{Pool, PooledConnection};
+use r2d2_sqlite::SqliteConnectionManager;
+use rusqlite::{params, OptionalExtension, Row};
+
+use crate::db::migrations;
+use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
+use crate::domain::envelope::{Envelope, Part, Participant, Trust};
+use crate::domain::ids::{AgentId, MessageId};
+use crate::domain::now_ms;
+
+pub type Conn = PooledConnection<SqliteConnectionManager>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("database error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
+    #[error("connection pool error: {0}")]
+    Pool(#[from] r2d2::Error),
+    #[error("migration error: {0}")]
+    Migration(#[from] migrations::MigrationError),
+    #[error("stored row is malformed: {0}")]
+    Corrupt(String),
+    #[error("no agent with id {0}")]
+    AgentNotFound(AgentId),
+    #[error("an agent named {0:?} already exists")]
+    DuplicateName(String),
+}
+
+/// Maps SQLite's unique-constraint failure onto a domain error, so callers get
+/// "that name is taken" instead of a raw driver string.
+fn classify(err: rusqlite::Error, name: &str) -> StoreError {
+    if let rusqlite::Error::SqliteFailure(inner, _) = &err {
+        if inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
+            return StoreError::DuplicateName(name.to_string());
+        }
+    }
+    StoreError::Sqlite(err)
+}
+
+#[derive(Debug, Clone)]
+pub struct Store {
+    pool: Pool<SqliteConnectionManager>,
+}
+
+impl Store {
+    pub fn open(path: &Path) -> Result<Self, StoreError> {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Two kinds of setting, applied in two places.
+        //
+        // `journal_mode` belongs to the database file, not to a connection, and
+        // switching it takes an exclusive lock. It has to happen once, alone,
+        // before the pool exists. Letting the pool's connections race for that
+        // lock logs "database is locked" and silently leaves some of them on
+        // the rollback journal: a busy timeout does not save you, because
+        // SQLite treats a shared/exclusive conflict inside a single process as
+        // a deadlock and fails immediately rather than waiting.
+        //
+        // WAL is what lets the UI read a transcript while agents are mid-write.
+        // Without it every read queues behind the writer and the window
+        // stutters whenever a cascade is running.
+        {
+            let mut bootstrap = rusqlite::Connection::open(path)?;
+            // Needed before the migration below, so a second process opening
+            // the same database waits for the write lock rather than failing.
+            bootstrap.busy_timeout(std::time::Duration::from_secs(5))?;
+            let mode: String =
+                bootstrap.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+            if !mode.eq_ignore_ascii_case("wal") {
+                return Err(StoreError::Corrupt(format!(
+                    "could not switch {} to WAL mode (got {mode:?})",
+                    path.display()
+                )));
+            }
+            migrations::run(&mut bootstrap)?;
+        }
+
+        // Everything below is per-connection and needs no exclusive lock, so it
+        // is safe to run on all of them at once.
+        let manager = SqliteConnectionManager::file(path).with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA busy_timeout = 5000;
+                 PRAGMA synchronous = NORMAL;
+                 PRAGMA foreign_keys = ON;",
+            )
+        });
+
+        Ok(Self { pool: Pool::builder().max_size(8).build(manager)? })
+    }
+
+    pub fn conn(&self) -> Result<Conn, StoreError> {
+        Ok(self.pool.get()?)
+    }
+
+    // ---- agents ----------------------------------------------------------
+
+    pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let card = AgentCard {
+            id: AgentId::new(),
+            name: draft.name.clone(),
+            avatar: draft.avatar.clone(),
+            color: draft.color.clone(),
+            model: draft.model.clone(),
+            system_prompt: draft.system_prompt.clone(),
+            skills: draft.skills.clone(),
+            lifecycle: Lifecycle::Active,
+            version: 1,
+            created_at: now,
+            updated_at: now,
+        };
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                card.id.to_string(),
+                card.name,
+                card.avatar,
+                card.color,
+                card.model,
+                card.system_prompt,
+                serde_json::to_string(&card.skills).unwrap_or_else(|_| "[]".into()),
+                card.lifecycle.as_str(),
+                card.version,
+                card.created_at,
+                card.updated_at,
+            ],
+        )
+        .map_err(|e| classify(e, &card.name))?;
+
+        Ok(card)
+    }
+
+    /// Applies an operator edit and bumps the card version.
+    ///
+    /// The version bump is what lets a peer notice the card changed under it,
+    /// which is the only reason A2A's Update phase exists.
+    pub fn update_agent(&self, id: AgentId, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let changed = conn
+            .execute(
+                "UPDATE agents
+                    SET name=?2, avatar=?3, color=?4, model=?5, system_prompt=?6, skills=?7,
+                        version = version + 1, updated_at=?8
+                  WHERE id=?1",
+                params![
+                    id.to_string(),
+                    draft.name,
+                    draft.avatar,
+                    draft.color,
+                    draft.model,
+                    draft.system_prompt,
+                    serde_json::to_string(&draft.skills).unwrap_or_else(|_| "[]".into()),
+                    now,
+                ],
+            )
+            .map_err(|e| classify(e, &draft.name))?;
+
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    pub fn set_lifecycle(&self, id: AgentId, state: Lifecycle) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET lifecycle=?2, updated_at=?3 WHERE id=?1",
+            params![id.to_string(), state.as_str(), now_ms()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at
+               FROM agents WHERE id=?1",
+            params![id.to_string()],
+            row_to_card,
+        )
+        .optional()?
+        .transpose()
+    }
+
+    /// Every agent, terminated ones included.
+    ///
+    /// Terminated agents still appear in old transcripts, so the frontend needs
+    /// their name, avatar, and color to render history. It filters them out of
+    /// the sidebar itself.
+    pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at
+               FROM agents ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map([], row_to_card)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    // ---- messages --------------------------------------------------------
+
+    pub fn append(&self, envelope: &Envelope) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let (from_kind, from_agent) = participant_columns(envelope.from);
+        let (to_kind, to_agent) = participant_columns(envelope.to);
+        let parts = serde_json::to_string(&envelope.parts)
+            .map_err(|e| StoreError::Corrupt(format!("parts are not serializable: {e}")))?;
+
+        conn.execute(
+            "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            params![
+                envelope.id.to_string(),
+                envelope.run_id.to_string(),
+                envelope.channel_id.to_string(),
+                from_kind,
+                from_agent,
+                to_kind,
+                to_agent,
+                parts,
+                envelope.trust.as_str(),
+                envelope.hop,
+                envelope.expects_reply,
+                envelope.cause.map(|c| c.to_string()),
+                envelope.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// The newest `limit` messages in a channel, returned oldest-first for
+    /// direct rendering.
+    pub fn channel_messages(
+        &self,
+        channel: AgentId,
+        limit: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+               FROM messages WHERE channel_id=?1
+              ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![channel.to_string(), limit], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    /// The conversation as a whole, oldest last, for the flow board.
+    ///
+    /// Includes the operator's messages and the replies back to them, not just
+    /// peer traffic: a flow that starts partway through, at the first agent to
+    /// agent message, hides who set it off. An agent's private activity records
+    /// are excluded, since they are bookkeeping rather than a message passing
+    /// between two participants.
+    pub fn conversation_flow(&self, limit: u32) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+               FROM messages WHERE to_kind <> 'system'
+              ORDER BY created_at DESC, id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    pub fn delete_channel_messages(&self, channel: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM messages WHERE channel_id=?1", params![channel.to_string()])?)
+    }
+
+    /// Newest message timestamp per agent, counting both ends of a message.
+    ///
+    /// An agent that messaged a peer has that message filed in the *peer's*
+    /// channel, so grouping by channel alone would leave the sender looking
+    /// idle. Both endpoints are considered.
+    pub fn last_activity(&self) -> Result<HashMap<AgentId, i64>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT agent, MAX(created_at) FROM (
+                 SELECT from_agent AS agent, created_at FROM messages WHERE from_agent IS NOT NULL
+                 UNION ALL
+                 SELECT to_agent AS agent, created_at FROM messages WHERE to_agent IS NOT NULL
+             ) GROUP BY agent",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let id: String = row.get(0)?;
+            let at: i64 = row.get(1)?;
+            Ok((id, at))
+        })?;
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (raw, at) = row?;
+            match raw.parse::<AgentId>() {
+                Ok(id) => {
+                    out.insert(id, at);
+                }
+                // A malformed id should not sink the whole sidebar ordering.
+                Err(err) => tracing::warn!(%err, id = %raw, "skipping unparseable agent id"),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn count_messages(&self) -> Result<i64, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?)
+    }
+}
+
+// ---- row mapping ---------------------------------------------------------
+
+fn participant_columns(p: Participant) -> (&'static str, Option<String>) {
+    match p {
+        Participant::Human => ("human", None),
+        Participant::System => ("system", None),
+        Participant::Agent { id } => ("agent", Some(id.to_string())),
+    }
+}
+
+fn participant_from_columns(kind: &str, agent: Option<String>) -> Result<Participant, StoreError> {
+    match kind {
+        "human" => Ok(Participant::Human),
+        "system" => Ok(Participant::System),
+        "agent" => {
+            let raw = agent.ok_or_else(|| {
+                StoreError::Corrupt("row has from/to kind 'agent' but no agent id".into())
+            })?;
+            raw.parse::<AgentId>()
+                .map(|id| Participant::Agent { id })
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {raw:?}: {e}")))
+        }
+        other => Err(StoreError::Corrupt(format!("unknown participant kind {other:?}"))),
+    }
+}
+
+/// Returns a nested Result so a malformed row surfaces as a domain error
+/// rather than being coerced into a rusqlite error with no context.
+type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
+
+fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
+    let id_raw: String = row.get(0)?;
+    let skills_raw: String = row.get(6)?;
+    let lifecycle_raw: String = row.get(7)?;
+
+    Ok((|| {
+        let id = id_raw
+            .parse::<AgentId>()
+            .map_err(|e| StoreError::Corrupt(format!("bad agent id {id_raw:?}: {e}")))?;
+        let lifecycle = Lifecycle::parse(&lifecycle_raw)
+            .ok_or_else(|| StoreError::Corrupt(format!("unknown lifecycle {lifecycle_raw:?}")))?;
+        // A malformed skills blob should not make the agent unloadable; the
+        // card is still usable without it.
+        let skills: Vec<String> = serde_json::from_str(&skills_raw).unwrap_or_default();
+
+        Ok(AgentCard {
+            id,
+            name: row.get(1)?,
+            avatar: row.get(2)?,
+            color: row.get(3)?,
+            model: row.get(4)?,
+            system_prompt: row.get(5)?,
+            skills,
+            lifecycle,
+            version: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
+        })
+    })())
+}
+
+fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
+    let id_raw: String = row.get(0)?;
+    let run_raw: String = row.get(1)?;
+    let channel_raw: String = row.get(2)?;
+    let from_kind: String = row.get(3)?;
+    let from_agent: Option<String> = row.get(4)?;
+    let to_kind: String = row.get(5)?;
+    let to_agent: Option<String> = row.get(6)?;
+    let parts_raw: String = row.get(7)?;
+    let trust_raw: String = row.get(8)?;
+    let hop: u16 = row.get(9)?;
+    let expects_reply: bool = row.get(10)?;
+    let cause_raw: Option<String> = row.get(11)?;
+    let created_at: i64 = row.get(12)?;
+
+    Ok((|| {
+        let parts: Vec<Part> = serde_json::from_str(&parts_raw)
+            .map_err(|e| StoreError::Corrupt(format!("unreadable parts: {e}")))?;
+        let trust = Trust::parse(&trust_raw)
+            .ok_or_else(|| StoreError::Corrupt(format!("unknown trust {trust_raw:?}")))?;
+
+        Ok(Envelope {
+            id: id_raw.parse().map_err(|e| StoreError::Corrupt(format!("bad message id: {e}")))?,
+            run_id: run_raw.parse().map_err(|e| StoreError::Corrupt(format!("bad run id: {e}")))?,
+            channel_id: channel_raw
+                .parse()
+                .map_err(|e| StoreError::Corrupt(format!("bad channel id: {e}")))?,
+            from: participant_from_columns(&from_kind, from_agent)?,
+            to: participant_from_columns(&to_kind, to_agent)?,
+            parts,
+            trust,
+            hop,
+            expects_reply,
+            cause: match cause_raw {
+                Some(raw) => Some(
+                    raw.parse::<MessageId>()
+                        .map_err(|e| StoreError::Corrupt(format!("bad cause id: {e}")))?,
+                ),
+                None => None,
+            },
+            created_at,
+        })
+    })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::envelope::channel_for;
+    use crate::domain::ids::RunId;
+
+    struct Fixture {
+        store: Store,
+        _dir: tempfile::TempDir,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        Fixture { store, _dir: dir }
+    }
+
+    fn draft(name: &str) -> CleanDraft {
+        CleanDraft {
+            name: name.into(),
+            avatar: "avocado".into(),
+            color: "#7fb069".into(),
+            model: "anthropic/claude-sonnet-4.5".into(),
+            system_prompt: "be useful".into(),
+            skills: vec!["coordination".into()],
+        }
+    }
+
+    fn envelope(from: Participant, to: Participant, text: &str, run: RunId) -> Envelope {
+        Envelope {
+            id: MessageId::new(),
+            run_id: run,
+            channel_id: channel_for(from, to).expect("test envelopes must be routable"),
+            from,
+            to,
+            parts: vec![Part::text(text)],
+            trust: Trust::Peer,
+            hop: 1,
+            expects_reply: true,
+            cause: None,
+            created_at: now_ms(),
+        }
+    }
+
+    #[test]
+    fn every_pooled_connection_comes_up_configured() {
+        let f = fixture();
+        // Hold them all at once so the pool is forced to open its full size.
+        let conns: Vec<_> = (0..8).map(|_| f.store.conn().unwrap()).collect();
+        for conn in &conns {
+            let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+            assert_eq!(mode.to_lowercase(), "wal", "a connection came up outside WAL");
+
+            let timeout: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
+            assert!(timeout >= 5000, "busy timeout was not applied: {timeout}");
+        }
+    }
+
+    #[test]
+    fn opening_the_same_database_concurrently_does_not_fail() {
+        // Regression: journal_mode is a file-level setting behind an exclusive
+        // lock. When several connections raced to set it, the losers failed
+        // outright rather than waiting, because SQLite reports a shared vs
+        // exclusive conflict inside one process as a deadlock.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guac.db");
+
+        let results: Vec<Result<Store, StoreError>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8).map(|_| scope.spawn(|| Store::open(&path))).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+
+        for result in &results {
+            assert!(result.is_ok(), "concurrent open failed: {:?}", result.as_ref().err());
+        }
+        let mode: String = results[0]
+            .as_ref()
+            .unwrap()
+            .conn()
+            .unwrap()
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+    }
+
+    #[test]
+    fn opening_creates_the_schema_and_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("guac.db");
+        let store = Store::open(&path).unwrap();
+        store.create_agent(&draft("Manager")).unwrap();
+        drop(store);
+
+        let reopened = Store::open(&path).unwrap();
+        assert_eq!(reopened.list_agents().unwrap().len(), 1, "data must survive a restart");
+    }
+
+    #[test]
+    fn create_and_read_back_an_agent() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        assert_eq!(card.version, 1);
+        assert_eq!(card.lifecycle, Lifecycle::Active);
+
+        let fetched = f.store.get_agent(card.id).unwrap().unwrap();
+        assert_eq!(fetched, card, "round trip must be lossless");
+    }
+
+    #[test]
+    fn duplicate_live_names_are_rejected_with_a_domain_error() {
+        let f = fixture();
+        f.store.create_agent(&draft("Manager")).unwrap();
+        let err = f.store.create_agent(&draft("manager")).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::DuplicateName(name) if name == "manager"),
+            "expected DuplicateName, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn deleting_an_agent_frees_the_name_and_keeps_the_transcript() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let run = RunId::new();
+        f.store
+            .append(&envelope(Participant::Human, Participant::Agent { id: card.id }, "hi", run))
+            .unwrap();
+
+        f.store.set_lifecycle(card.id, Lifecycle::Terminated).unwrap();
+
+        let reused = f.store.create_agent(&draft("Manager")).unwrap();
+        assert_ne!(reused.id, card.id);
+        assert_eq!(
+            f.store.channel_messages(card.id, 50).unwrap().len(),
+            1,
+            "history of a deleted agent must remain readable"
+        );
+    }
+
+    #[test]
+    fn update_bumps_the_version_and_persists_edits() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let mut edit = draft("Coordinator");
+        edit.color = "#ff0000".into();
+
+        let updated = f.store.update_agent(card.id, &edit).unwrap();
+        assert_eq!(updated.version, 2, "peers detect card changes by version");
+        assert_eq!(updated.name, "Coordinator");
+        assert_eq!(updated.color, "#ff0000");
+        assert_eq!(updated.created_at, card.created_at, "creation time must not move");
+        assert!(updated.updated_at >= card.updated_at);
+    }
+
+    #[test]
+    fn updating_a_missing_agent_reports_not_found() {
+        let f = fixture();
+        let err = f.store.update_agent(AgentId::new(), &draft("Ghost")).unwrap_err();
+        assert!(matches!(err, StoreError::AgentNotFound(_)));
+    }
+
+    #[test]
+    fn renaming_onto_a_taken_name_is_refused() {
+        let f = fixture();
+        f.store.create_agent(&draft("Manager")).unwrap();
+        let chef = f.store.create_agent(&draft("Chef")).unwrap();
+        let err = f.store.update_agent(chef.id, &draft("Manager")).unwrap_err();
+        assert!(matches!(err, StoreError::DuplicateName(_)));
+    }
+
+    #[test]
+    fn agents_list_in_creation_order() {
+        let f = fixture();
+        for name in ["A", "B", "C"] {
+            f.store.create_agent(&draft(name)).unwrap();
+        }
+        assert_eq!(
+            f.store.list_agents().unwrap().iter().map(|x| x.name.clone()).collect::<Vec<_>>(),
+            vec!["A", "B", "C"]
+        );
+    }
+
+    #[test]
+    fn agents_created_in_the_same_millisecond_keep_their_creation_order() {
+        // `created_at` is not a total order at millisecond resolution, and
+        // falling back to the id sorts by random UUID. Ordering by rowid gives
+        // exact insertion order, which is what the sidebar has to show. Rows are
+        // never hard-deleted, so rowids are never reused.
+        let f = fixture();
+        for name in ["A", "B", "C", "D", "E"] {
+            f.store.create_agent(&draft(name)).unwrap();
+        }
+        let names: Vec<String> =
+            f.store.list_agents().unwrap().iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, vec!["A", "B", "C", "D", "E"]);
+
+        // And it must not drift between reads.
+        let first = f.store.list_agents().unwrap();
+        for _ in 0..5 {
+            assert_eq!(f.store.list_agents().unwrap(), first, "ordering must be deterministic");
+        }
+    }
+
+    #[test]
+    fn envelopes_round_trip_with_all_participant_shapes() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let peer = f.store.create_agent(&draft("Chef")).unwrap();
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+
+        let cases = [
+            envelope(Participant::Human, agent(card.id), "from human", run),
+            envelope(agent(card.id), Participant::Human, "to human", run),
+            envelope(agent(card.id), agent(peer.id), "agent to agent", run),
+            envelope(Participant::System, agent(card.id), "system notice", run),
+        ];
+        for case in &cases {
+            f.store.append(case).unwrap();
+        }
+
+        let manager_channel = f.store.channel_messages(card.id, 50).unwrap();
+        assert_eq!(manager_channel.len(), 3, "human traffic and system notices file under Manager");
+
+        let chef_channel = f.store.channel_messages(peer.id, 50).unwrap();
+        assert_eq!(chef_channel.len(), 1);
+        assert_eq!(chef_channel[0].from, agent(card.id));
+        assert_eq!(chef_channel[0].plain_text(), "agent to agent");
+    }
+
+    #[test]
+    fn channel_messages_come_back_oldest_first() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let run = RunId::new();
+        for i in 0..5 {
+            let mut e = envelope(
+                Participant::Human,
+                Participant::Agent { id: card.id },
+                &format!("m{i}"),
+                run,
+            );
+            e.created_at = 1_000 + i as i64;
+            f.store.append(&e).unwrap();
+        }
+        let texts: Vec<String> =
+            f.store.channel_messages(card.id, 50).unwrap().iter().map(|e| e.plain_text()).collect();
+        assert_eq!(texts, vec!["m0", "m1", "m2", "m3", "m4"]);
+    }
+
+    #[test]
+    fn channel_limit_keeps_the_newest_messages_in_order() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let run = RunId::new();
+        for i in 0..10 {
+            let mut e = envelope(
+                Participant::Human,
+                Participant::Agent { id: card.id },
+                &format!("m{i}"),
+                run,
+            );
+            e.created_at = 1_000 + i as i64;
+            f.store.append(&e).unwrap();
+        }
+        let texts: Vec<String> =
+            f.store.channel_messages(card.id, 3).unwrap().iter().map(|e| e.plain_text()).collect();
+        assert_eq!(
+            texts,
+            vec!["m7", "m8", "m9"],
+            "a limited window must be the newest, still ordered"
+        );
+    }
+
+    #[test]
+    fn the_flow_covers_the_whole_conversation_but_not_bookkeeping() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+
+        // Explicit timestamps: these are written in the same millisecond, and
+        // the tie-break is by id, which is a random UUID.
+        let mut at = 1_000;
+        let mut send = |from, to, text: &str| {
+            let mut e = envelope(from, to, text, run);
+            e.created_at = at;
+            at += 1;
+            f.store.append(&e).unwrap();
+        };
+        send(Participant::Human, agent(a.id), "you asked");
+        send(agent(a.id), agent(b.id), "peer msg");
+        send(agent(b.id), Participant::Human, "answer");
+        // An agent's own activity record is not a message between participants.
+        send(agent(a.id), Participant::System, "tool trail");
+
+        let flow: Vec<String> =
+            f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
+        assert_eq!(flow, vec!["you asked", "peer msg", "answer"]);
+    }
+
+    #[test]
+    fn the_flow_comes_back_in_order() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let run = RunId::new();
+        for i in 0..5 {
+            let mut e = envelope(
+                Participant::Human,
+                Participant::Agent { id: a.id },
+                &format!("m{i}"),
+                run,
+            );
+            e.created_at = 1_000 + i as i64;
+            f.store.append(&e).unwrap();
+        }
+        let flow: Vec<String> =
+            f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
+        assert_eq!(flow, vec!["m0", "m1", "m2", "m3", "m4"]);
+    }
+
+    #[test]
+    fn structured_parts_survive_the_round_trip() {
+        use crate::domain::envelope::{NoticeKind, ToolOutcome};
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let mut e =
+            envelope(Participant::Human, Participant::Agent { id: card.id }, "x", RunId::new());
+        e.parts = vec![
+            Part::text("hello"),
+            Part::Json { name: "report".into(), value: serde_json::json!({"ok": true, "n": 3}) },
+            Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into() },
+            Part::ToolCall {
+                name: "send_message".into(),
+                arguments: serde_json::json!({"to": "Chef"}),
+                outcome: ToolOutcome::Refused { reason: "duplicate".into() },
+            },
+        ];
+        f.store.append(&e).unwrap();
+
+        let back = f.store.channel_messages(card.id, 1).unwrap().pop().unwrap();
+        assert_eq!(back.parts, e.parts, "every part variant must survive storage");
+    }
+
+    #[test]
+    fn cause_and_hop_are_preserved_for_replay() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let cause = MessageId::new();
+        let mut e =
+            envelope(Participant::Human, Participant::Agent { id: card.id }, "x", RunId::new());
+        e.cause = Some(cause);
+        e.hop = 3;
+        f.store.append(&e).unwrap();
+
+        let back = f.store.channel_messages(card.id, 1).unwrap().pop().unwrap();
+        assert_eq!(back.cause, Some(cause));
+        assert_eq!(back.hop, 3);
+    }
+
+    #[test]
+    fn a_corrupt_participant_row_surfaces_as_corrupt_not_a_panic() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        {
+            let conn = f.store.conn().unwrap();
+            conn.execute(
+                "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at)
+                 VALUES (?1,?2,?3,'agent',NULL,'human',NULL,'[]','peer',0,1,NULL,1)",
+                params![MessageId::new().to_string(), RunId::new().to_string(), card.id.to_string()],
+            )
+            .unwrap();
+        }
+        let err = f.store.channel_messages(card.id, 10).unwrap_err();
+        assert!(matches!(err, StoreError::Corrupt(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn last_activity_counts_both_ends_of_a_message() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let quiet = f.store.create_agent(&draft("Quiet")).unwrap();
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+
+        let mut msg = envelope(agent(a.id), agent(b.id), "hello", run);
+        msg.created_at = 5_000;
+        f.store.append(&msg).unwrap();
+
+        let seen = f.store.last_activity().unwrap();
+        assert_eq!(seen.get(&a.id), Some(&5_000), "the sender must not look idle");
+        assert_eq!(seen.get(&b.id), Some(&5_000), "nor the recipient");
+        assert_eq!(seen.get(&quiet.id), None, "an agent with no traffic has no entry");
+    }
+
+    #[test]
+    fn last_activity_reports_the_newest_message() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let run = RunId::new();
+        for at in [1_000, 9_000, 4_000] {
+            let mut msg = envelope(Participant::Human, Participant::Agent { id: a.id }, "x", run);
+            msg.created_at = at;
+            f.store.append(&msg).unwrap();
+        }
+        assert_eq!(f.store.last_activity().unwrap().get(&a.id), Some(&9_000));
+    }
+
+    #[test]
+    fn clearing_a_channel_leaves_other_channels_alone() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let run = RunId::new();
+        f.store
+            .append(&envelope(Participant::Human, Participant::Agent { id: a.id }, "x", run))
+            .unwrap();
+        f.store
+            .append(&envelope(Participant::Human, Participant::Agent { id: b.id }, "y", run))
+            .unwrap();
+
+        assert_eq!(f.store.delete_channel_messages(a.id).unwrap(), 1);
+        assert!(f.store.channel_messages(a.id, 10).unwrap().is_empty());
+        assert_eq!(f.store.channel_messages(b.id, 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_writers_do_not_deadlock() {
+        // Agents write from independent tasks. WAL plus a busy timeout should
+        // make this boring; if it is not, it fails here and not in the field.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let run = RunId::new();
+
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                let store = f.store.clone();
+                scope.spawn(move || {
+                    for i in 0..25 {
+                        let e = envelope(
+                            Participant::Human,
+                            Participant::Agent { id: card.id },
+                            &format!("m{i}"),
+                            run,
+                        );
+                        store.append(&e).unwrap();
+                    }
+                });
+            }
+        });
+
+        assert_eq!(f.store.count_messages().unwrap(), 200);
+    }
+}

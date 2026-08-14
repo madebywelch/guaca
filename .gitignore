@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.local
+
+src-tauri/target/
+src-tauri/gen/
+
+# Never commit an inference key.
+.env
+.env.*
+!.env.example
+
+# Generated from scripts/make-icon.py
+scripts/icon-source.png

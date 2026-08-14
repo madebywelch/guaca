@@ -1,0 +1,891 @@
+//! End-to-end runtime tests.
+//!
+//! These drive the real actor runtime against a scripted OpenAI-compatible
+//! server, so everything between "operator presses enter" and "four agents have
+//! replied" is exercised: tool-call assembly, the guard, channel routing, batch
+//! coalescing, and settle detection. The only thing swapped out is the model.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use axum::response::IntoResponse;
+use axum::routing::post;
+use axum::Router;
+
+use guac_lib::config::{AppConfig, InferenceConfig};
+use guac_lib::db::Store;
+use guac_lib::domain::agent::{CleanDraft, Lifecycle};
+use guac_lib::domain::envelope::{Envelope, Part, Participant};
+use guac_lib::domain::ids::{AgentId, RunId};
+use guac_lib::llm::openrouter::LlmClient;
+use guac_lib::runtime::events::{RecordingSink, UiEvent};
+use guac_lib::runtime::guard::GuardLimits;
+use guac_lib::runtime::Runtime;
+use guac_lib::workspace::Workspace;
+
+// ---- scripted model ------------------------------------------------------
+
+/// What the stub model should do for one request.
+#[derive(Debug, Clone)]
+enum Script {
+    /// Emit plain text.
+    Say(String),
+    /// Emit a `send_message` tool call.
+    SendTo { recipients: Vec<String>, text: String },
+    /// Emit a `directory` tool call.
+    Directory,
+    /// Emit an `update_notes` tool call.
+    Notes(String),
+}
+
+fn frame(value: serde_json::Value) -> String {
+    format!("data: {value}\n\n")
+}
+
+fn render(script: &Script) -> String {
+    let mut body = String::new();
+    match script {
+        Script::Say(text) => {
+            // Split into fragments so the streaming path is exercised, not
+            // just a single-chunk happy case.
+            for piece in text.as_bytes().chunks(7) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(
+                    serde_json::json!({"choices":[{"delta":{"content": piece}}]}),
+                ));
+            }
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+            ));
+        }
+        Script::SendTo { recipients, text } => {
+            let args = serde_json::json!({ "to": recipients, "text": text }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_send","type":"function",
+                 "function":{"name":"send_message","arguments":""}}
+            ]}}]})));
+            // Arguments arrive in pieces, as they really do.
+            for piece in args.as_bytes().chunks(11) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                    {"index":0,"function":{"arguments": piece}}
+                ]}}]})));
+            }
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Notes(content) => {
+            let args = serde_json::json!({ "content": content }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_notes","type":"function",
+                 "function":{"name":"update_notes","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Directory => {
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_dir","type":"function",
+                 "function":{"name":"directory","arguments":"{}"}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+    }
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+/// Extracts `You are <Name>,` from the system prompt so the stub can answer as
+/// whichever agent is asking.
+fn speaker(body: &serde_json::Value) -> String {
+    let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+    system
+        .strip_prefix("You are ")
+        .and_then(|rest| rest.split(',').next())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+/// True when the newest user turn carries peer messages, meaning this agent is
+/// reading replies rather than being given a fresh instruction. A real model
+/// would summarize here rather than broadcasting again.
+fn reading_peer_replies(body: &serde_json::Value) -> bool {
+    body["messages"]
+        .as_array()
+        .and_then(|m| m.last())
+        .map(|m| {
+            m["role"] == "user" && m["content"].as_str().unwrap_or_default().contains("[AGENT")
+        })
+        .unwrap_or(false)
+}
+
+/// True once this conversation already contains a tool result, meaning the
+/// agent has already acted and should now speak.
+fn has_tool_result(body: &serde_json::Value) -> bool {
+    body["messages"].as_array().map(|m| m.iter().any(|msg| msg["role"] == "tool")).unwrap_or(false)
+}
+
+struct Stub {
+    base_url: String,
+    calls: Arc<AtomicUsize>,
+    transcript: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+}
+
+async fn serve<F>(decide: F) -> Stub
+where
+    F: Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static,
+{
+    let calls = Arc::new(AtomicUsize::new(0));
+    let transcript = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let call_counter = calls.clone();
+    let recorder = transcript.clone();
+
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: axum::extract::Json<serde_json::Value>| {
+            let decide = decide.clone();
+            let call_counter = call_counter.clone();
+            let recorder = recorder.clone();
+            async move {
+                call_counter.fetch_add(1, Ordering::SeqCst);
+                recorder.lock().push(body.0.clone());
+                let script = decide(&body.0);
+                ([("content-type", "text/event-stream")], render(&script)).into_response()
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    Stub { base_url: format!("http://{addr}/v1"), calls, transcript }
+}
+
+// ---- harness -------------------------------------------------------------
+
+struct Harness {
+    runtime: Runtime,
+    sink: Arc<RecordingSink>,
+    ids: HashMap<String, AgentId>,
+    _dir: tempfile::TempDir,
+}
+
+fn draft(name: &str, skills: &[&str]) -> CleanDraft {
+    CleanDraft {
+        name: name.into(),
+        avatar: "avocado".into(),
+        color: "#7fb069".into(),
+        model: "test/model".into(),
+        system_prompt: format!("You are the {name}."),
+        skills: skills.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+fn harness(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+    let mut ids = HashMap::new();
+    for name in names {
+        let card = store.create_agent(&draft(name, &["testing"])).unwrap();
+        ids.insert(name.to_string(), card.id);
+    }
+
+    let config = AppConfig {
+        version: guac_lib::config::CURRENT_VERSION,
+        inference: InferenceConfig {
+            base_url: stub.base_url.clone(),
+            api_key: "sk-test".into(),
+            default_model: "test/model".into(),
+            request_timeout_secs: 10,
+            ..Default::default()
+        },
+        limits,
+    };
+
+    let sink = RecordingSink::new();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        config,
+        Workspace::new(dir.path().join("workspace")),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+
+    Harness { runtime, sink, ids, _dir: dir }
+}
+
+impl Harness {
+    fn id(&self, name: &str) -> AgentId {
+        *self.ids.get(name).unwrap_or_else(|| panic!("no agent named {name}"))
+    }
+
+    fn channel_texts(&self, name: &str) -> Vec<String> {
+        self.runtime
+            .store()
+            .channel_messages(self.id(name), 200)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// Peer traffic only, which is what most of these tests reason about.
+    fn feed(&self) -> Vec<Envelope> {
+        self.runtime
+            .store()
+            .conversation_flow(400)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.from.is_agent() && e.to.is_agent())
+            .collect()
+    }
+
+    /// Polls until `check` holds, or panics on timeout.
+    async fn wait_until(&self, what: &str, check: impl Fn(&Harness) -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !check(self) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    fn pause(&self, name: &str) {
+        self.runtime.store().set_lifecycle(self.id(name), Lifecycle::Paused).unwrap();
+        self.runtime.pause_agent(self.id(name));
+    }
+
+    fn resume(&self, name: &str) {
+        self.runtime.store().set_lifecycle(self.id(name), Lifecycle::Active).unwrap();
+        self.runtime.resume_agent(self.id(name));
+    }
+
+    /// Waits for the run to settle, or panics with what actually happened.
+    async fn settle(&self, run: RunId) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let settled = self
+                .sink
+                .count_of(|e| matches!(e, UiEvent::RunSettled { run_id, .. } if *run_id == run));
+            if settled > 0 {
+                // Let any final persistence land before assertions read it.
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                assert_eq!(settled, 1, "RunSettled must fire exactly once per run");
+                return;
+            }
+            if Instant::now() > deadline {
+                panic!(
+                    "run did not settle. messages so far:\n{:#?}",
+                    self.sink
+                        .appended_messages()
+                        .iter()
+                        .map(|m| format!("{:?} -> {:?}: {}", m.from, m.to, m.plain_text()))
+                        .collect::<Vec<_>>()
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+}
+
+// ---- tests ---------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manager_introduces_itself_to_every_other_agent() {
+    // The scenario from the brief, start to finish.
+    let peers = ["Chef", "Host", "Barista", "Sommelier"];
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if reading_peer_replies(body) {
+                Script::Say("Everyone has introduced themselves.".into())
+            } else if has_tool_result(body) {
+                Script::Say("Introductions are done.".into())
+            } else {
+                Script::SendTo {
+                    recipients: peers.iter().map(|s| s.to_string()).collect(),
+                    text: "Hi, I'm Manager. I coordinate this workspace.".into(),
+                }
+            }
+        } else {
+            Script::Say(format!("Hi Manager, I'm {who}."))
+        }
+    })
+    .await;
+
+    let h = harness(
+        &stub,
+        &["Manager", "Chef", "Host", "Barista", "Sommelier"],
+        GuardLimits::default(),
+    );
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), "Introduce yourself to all the other agents.")
+        .unwrap();
+    h.settle(run).await;
+
+    // Every peer received the introduction in its own channel.
+    for peer in peers {
+        let texts = h.channel_texts(peer);
+        assert!(
+            texts.iter().any(|t| t.contains("I'm Manager")),
+            "{peer} never received the introduction. Channel was: {texts:?}"
+        );
+    }
+
+    // Every reply came back to the Manager's channel.
+    let manager_channel = h.channel_texts("Manager").join("\n");
+    for peer in peers {
+        assert!(
+            manager_channel.contains(&format!("I'm {peer}")),
+            "{peer}'s reply never reached the Manager channel. Channel was:\n{manager_channel}"
+        );
+    }
+
+    // Four introductions out, four replies back.
+    assert_eq!(h.feed().len(), 8, "expected 4 sends and 4 replies in the activity feed");
+
+    // Two Manager calls to send and then speak, four peer calls, and between
+    // one and four more for the Manager to read the replies, depending on how
+    // many batches they land in. That last part is scheduling, not behaviour,
+    // so this bounds amplification rather than pinning a number: batching
+    // itself is asserted deterministically in
+    // `replies_queued_together_are_read_in_a_single_turn`.
+    let calls = stub.calls.load(Ordering::SeqCst);
+    assert!(
+        (6..=10).contains(&calls),
+        "the cascade should converge in 6-10 model calls, took {calls}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn replies_queued_together_are_read_in_a_single_turn() {
+    // Batching is what stops four replies from costing four Manager turns.
+    // Rather than racing the scheduler, this pauses the Manager so all four
+    // replies are provably sitting in its inbox before it wakes up.
+    let peers = ["Chef", "Host", "Barista", "Sommelier"];
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if reading_peer_replies(body) {
+                Script::Say("Noted.".into())
+            } else if has_tool_result(body) {
+                Script::Say("Sent.".into())
+            } else {
+                Script::SendTo {
+                    recipients: peers.iter().map(|s| s.to_string()).collect(),
+                    text: "Hello there.".into(),
+                }
+            }
+        } else {
+            // Long enough that the Manager is idle and pausable before any
+            // reply is on the wire.
+            std::thread::sleep(Duration::from_millis(250));
+            Script::Say(format!("Acknowledged, from {who}."))
+        }
+    })
+    .await;
+
+    let h = harness(
+        &stub,
+        &["Manager", "Chef", "Host", "Barista", "Sommelier"],
+        GuardLimits::default(),
+    );
+    let manager = h.id("Manager");
+    let run = h.runtime.send_from_human(manager, "Say hello to everyone.").unwrap();
+
+    // Once all four introductions are out, the peers are still sleeping.
+    h.wait_until("the introductions to be sent", |h| {
+        h.feed().iter().filter(|e| e.from == Participant::Agent { id: manager }).count() == 4
+    })
+    .await;
+    h.pause("Manager");
+
+    // Waiting on the transcript alone is not enough: a message is persisted
+    // before it is enqueued, so resuming in that window catches only three.
+    // At most one reply can have been pulled already, hence three still queued.
+    h.wait_until("all four replies to be queued", |h| {
+        let delivered =
+            h.feed().iter().filter(|e| e.to == Participant::Agent { id: manager }).count();
+        delivered == 4 && h.runtime.inbox_depth(manager) >= 3
+    })
+    .await;
+
+    h.resume("Manager");
+    h.settle(run).await;
+
+    let prompts_reading_replies: Vec<usize> = stub
+        .transcript
+        .lock()
+        .iter()
+        .filter(|body| speaker(body) == "Manager" && reading_peer_replies(body))
+        .map(|body| {
+            body["messages"]
+                .as_array()
+                .and_then(|m| m.last())
+                .and_then(|m| m["content"].as_str())
+                .map(|c| c.matches("[AGENT").count())
+                .unwrap_or(0)
+        })
+        .collect();
+
+    assert_eq!(
+        prompts_reading_replies.len(),
+        1,
+        "four queued replies must cost one turn, not {}",
+        prompts_reading_replies.len()
+    );
+    assert_eq!(prompts_reading_replies[0], 4, "all four replies must appear in that single prompt");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_agents_told_to_talk_forever_stop_on_their_own() {
+    // Both agents are scripted to always message the other. Without the guard
+    // this never terminates.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let other = if who == "Ping" { "Pong" } else { "Ping" };
+        Script::SendTo {
+            recipients: vec![other.to_string()],
+            // Varying text defeats the dedup check on purpose, so this test
+            // exercises the hop and pair limits rather than dedup.
+            text: format!(
+                "message {} from {who}",
+                body["messages"].as_array().map(|m| m.len()).unwrap_or(0)
+            ),
+        }
+    })
+    .await;
+
+    let h = harness(
+        &stub,
+        &["Ping", "Pong"],
+        GuardLimits {
+            max_hops: 4,
+            max_steps_per_run: 12,
+            max_fanout_per_call: 8,
+            max_sends_per_pair: 3,
+        },
+    );
+    let run = h.runtime.send_from_human(h.id("Ping"), "Talk to Pong forever.").unwrap();
+    h.settle(run).await;
+
+    let calls = stub.calls.load(Ordering::SeqCst);
+    assert!(calls <= 14, "runaway loop: {calls} inference calls");
+
+    let feed = h.feed();
+    assert!(!feed.is_empty(), "the agents should have exchanged something before stopping");
+    assert!(feed.len() <= 8, "too much traffic before the guard bit: {}", feed.len());
+
+    // The transcript must say why it stopped, not just go quiet.
+    let all: String = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Ping"), 200)
+        .unwrap()
+        .iter()
+        .chain(h.runtime.store().channel_messages(h.id("Pong"), 200).unwrap().iter())
+        .map(|e| serde_json::to_string(&e.parts).unwrap())
+        .collect();
+    assert!(
+        all.contains("limit") || all.contains("budget") || all.contains("Refused"),
+        "the operator must be told why the conversation stopped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_repeated_identical_message_is_refused() {
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if who == "Ping" {
+            Script::SendTo { recipients: vec!["Pong".into()], text: "identical text".into() }
+        } else {
+            Script::Say("ok".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Ping", "Pong"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Ping"), "Message Pong repeatedly.").unwrap();
+    h.settle(run).await;
+
+    let delivered = h.feed().iter().filter(|e| e.plain_text() == "identical text").count();
+    assert_eq!(delivered, 1, "the same message to the same peer must only go once");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn messaging_an_agent_that_does_not_exist_is_reported_to_the_model() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("That agent does not exist.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Nobody".into()], text: "hello?".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Message Nobody.").unwrap();
+    h.settle(run).await;
+
+    let tool_results: Vec<String> = stub
+        .transcript
+        .lock()
+        .iter()
+        .flat_map(|body| {
+            body["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    assert!(
+        tool_results.iter().any(|r| r.contains("no agent named Nobody")),
+        "the model must learn the recipient does not exist, got {tool_results:?}"
+    );
+    assert!(h.feed().is_empty(), "nothing should have been delivered");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agents_tool_trail_stays_in_its_own_channel() {
+    // Regression: the trail used to ride along on the reply envelope, and a
+    // reply to a peer files in the recipient's channel. Opening one agent's
+    // channel therefore showed you every other agent's private working notes.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if has_tool_result(body) {
+                Script::Say("Asked Chef to take a look.".into())
+            } else {
+                Script::SendTo { recipients: vec!["Chef".into()], text: "please review".into() }
+            }
+        } else {
+            Script::Say("Reviewed.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "get Chef on it").unwrap();
+    h.settle(run).await;
+
+    let tool_parts_in = |name: &str| {
+        h.runtime
+            .store()
+            .channel_messages(h.id(name), 200)
+            .unwrap()
+            .iter()
+            .flat_map(|e| e.parts.clone())
+            .filter(|p| matches!(p, Part::ToolCall { .. }))
+            .count()
+    };
+
+    assert!(tool_parts_in("Manager") > 0, "the acting agent keeps its own record");
+    assert_eq!(tool_parts_in("Chef"), 0, "Chef's channel must not hold Manager's tool calls");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_guard_refusal_is_reported_to_the_agent_that_hit_it() {
+    // The refusal is about what this agent tried to do, so it belongs in this
+    // agent's channel rather than travelling to whoever it was aimed at.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let other = if who == "Ping" { "Pong" } else { "Ping" };
+        Script::SendTo {
+            recipients: vec![other.to_string()],
+            text: format!("relay {}", body["messages"].as_array().map(|m| m.len()).unwrap_or(0)),
+        }
+    })
+    .await;
+
+    let h = harness(
+        &stub,
+        &["Ping", "Pong"],
+        GuardLimits { max_hops: 2, max_steps_per_run: 10, ..GuardLimits::default() },
+    );
+    let run = h.runtime.send_from_human(h.id("Ping"), "talk forever").unwrap();
+    h.settle(run).await;
+
+    let notices_in = |name: &str| {
+        h.runtime
+            .store()
+            .channel_messages(h.id(name), 200)
+            .unwrap()
+            .iter()
+            .flat_map(|e| e.parts.clone())
+            .filter(|p| matches!(p, Part::Notice { .. }))
+            .count()
+    };
+    assert!(
+        notices_in("Ping") + notices_in("Pong") > 0,
+        "the operator must be told why it stopped"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_directory_tool_lists_peers_but_never_their_prompts() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Found them.".into())
+        } else {
+            Script::Directory
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Who else is here?").unwrap();
+    h.settle(run).await;
+
+    let tool_results: Vec<String> = stub
+        .transcript
+        .lock()
+        .iter()
+        .flat_map(|body| {
+            body["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+
+    let joined = tool_results.join("\n");
+    assert!(joined.contains("Chef"), "directory should list Chef: {joined}");
+    assert!(!joined.contains("Manager"), "an agent should not see itself in the directory");
+    assert!(
+        !joined.contains("You are the Chef."),
+        "the directory must never expose another agent's system prompt: {joined}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_agent_stops_receiving_but_keeps_its_transcript() {
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "are you there?".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+
+    // Give Chef some history first.
+    let first = h.runtime.send_from_human(h.id("Chef"), "hello Chef").unwrap();
+    h.settle(first).await;
+    assert!(!h.channel_texts("Chef").is_empty());
+
+    h.runtime.store().set_lifecycle(h.id("Chef"), Lifecycle::Terminated).unwrap();
+    h.runtime.stop_agent(h.id("Chef"));
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "Message Chef.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.feed().iter().all(|e| e.to != Participant::Agent { id: h.id("Chef") }),
+        "a deleted agent must not receive new messages"
+    );
+    assert!(
+        !h.channel_texts("Chef").is_empty(),
+        "deleting an agent must not destroy the record of what it said"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_a_paused_agent_stops_its_actor() {
+    // Regression: a paused actor parks on a notifier whose only other handle
+    // lives in the inbox. Deleting the agent drops that inbox, so the actor
+    // would wait forever, leaking the task and the message it was holding.
+    let stub = serve(|_| Script::Say("ok".into())).await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    assert_eq!(h.runtime.live_actors(), 2);
+
+    h.pause("Chef");
+    // Give Chef something to hold, so it is parked mid-message rather than
+    // idle on an empty inbox.
+    h.runtime.send_from_human(h.id("Chef"), "you are paused").unwrap();
+    h.wait_until("Chef to park", |h| {
+        matches!(
+            h.runtime.activity_snapshot().get(&h.id("Chef")),
+            Some(guac_lib::runtime::events::Activity::Paused)
+        )
+    })
+    .await;
+
+    h.runtime.store().set_lifecycle(h.id("Chef"), Lifecycle::Terminated).unwrap();
+    // Deleting must wake the parked actor by itself. Nothing else can: this
+    // call drops the last handle to the notifier it is waiting on.
+    h.runtime.stop_agent(h.id("Chef"));
+
+    h.wait_until("Chef's actor to exit", |h| h.runtime.live_actors() == 1).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_upstream_failure_is_reported_in_the_channel_rather_than_swallowed() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                (
+                    axum::http::StatusCode::UNAUTHORIZED,
+                    axum::Json(
+                        serde_json::json!({"error": {"message": "No auth credentials found"}}),
+                    ),
+                )
+                    .into_response()
+            }),
+        );
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let stub = Stub {
+        base_url: format!("http://{addr}/v1"),
+        calls: Arc::new(AtomicUsize::new(0)),
+        transcript: Arc::new(parking_lot::Mutex::new(Vec::new())),
+    };
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "hello").unwrap();
+    h.settle(run).await;
+
+    let parts: String = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 50)
+        .unwrap()
+        .iter()
+        .map(|e| serde_json::to_string(&e.parts).unwrap())
+        .collect();
+    assert!(
+        parts.contains("No auth credentials") || parts.contains("rejected the API key"),
+        "an auth failure must show up in the channel, got {parts}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_can_write_notes_and_reads_them_back_next_turn() {
+    // The write-manage-read loop, end to end: an agent records something on one
+    // turn and finds it in its own prompt on the next.
+    let stub = serve(|body| {
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if system.contains("Operator prefers terse replies") {
+            Script::Say("I remember.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Noted.".into())
+        } else {
+            Script::Notes("Operator prefers terse replies.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "be terse from now on").unwrap();
+    h.settle(first).await;
+
+    assert_eq!(
+        h.runtime.workspace().read(h.id("Manager")),
+        "Operator prefers terse replies.",
+        "the note should be on disk"
+    );
+
+    let second = h.runtime.send_from_human(h.id("Manager"), "what do you remember?").unwrap();
+    h.settle(second).await;
+
+    let said = h.channel_texts("Manager").join("\n");
+    assert!(said.contains("I remember."), "the note was not in the second prompt: {said}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_an_agent_takes_its_notes_with_it() {
+    let stub = serve(|_| Script::Notes("private".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "remember something").unwrap();
+    h.settle(run).await;
+    assert_eq!(h.runtime.workspace().read(h.id("Manager")), "private");
+
+    h.runtime.workspace().remove(h.id("Manager"));
+    assert_eq!(h.runtime.workspace().read(h.id("Manager")), "");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn streamed_text_matches_the_persisted_message() {
+    let stub = serve(|_| Script::Say("The quick brown fox jumps over the lazy dog.".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "say something").unwrap();
+    h.settle(run).await;
+
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+
+    let streamed = h.sink.streamed_text(stream_id);
+    let persisted = h.channel_texts("Manager").pop().unwrap();
+    assert_eq!(streamed, persisted, "what the operator watched appear must equal what was saved");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agents_run_concurrently_rather_than_one_after_another() {
+    // Each peer's response is delayed. If the runtime were serial, five agents
+    // at 300ms each would take 1.5s; concurrent should be closer to one delay.
+    let peers = ["Chef", "Host", "Barista", "Sommelier"];
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if has_tool_result(body) {
+                Script::Say("done".into())
+            } else {
+                Script::SendTo {
+                    recipients: peers.iter().map(|s| s.to_string()).collect(),
+                    text: "go".into(),
+                }
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(300));
+            Script::Say(format!("{who} finished."))
+        }
+    })
+    .await;
+
+    let h = harness(
+        &stub,
+        &["Manager", "Chef", "Host", "Barista", "Sommelier"],
+        GuardLimits::default(),
+    );
+    let started = Instant::now();
+    let run = h.runtime.send_from_human(h.id("Manager"), "go").unwrap();
+    h.settle(run).await;
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_millis(900),
+        "four 300ms peers took {elapsed:?}; they are not running concurrently"
+    );
+}

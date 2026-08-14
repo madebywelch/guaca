@@ -1,0 +1,1052 @@
+//! The agent runtime.
+//!
+//! Every agent is a task with an unbounded inbox. Sending is enqueue-and-return,
+//! so an agent that fires messages at four peers is not blocked on any of them,
+//! and four peers think concurrently. That is the whole reason this lives in
+//! Rust rather than in the webview.
+//!
+//! Locks here are `parking_lot` and every critical section is short and
+//! synchronous. Nothing holds a lock across an `.await`; the guard registry in
+//! particular is locked, consulted, and released before any inference starts.
+
+pub mod events;
+pub mod guard;
+pub mod prompt;
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+use parking_lot::{Mutex, RwLock};
+use tokio::sync::{mpsc, Notify};
+
+use crate::config::AppConfig;
+use crate::db::{Store, StoreError};
+use crate::domain::agent::{AgentCard, DirectoryEntry, Lifecycle};
+use crate::domain::envelope::{
+    channel_for, Envelope, NoticeKind, Part, Participant, ToolOutcome, Trust,
+};
+use crate::domain::ids::{AgentId, MessageId, RunId};
+use crate::domain::now_ms;
+use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
+use crate::llm::tools::{self, Delivery, ToolInvocation};
+use crate::workspace::Workspace;
+use events::{Activity, EventSink, UiEvent};
+use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
+use prompt::{NameTable, ReplyMode};
+
+/// How many times one turn may call tools before it must produce prose.
+///
+/// Four is enough for `directory` then `send_message` with slack for a retry
+/// after a refusal, and low enough that a confused model cannot spend a run's
+/// entire budget inside a single turn.
+const MAX_TOOL_ROUNDS: usize = 4;
+
+/// How many messages one turn reads at once.
+const MAX_BATCH: usize = 12;
+
+/// How much transcript is replayed into a prompt.
+const HISTORY_WINDOW: u32 = 40;
+
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("no agent with id {0}")]
+    UnknownAgent(AgentId),
+    #[error("{0} has been deleted")]
+    AgentTerminated(String),
+}
+
+struct Inbox {
+    tx: mpsc::UnboundedSender<Envelope>,
+    /// Queue depth, so the sidebar can show a backlog without draining it.
+    depth: Arc<AtomicUsize>,
+    /// Woken when a paused agent is resumed.
+    resume: Arc<Notify>,
+}
+
+struct Inner {
+    /// Explicit rather than relying on an ambient tokio context: Tauri's setup
+    /// hook runs on the main thread outside any runtime, so `tokio::spawn`
+    /// would panic there.
+    handle: tokio::runtime::Handle,
+    store: Store,
+    llm: LlmClient,
+    config: RwLock<AppConfig>,
+    guard: Mutex<GuardRegistry>,
+    inboxes: Mutex<HashMap<AgentId, Inbox>>,
+    activity: Mutex<HashMap<AgentId, Activity>>,
+    /// Outstanding work per run, used to decide when a cascade has settled.
+    inflight: Mutex<HashMap<RunId, usize>>,
+    /// Per-agent notes on disk.
+    workspace: Workspace,
+    /// Actor tasks currently running. Registration and the task are separate
+    /// things, and a leaked task is invisible without counting it.
+    live_actors: Arc<AtomicUsize>,
+    events: Arc<dyn EventSink>,
+}
+
+#[derive(Clone)]
+pub struct Runtime {
+    inner: Arc<Inner>,
+}
+
+impl Runtime {
+    /// Uses the ambient tokio runtime. Convenient inside `#[tokio::test]`.
+    pub fn new(
+        store: Store,
+        llm: LlmClient,
+        config: AppConfig,
+        workspace: Workspace,
+        events: Arc<dyn EventSink>,
+    ) -> Self {
+        Self::with_handle(tokio::runtime::Handle::current(), store, llm, config, workspace, events)
+    }
+
+    pub fn with_handle(
+        handle: tokio::runtime::Handle,
+        store: Store,
+        llm: LlmClient,
+        config: AppConfig,
+        workspace: Workspace,
+        events: Arc<dyn EventSink>,
+    ) -> Self {
+        let limits = config.limits;
+        Self {
+            inner: Arc::new(Inner {
+                handle,
+                store,
+                llm,
+                config: RwLock::new(config),
+                guard: Mutex::new(GuardRegistry::new(limits)),
+                inboxes: Mutex::new(HashMap::new()),
+                activity: Mutex::new(HashMap::new()),
+                inflight: Mutex::new(HashMap::new()),
+                workspace,
+                live_actors: Arc::new(AtomicUsize::new(0)),
+                events,
+            }),
+        }
+    }
+
+    pub fn store(&self) -> &Store {
+        &self.inner.store
+    }
+
+    pub fn workspace(&self) -> &Workspace {
+        &self.inner.workspace
+    }
+
+    pub fn config(&self) -> AppConfig {
+        self.inner.config.read().clone()
+    }
+
+    pub fn set_config(&self, config: AppConfig) {
+        self.inner.guard.lock().set_limits(config.limits);
+        *self.inner.config.write() = config;
+    }
+
+    pub fn limits(&self) -> GuardLimits {
+        self.inner.guard.lock().default_limits()
+    }
+
+    // ---- lifecycle -------------------------------------------------------
+
+    /// Brings every non-terminated agent online. Called once at startup.
+    pub fn start_all(&self) -> Result<usize, RuntimeError> {
+        let agents = self.inner.store.list_agents()?;
+        let mut started = 0;
+        for card in agents.iter().filter(|c| c.lifecycle != Lifecycle::Terminated) {
+            self.start_agent(card.id);
+            started += 1;
+        }
+        Ok(started)
+    }
+
+    /// Spawns the actor for one agent. Idempotent.
+    pub fn start_agent(&self, id: AgentId) {
+        let mut inboxes = self.inner.inboxes.lock();
+        if inboxes.contains_key(&id) {
+            return;
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+        let depth = Arc::new(AtomicUsize::new(0));
+        let resume = Arc::new(Notify::new());
+        inboxes.insert(id, Inbox { tx, depth: depth.clone(), resume: resume.clone() });
+        drop(inboxes);
+
+        let runtime = self.clone();
+        let live = self.inner.live_actors.clone();
+        live.fetch_add(1, Ordering::SeqCst);
+        self.inner.handle.spawn(async move {
+            actor_loop(runtime, id, rx, depth, resume).await;
+            live.fetch_sub(1, Ordering::SeqCst);
+        });
+
+        self.set_activity(id, Activity::Idle);
+    }
+
+    /// Drops the inbox so the actor task finishes once it has drained.
+    ///
+    /// Anything still queued is discarded, which is the correct reading of
+    /// "delete this agent": undelivered mail to a deleted mailbox has nowhere
+    /// to go.
+    pub fn stop_agent(&self, id: AgentId) {
+        let inbox = { self.inner.inboxes.lock().remove(&id) };
+        if let Some(inbox) = inbox {
+            // Wake a parked actor so it can notice it has been deleted and
+            // exit. Dropping the inbox alone only releases an actor blocked on
+            // `recv`; one paused mid-message is waiting on this notifier, and
+            // this is the last handle to it.
+            inbox.resume.notify_waiters();
+        }
+        self.inner.activity.lock().remove(&id);
+    }
+
+    pub fn resume_agent(&self, id: AgentId) {
+        let resume = { self.inner.inboxes.lock().get(&id).map(|inbox| inbox.resume.clone()) };
+        if let Some(resume) = resume {
+            resume.notify_waiters();
+        }
+        self.set_activity(id, Activity::Idle);
+    }
+
+    /// Marks an agent paused. The actor parks at its next message boundary and
+    /// everything sent meanwhile queues rather than being dropped.
+    pub fn pause_agent(&self, id: AgentId) {
+        self.set_activity(id, Activity::Paused);
+    }
+
+    pub fn emit(&self, event: UiEvent) {
+        self.inner.events.emit(event);
+    }
+
+    /// One cheap round trip to tell a bad key from a bad URL from a bad model.
+    ///
+    /// Without this, every misconfiguration presents identically as an agent
+    /// that says nothing.
+    pub async fn probe(&self, config: &AppConfig) -> Result<String, LlmError> {
+        let request = ChatRequest {
+            model: config.inference.default_model.clone(),
+            messages: vec![
+                ChatMessage::system("Reply with the single word: ok"),
+                ChatMessage::user("ping"),
+            ],
+            tools: Vec::new(),
+            temperature: Some(0.0),
+        };
+        let completion = self.inner.llm.stream_chat(&config.inference, &request, |_| {}).await?;
+        Ok(format!(
+            "Connected to {} using {}. Model replied: {}",
+            config.inference.base_url,
+            config.inference.default_model,
+            completion.content.trim().chars().take(80).collect::<String>()
+        ))
+    }
+
+    /// Messages queued for an agent that it has not yet picked up.
+    ///
+    /// Observable because "persisted" and "queued" are two different moments:
+    /// `deliver` writes to the store before it touches the inbox, so anything
+    /// waiting on delivery has to watch the inbox, not the transcript.
+    pub fn inbox_depth(&self, id: AgentId) -> usize {
+        self.inner
+            .inboxes
+            .lock()
+            .get(&id)
+            .map(|inbox| inbox.depth.load(Ordering::SeqCst))
+            .unwrap_or(0)
+    }
+
+    /// Number of agent actor tasks currently running.
+    pub fn live_actors(&self) -> usize {
+        self.inner.live_actors.load(Ordering::SeqCst)
+    }
+
+    pub fn activity_snapshot(&self) -> HashMap<AgentId, Activity> {
+        self.inner.activity.lock().clone()
+    }
+
+    fn set_activity(&self, id: AgentId, activity: Activity) {
+        let changed = {
+            let mut map = self.inner.activity.lock();
+            if map.get(&id) == Some(&activity) {
+                false
+            } else {
+                map.insert(id, activity);
+                true
+            }
+        };
+        if changed {
+            self.inner.events.emit(UiEvent::ActivityChanged { agent_id: id, activity });
+        }
+    }
+
+    // ---- delivery --------------------------------------------------------
+
+    /// Persists an envelope, tells the UI, and queues it if an agent is the
+    /// recipient.
+    ///
+    /// Persisting before enqueueing is deliberate: the operator sees a message
+    /// the moment it is sent, even if the recipient is busy for the next
+    /// thirty seconds.
+    fn deliver(&self, envelope: Envelope) -> Result<(), RuntimeError> {
+        self.inner.store.append(&envelope)?;
+        self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
+
+        if let Participant::Agent { id } = envelope.to {
+            let queued = {
+                let inboxes = self.inner.inboxes.lock();
+                match inboxes.get(&id) {
+                    Some(inbox) => {
+                        let depth = inbox.depth.fetch_add(1, Ordering::SeqCst) + 1;
+                        match inbox.tx.send(envelope) {
+                            Ok(()) => Some(depth),
+                            Err(_) => {
+                                inbox.depth.fetch_sub(1, Ordering::SeqCst);
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            };
+
+            if let Some(depth) = queued {
+                // An agent mid-inference keeps its Thinking badge; the queue
+                // depth is only interesting when it is not already working.
+                let thinking = { self.inner.activity.lock().get(&id) == Some(&Activity::Thinking) };
+                if !thinking {
+                    self.set_activity(id, Activity::Queued { depth });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Operator sends a message to one agent. Returns the run it starts.
+    pub fn send_from_human(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
+        let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
+        if card.lifecycle == Lifecycle::Terminated {
+            return Err(RuntimeError::AgentTerminated(card.name));
+        }
+
+        let run_id = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: to,
+            from: Participant::Human,
+            to: Participant::Agent { id: to },
+            parts: vec![Part::text(text.trim())],
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            cause: None,
+            created_at: now_ms(),
+        };
+
+        self.track_inflight(run_id, 1);
+        self.deliver(envelope)?;
+        Ok(run_id)
+    }
+
+    fn track_inflight(&self, run: RunId, delta: i64) {
+        let settled = {
+            let mut map = self.inner.inflight.lock();
+            let entry = map.entry(run).or_insert(0);
+            if delta >= 0 {
+                *entry += delta as usize;
+            } else {
+                *entry = entry.saturating_sub((-delta) as usize);
+            }
+            if *entry == 0 {
+                map.remove(&run);
+                true
+            } else {
+                false
+            }
+        };
+
+        if settled {
+            let steps = self.inner.guard.lock().peek(run).map(|r| r.steps_used()).unwrap_or(0);
+            self.inner.events.emit(UiEvent::RunSettled { run_id: run, steps_used: steps });
+        }
+    }
+
+    fn notice(
+        &self,
+        agent: AgentId,
+        run_id: RunId,
+        cause: Option<MessageId>,
+        kind: NoticeKind,
+        text: String,
+    ) {
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: agent,
+            from: Participant::System,
+            to: Participant::Agent { id: agent },
+            parts: vec![Part::Notice { kind, text }],
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: false,
+            cause,
+            created_at: now_ms(),
+        };
+        // A notice is written straight to the transcript rather than delivered,
+        // so it never wakes the agent it is about.
+        if let Err(err) = self.inner.store.append(&envelope) {
+            tracing::error!(%err, "failed to record notice");
+            return;
+        }
+        self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+    }
+
+    // ---- one agent turn --------------------------------------------------
+
+    async fn run_turn(&self, agent_id: AgentId, batch: Vec<Envelope>) {
+        let Some(card) = self.inner.store.get_agent(agent_id).ok().flatten() else {
+            return;
+        };
+        if card.lifecycle == Lifecycle::Terminated {
+            return;
+        }
+
+        let run_id = batch[0].run_id;
+        let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
+        let cause = batch.last().map(|e| e.id);
+
+        // The most recent envelope that wants an answer decides where the
+        // reply goes. Everything else in the batch is context.
+        let reply_target = batch.iter().rev().find(|e| e.expects_reply).map(|e| e.from);
+        let mode = match reply_target {
+            Some(Participant::Human) => ReplyMode::ToOperator,
+            Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
+            _ => ReplyMode::NoteOnly,
+        };
+
+        // Peek rather than claim: the budget is spent per model call inside the
+        // loop below, but there is no point building a prompt or telling the UI
+        // a message is coming if the run is already finished.
+        let has_budget = { self.inner.guard.lock().run(run_id).has_budget() };
+        if !has_budget {
+            let limits = self.limits();
+            self.notice(
+                agent_id,
+                run_id,
+                cause,
+                NoticeKind::GuardStop,
+                format!(
+                    "{} did not run: this conversation already used its budget of {} model calls. \
+                     Raise it in Settings if the work is genuinely this large.",
+                    card.name, limits.max_steps_per_run
+                ),
+            );
+            self.finish_turn(agent_id, run_id, batch.len());
+            return;
+        }
+
+        self.set_activity(agent_id, Activity::Thinking);
+
+        let roster = self.roster_excluding(agent_id);
+        let names = self.name_table();
+        let history = self
+            .inner
+            .store
+            .channel_messages(agent_id, HISTORY_WINDOW)
+            .unwrap_or_default()
+            .into_iter()
+            // The batch is rendered separately; including it twice would make
+            // the model answer itself.
+            .filter(|e| !batch.iter().any(|b| b.id == e.id))
+            .collect::<Vec<_>>();
+
+        let notes = self.inner.workspace.read(agent_id);
+        let mut messages =
+            prompt::build_messages(&card, &roster, &names, &notes, &history, &batch, mode);
+
+        // Where the finished message will land, and who it is for. Both are
+        // known before the first token, so the UI never has to guess and then
+        // correct itself.
+        let (out_channel, stream_to) = match (mode, reply_target) {
+            (ReplyMode::ToPeer, Some(Participant::Agent { id })) => (id, Participant::Agent { id }),
+            _ => (agent_id, Participant::Human),
+        };
+
+        let stream_id = MessageId::new();
+        self.inner.events.emit(UiEvent::StreamStarted {
+            message_id: stream_id,
+            channel_id: out_channel,
+            agent_id,
+            run_id,
+            to: stream_to,
+        });
+
+        let config = self.config();
+        let mut collected_text = String::new();
+        let mut tool_parts: Vec<Part> = Vec::new();
+        let mut failure: Option<LlmError> = None;
+        let mut hit_tool_ceiling = false;
+        let mut budget_exhausted = false;
+
+        for round in 0..MAX_TOOL_ROUNDS {
+            // One claim per model call. Claiming per turn instead would let a
+            // tool-looping turn bill MAX_TOOL_ROUNDS times against one unit of
+            // budget, which is how a bounded run still runs up a bill.
+            let reserved = { self.inner.guard.lock().run(run_id).reserve_step() };
+            if !reserved {
+                budget_exhausted = true;
+                break;
+            }
+
+            let request = ChatRequest {
+                model: card.model.clone(),
+                messages: messages.clone(),
+                tools: tools::specs(),
+                temperature: None,
+            };
+
+            let events = self.inner.events.clone();
+            let completion = self
+                .inner
+                .llm
+                .stream_chat(&config.inference, &request, |token| {
+                    events.emit(UiEvent::StreamDelta {
+                        message_id: stream_id,
+                        channel_id: out_channel,
+                        text: token.to_string(),
+                    });
+                })
+                .await;
+
+            let completion = match completion {
+                Ok(completion) => completion,
+                Err(err) => {
+                    failure = Some(err);
+                    break;
+                }
+            };
+
+            if !completion.content.is_empty() {
+                if !collected_text.is_empty() {
+                    collected_text.push_str("\n\n");
+                }
+                collected_text.push_str(&completion.content);
+            }
+
+            if completion.tool_calls.is_empty() {
+                break;
+            }
+
+            messages.push(ChatMessage::Assistant {
+                content: (!completion.content.is_empty()).then(|| completion.content.clone()),
+                tool_calls: completion.to_wire_tool_calls(),
+            });
+
+            for call in &completion.tool_calls {
+                let (result, part) =
+                    self.execute_tool(&card, run_id, inbound_hop, cause, call).await;
+                tool_parts.push(part);
+                messages.push(ChatMessage::Tool { tool_call_id: call.id.clone(), content: result });
+            }
+
+            if round == MAX_TOOL_ROUNDS - 1 {
+                hit_tool_ceiling = true;
+            }
+        }
+
+        self.inner
+            .events
+            .emit(UiEvent::StreamEnded { message_id: stream_id, channel_id: out_channel });
+
+        if hit_tool_ceiling {
+            tool_parts.push(Part::Notice {
+                kind: NoticeKind::GuardStop,
+                text: format!(
+                    "{} reached the limit of {MAX_TOOL_ROUNDS} tool calls in one turn.",
+                    card.name
+                ),
+            });
+        }
+        if budget_exhausted {
+            let limits = self.limits();
+            tool_parts.push(Part::Notice {
+                kind: NoticeKind::GuardStop,
+                text: format!(
+                    "This conversation hit its budget of {} model calls, so {} stopped early.",
+                    limits.max_steps_per_run, card.name
+                ),
+            });
+        }
+
+        if let Some(err) = failure {
+            tracing::warn!(agent = %card.name, error = %err, "inference failed");
+            self.notice(
+                agent_id,
+                run_id,
+                cause,
+                NoticeKind::UpstreamError,
+                format!("{} could not reply: {}", card.name, err),
+            );
+        } else {
+            self.emit_reply(
+                &card,
+                run_id,
+                inbound_hop,
+                cause,
+                mode,
+                reply_target,
+                collected_text,
+                tool_parts,
+            );
+        }
+
+        self.finish_turn(agent_id, run_id, batch.len());
+    }
+
+    fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize) {
+        let depth = {
+            let inboxes = self.inner.inboxes.lock();
+            inboxes.get(&agent_id).map(|i| i.depth.load(Ordering::SeqCst)).unwrap_or(0)
+        };
+        self.set_activity(
+            agent_id,
+            if depth == 0 { Activity::Idle } else { Activity::Queued { depth } },
+        );
+        self.track_inflight(run_id, -(consumed as i64));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_reply(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        inbound_hop: u16,
+        cause: Option<MessageId>,
+        mode: ReplyMode,
+        reply_target: Option<Participant>,
+        text: String,
+        mut tool_parts: Vec<Part>,
+    ) {
+        let text = text.trim().to_string();
+        let me = Participant::Agent { id: card.id };
+        let mut hop = inbound_hop;
+        let mut to = Participant::Human;
+
+        if mode == ReplyMode::ToPeer {
+            if let Some(Participant::Agent { id: peer }) = reply_target {
+                // An automatic reply still travels a hop and still counts
+                // against the pair budget, otherwise two agents could bounce
+                // replies forever without ever calling send_message.
+                let peer_name = self
+                    .inner
+                    .store
+                    .get_agent(peer)
+                    .ok()
+                    .flatten()
+                    .map(|c| c.name)
+                    .unwrap_or_else(|| "that agent".to_string());
+
+                let verdict = {
+                    self.inner.guard.lock().run(run_id).evaluate(&SendRequest {
+                        from: card.id,
+                        to: peer,
+                        to_name: peer_name.clone(),
+                        text: text.clone(),
+                        inbound_hop,
+                    })
+                };
+
+                match verdict {
+                    Verdict::Allow { hop: next } => {
+                        to = Participant::Agent { id: peer };
+                        hop = next;
+                    }
+                    Verdict::Refuse(refusal) => {
+                        // Downgrade to a note rather than dropping the answer.
+                        tool_parts.push(Part::Notice {
+                            kind: NoticeKind::GuardStop,
+                            text: format!(
+                                "Reply to {peer_name} was not delivered: {}.",
+                                refusal.headline()
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+
+        // The record of what this agent did belongs in this agent's own
+        // channel, always. Attaching it to the reply meant that a reply to a
+        // peer carried the sender's private working notes into the recipient's
+        // transcript, so opening one agent's channel showed you every other
+        // agent's tool calls.
+        if !tool_parts.is_empty() {
+            let record = Envelope {
+                id: MessageId::new(),
+                run_id,
+                channel_id: card.id,
+                from: me,
+                to: Participant::System,
+                parts: tool_parts,
+                trust: Trust::System,
+                hop: inbound_hop,
+                expects_reply: false,
+                cause,
+                created_at: now_ms(),
+            };
+            if let Err(err) = self.deliver(record) {
+                tracing::error!(%err, "failed to record agent activity");
+            }
+        }
+
+        if text.is_empty() {
+            return;
+        }
+
+        let Some(channel_id) = channel_for(me, to) else {
+            return;
+        };
+
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id,
+            from: me,
+            to,
+            parts: vec![Part::text(text)],
+            trust: Trust::Peer,
+            hop,
+            // An agent's answer never itself demands an answer. This is the
+            // single asymmetry that makes cascades terminate.
+            expects_reply: false,
+            cause,
+            created_at: now_ms(),
+        };
+
+        if to.is_agent() {
+            self.track_inflight(run_id, 1);
+        }
+        if let Err(err) = self.deliver(envelope) {
+            tracing::error!(%err, "failed to deliver reply");
+        }
+    }
+
+    // ---- tools -----------------------------------------------------------
+
+    async fn execute_tool(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        inbound_hop: u16,
+        cause: Option<MessageId>,
+        call: &ToolCall,
+    ) -> (String, Part) {
+        let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
+
+        let invocation = match tools::parse(call) {
+            Ok(invocation) => invocation,
+            Err(err) => {
+                return (
+                    err.guidance(),
+                    Part::ToolCall {
+                        name: call.name.clone(),
+                        arguments,
+                        outcome: ToolOutcome::Failed { error: err.to_string() },
+                    },
+                );
+            }
+        };
+
+        match invocation {
+            ToolInvocation::Directory => {
+                let roster = self.roster_excluding(card.id);
+                let payload =
+                    serde_json::to_string_pretty(&roster).unwrap_or_else(|_| "[]".to_string());
+                let summary = if roster.is_empty() {
+                    "No other agents exist.".to_string()
+                } else {
+                    format!(
+                        "{} agent(s): {}",
+                        roster.len(),
+                        roster.iter().map(|e| e.name.as_str()).collect::<Vec<_>>().join(", ")
+                    )
+                };
+                (
+                    payload,
+                    Part::ToolCall {
+                        name: tools::DIRECTORY.to_string(),
+                        arguments,
+                        outcome: ToolOutcome::Ok { summary },
+                    },
+                )
+            }
+
+            ToolInvocation::UpdateNotes { content } => {
+                match self.inner.workspace.write(card.id, &card.name, &content) {
+                    Ok(stored) => {
+                        let summary = if stored.truncated {
+                            format!(
+                                "Notes saved, but they were too long and the end was cut. {} \
+                                 characters kept. Rewrite them shorter, keeping only what will \
+                                 still matter next week.",
+                                stored.characters
+                            )
+                        } else if stored.characters == 0 {
+                            "Notes cleared.".to_string()
+                        } else {
+                            format!("Notes saved ({} characters).", stored.characters)
+                        };
+                        (
+                            summary.clone(),
+                            Part::ToolCall {
+                                name: tools::UPDATE_NOTES.to_string(),
+                                arguments,
+                                outcome: ToolOutcome::Ok { summary },
+                            },
+                        )
+                    }
+                    Err(err) => (
+                        format!("Error: your notes could not be saved ({err})."),
+                        Part::ToolCall {
+                            name: tools::UPDATE_NOTES.to_string(),
+                            arguments,
+                            outcome: ToolOutcome::Failed { error: err.to_string() },
+                        },
+                    ),
+                }
+            }
+
+            ToolInvocation::SendMessage { to, text } => {
+                let deliveries = self.send_to_peers(card, run_id, inbound_hop, cause, &to, &text);
+                let rendered = tools::render_deliveries(&deliveries);
+                let queued =
+                    deliveries.iter().filter(|d| matches!(d, Delivery::Queued { .. })).count();
+                let outcome = if queued > 0 {
+                    ToolOutcome::Ok { summary: format!("queued for {queued} agent(s)") }
+                } else {
+                    ToolOutcome::Refused {
+                        reason: deliveries
+                            .iter()
+                            .filter_map(|d| match d {
+                                Delivery::Refused { reason, .. } => Some(reason.as_str()),
+                                _ => None,
+                            })
+                            .next()
+                            .unwrap_or("no recipients")
+                            .to_string(),
+                    }
+                };
+                (
+                    rendered,
+                    Part::ToolCall { name: tools::SEND_MESSAGE.to_string(), arguments, outcome },
+                )
+            }
+        }
+    }
+
+    fn send_to_peers(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        inbound_hop: u16,
+        cause: Option<MessageId>,
+        recipients: &[String],
+        text: &str,
+    ) -> Vec<Delivery> {
+        // Fan-out width is checked before any recipient, so a blast at the
+        // whole roster is refused as one thing rather than partly delivered.
+        let too_wide = { self.inner.guard.lock().run(run_id).check_fanout(recipients.len()) };
+        if let Some(refusal) = too_wide {
+            return recipients
+                .iter()
+                .map(|name| Delivery::Refused { to: name.clone(), reason: refusal.explain() })
+                .collect();
+        }
+
+        let directory = self.inner.store.list_agents().unwrap_or_default();
+        let mut out = Vec::new();
+
+        for name in recipients {
+            let found = directory.iter().find(|c| c.name.eq_ignore_ascii_case(name.trim()));
+
+            let target = match found {
+                None => {
+                    out.push(Delivery::Refused {
+                        to: name.clone(),
+                        reason: Refusal::UnknownRecipient { recipient: name.clone() }.explain(),
+                    });
+                    continue;
+                }
+                Some(recipient) if recipient.lifecycle == Lifecycle::Terminated => {
+                    out.push(Delivery::Refused {
+                        to: name.clone(),
+                        reason: Refusal::RecipientTerminated { recipient: recipient.name.clone() }
+                            .explain(),
+                    });
+                    continue;
+                }
+                Some(recipient) => recipient,
+            };
+
+            let verdict = {
+                self.inner.guard.lock().run(run_id).evaluate(&SendRequest {
+                    from: card.id,
+                    to: target.id,
+                    to_name: target.name.clone(),
+                    text: text.to_string(),
+                    inbound_hop,
+                })
+            };
+
+            match verdict {
+                Verdict::Refuse(refusal) => {
+                    out.push(Delivery::Refused {
+                        to: target.name.clone(),
+                        reason: refusal.explain(),
+                    });
+                }
+                Verdict::Allow { hop } => {
+                    let from = Participant::Agent { id: card.id };
+                    let to = Participant::Agent { id: target.id };
+                    let Some(channel_id) = channel_for(from, to) else {
+                        continue;
+                    };
+
+                    let envelope = Envelope {
+                        id: MessageId::new(),
+                        run_id,
+                        channel_id,
+                        from,
+                        to,
+                        parts: vec![Part::text(text)],
+                        trust: Trust::Peer,
+                        hop,
+                        expects_reply: true,
+                        cause,
+                        created_at: now_ms(),
+                    };
+
+                    self.track_inflight(run_id, 1);
+                    match self.deliver(envelope) {
+                        Ok(()) => out.push(Delivery::Queued { to: target.name.clone() }),
+                        Err(err) => {
+                            self.track_inflight(run_id, -1);
+                            out.push(Delivery::Refused {
+                                to: target.name.clone(),
+                                reason: format!("Refused: delivery failed ({err})."),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        out
+    }
+
+    // ---- lookups ---------------------------------------------------------
+
+    fn roster_excluding(&self, me: AgentId) -> Vec<DirectoryEntry> {
+        self.inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|c| c.id != me && c.lifecycle.is_discoverable())
+            .map(|c| c.directory_entry())
+            .collect()
+    }
+
+    fn name_table(&self) -> NameTable {
+        self.inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.id, c.name))
+            .collect()
+    }
+}
+
+async fn actor_loop(
+    runtime: Runtime,
+    id: AgentId,
+    mut rx: mpsc::UnboundedReceiver<Envelope>,
+    depth: Arc<AtomicUsize>,
+    resume: Arc<Notify>,
+) {
+    // Carries an envelope that was pulled but does not belong in the current
+    // batch, so nothing is lost between iterations.
+    let mut carry: Option<Envelope> = None;
+
+    loop {
+        let first = match carry.take() {
+            Some(envelope) => envelope,
+            None => match rx.recv().await {
+                Some(envelope) => envelope,
+                None => break,
+            },
+        };
+        depth.fetch_sub(1, Ordering::SeqCst);
+
+        // A paused agent holds what it has and lets the rest queue behind it.
+        //
+        // Deletion has to be distinguished from pausing here. Both stop the
+        // agent accepting work, but `stop_agent` drops the inbox, which holds
+        // the only other handle to this notifier. Parking on a deleted agent
+        // would wait for a wake-up that can never come, leaking the task and
+        // the envelope it is holding for the life of the process.
+        let mut abandoned = false;
+        loop {
+            match runtime.inner.store.get_agent(id).ok().flatten() {
+                None => {
+                    abandoned = true;
+                    break;
+                }
+                Some(card) if card.lifecycle == Lifecycle::Terminated => {
+                    abandoned = true;
+                    break;
+                }
+                Some(card) if card.lifecycle.accepts_work() => break,
+                Some(_) => {
+                    runtime.set_activity(id, Activity::Paused);
+                    resume.notified().await;
+                }
+            }
+        }
+        if abandoned {
+            break;
+        }
+
+        let mut batch = vec![first];
+
+        // Messages that do not want an answer are pure context, so reading a
+        // burst of them in one turn is both cheaper and less noisy. Messages
+        // that do want an answer are handled one at a time, because each
+        // produces its own addressed reply.
+        if !batch[0].expects_reply {
+            while batch.len() < MAX_BATCH {
+                match rx.try_recv() {
+                    Ok(next) if !next.expects_reply && next.run_id == batch[0].run_id => {
+                        depth.fetch_sub(1, Ordering::SeqCst);
+                        batch.push(next);
+                    }
+                    Ok(next) => {
+                        carry = Some(next);
+                        break;
+                    }
+                    Err(_) => break,
+                }
+            }
+        }
+
+        runtime.run_turn(id, batch).await;
+    }
+
+    tracing::debug!(agent = %id.short(), "actor stopped");
+}

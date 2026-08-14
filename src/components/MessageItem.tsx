@@ -1,0 +1,225 @@
+import { AgentAvatar } from "../avatars/AgentAvatar";
+import { sendBody, sendRecipients } from "../lib/toolArgs";
+import type { AgentCard, AgentId, Envelope, Part, Participant } from "../lib/types";
+import { Markdown } from "./Markdown";
+import { NoticeRow, toPeer, WireRow } from "./WireRow";
+
+export interface Lookups {
+  byId: (id: AgentId) => AgentCard | undefined;
+  /** Tool calls name their recipients, so names need resolving too. */
+  byName: (name: string) => AgentCard | undefined;
+}
+
+interface Props {
+  message: Envelope;
+  lookups: Lookups;
+  /** Hides the avatar and header when the previous message had the same author. */
+  continued: boolean;
+  /** The activity feed shows both ends of a message; a channel shows one. */
+  feed: boolean;
+}
+
+const HUMAN = { id: "human", name: "You", color: "#5b665e", avatar: "plain" };
+const SYSTEM = { id: "system", name: "Guac", color: "#8a5a2f", avatar: "plain" };
+
+function identity(participant: Participant, byId: Lookups["byId"]) {
+  if (participant.kind === "human") return HUMAN;
+  if (participant.kind === "system") return SYSTEM;
+  const card = byId(participant.id);
+  return card
+    ? { id: card.id, name: card.name, color: card.color, avatar: card.avatar }
+    : { id: participant.id, name: "Deleted agent", color: "#8aa0a6", avatar: "blank" };
+}
+
+function clockTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** Keys tied to the message id. A persisted message is immutable. */
+function keyed(message: Envelope) {
+  return message.parts.map((part, position) => ({ part, key: `${message.id}:${position}` }));
+}
+
+function plainBody(message: Envelope): string {
+  return message.parts
+    .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
+    .map((p) => p.text)
+    .join("\n")
+    .trim();
+}
+
+/**
+ * One entry in a transcript.
+ *
+ * Three shapes, chosen by who was talking to whom:
+ *
+ * - operator to agent, or agent to operator: a chat bubble. These are the only
+ *   messages written to be read in full.
+ * - agent to agent: a single centred line with the content one click away.
+ *   Rendering these as bubbles buried the operator's own conversation under
+ *   machine chatter they were never meant to read line by line.
+ * - agent to system: that agent's own record of what it did on its turn.
+ */
+export function MessageItem({ message, lookups, continued, feed }: Props) {
+  const { from, to } = message;
+
+  if (from.kind === "agent" && to.kind === "agent") {
+    return (
+      <WireRow
+        direction={feed ? "between" : "received"}
+        peer={toPeer(lookups.byId(from.id), from.id)}
+        counterpart={toPeer(lookups.byId(to.id), to.id)}
+        hop={message.hop}
+        at={message.createdAt}
+        body={plainBody(message)}
+      />
+    );
+  }
+
+  if (from.kind === "agent" && to.kind === "system") {
+    return <ActivityRecord message={message} lookups={lookups} />;
+  }
+
+  return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
+}
+
+/** What an agent did on its own turn: who it wrote to, and any guard stops. */
+function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Lookups }) {
+  const actorId = message.from.kind === "agent" ? message.from.id : "";
+  const actor = toPeer(lookups.byId(actorId), actorId);
+
+  return (
+    <>
+      {keyed(message).map(({ part, key }) => {
+        if (part.type === "notice") {
+          return <NoticeRow key={key} kind={part.kind} text={part.text} />;
+        }
+        if (part.type !== "toolCall") return null;
+
+        if (part.name === "directory") {
+          const summary = part.outcome.status === "ok" ? part.outcome.summary : "";
+          return (
+            <div className="wire wire--quiet" key={key}>
+              <span className="wire__quiet-text">
+                {actor.name} checked who is available{summary ? ` — ${summary}` : ""}
+              </span>
+            </div>
+          );
+        }
+
+        const names = sendRecipients(part.arguments);
+        const text = sendBody(part.arguments);
+        const refusal =
+          part.outcome.status === "refused"
+            ? part.outcome.reason
+            : part.outcome.status === "failed"
+              ? part.outcome.error
+              : null;
+
+        // One row per recipient: "sent to three agents" hides which three.
+        const targets = names.length > 0 ? names : ["no one"];
+        return targets.map((name) => (
+          <WireRow
+            key={`${key}:${name}`}
+            direction="sent"
+            peer={toPeer(lookups.byName(name), name, name)}
+            at={message.createdAt}
+            body={text}
+            refusal={refusal}
+          />
+        ));
+      })}
+    </>
+  );
+}
+
+function ChatBubble({
+  message,
+  byId,
+  continued,
+}: {
+  message: Envelope;
+  byId: Lookups["byId"];
+  continued: boolean;
+}) {
+  const author = identity(message.from, byId);
+  // The operator does not need a portrait of themselves in their own log; the
+  // avatars are there to tell the agents apart.
+  const isOperator = message.from.kind === "human";
+
+  const parts = keyed(message);
+  const texts = parts.filter(
+    (e): e is { part: Extract<Part, { type: "text" }>; key: string } => e.part.type === "text",
+  );
+  const notices = parts.filter(
+    (e): e is { part: Extract<Part, { type: "notice" }>; key: string } => e.part.type === "notice",
+  );
+
+  return (
+    <article
+      className={continued ? "msg msg--continued" : "msg"}
+      data-operator={isOperator ? "true" : undefined}
+    >
+      <div>
+        {!continued && !isOperator && (
+          <AgentAvatar
+            avatar={author.avatar}
+            color={author.color}
+            size="sm"
+            seed={author.id}
+            title={author.name}
+          />
+        )}
+      </div>
+
+      <div style={{ minWidth: 0 }}>
+        {!continued && (
+          <div className="msg__head">
+            <span className="msg__author" style={{ color: author.color }}>
+              {author.name}
+            </span>
+            <time className="msg__time" dateTime={new Date(message.createdAt).toISOString()}>
+              {clockTime(message.createdAt)}
+            </time>
+          </div>
+        )}
+
+        {notices.map(({ part, key }) => (
+          <NoticeRow key={key} kind={part.kind} text={part.text} />
+        ))}
+
+        {texts.map(({ part, key }) => (
+          <Markdown key={key}>{part.text}</Markdown>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+/** The in-progress bubble shown while an agent is composing. */
+export function StreamingMessage({ agent, text }: { agent: AgentCard | undefined; text: string }) {
+  return (
+    <article className="msg">
+      <div>
+        <AgentAvatar
+          avatar={agent?.avatar ?? "plain"}
+          color={agent?.color ?? "#c7d96b"}
+          size="sm"
+          seed={agent?.id}
+          activity={{ state: "thinking" }}
+        />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div className="msg__head">
+          <span className="msg__author" style={{ color: agent?.color }}>
+            {agent?.name ?? "Agent"}
+          </span>
+          <span className="msg__time">now</span>
+        </div>
+        <div className="md--streaming">
+          <Markdown>{text}</Markdown>
+        </div>
+      </div>
+    </article>
+  );
+}

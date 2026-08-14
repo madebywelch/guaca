@@ -1,0 +1,291 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AgentCard, Envelope, UiEvent } from "./types";
+
+// The store talks to Tauri, which does not exist in a test runner. Only the
+// transport is mocked; the reducer logic under test is the real one.
+vi.mock("./ipc", () => ({
+  api: {
+    listAgents: vi.fn(async () => [] as AgentCard[]),
+    agentActivity: vi.fn(async () => ({})),
+    getSettings: vi.fn(async () => null),
+    channelMessages: vi.fn(async () => [] as Envelope[]),
+    activityFeed: vi.fn(async () => [] as Envelope[]),
+  },
+  onRuntimeEvent: vi.fn(),
+}));
+
+const { ACTIVITY_CHANNEL, useStore } = await import("./store");
+
+function envelope(overrides: Partial<Envelope> = {}): Envelope {
+  return {
+    id: "m1",
+    runId: "r1",
+    channelId: "chef",
+    from: { kind: "human" },
+    to: { kind: "agent", id: "chef" },
+    parts: [{ type: "text", text: "hello" }],
+    trust: "operator",
+    hop: 0,
+    expectsReply: true,
+    cause: null,
+    createdAt: 100,
+    ...overrides,
+  };
+}
+
+const AGENTS: AgentCard[] = [
+  {
+    id: "manager",
+    name: "Manager",
+    avatar: "avocado",
+    color: "#c7d96b",
+    model: "m",
+    systemPrompt: "",
+    skills: [],
+    lifecycle: "active",
+    version: 1,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+  {
+    id: "chef",
+    name: "Chef",
+    avatar: "chilli",
+    color: "#e2674a",
+    model: "m",
+    systemPrompt: "",
+    skills: [],
+    lifecycle: "active",
+    version: 1,
+    createdAt: 0,
+    updatedAt: 0,
+  },
+];
+
+function reset(messages: Record<string, Envelope[] | undefined> = {}) {
+  useStore.setState({
+    agents: AGENTS,
+    activity: {},
+    lastActive: {},
+    settings: null,
+    selected: "chef",
+    messages,
+    streams: {},
+    pulses: [],
+    banner: null,
+  });
+}
+
+const apply = (event: UiEvent) => useStore.getState().applyEvent(event);
+
+beforeEach(() => reset());
+
+describe("messageAppended", () => {
+  it("appends to a loaded channel", () => {
+    reset({ chef: [] });
+    apply({ type: "messageAppended", message: envelope() });
+    expect(useStore.getState().messages.chef).toHaveLength(1);
+  });
+
+  it("leaves an unloaded channel alone", () => {
+    // Appending into a channel that was never fetched would produce a
+    // transcript with a hole in it the first time it is opened.
+    apply({ type: "messageAppended", message: envelope() });
+    expect(useStore.getState().messages.chef).toBeUndefined();
+  });
+
+  it("ignores a message it already has", () => {
+    reset({ chef: [] });
+    apply({ type: "messageAppended", message: envelope() });
+    apply({ type: "messageAppended", message: envelope() });
+    expect(useStore.getState().messages.chef).toHaveLength(1);
+  });
+
+  it("keeps a channel ordered when messages arrive late", () => {
+    reset({ chef: [] });
+    apply({ type: "messageAppended", message: envelope({ id: "b", createdAt: 200 }) });
+    apply({ type: "messageAppended", message: envelope({ id: "a", createdAt: 100 }) });
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["a", "b"]);
+  });
+
+  it("orders deterministically when timestamps collide", () => {
+    reset({ chef: [] });
+    apply({ type: "messageAppended", message: envelope({ id: "z", createdAt: 100 }) });
+    apply({ type: "messageAppended", message: envelope({ id: "a", createdAt: 100 }) });
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["a", "z"]);
+  });
+
+  it("puts the whole conversation on the flow board", () => {
+    // Including the operator's own messages: a flow that starts at the first
+    // agent-to-agent message hides who set it off.
+    reset({ chef: [], [ACTIVITY_CHANNEL]: [] });
+    apply({ type: "messageAppended", message: envelope({ id: "a" }) });
+    apply({
+      type: "messageAppended",
+      message: envelope({
+        id: "b",
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+      }),
+    });
+    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toHaveLength(2);
+  });
+
+  it("keeps private activity records off the flow board", () => {
+    // An agent's own tool trail is bookkeeping, not a message between two
+    // participants, so it has no arrow to draw.
+    reset({ chef: [], [ACTIVITY_CHANNEL]: [] });
+    apply({
+      type: "messageAppended",
+      message: envelope({ from: { kind: "agent", id: "chef" }, to: { kind: "system" } }),
+    });
+    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toHaveLength(0);
+  });
+});
+
+describe("rail pulses", () => {
+  it("fires for agent-to-agent traffic in the sender's colour", () => {
+    apply({
+      type: "messageAppended",
+      message: envelope({
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+      }),
+    });
+    const [pulse] = useStore.getState().pulses;
+    expect(pulse).toMatchObject({ from: "manager", to: "chef", color: "#c7d96b" });
+  });
+
+  it("fires even when neither channel is open", () => {
+    // The pulse comes from the event, not from a channel read, which is what
+    // lets you watch a cascade you are not looking at.
+    expect(useStore.getState().messages.chef).toBeUndefined();
+    apply({
+      type: "messageAppended",
+      message: envelope({
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+      }),
+    });
+    expect(useStore.getState().pulses).toHaveLength(1);
+  });
+
+  it("does not fire for operator messages", () => {
+    apply({ type: "messageAppended", message: envelope() });
+    expect(useStore.getState().pulses).toHaveLength(0);
+  });
+
+  it("is dismissed by id", () => {
+    apply({
+      type: "messageAppended",
+      message: envelope({
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+      }),
+    });
+    const id = useStore.getState().pulses[0]!.id;
+    useStore.getState().dismissPulse(id);
+    expect(useStore.getState().pulses).toHaveLength(0);
+  });
+});
+
+describe("streaming", () => {
+  const started: UiEvent = {
+    type: "streamStarted",
+    messageId: "s1",
+    channelId: "chef",
+    agentId: "chef",
+    runId: "r1",
+    to: { kind: "human" },
+  };
+
+  it("accumulates deltas in order", () => {
+    apply(started);
+    apply({ type: "streamDelta", messageId: "s1", channelId: "chef", text: "Hel" });
+    apply({ type: "streamDelta", messageId: "s1", channelId: "chef", text: "lo" });
+    expect(useStore.getState().streams.s1?.text).toBe("Hello");
+  });
+
+  it("ignores deltas for a stream that never started", () => {
+    // Out-of-order or post-teardown deltas must not resurrect a bubble.
+    apply({ type: "streamDelta", messageId: "ghost", channelId: "chef", text: "x" });
+    expect(useStore.getState().streams.ghost).toBeUndefined();
+  });
+
+  it("keeps concurrent streams separate", () => {
+    apply(started);
+    apply({
+      type: "streamStarted",
+      messageId: "s2",
+      channelId: "manager",
+      agentId: "manager",
+      runId: "r1",
+      to: { kind: "human" },
+    });
+    apply({ type: "streamDelta", messageId: "s1", channelId: "chef", text: "chef" });
+    apply({ type: "streamDelta", messageId: "s2", channelId: "manager", text: "manager" });
+
+    expect(useStore.getState().streams.s1?.text).toBe("chef");
+    expect(useStore.getState().streams.s2?.text).toBe("manager");
+  });
+
+  it("remembers who a stream is for", () => {
+    // A peer-bound stream is announced rather than rendered as text, so the
+    // destination has to survive into the buffer.
+    apply({
+      type: "streamStarted",
+      messageId: "s3",
+      channelId: "manager",
+      agentId: "chef",
+      runId: "r1",
+      to: { kind: "agent", id: "manager" },
+    });
+    expect(useStore.getState().streams.s3?.to).toEqual({ kind: "agent", id: "manager" });
+  });
+
+  it("clears the buffer when the stream ends", () => {
+    apply(started);
+    apply({ type: "streamEnded", messageId: "s1", channelId: "chef" });
+    expect(useStore.getState().streams.s1).toBeUndefined();
+  });
+});
+
+describe("sidebar ordering", () => {
+  it("records activity for both ends of a message", () => {
+    // A message an agent sends is filed in the recipient's channel, so tracking
+    // the channel alone would leave the sender looking idle.
+    apply({
+      type: "messageAppended",
+      message: envelope({
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+        createdAt: 500,
+      }),
+    });
+    expect(useStore.getState().lastActive.manager).toBe(500);
+    expect(useStore.getState().lastActive.chef).toBe(500);
+  });
+
+  it("keeps the newest timestamp", () => {
+    apply({ type: "messageAppended", message: envelope({ id: "a", createdAt: 900 }) });
+    apply({ type: "messageAppended", message: envelope({ id: "b", createdAt: 100 }) });
+    expect(useStore.getState().lastActive.chef).toBe(900);
+  });
+});
+
+describe("activity", () => {
+  it("records the latest state per agent", () => {
+    apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
+    expect(useStore.getState().activity.chef).toEqual({ state: "thinking" });
+
+    apply({ type: "activityChanged", agentId: "chef", activity: { state: "queued", depth: 2 } });
+    expect(useStore.getState().activity.chef).toEqual({ state: "queued", depth: 2 });
+  });
+
+  it("does not disturb other agents", () => {
+    apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
+    apply({ type: "activityChanged", agentId: "manager", activity: { state: "idle" } });
+    expect(useStore.getState().activity.chef).toEqual({ state: "thinking" });
+  });
+});
