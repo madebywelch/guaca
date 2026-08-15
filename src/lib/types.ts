@@ -15,8 +15,15 @@ export type NoticeKind = "guardStop" | "upstreamError" | "lifecycle";
 
 export type Participant = { kind: "human" } | { kind: "agent"; id: AgentId } | { kind: "system" };
 
+export interface RefusedRecipient {
+  to: string;
+  reason: string;
+}
+
 export type ToolOutcome =
   | { status: "ok"; summary: string }
+  /** A fan-out where some recipients took it and some did not. */
+  | { status: "partial"; summary: string; refused: RefusedRecipient[] }
   | { status: "refused"; reason: string }
   | { status: "failed"; error: string };
 
@@ -126,6 +133,8 @@ export interface GuardLimits {
 }
 
 export interface Settings {
+  /** What agents call you. Empty means they say "the operator". */
+  operatorName: string;
   e2bKeySet: boolean;
   e2bKeyHint: string;
   computerIdleMinutes: number;
@@ -139,6 +148,7 @@ export interface Settings {
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
 export interface SettingsPatch {
+  operatorName?: string;
   e2bApiKey?: string;
   computerIdleMinutes?: number;
   baseUrl?: string;

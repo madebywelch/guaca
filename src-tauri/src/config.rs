@@ -93,6 +93,15 @@ const V0_LIMITS: GuardLimits = GuardLimits {
 pub struct AppConfig {
     /// 0 means "written before settings were versioned".
     pub version: u32,
+    /// What agents call the person using this app.
+    ///
+    /// Ambient rather than something each agent discovers and writes into its
+    /// own notes: an operator had to tell one agent their name, that agent
+    /// stored it privately, and every other agent still had no idea who it was
+    /// working for. Empty falls back to "the operator", which is what agents
+    /// said before this existed.
+    #[serde(default)]
+    pub operator_name: String,
     pub inference: InferenceConfig,
     pub limits: GuardLimits,
     #[serde(default)]
@@ -167,6 +176,7 @@ pub fn migrate(config: &mut AppConfig) -> bool {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RedactedConfig {
+    pub operator_name: String,
     pub e2b_key_set: bool,
     pub e2b_key_hint: String,
     pub computer_idle_minutes: u32,
@@ -181,6 +191,7 @@ pub struct RedactedConfig {
 impl AppConfig {
     pub fn redacted(&self) -> RedactedConfig {
         RedactedConfig {
+            operator_name: self.operator_name.clone(),
             e2b_key_set: !self.e2b.api_key.trim().is_empty(),
             e2b_key_hint: hint_for(&self.e2b.api_key),
             computer_idle_minutes: self.e2b.idle_minutes,

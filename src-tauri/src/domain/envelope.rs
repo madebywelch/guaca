@@ -116,9 +116,33 @@ pub enum Part {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ToolOutcome {
-    Ok { summary: String },
-    Refused { reason: String },
-    Failed { error: String },
+    Ok {
+        summary: String,
+    },
+    /// Some recipients took it and some did not.
+    ///
+    /// A fan-out has no single verdict. Reporting the whole call "ok" because
+    /// one message got through drew every recipient as delivered, including the
+    /// ones that were refused, so the operator read "Sent to Researcher" about a
+    /// message Researcher never received.
+    Partial {
+        summary: String,
+        refused: Vec<RefusedRecipient>,
+    },
+    Refused {
+        reason: String,
+    },
+    Failed {
+        error: String,
+    },
+}
+
+/// One recipient a fan-out could not reach, and why.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedRecipient {
+    pub to: String,
+    pub reason: String,
 }
 
 impl Part {

@@ -82,9 +82,9 @@ struct ToolResult {
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{AgentCard, DirectoryEntry, Lifecycle};
 use crate::domain::envelope::{
-    channel_for, Envelope, NoticeKind, Part, Participant, ToolOutcome, Trust,
+    channel_for, Envelope, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome, Trust,
 };
-use crate::domain::ids::{AgentId, MessageId, RunId};
+use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
@@ -608,8 +608,16 @@ impl Runtime {
             .collect::<Vec<_>>();
 
         let notes = self.inner.workspace.read(agent_id);
-        let mut messages =
-            prompt::build_messages(&card, &roster, &names, &notes, &history, &batch, mode);
+        let mut messages = prompt::build_messages(
+            &card,
+            &self.config().operator_name,
+            &roster,
+            &names,
+            &notes,
+            &history,
+            &batch,
+            mode,
+        );
 
         // Where the finished message will land, and who it is for. Both are
         // known before the first token, so the UI never has to guess and then
@@ -1152,8 +1160,25 @@ impl Runtime {
                 let rendered = tools::render_deliveries(&deliveries);
                 let queued =
                     deliveries.iter().filter(|d| matches!(d, Delivery::Queued { .. })).count();
-                let outcome = if queued > 0 {
+                let refused: Vec<_> = deliveries
+                    .iter()
+                    .filter_map(|d| match d {
+                        Delivery::Refused { to, reason } => {
+                            Some(RefusedRecipient { to: to.clone(), reason: reason.clone() })
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                let outcome = if queued > 0 && refused.is_empty() {
                     ToolOutcome::Ok { summary: format!("queued for {queued} agent(s)") }
+                } else if queued > 0 {
+                    ToolOutcome::Partial {
+                        summary: format!(
+                            "queued for {queued} of {} agent(s)",
+                            queued + refused.len()
+                        ),
+                        refused,
+                    }
                 } else {
                     ToolOutcome::Refused {
                         reason: deliveries
@@ -1308,9 +1333,7 @@ impl Runtime {
             // must not be distinguishable from a name belonging to nobody:
             // confirming that the agent exists would leak the roster across the
             // boundary the group is there to draw.
-            let found = directory
-                .iter()
-                .find(|c| c.group_id == card.group_id && c.name.eq_ignore_ascii_case(trimmed));
+            let found = resolve_recipient(&directory, card.group_id, trimmed);
 
             let target = match found {
                 None => {
@@ -1708,6 +1731,27 @@ async fn actor_loop(
     tracing::debug!(agent = %id.short(), "actor stopped");
 }
 
+/// The agent a name refers to, within the sender's group.
+///
+/// A live agent always wins the name. Deleted agents keep their rows so their
+/// transcripts still read, and operators reuse names: deleting Researcher and
+/// making a new one left the old row answering to the name, so the live agent
+/// was unreachable and the sender was told it had been deleted while it sat in
+/// the directory. A terminated match is still returned when it is the only one,
+/// because "that agent was deleted" is a better answer than "no such agent".
+fn resolve_recipient<'a>(
+    directory: &'a [AgentCard],
+    group: GroupId,
+    name: &str,
+) -> Option<&'a AgentCard> {
+    let matching =
+        |card: &&AgentCard| card.group_id == group && card.name.eq_ignore_ascii_case(name);
+    directory
+        .iter()
+        .find(|card| matching(card) && card.lifecycle != Lifecycle::Terminated)
+        .or_else(|| directory.iter().find(matching))
+}
+
 /// The sandboxes an agent could still be using.
 ///
 /// Only a live agent holds a claim. A deleted agent keeps its row so its
@@ -1729,7 +1773,7 @@ mod tests {
     fn card(lifecycle: Lifecycle, sandbox: &str) -> AgentCard {
         AgentCard {
             id: AgentId::new(),
-            group_id: crate::domain::ids::GroupId::new(),
+            group_id: GroupId::new(),
             name: "Agent".into(),
             avatar: "avocado".into(),
             color: "#7fb069".into(),
@@ -1744,6 +1788,37 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         }
+    }
+
+    #[test]
+    fn a_live_agent_wins_a_name_a_deleted_one_used_to_hold() {
+        let group = GroupId::new();
+        let stale = AgentCard {
+            group_id: group,
+            name: "Researcher".into(),
+            ..card(Lifecycle::Terminated, "old")
+        };
+        let live = AgentCard {
+            group_id: group,
+            name: "researcher".into(),
+            ..card(Lifecycle::Active, "new")
+        };
+        // Deleted first, exactly as the rows are ordered: it was found first and
+        // answered for a name its replacement was using.
+        let directory = [stale.clone(), live.clone()];
+
+        let found = resolve_recipient(&directory, group, "Researcher").expect("resolves");
+        assert_eq!(found.id, live.id, "the live agent must answer to its own name");
+
+        // With no live namesake the deleted one still answers, so the sender is
+        // told the agent was deleted rather than that it never existed.
+        let only_stale = [stale.clone()];
+        let found = resolve_recipient(&only_stale, group, "Researcher").expect("resolves");
+        assert_eq!(found.id, stale.id);
+
+        // Another group's agent is not reachable and not distinguishable from
+        // nobody, which is what the group boundary is for.
+        assert!(resolve_recipient(&directory, GroupId::new(), "Researcher").is_none());
     }
 
     #[test]

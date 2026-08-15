@@ -168,6 +168,27 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText(/hop limit reached/)).toBeTruthy();
   });
 
+  it("marks only the recipients a half-delivered send actually missed", () => {
+    // The bug this replaces: one verdict for the whole call, so a send that
+    // reached two of three drew all three as delivered.
+    show(
+      record({
+        type: "toolCall",
+        name: "send_message",
+        arguments: { to: ["Chef", "Ghost", "Sous"], text: "standup" },
+        outcome: {
+          status: "partial",
+          summary: "queued for 2 of 3 agent(s)",
+          refused: [{ to: "Ghost", reason: "Refused: Ghost has been deleted." }],
+        },
+      }),
+    );
+    expect(screen.getByText(/Not delivered to Ghost/)).toBeTruthy();
+    expect(screen.getByText(/Sent to Chef/)).toBeTruthy();
+    expect(screen.getByText(/Sent to Sous/)).toBeTruthy();
+    expect(screen.queryByText(/Sent to Ghost/)).toBeNull();
+  });
+
   it("keeps a directory lookup quiet and unclickable", () => {
     show(
       record({

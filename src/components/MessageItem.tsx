@@ -102,7 +102,10 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
         // message. Naming the tools that are not sends is what stops the next
         // one from doing the same.
         if (part.name !== "send_message") {
-          const summary = part.outcome.status === "ok" ? part.outcome.summary : "";
+          const summary =
+            part.outcome.status === "ok" || part.outcome.status === "partial"
+              ? part.outcome.summary
+              : "";
           const what =
             part.name === "directory"
               ? "checked who is available"
@@ -121,12 +124,18 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
 
         const names = sendRecipients(part.arguments);
         const text = sendBody(part.arguments);
-        const refusal =
-          part.outcome.status === "refused"
-            ? part.outcome.reason
-            : part.outcome.status === "failed"
-              ? part.outcome.error
-              : null;
+        const outcome = part.outcome;
+        // Per recipient, because a fan-out can be half-delivered. Painting one
+        // verdict across every row drew agents that were refused as "Sent to",
+        // which is the one thing this trail exists to be right about.
+        const refusalFor = (name: string): string | null => {
+          if (outcome.status === "refused") return outcome.reason;
+          if (outcome.status === "failed") return outcome.error;
+          if (outcome.status === "partial") {
+            return outcome.refused.find((r) => r.to === name)?.reason ?? null;
+          }
+          return null;
+        };
 
         // One row per recipient: "sent to three agents" hides which three.
         const targets = names.length > 0 ? names : ["no one"];
@@ -137,7 +146,7 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
             peer={toPeer(lookups.byName(name), name, name)}
             at={message.createdAt}
             body={text}
-            refusal={refusal}
+            refusal={refusalFor(name)}
           />
         ));
       })}

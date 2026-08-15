@@ -362,6 +362,7 @@ pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<u
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
+    pub operator_name: Option<String>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub default_model: Option<String>,
@@ -379,6 +380,9 @@ pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
 /// Applies a patch to a config in memory. Shared by saving and testing, so a
 /// tested configuration and a saved one can never diverge.
 fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), CommandError> {
+    if let Some(name) = patch.operator_name {
+        config.operator_name = name.trim().to_string();
+    }
     if let Some(base_url) = patch.base_url {
         config.inference.base_url = config::normalize_base_url(&base_url)?;
     }

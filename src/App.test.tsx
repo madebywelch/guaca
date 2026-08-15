@@ -17,6 +17,7 @@ const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () =>
 const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   baseUrl: "https://openrouter.ai/api/v1",
   defaultModel: "test/model",
+  operatorName: "",
   apiKeySet: true,
   e2bKeySet: false,
   e2bKeyHint: "",
@@ -150,6 +151,7 @@ describe("App", () => {
 
   it("prompts for a key when none is configured", async () => {
     getSettings.mockResolvedValue({
+      operatorName: "",
       baseUrl: "https://openrouter.ai/api/v1",
       defaultModel: "test/model",
       apiKeySet: false,

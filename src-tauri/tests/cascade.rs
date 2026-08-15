@@ -230,6 +230,7 @@ fn harness_in_groups(stub: &Stub, placed: &[(&str, Option<&str>)], limits: Guard
 
     let config = AppConfig {
         version: guac_lib::config::CURRENT_VERSION,
+        operator_name: String::new(),
         inference: InferenceConfig {
             base_url: stub.base_url.clone(),
             api_key: "sk-test".into(),
@@ -1123,6 +1124,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
 
     let config = AppConfig {
         version: guac_lib::config::CURRENT_VERSION,
+        operator_name: String::new(),
         inference: InferenceConfig {
             base_url: stub.base_url.clone(),
             api_key: "sk-test".into(),

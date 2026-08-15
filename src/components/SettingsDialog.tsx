@@ -58,6 +58,7 @@ export function SettingsDialog({ onClose }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
 
+  const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
   const [apiKey, setApiKey] = useState("");
@@ -90,6 +91,7 @@ export function SettingsDialog({ onClose }: Props) {
     setStatus(null);
     try {
       const next = await api.updateSettings({
+        operatorName,
         baseUrl,
         defaultModel: model,
         limits,
@@ -140,6 +142,20 @@ export function SettingsDialog({ onClose }: Props) {
           Guac runs entirely on this machine. The only thing it sends anywhere is what you and your
           agents type, to the endpoint below.
         </p>
+
+        <label className="field">
+          <span className="field__label">Your name</span>
+          <input
+            className="input"
+            value={operatorName}
+            placeholder="Unnamed"
+            onChange={(event) => setOperatorName(event.target.value)}
+          />
+          <span className="field__hint">
+            What every agent calls you. They are told this on every turn, so you never have to
+            introduce yourself or ask one to remember it. Leave blank and they say "the operator".
+          </span>
+        </label>
 
         <label className="field">
           <span className="field__label">Inference endpoint</span>
