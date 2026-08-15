@@ -272,11 +272,19 @@ impl E2bClient {
     }
 
     /// Puts the machine to sleep. The disk is kept; the bill is not.
+    ///
+    /// Deliberately without its memory. E2B keeps memory by default, which
+    /// preserves running processes and open tabs, but a desktop has 8 GiB of it
+    /// and that snapshot is stored for as long as the machine sleeps. The disk
+    /// is what carries a signed-in browser, and the browser is restarted on the
+    /// next use anyway, so this costs a few seconds on waking and saves storing
+    /// eight gigabytes per sleeping agent.
     pub async fn pause(&self, sandbox: &str) -> Result<(), E2bError> {
         let response = self
             .http
             .post(format!("{API_BASE}/sandboxes/{sandbox}/pause"))
             .header("X-API-Key", &self.api_key)
+            .json(&serde_json::json!({ "memory": false }))
             .send()
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
