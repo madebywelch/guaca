@@ -22,6 +22,7 @@ pub const RUN_COMMAND: &str = "run_command";
 pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
+pub const SCHEDULE: &str = "schedule";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -108,6 +109,39 @@ pub fn specs() -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["command"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: SCHEDULE.to_string(),
+            description: "Keep your own schedule. Use this to do something later, or to keep \
+                          doing it: `add` with `every_secs` repeats, `add` with only `in_secs` \
+                          fires once. When it fires you get the instruction back as a new \
+                          message and work as usual, so write it as something you will be able \
+                          to act on with no other context. Nothing is running while you wait, \
+                          and a routine outlives restarts."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "cancel"] },
+                    "what": {
+                        "type": "string",
+                        "description": "The instruction to give yourself when it fires."
+                    },
+                    "every_secs": {
+                        "type": "integer",
+                        "description": "Repeat this often. 18000 is every five hours. \
+                                        Omit for something that happens once."
+                    },
+                    "in_secs": {
+                        "type": "integer",
+                        "description": "How long until the first run. Defaults to one interval \
+                                        away, or immediately for a one-off."
+                    },
+                    "id": { "type": "string", "description": "For `cancel`, from `list`." }
+                },
+                "required": ["action"],
                 "additionalProperties": false
             }),
         },
@@ -227,6 +261,22 @@ pub enum ToolInvocation {
     OpenOnDesktop { command: String },
     UseScreen { action: ScreenAction },
     Browse { action: String, args: serde_json::Value },
+    Schedule { action: ScheduleAction },
+}
+
+/// What an agent can do to its own schedule.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScheduleAction {
+    List,
+    /// `every_secs` absent fires once, after `in_secs`.
+    Add {
+        what: String,
+        every_secs: Option<u32>,
+        in_secs: Option<u32>,
+    },
+    Cancel {
+        id: String,
+    },
 }
 
 /// What an agent can do to the screen it is looking at.
@@ -244,7 +294,7 @@ pub enum ScreenAction {
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command, open_on_desktop, use_screen, browse."
+         run_command, open_on_desktop, use_screen, browse, schedule."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -263,6 +313,10 @@ pub enum ToolParseError {
     UnknownScreenAction,
     #[error("browse needs a known `action`")]
     UnknownBrowseAction,
+    #[error("schedule needs a known `action`")]
+    UnknownScheduleAction,
+    #[error("schedule add needs {needs}")]
+    IncompleteSchedule { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
 }
@@ -281,6 +335,15 @@ impl ToolParseError {
             ToolParseError::BadJson { name, detail } => format!(
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
+            ),
+            ToolParseError::UnknownScheduleAction => {
+                "Error: `action` must be list, add or cancel. Use \
+                 {\"action\": \"list\"} to see what you have already set."
+                    .to_string()
+            }
+            ToolParseError::IncompleteSchedule { needs } => format!(
+                "Error: to add a routine you need {needs}. For example \
+                 {{\"action\": \"add\", \"what\": \"check the listings\", \"every_secs\": 18000}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -399,6 +462,51 @@ fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolPa
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
+        SCHEDULE => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SCHEDULE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let secs = |name: &str| {
+                value.get(name).and_then(|v| v.as_i64()).filter(|n| *n > 0).map(|n| n as u32)
+            };
+            match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" => Ok(ToolInvocation::Schedule { action: ScheduleAction::List }),
+                "add" | "create" => {
+                    let what = value
+                        .get("what")
+                        .or_else(|| value.get("prompt"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let every = secs("every_secs");
+                    let delay = secs("in_secs");
+                    if what.trim().is_empty() {
+                        return Err(ToolParseError::IncompleteSchedule {
+                            needs: "a `what` to do".to_string(),
+                        });
+                    }
+                    if every.is_none() && delay.is_none() {
+                        return Err(ToolParseError::IncompleteSchedule {
+                            needs: "either `every_secs` to repeat or `in_secs` to happen once"
+                                .to_string(),
+                        });
+                    }
+                    Ok(ToolInvocation::Schedule {
+                        action: ScheduleAction::Add { what, every_secs: every, in_secs: delay },
+                    })
+                }
+                "cancel" | "remove" | "delete" => match value.get("id").and_then(|v| v.as_str()) {
+                    Some(id) if !id.trim().is_empty() => Ok(ToolInvocation::Schedule {
+                        action: ScheduleAction::Cancel { id: id.to_string() },
+                    }),
+                    _ => Err(ToolParseError::IncompleteSchedule {
+                        needs: "the `id` of the routine, from `list`".to_string(),
+                    }),
+                },
+                _ => Err(ToolParseError::UnknownScheduleAction),
+            }
+        }
         BROWSE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: BROWSE.to_string(),
@@ -640,13 +748,41 @@ mod tests {
     }
 
     #[test]
+    fn a_routine_needs_a_time_as_well_as_a_task() {
+        // Without either it would be a routine that never fires, which reads as
+        // having worked.
+        let err = parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"check\"}")).unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
+        assert!(err.guidance().contains("every_secs"), "the way out has to be in the message");
+
+        assert_eq!(
+            parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"check\",\"every_secs\":18000}")),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add {
+                    what: "check".into(),
+                    every_secs: Some(18000),
+                    in_secs: None
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn schedule_defaults_to_showing_what_is_already_set() {
+        assert_eq!(
+            parse(&call(SCHEDULE, "{}")),
+            Ok(ToolInvocation::Schedule { action: ScheduleAction::List })
+        );
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs();
         assert_eq!(
             specs.len(),
-            7,
-            "directory, run_command, open_on_desktop, use_screen, browse, send_message, \
-             update_notes"
+            8,
+            "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
+             send_message, update_notes"
         );
         for spec in &specs {
             assert_eq!(

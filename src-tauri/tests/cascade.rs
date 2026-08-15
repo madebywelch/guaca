@@ -20,6 +20,7 @@ use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
+use guac_lib::domain::now_ms;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
@@ -1163,5 +1164,56 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
     assert!(
         models.contains(&"app/default".to_string()),
         "a group with no model must still inherit the app default, got {models:?}"
+    );
+}
+
+// ---- routines ------------------------------------------------------------
+
+#[tokio::test]
+async fn a_routine_that_is_due_wakes_its_agent() {
+    // The whole point of a schedule is that something happens without anyone
+    // typing, so this drives the real scheduler rather than calling the
+    // delivery path directly.
+    let stub = serve(|_| Script::Say("checked the listings".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+
+    // Due a moment ago, the state the scheduler actually finds things in.
+    h.runtime
+        .store()
+        .create_routine(h.id("Watcher"), "check the listings", Some(3600), now_ms() - 1000)
+        .unwrap();
+
+    h.runtime.start_scheduler();
+    h.wait_until("the routine to fire", |h| {
+        h.channel_texts("Watcher").iter().any(|t| t.contains("checked the listings"))
+    })
+    .await;
+
+    // A repeating routine stays, moved forward rather than firing again.
+    let routines = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(routines.len(), 1, "a repeat must survive its own run");
+    assert!(
+        routines[0].next_run_at > now_ms(),
+        "and must not still be due, or it fires again on the next tick"
+    );
+    assert!(routines[0].last_run_at.is_some(), "it should record having run");
+}
+
+#[tokio::test]
+async fn a_one_off_routine_does_not_come_due_twice() {
+    let stub = serve(|_| Script::Say("woke up".into())).await;
+    let h = harness(&stub, &["Sleeper"], GuardLimits::default());
+
+    h.runtime.store().create_routine(h.id("Sleeper"), "wake up", None, now_ms() - 1000).unwrap();
+
+    h.runtime.start_scheduler();
+    h.wait_until("the alarm to go off", |h| {
+        h.channel_texts("Sleeper").iter().any(|t| t.contains("woke up"))
+    })
+    .await;
+
+    assert!(
+        h.runtime.store().agent_routines(h.id("Sleeper")).unwrap().is_empty(),
+        "a one-off must be gone once it has run, not left with a time in the past"
     );
 }

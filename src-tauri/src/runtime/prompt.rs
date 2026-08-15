@@ -74,6 +74,11 @@ pub fn system_prompt(
            anything that changes the screen, because you are always working from the last \
            picture you took rather than from what is there now. This is how you read a page, \
            follow a link, fill a form, or use an app you are already signed into.\n\n\
+         You also keep your own schedule with `schedule`: work you should do later, or keep \
+         doing. When a routine fires you receive its instruction as a new message, so write it \
+         as something you can act on with nothing else in front of you. Use it whenever you are \
+         asked for something recurring, and prefer one routine that does the whole job over \
+         several that each do a piece of it.\n\n\
          Never say you have no computer, no browser, or no way to look something up. You have \
          all three. Say what you ran and what it returned rather than presenting a result as \
          something you simply knew.\n",
@@ -337,6 +342,7 @@ mod tests {
             prompt.contains("browse"),
             "the browser knows where things are; pixels are the fallback, not the default"
         );
+        assert!(prompt.contains("schedule"), "an agent that does not know it can wait cannot");
         assert!(
             prompt.contains("look"),
             "an agent that does not look first will click from memory of a screen it never saw"

@@ -15,8 +15,9 @@ use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
-use crate::domain::ids::{AgentId, GroupId, MessageId};
+use crate::domain::ids::{AgentId, GroupId, MessageId, RoutineId};
 use crate::domain::now_ms;
+use crate::domain::routine::Routine;
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -295,6 +296,106 @@ impl Store {
             )
             .optional()?
             .flatten())
+    }
+
+    // ---- routines --------------------------------------------------------
+
+    pub fn create_routine(
+        &self,
+        agent: AgentId,
+        what: &str,
+        every_secs: Option<u32>,
+        first_run_at: i64,
+    ) -> Result<Routine, StoreError> {
+        let conn = self.conn()?;
+        let routine = Routine {
+            id: RoutineId::new(),
+            agent_id: agent,
+            what: what.trim().to_string(),
+            every_secs,
+            next_run_at: first_run_at,
+            last_run_at: None,
+            created_at: now_ms(),
+        };
+        conn.execute(
+            "INSERT INTO routines (id,agent_id,what,every_secs,next_run_at,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6)",
+            params![
+                routine.id.to_string(),
+                agent.to_string(),
+                routine.what,
+                routine.every_secs,
+                routine.next_run_at,
+                routine.created_at,
+            ],
+        )?;
+        Ok(routine)
+    }
+
+    pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+               FROM routines WHERE agent_id=?1 ORDER BY next_run_at",
+        )?;
+        let rows = stmt.query_map(params![agent.to_string()], row_to_routine)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Everything due to run, oldest first.
+    ///
+    /// Only for agents that can still act: a routine belonging to a deleted or
+    /// paused agent would otherwise fire into nothing, repeatedly.
+    pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT r.id,r.agent_id,r.what,r.every_secs,r.next_run_at,r.last_run_at,r.created_at
+               FROM routines r
+               JOIN agents a ON a.id = r.agent_id
+              WHERE r.next_run_at <= ?1 AND a.lifecycle = 'active'
+              ORDER BY r.next_run_at",
+        )?;
+        let rows = stmt.query_map(params![now], row_to_routine)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Records that a routine ran, and when it is next due.
+    ///
+    /// A one-shot is removed rather than left with a time in the past, so the
+    /// scheduler never has to reason about whether something already happened.
+    pub fn routine_ran(&self, routine: &Routine, now: i64) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        match routine.after_running(now) {
+            Some(next) => {
+                conn.execute(
+                    "UPDATE routines SET next_run_at=?2, last_run_at=?3 WHERE id=?1",
+                    params![routine.id.to_string(), next, now],
+                )?;
+            }
+            None => {
+                conn.execute("DELETE FROM routines WHERE id=?1", params![routine.id.to_string()])?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn delete_routine(&self, id: RoutineId) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM routines WHERE id=?1", params![id.to_string()])? > 0)
+    }
+
+    /// Removes an agent's schedule along with the agent.
+    pub fn delete_agent_routines(&self, agent: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM routines WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
     // ---- groups ----------------------------------------------------------
@@ -612,6 +713,27 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
+        })
+    })())
+}
+
+fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
+    let id_raw: String = row.get(0)?;
+    let agent_raw: String = row.get(1)?;
+
+    Ok((|| {
+        Ok(Routine {
+            id: id_raw
+                .parse::<RoutineId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad routine id {id_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            what: row.get(2)?,
+            every_secs: row.get(3)?,
+            next_run_at: row.get(4)?,
+            last_run_at: row.get(5)?,
+            created_at: row.get(6)?,
         })
     })())
 }

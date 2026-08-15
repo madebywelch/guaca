@@ -1591,6 +1591,9 @@ button {
   z-index: 4;
   box-shadow: 0 0.6rem 1.4rem -0.8rem rgb(24 33 27 / 0.4);
   transition: width 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* Belt to the listener's braces: stops a gesture that starts here from
+     continuing into the transcript underneath. */
+  overscroll-behavior: contain;
 }
 
 /* Taking control is worth the room: at preview size a desktop is legible as a

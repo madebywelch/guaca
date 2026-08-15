@@ -75,6 +75,8 @@ pub fn run() {
                 sink,
             );
             let started = runtime.start_all()?;
+            // Agents keep their own appointments.
+            runtime.start_scheduler();
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.

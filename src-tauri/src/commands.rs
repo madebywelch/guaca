@@ -255,6 +255,9 @@ pub fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
     // The transcript survives a deletion, but the agent's private notes are
     // its own and go with it.
     state.runtime.workspace().remove(id);
+    // Its schedule goes too, or it would keep coming due for an agent that can
+    // no longer act on it.
+    let _ = state.runtime.store().delete_agent_routines(id);
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

@@ -393,6 +393,82 @@ impl Runtime {
     }
 
     /// Operator sends a message to one agent. Returns the run it starts.
+    /// Delivers a routine's instruction, as though the operator had asked.
+    ///
+    /// Attributed to the system rather than to the operator so the transcript
+    /// shows plainly that a schedule fired and nobody typed anything, while
+    /// still carrying operator authority: the agent set this for itself, or was
+    /// told to.
+    pub fn send_from_routine(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
+        let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
+        if card.lifecycle != Lifecycle::Active {
+            return Err(RuntimeError::AgentTerminated(card.name));
+        }
+
+        let run_id = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: to,
+            from: Participant::System,
+            to: Participant::Agent { id: to },
+            parts: vec![Part::text(text.trim())],
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            cause: None,
+            created_at: now_ms(),
+        };
+
+        self.track_inflight(run_id, 1);
+        self.deliver(envelope)?;
+        Ok(run_id)
+    }
+
+    /// Watches the clock so agents can keep their own appointments.
+    ///
+    /// Polls rather than holding a timer per routine: what is stored is when a
+    /// thing is next due, so a schedule made last week still fires after a
+    /// restart, and nothing has to be rebuilt in memory at startup.
+    pub fn start_scheduler(&self) {
+        let runtime = self.clone();
+        self.inner.handle.spawn(async move {
+            loop {
+                let now = now_ms();
+                let due = match runtime.inner.store.due_routines(now) {
+                    Ok(due) => due,
+                    Err(err) => {
+                        tracing::warn!(%err, "could not read the schedule");
+                        continue;
+                    }
+                };
+
+                for routine in due {
+                    // Recorded as run before it is run. A routine that fails on
+                    // delivery must not come due again on the next tick and
+                    // again on the one after that.
+                    if let Err(err) = runtime.inner.store.routine_ran(&routine, now) {
+                        tracing::error!(%err, "could not advance a routine; skipping it");
+                        continue;
+                    }
+
+                    tracing::info!(
+                        agent = %routine.agent_id.short(),
+                        repeats = routine.repeats(),
+                        "a routine came due"
+                    );
+                    if let Err(err) = runtime.send_from_routine(routine.agent_id, &routine.what) {
+                        tracing::warn!(%err, "a routine could not be delivered");
+                    }
+                }
+
+                // Swept at the end rather than the start, so anything already
+                // overdue at launch runs now instead of waiting out a tick.
+                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+            }
+        });
+    }
+
     pub fn send_from_human(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
         if card.lifecycle == Lifecycle::Terminated {
@@ -1007,6 +1083,16 @@ impl Runtime {
                 )
             }
 
+            ToolInvocation::Schedule { action } => {
+                let (rendered, outcome) = match self.keep_schedule(card, &action) {
+                    Ok(summary) => (summary.clone(), ToolOutcome::Ok { summary }),
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::ToolCall { name: tools::SCHEDULE.to_string(), arguments, outcome })
+            }
+
             ToolInvocation::Browse { action, args } => {
                 let outcome = match self.ensure_computer(card).await {
                     Ok((client, sandbox)) => {
@@ -1442,6 +1528,73 @@ impl Runtime {
             }
         }
         Ok(swept)
+    }
+
+    /// Reads or changes an agent's own schedule.
+    ///
+    /// Answers in the words the agent used rather than in seconds, because the
+    /// reply is the only record it keeps of what it set.
+    fn keep_schedule(
+        &self,
+        card: &AgentCard,
+        action: &tools::ScheduleAction,
+    ) -> Result<String, crate::db::StoreError> {
+        use crate::domain::routine::{human_gap, validate, MIN_EVERY_SECS};
+
+        match action {
+            tools::ScheduleAction::List => {
+                let routines = self.inner.store.agent_routines(card.id)?;
+                if routines.is_empty() {
+                    return Ok("You have nothing scheduled.".to_string());
+                }
+                let mut out = String::from("Your schedule:\n");
+                for routine in routines {
+                    out.push_str(&format!(
+                        "  {} — {} ({})\n",
+                        routine.id,
+                        routine.what,
+                        routine.describe()
+                    ));
+                }
+                out.push_str("Cancel one with its id.");
+                Ok(out)
+            }
+
+            tools::ScheduleAction::Add { what, every_secs, in_secs } => {
+                if let Err(err) = validate(what, *every_secs, *in_secs) {
+                    return Ok(format!(
+                        "Refused: {err}. The shortest repeat is {}.",
+                        human_gap(MIN_EVERY_SECS)
+                    ));
+                }
+
+                // A repeat with no stated start waits one full interval, which
+                // is what "every five hours" means to the person who said it.
+                let delay = in_secs.or(*every_secs).unwrap_or(0);
+                let first = now_ms() + i64::from(delay) * 1000;
+                let routine = self.inner.store.create_routine(card.id, what, *every_secs, first)?;
+
+                Ok(format!(
+                    "Scheduled: {} ({}). Its id is {}.",
+                    routine.what,
+                    routine.describe(),
+                    routine.id
+                ))
+            }
+
+            tools::ScheduleAction::Cancel { id } => {
+                let Ok(parsed) = id.trim().parse() else {
+                    return Ok(format!("There is no routine with the id {id}."));
+                };
+                // Only its own: an id is guessable and a schedule is not shared.
+                let mine = self.inner.store.agent_routines(card.id)?;
+                if !mine.iter().any(|r| r.id == parsed) {
+                    return Ok(format!("You have no routine with the id {id}."));
+                }
+                self.inner.store.delete_routine(parsed)?;
+                Ok(format!("Cancelled {id}."))
+            }
+        }
     }
 
     /// The inference settings one agent's turn should use.

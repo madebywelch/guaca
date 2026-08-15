@@ -65,6 +65,7 @@ macro_rules! declare_id {
 declare_id!(AgentId, "agent");
 declare_id!(GroupId, "group");
 declare_id!(MessageId, "msg");
+declare_id!(RoutineId, "routine");
 declare_id!(RunId, "run");
 
 #[cfg(test)]

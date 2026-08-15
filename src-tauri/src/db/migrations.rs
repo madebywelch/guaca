@@ -190,6 +190,30 @@ ALTER TABLE agents ADD COLUMN sandbox_traffic_token TEXT;
 UPDATE agents SET sandbox_id = NULL;
 "#,
     ),
+    (
+        9,
+        r#"
+-- An agent's own schedule. It sets these for itself, so the row belongs to the
+-- agent rather than to the operator.
+--
+-- `every_secs` NULL means it fires once and is done. A repeating routine keeps
+-- its row and moves `next_run_at` forward, so a schedule survives restarts:
+-- what is stored is when it is next due, not a timer someone has to hold.
+CREATE TABLE routines (
+    id          TEXT    PRIMARY KEY,
+    agent_id    TEXT    NOT NULL REFERENCES agents(id),
+    what        TEXT    NOT NULL,
+    every_secs  INTEGER,
+    next_run_at INTEGER NOT NULL,
+    last_run_at INTEGER,
+    created_at  INTEGER NOT NULL
+);
+
+-- The scheduler asks one question, repeatedly: what is due?
+CREATE INDEX routines_due ON routines (next_run_at);
+CREATE INDEX routines_agent ON routines (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

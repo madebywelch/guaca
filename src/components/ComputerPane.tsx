@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -26,10 +26,24 @@ export function ComputerPane({ agent }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
+  const paneRef = useRef<HTMLDivElement>(null);
 
   // Nothing at all until there is a key. Offering to give an agent a computer
   // that cannot be made is worse than not mentioning computers.
   const configured = settings?.e2bKeySet === true;
+
+  // The pane floats over the transcript, and a wheel over it was scrolling the
+  // conversation behind it: the desktop does not scroll, so the browser passes
+  // the gesture up to the nearest thing that does. Attached by hand rather than
+  // through onWheel because React's is passive, and a passive listener cannot
+  // refuse the scroll.
+  useEffect(() => {
+    const node = paneRef.current;
+    if (!node) return;
+    const swallow = (event: WheelEvent) => event.preventDefault();
+    node.addEventListener("wheel", swallow, { passive: false });
+    return () => node.removeEventListener("wheel", swallow);
+  }, [checked]);
 
   const look = useCallback(async () => {
     try {
@@ -82,7 +96,7 @@ export function ComputerPane({ agent }: Props) {
   const asleep = computer?.state === "asleep";
 
   return (
-    <div className="computer" data-open={open ? "true" : undefined}>
+    <div className="computer" data-open={open ? "true" : undefined} ref={paneRef}>
       <div className="computer__bar">
         <span className="computer__title">Computer</span>
         {computer && (
