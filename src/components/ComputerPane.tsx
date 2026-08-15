@@ -2,18 +2,50 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { type AgentCard, type Computer, errorMessage } from "../lib/types";
+import { type AgentCard, type AgentId, type Computer, errorMessage } from "../lib/types";
 
 interface Props {
   agent: AgentCard;
 }
 
 /**
+ * Whether the operator has stowed this agent's pane before.
+ *
+ * Kept per agent and across restarts, because it is a statement about that
+ * agent rather than about this session: an agent that is never going to want a
+ * computer is never going to want one tomorrow either.
+ */
+function remembered(id: AgentId): "stowed" | "shown" | null {
+  try {
+    const held = localStorage.getItem(`guac.computer.${id}`);
+    return held === "stowed" || held === "shown" ? held : null;
+  } catch {
+    // Private browsing modes and hardened webviews can refuse storage. A
+    // forgotten preference is a much smaller problem than a blank channel.
+    return null;
+  }
+}
+
+function remember(id: AgentId, choice: "stowed" | "shown") {
+  try {
+    localStorage.setItem(`guac.computer.${id}`, choice);
+  } catch {
+    // As above: not worth telling the operator about.
+  }
+}
+
+/**
  * An agent's computer, in the corner of its channel.
  *
- * One view, two sizes. Minimised it is a live but read-only picture behind a
- * transparent veil, so a stray click cannot land in the agent's desktop;
- * expanded it accepts input and the operator can take over.
+ * One view, three sizes. Stowed it is a chip and nothing else, which is what
+ * an agent that is never given a computer is worth; as a preview it is a live
+ * but read-only picture behind a transparent veil, so a stray click cannot
+ * land in the agent's desktop; expanded it accepts input and the operator can
+ * take over.
+ *
+ * It starts stowed unless the agent has a machine, and remembers being stowed,
+ * because an agent that will never want a computer will not want one tomorrow
+ * either and should not hold the corner of its transcript in the meantime.
  *
  * There is deliberately no terminal here. A shell is how the agent works, not
  * how an operator watches it, and a second way in only invited the two to
@@ -23,6 +55,10 @@ export function ComputerPane({ agent }: Props) {
   const settings = useStore((s) => s.settings);
   const [computer, setComputer] = useState<Computer | null>(null);
   const [open, setOpen] = useState(false);
+  // The operator's explicit choice, if they have made one. Null follows the
+  // agent: a machine is worth a preview, and an agent that will never have one
+  // should not spend the corner of the transcript saying so.
+  const [chosen, setChosen] = useState<"stowed" | "shown" | null>(() => remembered(agent.id));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
@@ -82,6 +118,7 @@ export function ComputerPane({ agent }: Props) {
     setBusy(false);
     setError(null);
     setConfirming(null);
+    setChosen(remembered(agent.id));
     if (configured) void look();
   }, [agent.id, look, configured]);
 
@@ -113,6 +150,33 @@ export function ComputerPane({ agent }: Props) {
 
   const running = computer?.state === "running";
   const asleep = computer?.state === "asleep";
+  const stowed = chosen === null ? computer === null : chosen === "stowed";
+
+  const stow = (next: "stowed" | "shown") => {
+    setChosen(next);
+    remember(agent.id, next);
+    if (next === "stowed") setOpen(false);
+  };
+
+  if (stowed) {
+    return (
+      <div className="computer computer--stowed">
+        <button
+          type="button"
+          className="computer__chip"
+          onClick={() => stow("shown")}
+          title={
+            computer
+              ? `${agent.name}'s computer is ${computer.state}. Click to watch it.`
+              : `${agent.name} has no computer. Click to give it one.`
+          }
+        >
+          <span className="computer__chip-dot" data-state={computer?.state ?? "none"} />
+          Computer
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="computer" data-open={open ? "true" : undefined} ref={paneRef}>
@@ -166,6 +230,14 @@ export function ComputerPane({ agent }: Props) {
               </button>
             </>
           )}
+          <button
+            type="button"
+            className="computer__tab"
+            onClick={() => stow("stowed")}
+            title="Out of the way. The machine is not touched."
+          >
+            Hide
+          </button>
         </div>
 
         {running && computer?.vncUrl ? (

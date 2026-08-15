@@ -293,10 +293,9 @@ export const useStore = create<State>((set, get) => ({
               [event.groupId]: {
                 prompt: held.prompt + event.prompt,
                 completion: held.completion + event.completion,
-                // Not carried on the event: a price arrives per call and the
-                // running total is corrected when the run settles, rather than
-                // guessed at here from a rate this side does not know.
-                cost: held.cost,
+                // Null stays null: a provider that prices nothing has not
+                // made this run free, and adding it up as zero would say so.
+                cost: event.cost === null ? held.cost : (held.cost ?? 0) + event.cost,
                 calls: held.calls + 1,
               },
             },

@@ -82,6 +82,9 @@ pub enum UiEvent {
         run_id: RunId,
         prompt: u32,
         completion: u32,
+        /// Absent when the provider does not price calls, which is not the
+        /// same as free and must not be added up as zero.
+        cost: Option<f64>,
     },
 
     /// Every agent in a run has gone quiet.

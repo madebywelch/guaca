@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -42,6 +42,7 @@ const HAS_ONE: Computer = {
 
 describe("ComputerPane", () => {
   beforeEach(() => {
+    localStorage.clear();
     agentComputer.mockReset();
     useStore.setState({
       settings: {
@@ -82,13 +83,44 @@ describe("ComputerPane", () => {
     view.rerender(<ComputerPane agent={card("has-none", "Scribe")} />);
     settleWithMachine(HAS_ONE);
 
-    await waitFor(() => expect(screen.getByText(/No computer yet/)).toBeTruthy());
-    expect(screen.queryByTitle(/computer$/)).toBeNull();
+    // An agent with no machine stows itself to a chip, so what is asserted is
+    // that the machine that arrived late is nowhere on screen.
+    await waitFor(() => expect(screen.getByText("Computer")).toBeTruthy());
+    expect(screen.queryByTitle(/'s computer$/)).toBeNull();
+    expect(screen.getByRole("button").getAttribute("title")).toContain("has no computer");
   });
 
   it("shows the machine of the agent actually being looked at", async () => {
     agentComputer.mockResolvedValue(HAS_ONE);
     render(<ComputerPane agent={card("has-one", "Cook")} />);
     await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
+  });
+
+  it("stays out of the way for an agent with no machine, until asked", async () => {
+    // The complaint this answers: the widget held the corner of every
+    // transcript, including for agents that are never given a computer.
+    agentComputer.mockResolvedValue(null);
+    render(<ComputerPane agent={card("has-none", "Scribe")} />);
+
+    await waitFor(() => expect(screen.getByText("Computer")).toBeTruthy());
+    expect(screen.queryByText(/Give one/)).toBeNull();
+
+    fireEvent.click(screen.getByRole("button"));
+    expect(screen.getByText(/Give one/)).toBeTruthy();
+  });
+
+  it("keeps a stowed pane stowed when the operator comes back", async () => {
+    agentComputer.mockResolvedValue(HAS_ONE);
+    const view = render(<ComputerPane agent={card("has-one", "Cook")} />);
+    await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
+
+    fireEvent.click(screen.getByText("Hide"));
+    expect(screen.queryByTitle("Cook's computer")).toBeNull();
+
+    // Away and back: the choice was about the agent, not about the visit.
+    view.rerender(<ComputerPane agent={card("other", "Sous")} />);
+    view.rerender(<ComputerPane agent={card("has-one", "Cook")} />);
+    await waitFor(() => expect(screen.getByText("Computer")).toBeTruthy());
+    expect(screen.queryByTitle("Cook's computer")).toBeNull();
   });
 });

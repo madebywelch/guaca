@@ -180,6 +180,8 @@ export type UiEvent =
       runId: RunId;
       prompt: number;
       completion: number;
+      /** Null when the provider does not price calls. Not the same as free. */
+      cost: number | null;
     }
   | { type: "runSettled"; runId: RunId; stepsUsed: number };
 

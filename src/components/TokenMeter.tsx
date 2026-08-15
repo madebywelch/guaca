@@ -10,6 +10,19 @@ interface Props {
   groupId: GroupId;
 }
 
+/**
+ * A price, at the precision the number deserves.
+ *
+ * Calls cost fractions of a cent, so two decimal places would show a working
+ * crew as $0.00 for its first hour. The places drop away as the total grows.
+ */
+export function money(dollars: number): string {
+  if (dollars >= 100) return `$${Math.round(dollars)}`;
+  if (dollars >= 1) return `$${dollars.toFixed(2)}`;
+  if (dollars >= 0.01) return `$${dollars.toFixed(3)}`;
+  return `$${dollars.toFixed(4)}`;
+}
+
 /** 1.2k, 3.4M. Exact below a thousand, because early numbers are small. */
 export function compact(tokens: number): string {
   if (tokens < 1000) return String(tokens);
@@ -98,6 +111,7 @@ export function TokenMeter({ groupId }: Props) {
         ))}
       </span>
       <span className="meter__count">{compact(spent)}</span>
+      {total?.cost != null && <span className="meter__cost">{money(total.cost)}</span>}
     </span>
   );
 }

@@ -3,7 +3,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
-import { compact } from "./TokenMeter";
+import { compact, money } from "./TokenMeter";
 import { MessageModal, type WirePeer } from "./WireRow";
 
 /**
@@ -182,6 +182,9 @@ export function ActivityFlow({ messages, byId }: Props) {
                     ]!.calls.toLocaleString()} model call(s)`}
                   >
                     {compact(spent[block.runId]!.prompt + spent[block.runId]!.completion)}
+                    {spent[block.runId]!.cost != null && (
+                      <span className="run__cost">{money(spent[block.runId]!.cost!)}</span>
+                    )}
                   </span>
                 )}
               </button>

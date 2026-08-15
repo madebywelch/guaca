@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PULSE_WINDOW_MS } from "../lib/store";
-import { bars, compact } from "./TokenMeter";
+import { bars, compact, money } from "./TokenMeter";
 
 describe("compact", () => {
   it("is exact while the numbers are small", () => {
@@ -16,6 +16,20 @@ describe("compact", () => {
     expect(compact(1000)).toBe("1.0k");
     expect(compact(12_400)).toBe("12k");
     expect(compact(1_240_000)).toBe("1.2M");
+  });
+});
+
+describe("money", () => {
+  it("keeps enough places to show a crew that has only just started", () => {
+    // Calls cost fractions of a cent. Two decimal places would report an hour
+    // of work as $0.00.
+    expect(money(0.001121)).toBe("$0.0011");
+    expect(money(0.0234)).toBe("$0.023");
+  });
+
+  it("drops the places once they stop meaning anything", () => {
+    expect(money(4.2)).toBe("$4.20");
+    expect(money(128.4)).toBe("$128");
   });
 });
 

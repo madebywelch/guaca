@@ -262,6 +262,21 @@ button {
   background: var(--flesh-soft);
 }
 
+.meter__cost {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter[data-busy] .meter__cost {
+  color: var(--flesh-soft);
+}
+
+.run__cost {
+  margin-left: 0.35rem;
+}
+
 .meter__count {
   font-family: var(--font-mono);
   font-size: 0.55rem;
@@ -270,7 +285,22 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.meter[data-busy] .meter__count {
+.meter[data-busy] .meter__cost {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter[data-busy] .meter__cost {
+  color: var(--flesh-soft);
+}
+
+.run__cost {
+  margin-left: 0.35rem;
+}
+
+.meter__count {
   color: var(--flesh-soft);
 }
 
@@ -1778,6 +1808,49 @@ button {
   /* Belt to the listener's braces: stops a gesture that starts here from
      continuing into the transcript underneath. */
   overscroll-behavior: contain;
+}
+
+/* Stowed: a chip, and nothing else. An agent that will never have a computer
+   should not spend a third of the reading column saying so. */
+.computer--stowed {
+  height: auto;
+  width: auto;
+  margin: 0 0 0.2rem 0.6rem;
+}
+
+.computer__chip {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.4rem;
+  background: var(--rail-ground);
+  border: 1px solid var(--rail-edge);
+  border-radius: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
+  opacity: 0.62;
+}
+
+.computer__chip:hover {
+  opacity: 1;
+}
+
+.computer__chip-dot {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 50%;
+  background: var(--rail-edge);
+}
+
+.computer__chip-dot[data-state="running"] {
+  background: var(--flesh-soft);
+}
+
+.computer__chip-dot[data-state="asleep"] {
+  background: var(--rail-muted);
 }
 
 /* The panel itself, anchored to the gutter's right edge. Growing it leftwards
