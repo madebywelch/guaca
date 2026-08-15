@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod domain;
 pub mod e2b;
+pub mod eval;
 pub mod llm;
 pub mod proxy;
 pub mod runtime;

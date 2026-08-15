@@ -16,6 +16,7 @@ pub mod prompt;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, Notify};
@@ -98,6 +99,14 @@ const MAX_BATCH: usize = 12;
 
 /// How much transcript is replayed into a prompt.
 const HISTORY_WINDOW: u32 = 40;
+
+/// How long an agent will wait for peers that are still answering the same
+/// thing, before reading what it already has.
+///
+/// Long enough to cover the spread between several model calls that started
+/// together, short enough that nobody watching notices.
+const BURST_WINDOW: Duration = Duration::from_millis(2500);
+const BURST_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -493,6 +502,11 @@ impl Runtime {
         self.track_inflight(run_id, 1);
         self.deliver(envelope)?;
         Ok(run_id)
+    }
+
+    /// Replies this agent is still owed in this run.
+    fn awaiting_replies(&self, run: RunId, me: AgentId) -> usize {
+        self.inner.guard.lock().run(run).awaiting(me)
     }
 
     fn track_inflight(&self, run: RunId, delta: i64) {
@@ -1760,19 +1774,40 @@ async fn actor_loop(
         // burst of them in one turn is both cheaper and less noisy. Messages
         // that do want an answer are handled one at a time, because each
         // produces its own addressed reply.
+        //
+        // Three peers answering one broadcast do not answer together: each
+        // takes as long as its own model call, so they land seconds apart.
+        // Draining only what had already queued meant three separate turns,
+        // three prompts, and three notes in the operator's channel for one
+        // instruction. So while the run still has someone else working, this
+        // waits a moment for them rather than reading the first arrival alone.
         if !batch[0].expects_reply {
+            let run = batch[0].run_id;
+            let patience = Instant::now() + BURST_WINDOW;
             while batch.len() < MAX_BATCH {
                 match rx.try_recv() {
-                    Ok(next) if !next.expects_reply && next.run_id == batch[0].run_id => {
+                    Ok(next) if !next.expects_reply && next.run_id == run => {
                         depth.fetch_sub(1, Ordering::SeqCst);
                         batch.push(next);
+                        continue;
                     }
                     Ok(next) => {
                         carry = Some(next);
                         break;
                     }
-                    Err(_) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => break,
+                    Err(mpsc::error::TryRecvError::Empty) => {}
                 }
+
+                // Nothing queued. Worth waiting only for replies this agent is
+                // actually still owed, and never for long: an agent that has
+                // been told something is expected to act on it. Waiting on "is
+                // anyone still busy" made it sit through peers that had already
+                // answered and were finishing their own notes.
+                if Instant::now() >= patience || runtime.awaiting_replies(run, id) == 0 {
+                    break;
+                }
+                tokio::time::sleep(BURST_POLL).await;
             }
         }
 

@@ -187,6 +187,9 @@ pub fn system_prompt(
              unless something has changed that the operator does not already know. An \
              acknowledgement does not need acknowledging, and thanking someone for thanking you \
              is how a crew spends an afternoon talking to itself.\n\n\
+             Nothing means nothing. Do not write a line to report that no reply was needed, or \
+             that an acknowledgement was received and required nothing further. That is a note \
+             about nothing, and it costs the operator a line in the only channel they read.\n\n\
              Everything you have already done this run is in the history above, including every \
              message you have already sent. Do not do it again because you have been reminded of \
              it.\n\n\
@@ -511,6 +514,12 @@ mod tests {
         assert!(
             note.contains("Do not write to a peer"),
             "the mode that means nobody is waiting has to say so"
+        );
+        // Live evals caught this: told it could stay quiet, a real model wrote
+        // "No reply needed here" to the operator instead of writing nothing.
+        assert!(
+            note.contains("Nothing means nothing"),
+            "an agent will narrate its own silence unless told not to"
         );
     }
 

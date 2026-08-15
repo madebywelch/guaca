@@ -329,6 +329,20 @@ impl RunState {
     }
 
     /// Checks fan-out width before any individual recipient is evaluated.
+    /// How many peers this agent has written to that have not written back.
+    ///
+    /// The number of replies it is still owed, which is the only thing worth
+    /// waiting for. Waiting on "is anyone in this run busy" instead made an
+    /// agent sit through peers that were merely finishing their own notes.
+    pub fn awaiting(&self, me: AgentId) -> usize {
+        self.pair_counts
+            .keys()
+            .filter(|(from, to)| *from == me && !self.has_written(*to, me))
+            .map(|(_, to)| *to)
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
     /// Whether `from` has written to `to` at any point in this run.
     ///
     /// Batch membership cannot answer this. Replies arrive milliseconds apart
