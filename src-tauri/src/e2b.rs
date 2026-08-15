@@ -46,6 +46,10 @@ const CDP_PORT: u16 = 9222;
 /// and tested as Python rather than as a Rust string.
 const BROWSER_DRIVER: &str = include_str!("browser.py");
 
+/// Reads what the browser is signed in to, from its own files on disk.
+/// Separate from the driver because it deliberately does not need a browser.
+const SESSION_READER: &str = include_str!("sessions.py");
+
 /// envd, the agent daemon inside every sandbox.
 const ENVD_PORT: u16 = 49983;
 
@@ -175,6 +179,15 @@ struct SandboxRow {
 pub struct E2bClient {
     http: reqwest::Client,
     api_key: String,
+    /// Credentials put into the environment of every command this client runs.
+    ///
+    /// Carried on the client rather than threaded through each call because
+    /// "which agent is this acting for" is a property of the whole session, and
+    /// a parameter on `run` would be one that eight call sites could each
+    /// forget. Nothing here is written to the sandbox's disk: it lives in the
+    /// process environment of the command that needs it and goes when the
+    /// command does.
+    env: std::collections::BTreeMap<String, String>,
 }
 
 impl E2bClient {
@@ -186,7 +199,17 @@ impl E2bClient {
             return None;
         }
         let http = reqwest::Client::builder().timeout(RUN_TIMEOUT).build().ok()?;
-        Some(Self { http, api_key: api_key.to_string() })
+        Some(Self { http, api_key: api_key.to_string(), env: Default::default() })
+    }
+
+    /// Hands this client the credentials its agent's group holds.
+    ///
+    /// The only route a stored secret takes out of the database, and it ends in
+    /// a process environment inside a sandbox. It never passes through a
+    /// prompt, a transcript, or the webview.
+    pub fn with_env(mut self, env: std::collections::BTreeMap<String, String>) -> Self {
+        self.env = env;
+        self
     }
 
     async fn control<T: for<'de> Deserialize<'de>>(
@@ -381,16 +404,7 @@ impl E2bClient {
         envd_token: &str,
         command: &str,
     ) -> Result<Output, E2bError> {
-        let request = serde_json::json!({
-            "process": {
-                // Through a login shell so PATH and the usual environment are
-                // what a person would get, not a bare exec.
-                "cmd": "/bin/bash",
-                "args": ["-l", "-c", command],
-                "cwd": "/home/user",
-                "envs": {},
-            }
-        });
+        let request = process_body(command, &self.env);
 
         let response = self
             .http
@@ -688,6 +702,67 @@ fn create_body(agent: &str, idle_seconds: u32) -> serde_json::Value {
         // The public ports refuse traffic without the other token it returns.
         "network": { "allowPublicTraffic": false },
         "metadata": { "guac": "true", "guac-agent": agent },
+    })
+}
+
+/// The body that starts one command, with whatever credentials it should see.
+///
+/// Built here rather than inline so the environment can be asserted on. A
+/// silently empty `envs` is a connector that appears configured everywhere in
+/// the app and does nothing on the machine.
+fn process_body(
+    command: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "process": {
+            // Through a login shell so PATH and the usual environment are what
+            // a person would get, not a bare exec.
+            "cmd": "/bin/bash",
+            "args": ["-l", "-c", command],
+            "cwd": "/home/user",
+            // Passed per command rather than written into a dotfile: a file on
+            // the sandbox's disk survives the sleep this app relies on, and
+            // would leave tokens on a machine long after the connector holding
+            // them was deleted.
+            "envs": env,
+        }
+    })
+}
+
+/// Asks a machine what its browser is signed in to.
+///
+/// Reads the profile `browse` drives, which is the one that matters: Chrome
+/// ignores `--remote-debugging-port` when it re-attaches to an existing
+/// profile, so Guaca's browser keeps a profile of its own and a session in any
+/// other window is one no agent can use.
+///
+/// Deliberately not routed through `browse`. Connecting to the browser would
+/// start it if it were closed, so merely asking the question would boot Chrome
+/// on every machine; and `ensure_browser` costs several seconds it does not
+/// need to spend here. Cookies are on disk, so this is one command.
+pub async fn signed_in_state(
+    client: &E2bClient,
+    sandbox: &str,
+    envd_token: &str,
+) -> Result<crate::domain::signin::BrowserState, E2bError> {
+    let script = base64_encode(SESSION_READER.as_bytes());
+    let out = client
+        .run(
+            sandbox,
+            envd_token,
+            &format!(
+                "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/sessions.py && \
+                 python3 ~/.guac/sessions.py"
+            ),
+        )
+        .await?;
+
+    serde_json::from_str(out.stdout.trim()).map_err(|e| {
+        E2bError::Protocol(format!(
+            "could not read what the browser is signed in to ({e}): {}",
+            out.stderr.trim().chars().take(200).collect::<String>()
+        ))
     })
 }
 
@@ -996,6 +1071,35 @@ mod tests {
         );
         assert_eq!(body["metadata"]["guac"], "true", "the sweeper finds orphans by this label");
         assert_eq!(body["metadata"]["guac-agent"], "Manager");
+    }
+
+    #[test]
+    fn a_command_carries_the_credentials_its_agent_was_given() {
+        // Silently empty, every connector in the app looks configured and does
+        // nothing on the machine, which reads as the API rejecting the token.
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("GITHUB_TOKEN".to_string(), "ghp_hunter2".to_string());
+
+        let body = process_body("curl -s api.github.com", &env);
+        assert_eq!(body["process"]["envs"]["GITHUB_TOKEN"], "ghp_hunter2");
+        assert_eq!(body["process"]["args"][2], "curl -s api.github.com");
+
+        // And an agent whose group has none gets exactly what it got before.
+        let bare = process_body("echo hi", &Default::default());
+        assert_eq!(bare["process"]["envs"], serde_json::json!({}));
+    }
+
+    #[test]
+    fn a_credential_is_never_written_to_the_machines_disk() {
+        // A dotfile would survive the sleep this app relies on, so a token
+        // would sit on a sandbox long after the connector holding it was
+        // deleted. It goes in the process environment and nowhere else.
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("TOKEN".to_string(), "secret".to_string());
+        let body = process_body("echo hi", &env);
+        let command = body["process"]["args"][2].as_str().unwrap_or_default();
+        assert!(!command.contains("secret"), "the value reached the command line: {command}");
+        assert!(!command.contains("TOKEN="), "nothing writes it into a file: {command}");
     }
 
     #[test]

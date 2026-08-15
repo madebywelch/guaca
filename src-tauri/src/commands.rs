@@ -13,11 +13,13 @@ use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
+use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
-use crate::domain::ids::{AgentId, GroupId, RoutineId, RunId};
+use crate::domain::ids::{AgentId, ConnectorId, GroupId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{self, Routine};
+use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
@@ -50,9 +52,12 @@ impl From<crate::db::StoreError> for CommandError {
         use crate::db::StoreError;
         match err {
             StoreError::DuplicateName(_) => CommandError::new("duplicateName", err.to_string()),
-            StoreError::AgentNotFound(_) | StoreError::GroupNotFound(_) => {
-                CommandError::new("notFound", err.to_string())
-            }
+            StoreError::AgentNotFound(_)
+            | StoreError::GroupNotFound(_)
+            | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
+            // An operator naming a variable twice is a mistake they can fix,
+            // not a disk failure, and the message already says which name.
+            StoreError::DuplicateEnvVar(_) => CommandError::new("validation", err.to_string()),
             // Its own kind: the UI can offer to move the agents, which it
             // cannot do for a generic storage failure.
             StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteDefaultGroup => {
@@ -82,6 +87,12 @@ impl From<crate::domain::agent::DraftError> for CommandError {
 
 impl From<crate::domain::group::GroupError> for CommandError {
     fn from(err: crate::domain::group::GroupError) -> Self {
+        CommandError::new("validation", err.to_string())
+    }
+}
+
+impl From<crate::domain::connector::ConnectorError> for CommandError {
+    fn from(err: crate::domain::connector::ConnectorError) -> Self {
         CommandError::new("validation", err.to_string())
     }
 }
@@ -187,6 +198,53 @@ pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> R
     Ok(())
 }
 
+// ---- connectors ----------------------------------------------------------
+
+/// Every account one crew can reach. Secrets are reported as set or not; the
+/// values are not in this type and there is no command that returns them.
+#[tauri::command]
+pub fn group_connectors(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Connector>> {
+    Ok(state.runtime.store().group_connectors(group_id)?)
+}
+
+#[tauri::command]
+pub fn create_connector(state: State<'_, AppState>, draft: ConnectorDraft) -> Reply<Connector> {
+    let clean = draft.validate()?;
+    let connector = state.runtime.store().create_connector(&clean)?;
+    // The roster every agent is shown includes what its peers can reach, so a
+    // new account changes what the whole crew knows.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(connector)
+}
+
+#[tauri::command]
+pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()> {
+    state.runtime.store().delete_connector(id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// What one agent's browser turns out to be signed in to, right now.
+///
+/// Detected rather than declared: the browser is holding the cookies, so Guaca
+/// asks the machine instead of asking the operator to keep a list up to date.
+/// Called when the operator opens an agent, and by the runtime after an agent
+/// has been browsing, which between them covers both ways a session appears.
+#[tauri::command]
+pub async fn scan_agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signin>> {
+    Ok(state.runtime.scan_signins(id).await?)
+}
+
+/// The last scan's result, without touching the machine.
+///
+/// Separate from the scan because the machine may be asleep, and what it was
+/// signed in to yesterday is still the best answer available. Waking a sandbox
+/// to redraw a list would also cost money on every render.
+#[tauri::command]
+pub fn agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signin>> {
+    Ok(state.runtime.store().agent_signins(id)?)
+}
+
 // ---- groups --------------------------------------------------------------
 
 #[tauri::command]
@@ -274,6 +332,10 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
     // Its schedule goes too, or it would keep coming due for an agent that can
     // no longer act on it.
     let _ = state.runtime.store().delete_agent_routines(id);
+    // And what its browser was signed in to, which was cookies on the disk
+    // destroyed above. Left behind, the roster would keep telling the crew to
+    // ask this agent for an account nothing can reach any more.
+    let _ = state.runtime.store().delete_agent_signins(id);
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

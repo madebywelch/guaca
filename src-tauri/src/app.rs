@@ -77,6 +77,9 @@ pub fn run() {
             let started = runtime.start_all()?;
             // Agents keep their own appointments.
             runtime.start_scheduler();
+            // And find out what their browsers are already signed in to, so the
+            // roster is right before anybody asks rather than after.
+            runtime.start_signin_sweep();
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.
@@ -116,6 +119,11 @@ pub fn run() {
             commands::start_agent_computer,
             commands::stop_agent_computer,
             commands::delete_agent_computer,
+            commands::group_connectors,
+            commands::create_connector,
+            commands::delete_connector,
+            commands::scan_agent_signins,
+            commands::agent_signins,
             commands::list_groups,
             commands::create_group,
             commands::update_group,

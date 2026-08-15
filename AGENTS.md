@@ -39,12 +39,46 @@ lands on one side fails the build rather than at runtime.
 **`Store::open` has two SQLite lessons encoded in comments.** Do not reorder the
 pragmas or simplify the migration transaction without reading them.
 
+**There are two Chrome profiles on every machine, and only one of them counts.**
+Chrome ignores `--remote-debugging-port` when it re-attaches to an existing
+profile, so `browse` drives a profile of its own under `~/.guac/chrome`, while
+`open_on_desktop google-chrome` opens the default one. Sign-in detection reads
+the profile `browse` drives, so a session established in the other window is
+invisible to every agent and nothing reports an error.
+
+**Sign-ins are detected, never declared.** The browser is holding the cookies,
+so `domain/signin.rs` asks it rather than asking the operator to keep a list.
+The whole set for an agent is replaced on every scan: a row that outlives the
+logout it should have noticed keeps the crew routing work to a machine that will
+hit a login wall.
+
+**A cookie's presence is not a login, and this is the trap.** A profile that has
+browsed for an hour holds a thousand cookies across three hundred domains, most
+of them durable and `httpOnly`. `google.com` sets `NID` on a browser that has
+never seen an account, and `PHPSESSID` is handed to every anonymous visitor.
+Both were real false positives from a live machine. Detection is therefore a
+signature table plus a rule that needs the browser to have *visited* the site
+and to hold a cookie implying an identity rather than a session. The tests carry
+the real cookie names; do not loosen them without a fresh capture.
+
+**A cookie value must never leave the sandbox.** `browser.py` drops it at the
+only point in the system that sees one, and `CookieMark` has no field it could
+arrive in.
+
+**A credential's secret must never reach the model.** It goes from SQLite into
+the `envs` of one sandbox command and stops there. Not into a prompt, not into
+the transcript, not over IPC, and deliberately not into a dotfile on the sandbox
+either, because that disk survives the sleep this app relies on.
+
+**A session belongs to one agent; a credential belongs to the group.** That is
+physical, not a policy: cookies are on one disk and a token is a string.
+
 ## Where things are
 
 ```
 src/                 React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
-  domain/            AgentCard, Envelope, Routine, ids. No I/O.
+  domain/            AgentCard, Envelope, Routine, Connector, Signin, ids. No I/O.
   runtime/
     guard.rs         The loop guard. Read this one first.
     mod.rs           Agent actors and the message bus.

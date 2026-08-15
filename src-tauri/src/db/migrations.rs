@@ -254,6 +254,107 @@ CREATE INDEX usage_run ON usage (run_id);
 ALTER TABLE usage ADD COLUMN cost REAL;
 "#,
     ),
+    (
+        12,
+        r#"
+-- Accounts a crew can reach. Two kinds in one table, because they are one
+-- concept to an operator and differ only in where the access physically lives.
+--
+-- `agent_id` is set for a sign-in and NULL for a key, and that is not a
+-- convenience: a sign-in is cookies on one machine's disk, so it belongs to
+-- that agent, while a key is a string any machine in the group can be handed.
+-- Modelling both as group-wide would tell three agents they are signed in to
+-- Gmail when one of them is.
+--
+-- `secret` holds a key's value. It never leaves this table except into the
+-- environment of a command running inside a sandbox: not into a prompt, not
+-- over IPC, not onto the sandbox's disk.
+CREATE TABLE connectors (
+    id           TEXT    PRIMARY KEY,
+    group_id     TEXT    NOT NULL REFERENCES groups(id),
+    agent_id     TEXT    REFERENCES agents(id),
+    kind         TEXT    NOT NULL,
+    service      TEXT    NOT NULL,
+    account      TEXT    NOT NULL,
+    url          TEXT    NOT NULL DEFAULT '',
+    env_var      TEXT    NOT NULL DEFAULT '',
+    secret       TEXT    NOT NULL DEFAULT '',
+    note         TEXT    NOT NULL DEFAULT '',
+    confirmed_at INTEGER,
+    created_at   INTEGER NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+
+-- The two questions asked of this table: what can this crew reach, and what
+-- does this agent's machine hold.
+CREATE INDEX connectors_group ON connectors (group_id);
+CREATE INDEX connectors_agent ON connectors (agent_id);
+
+-- One variable name per group. Two keys sharing a name is a machine where one
+-- of them silently wins, and which one depends on row order.
+CREATE UNIQUE INDEX connectors_env_unique
+    ON connectors (group_id, env_var)
+    WHERE kind = 'key';
+"#,
+    ),
+    (
+        13,
+        r#"
+-- Sign-ins stopped being something an operator declares. The browser already
+-- knows what it is logged in to, and Chrome's remote interface will say, so
+-- asking the machine beats asking the person: an agent signed in a moment ago
+-- advertises it without anybody recording anything.
+--
+-- That leaves `connectors` holding one kind, so the columns that only a
+-- declared sign-in used are gone. Rebuilt rather than ALTERed because dropping
+-- a column referenced by a partial index is not something SQLite will do in
+-- place, and because the rows that were sign-ins have to go: they are replaced
+-- by detection, not migrated into it.
+CREATE TABLE connectors_new (
+    id         TEXT    PRIMARY KEY,
+    group_id   TEXT    NOT NULL REFERENCES groups(id),
+    service    TEXT    NOT NULL,
+    account    TEXT    NOT NULL,
+    env_var    TEXT    NOT NULL,
+    secret     TEXT    NOT NULL DEFAULT '',
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+INSERT INTO connectors_new (id,group_id,service,account,env_var,secret,note,created_at,updated_at)
+SELECT id,group_id,service,account,env_var,secret,note,created_at,updated_at
+  FROM connectors WHERE kind = 'key';
+
+DROP TABLE connectors;
+ALTER TABLE connectors_new RENAME TO connectors;
+
+CREATE INDEX connectors_group ON connectors (group_id);
+CREATE UNIQUE INDEX connectors_env_unique ON connectors (group_id, env_var);
+
+-- What each machine's browser is signed in to, as last observed.
+--
+-- A cache of a fact that lives somewhere else, which is why the whole set for
+-- an agent is replaced on every scan rather than merged: a row that lingers
+-- after the operator logged out is worse than no row, because the crew keeps
+-- routing work to an agent that will hit a login wall.
+--
+-- `first_seen_at` survives a replace so "signed in since Tuesday" stays true
+-- across scans, and no cookie value is stored, ever: the name and the flags are
+-- the whole signal and a session token is exactly what must not be kept.
+CREATE TABLE signins (
+    agent_id      TEXT    NOT NULL REFERENCES agents(id),
+    domain        TEXT    NOT NULL,
+    service       TEXT    NOT NULL,
+    recognised    INTEGER NOT NULL DEFAULT 0,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, domain)
+);
+
+CREATE INDEX signins_agent ON signins (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -454,6 +555,90 @@ mod tests {
             .expect("the same name in another group must be allowed");
         let clash = conn.execute(insert, rusqlite::params!["c", "manager", "g2"]);
         assert!(clash.is_err(), "a duplicate inside one group must still be rejected");
+    }
+
+    #[test]
+    fn two_connectors_in_one_group_cannot_claim_the_same_variable() {
+        // Both would be written into the same machine's environment and one
+        // would win by row order, so the agent would be handed a token for an
+        // account nobody chose.
+        let mut conn = memory();
+        run(&mut conn).unwrap();
+        let insert = "INSERT INTO connectors (id,group_id,service,account,env_var,secret,note,created_at,updated_at)
+                      VALUES (?1,?2,?3,'me',?4,'s','',0,0)";
+
+        conn.execute(insert, rusqlite::params!["a", DEFAULT_GROUP_ID, "GitHub", "TOKEN"]).unwrap();
+        let clash =
+            conn.execute(insert, rusqlite::params!["b", DEFAULT_GROUP_ID, "Linear", "TOKEN"]);
+        assert!(clash.is_err(), "a duplicate variable name in one group must be rejected");
+
+        // Another group is another set of machines, so the same name is fine.
+        conn.execute("INSERT INTO groups (id,name,created_at) VALUES ('g2','Research',0)", [])
+            .unwrap();
+        conn.execute(insert, rusqlite::params!["c", "g2", "Linear", "TOKEN"])
+            .expect("groups do not share an environment");
+    }
+
+    #[test]
+    fn declared_sign_ins_are_dropped_rather_than_carried_into_detection() {
+        // A database written before sign-ins were detected holds rows an
+        // operator typed. Keeping them would mean the roster advertised an
+        // account nobody had checked against the machine, which is the claim
+        // detection exists to stop making. The credentials beside them stay.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take(12) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let row = "INSERT INTO connectors (id,group_id,agent_id,kind,service,account,url,env_var,secret,note,created_at,updated_at)
+                   VALUES (?1,?2,?3,?4,?5,'me',?6,?7,?8,'',0,0)";
+        conn.execute(
+            row,
+            rusqlite::params![
+                "keep",
+                DEFAULT_GROUP_ID,
+                None::<String>,
+                "key",
+                "GitHub",
+                "",
+                "TOKEN",
+                "s"
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            row,
+            rusqlite::params![
+                "drop",
+                DEFAULT_GROUP_ID,
+                None::<String>,
+                "signin",
+                "Gmail",
+                "https://x",
+                "",
+                ""
+            ],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let kept: Vec<String> = conn
+            .prepare("SELECT id FROM connectors")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(kept, vec!["keep".to_string()], "only the credential survives");
+
+        // And the detected table is there and empty, waiting for a scan.
+        let signins: i64 =
+            conn.query_row("SELECT count(*) FROM signins", [], |r| r.get(0)).unwrap();
+        assert_eq!(signins, 0);
     }
 
     #[test]

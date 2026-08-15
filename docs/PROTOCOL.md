@@ -26,6 +26,7 @@ boundary, so importing that machinery would be cargo cult.
 | **Card versioning** | A2A Update phase | `AgentCard::version` | The only mechanism that lets a peer notice a card changed underneath it. Bumped on every edit. |
 | **Lifecycle-phase threat model** | the survey's Tables 3-6 | `guard.rs`, `prompt.rs`, `config.rs` | The survey's most reusable contribution. Its Creation/Operation/Update/Termination framing is a genuinely good checklist. |
 | **Prompt injection between agents treated as the primary threat** | MCP "tool poisoning", A2A "task injection" | `domain::envelope::Trust`, `runtime::prompt` | Both names describe one failure: wire content read as principal instruction. Guaca tags provenance on the envelope and restates it in the system prompt. |
+| **The card describes capability, so peers can route to it** | A2A | `domain::agent::DirectoryEntry::reaches` | Extended rather than adopted: see "Connectors" below. |
 
 ## Reduced
 
@@ -74,6 +75,72 @@ Two further mechanisms have no analogue in the literature:
   sent Chef 3 messages this run" stops. An agent whose message silently vanishes
   retries.
 
+## Connectors, and the second thing the survey does not cover
+
+The protocols describe how an agent declares what it *can do*. They say nothing
+about what it *has access to*, which in practice is the question that decides
+whether a task is possible. A2A's Agent Card comes closest, declaring
+OpenAPI-style security schemes, but those describe how a caller authenticates to
+the agent, not what the agent is already authenticated to.
+
+The gap shows up as a specific, repeated failure. An agent with a browser signed
+in to Gmail says it has no way to read mail, because nothing in its prompt says
+otherwise. The access was never missing; the knowledge was. `domain::connector`
+is that knowledge, and two decisions in it came from outside the protocol
+literature.
+
+**Two kinds, not one.** *Beyond Browsing: API-Based Web Agents*
+([arXiv 2410.16464](https://arxiv.org/abs/2410.16464)) ran API-calling agents,
+browsing agents and a hybrid over the same WebArena tasks. APIs beat browsing;
+the hybrid beat both, by 24.0 points absolute over browsing alone. So an agent
+is told about both a signed-in browser and a stored credential in the same list,
+and it chooses. Building only the browser kind would have been simpler and
+measurably worse; building only the API kind cannot be done at all, because
+LinkedIn has no API to call, which is what makes the browser kind the general
+one.
+
+**Capability is observed, not declared.** The protocols assume an agent
+publishes what it can do. For half of this, that is the wrong direction: the
+browser is holding the cookies, so the truthful move is to read the machine
+rather than to ask a person to maintain a manifest that drifts the moment they
+log out. What a declaration buys, and what this gives up, is certainty: a
+declared capability is exact, while an observed one has to survive the fact that
+a cookie's presence does not mean a login. `google.com` cookies on a signed-out
+browser and a `PHPSESSID` handed to anonymous visitors were both real false
+positives on a live machine. The answer is a signature table for services worth
+naming, a visited-and-identity-shaped rule for the rest, and an explicit
+distinction in the prompt between what is known and what is merely likely. An
+observed capability that overclaims is worse than no capability at all, because
+the agent spends a turn discovering it and the operator sees a broken account
+rather than an absent one.
+
+**A capability, once real, has to be scoped where it physically lives.** A
+credential is a string and goes to every machine in the group. A signed-in
+session is cookies on one disk and belongs to one agent, so it appears in that
+agent's own prompt as something it can use, and in every peer's roster as
+something to delegate for. This is the Agent Card's discovery idea applied to a
+fact rather than a claim: skills are written by the agent about itself, and
+`reaches` is written by the operator.
+
+**Two invariants, both structural rather than promised.** A credential's value
+has no field on `Connector` at all, so it cannot be serialized to the webview or
+rendered into a prompt; it travels from SQLite into one sandbox command's
+environment and nowhere else. And there is nowhere to type a password: the
+operator signs in at the real site, on the agent's screen, and Guaca records
+only that it happened.
+
+**The threat the survey's tables do not reach.** Its Operation-phase threats are
+about peers. A signed-in agent's larger exposure is the page it is reading:
+*BrowseSafe* ([arXiv 2511.20597](https://arxiv.org/abs/2511.20597)) makes the
+point that the injections that matter drive actions rather than text, and being
+signed in is precisely what makes the attempt worth making, since the payload no
+longer needs to obtain access. Guaca takes the architectural half of their
+layered defence, which is the half a local app can hold honestly: page content
+is labelled where it enters the turn (`runtime::WEB_LABEL`) rather than only in
+a system prompt written thousands of tokens earlier, credentials never enter the
+model's context, and the prompt names the line a signed-in agent stops at.
+Their model-based layers are not reimplemented here and are not claimed.
+
 **Provenance.** The protocols carry no causality. Guaca's envelope records
 `run_id`, `hop`, and `cause`, which is what makes a cascade reconstructable
 after the fact. This is the first thing you want when five agents have been
@@ -114,5 +181,17 @@ The protocols themselves, and the people behind them:
 
 The survey above is what made comparing them tractable, and its
 Creation/Operation/Update/Termination threat framing is used directly in
-`guard.rs` and `prompt.rs`. Adopting an idea is not an endorsement by any of
-these authors, and every simplification recorded here is this app's own.
+`guard.rs` and `prompt.rs`.
+
+Two papers outside that literature shaped connectors:
+
+- *Beyond Browsing: API-Based Web Agents*, Yueqi Song, Frank Xu, Shuyan Zhou and
+  Graham Neubig, [arXiv 2410.16464](https://arxiv.org/abs/2410.16464). The
+  measurement that made two kinds worth building instead of one.
+- *BrowseSafe: Understanding and Preventing Prompt Injection Within AI Browser
+  Agents*, Kaiyuan Zhang, Mark Tenenholtz, Kyle Polley, Jerry Ma, Denis Yarats
+  and Ninghui Li, [arXiv 2511.20597](https://arxiv.org/abs/2511.20597). The
+  threat model for an agent that is already logged in.
+
+Adopting an idea is not an endorsement by any of these authors, and every
+simplification recorded here is this app's own.

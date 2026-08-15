@@ -16,6 +16,9 @@ import type {
   AgentDraft,
   AgentId,
   Computer,
+  Connector,
+  ConnectorDraft,
+  ConnectorId,
   Envelope,
   Group,
   GroupDraft,
@@ -29,6 +32,7 @@ import type {
   RunUsage,
   Settings,
   SettingsPatch,
+  Signin,
   UiEvent,
 } from "./types";
 
@@ -46,6 +50,23 @@ export const api = {
 
   /** Destroys the sandbox and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
+
+  /** Every account a crew can reach. Never carries a credential's value. */
+  groupConnectors: (groupId: GroupId) => invoke<Connector[]>("group_connectors", { groupId }),
+
+  createConnector: (draft: ConnectorDraft) => invoke<Connector>("create_connector", { draft }),
+
+  deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  /** The last scan's result. Does not touch the machine, so it is free. */
+  agentSignins: (id: AgentId) => invoke<Signin[]>("agent_signins", { id }),
+
+  /**
+   * Asks the agent's browser what it is signed in to, right now. Nobody
+   * declares these: Chrome is holding the cookies, so the machine is asked.
+   * A sleeping or absent machine keeps whatever was last seen.
+   */
+  scanAgentSignins: (id: AgentId) => invoke<Signin[]>("scan_agent_signins", { id }),
 
   listGroups: () => invoke<Group[]>("list_groups"),
 
