@@ -117,16 +117,22 @@ export function ComputerPane({ agent }: Props) {
       {running && computer?.vncUrl ? (
         <div className="computer__screen">
           <iframe
-            // Remounting on the mode switch is deliberate: noVNC decides whether
-            // it listens for input when it connects, so flipping view_only on a
-            // live connection would do nothing.
-            key={`${computer.sandboxId}:${open}`}
+            // Keyed on the machine alone, never on the size. Resizing is a CSS
+            // change and the connection survives it, so expanding no longer
+            // drops the desktop and reconnects to it.
+            //
+            // Which is also why noVNC's own `view_only` is not used: it is read
+            // once when the connection opens, so switching it would mean
+            // reconnecting. The veil below does that job instead, and does it
+            // without touching the connection.
+            key={computer.sandboxId}
             title={`${agent.name}'s computer`}
-            src={`${computer.vncUrl}&view_only=${open ? 0 : 1}`}
+            src={computer.vncUrl}
           />
           {!open && (
-            // Covers the frame so a stray click cannot type into the agent's
-            // desktop while it is only meant to be watched.
+            // Swallows clicks aimed at the desktop while it is only meant to be
+            // watched, which is what makes noVNC's own read-only mode
+            // unnecessary and the connection worth keeping.
             <button
               type="button"
               className="computer__veil"

@@ -1594,7 +1594,8 @@ button {
 }
 
 /* Taking control is worth the room: at preview size a desktop is legible as a
-   picture but not usable as one. */
+   picture but not usable as one. The width is animated and the frame inside is
+   never remounted, so the desktop scales rather than reconnecting. */
 .computer[data-open="true"] {
   width: min(52rem, 100%);
 }
