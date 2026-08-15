@@ -565,6 +565,22 @@ impl Runtime {
         // The most recent envelope that wants an answer decides where the
         // reply goes. Everything else in the batch is context.
         let reply_target = batch.iter().rev().find(|e| e.expects_reply).map(|e| e.from);
+
+        // Every peer that wrote in this batch, answered or not.
+        //
+        // Writing back to one of them continues an exchange rather than opening
+        // one, which is what decides whether the message demands an answer. It
+        // cannot be read off `reply_target`: that is a single envelope, and a
+        // batch of replies contains none that want answering at all, so a
+        // courtesy "thanks, noted" to one of three peers who had just replied
+        // was filed as a fresh approach and started the exchange over.
+        let correspondents: HashSet<AgentId> = batch
+            .iter()
+            .filter_map(|e| match e.from {
+                Participant::Agent { id } => Some(id),
+                _ => None,
+            })
+            .collect();
         let mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
@@ -720,7 +736,7 @@ impl Runtime {
                         run_id,
                         inbound_hop,
                         cause,
-                        reply_target,
+                        &correspondents,
                         &mut addressed,
                         call,
                     )
@@ -945,9 +961,9 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        // Who this turn is answering, so a send aimed at them is recognised as
-        // a reply rather than a fresh approach.
-        reply_target: Option<Participant>,
+        // Peers that wrote to this agent in this batch, so a send aimed at one
+        // of them is recognised as continuing rather than as a fresh approach.
+        correspondents: &HashSet<AgentId>,
         // Peers this turn has already written to. See `emit_reply`.
         addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
@@ -960,7 +976,7 @@ impl Runtime {
                 run_id,
                 inbound_hop,
                 cause,
-                reply_target,
+                correspondents,
                 addressed,
                 call,
                 arguments,
@@ -978,7 +994,7 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        reply_target: Option<Participant>,
+        correspondents: &HashSet<AgentId>,
         addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
         arguments: serde_json::Value,
@@ -1154,7 +1170,7 @@ impl Runtime {
                     run_id,
                     inbound_hop,
                     cause,
-                    reply_target,
+                    correspondents,
                     addressed,
                     &to,
                     &text,
@@ -1310,7 +1326,8 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        reply_target: Option<Participant>,
+        // Peers that wrote to this agent in the batch it is answering.
+        correspondents: &HashSet<AgentId>,
         addressed: &mut HashSet<AgentId>,
         recipients: &[String],
         text: &str,
@@ -1388,17 +1405,14 @@ impl Runtime {
                         continue;
                     };
 
-                    // An agent answering its correspondent through this tool is
+                    // An agent answering a correspondent through this tool is
                     // still answering, so the message must not demand an answer
                     // back. Marking it as a fresh approach re-arms the cascade
                     // that `emit_reply`'s asymmetry exists to end: the peer
                     // replies, this agent replies to that, and the exchange only
                     // stops when the guard's dedup or hop limit fires. Two
                     // agents introducing themselves reached hop 7 of 8 that way.
-                    let answering = matches!(
-                        reply_target,
-                        Some(Participant::Agent { id }) if id == target.id
-                    );
+                    let answering = correspondents.contains(&target.id);
 
                     let envelope = Envelope {
                         id: MessageId::new(),

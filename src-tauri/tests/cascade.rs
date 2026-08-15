@@ -1089,6 +1089,62 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
 }
 
 #[tokio::test]
+async fn thanking_one_of_several_peers_who_replied_together_ends_the_exchange() {
+    // Observed: a manager introduced itself to three agents, all three replied
+    // at once, and its courtesy "thanks" to one of them was filed as a fresh
+    // approach. That peer replied, the manager thanked it again, and the
+    // exchange walked out to hop 6 with the operator watching five near
+    // identical summaries arrive.
+    //
+    // The batch is what makes it happen: replies do not expect answers, so the
+    // envelope the turn is "answering" is nobody, and every send looks new.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if has_tool_result(body) {
+            Script::Say("introductions done".into())
+        } else if text.contains("glad to be here") {
+            // The manager thanks one of the three that just replied.
+            Script::SendTo { recipients: vec!["Chef".into()], text: "thanks Chef".into() }
+        } else if text.contains("hello from manager") || text.contains("thanks Chef") {
+            Script::SendTo { recipients: vec!["Manager".into()], text: "glad to be here".into() }
+        } else {
+            Script::SendTo {
+                recipients: vec!["Chef".into(), "Baker".into(), "Grocer".into()],
+                text: "hello from manager".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef", "Baker", "Grocer"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to your team.").unwrap();
+    h.settle(run).await;
+
+    let feed = h.feed();
+    let deepest = feed.iter().map(|e| e.hop).max().unwrap_or(0);
+    let thanks = feed
+        .iter()
+        .find(|e| e.plain_text().contains("thanks Chef"))
+        .expect("the manager's thanks must have been delivered");
+
+    assert!(
+        !thanks.expects_reply,
+        "writing back to a peer that just replied continues the exchange; demanding an \
+         answer restarts it"
+    );
+    assert!(
+        deepest <= 4,
+        "the exchange must settle once everyone has been thanked, got hop {deepest} across {:?}",
+        feed.iter().map(|e| (e.hop, e.expects_reply)).collect::<Vec<_>>()
+    );
+}
+
+#[tokio::test]
 async fn a_group_can_pin_a_model_without_touching_the_other_group() {
     // Settings resolve agent over group over app. The point of the chain is
     // that two crews can run on different models at once, so this checks what
