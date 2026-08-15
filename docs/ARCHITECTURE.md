@@ -42,8 +42,10 @@ The loop guard (`runtime/guard.rs`) bounds the worst case, but bounding is not
 the same as terminating well. What actually makes a cascade converge is
 `expects_reply`:
 
-- A human message or an explicit `send_message` expects an answer.
-- An automatic reply does not.
+- A human message, or a message to a peer that has not written to this agent in
+  this run, expects an answer.
+- A message back to someone who has already written expects nothing: it is a
+  continuation, not an approach.
 
 An agent that receives a non-reply-expecting message still takes a turn to read
 it, but its output is filed as a note in its own channel rather than delivered
@@ -52,8 +54,27 @@ Manager reads. Without this, two agents being polite at each other would grind
 against the hop limit every time, wasting the entire budget to reach the same
 end state.
 
-Messages that do not expect a reply are also batched: an agent waking to four
-replies reads all four in one turn. Four replies cost one model call, not four.
+**"Has already written" is a question about the run, not about the batch.** This
+is the subtlety that took several attempts. Replies land milliseconds apart and
+an actor drains whatever is in its inbox, so a batch is a timing artifact: three
+peers answering one broadcast can be split across two turns, and deciding from
+the batch made the late two look like agents this one had never spoken to. Their
+messages then demanded answers and the cascade restarted. The guard already
+counts sends per pair for the whole run, and that answer does not change with
+arrival order.
+
+On top of the asymmetry, one hard rule: when nothing an agent woke to asked it
+for anything, and the peer it wants to write to has already had its say, the
+send is refused. Both sides are finished, and the only thing left to send is an
+acknowledgement of an acknowledgement.
+
+Messages that do not expect a reply are batched: an agent waking to four replies
+reads all four in one turn. Because real replies arrive seconds apart rather
+than together, an agent will also wait briefly for replies it is still owed —
+counted as peers it has written to that have not written back — before reading
+what it already has. Waiting instead on "is anyone in this run still busy" was
+tried and was wrong: it made an agent sit through peers that had already
+answered and were finishing their own notes.
 
 ## The budget counts model calls, not turns
 
@@ -67,7 +88,7 @@ and the test that found it is still there.
 
 The survey's "tool poisoning" (MCP) and "task injection" (A2A) describe the same
 failure: text that arrived over the wire being read as an instruction from the
-principal. Guac handles it in two places:
+principal. Guaca handles it in two places:
 
 1. `Trust` on the envelope: `Operator`, `Peer`, or `System`.
 2. The system prompt says what a peer may not do, and every incoming message is
@@ -154,3 +175,14 @@ Stated plainly rather than discovered later.
 - **Undelivered messages to a deleted agent are dropped**, not returned to the
   sender. The sender is not notified.
 - **No search.** Finding an old message means scrolling.
+- **An agent cannot follow up with a peer that already answered it inside the
+  same run.** A genuine second question and a courtesy "thanks" are the same
+  shape on the wire, and the refusal is aimed at the second. Making this
+  distinction properly means letting the model declare its intent on
+  `send_message` rather than inferring it, which is the obvious next change if
+  multi-round delegation starts mattering.
+- **Prompt instructions are guidance, not guarantees.** Several behaviours here
+  are steered by wording in `runtime/prompt.rs` — staying quiet when there is
+  nothing to add, not narrating that silence. A model can ignore any of it, so
+  anything that must hold is enforced in the runtime and the rest is measured by
+  the evals.

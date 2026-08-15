@@ -1,7 +1,10 @@
-# What Guac takes from the interoperability literature, and what it doesn't
+# What Guaca takes from the interoperability literature, and what it doesn't
 
-Guac's message layer is derived from the four agent protocols surveyed in
-[arXiv 2505.02279](https://arxiv.org/abs/2505.02279) (MCP, ACP, A2A, ANP). The
+Guaca's message layer is derived from the four agent protocols surveyed in
+*A survey of agent interoperability protocols: Model Context Protocol (MCP),
+Agent Communication Protocol (ACP), Agent-to-Agent Protocol (A2A), and Agent
+Network Protocol (ANP)* by Abul Ehtesham, Aditi Singh, Gaurav Kumar Gupta and
+Saket Kumar, [arXiv 2505.02279](https://arxiv.org/abs/2505.02279). The
 survey is a useful map of the design space and a poor specification: it
 describes how agents address each other, never when they stop. This document
 records which ideas were adopted, which were deliberately dropped, and which
@@ -9,7 +12,7 @@ gaps had to be filled from scratch.
 
 The governing rule: an idea earns its place only if it pays off inside a
 single-process, single-user, local desktop app. Most of what these protocols
-specify exists to cross an organizational trust boundary. Guac has no such
+specify exists to cross an organizational trust boundary. Guaca has no such
 boundary, so importing that machinery would be cargo cult.
 
 ## Adopted
@@ -22,16 +25,16 @@ boundary, so importing that machinery would be cargo cult.
 | **Explicit lifecycle** | all four | `domain::agent::Lifecycle` | Pause and delete need real states. See "Reduced" below for how it was trimmed. |
 | **Card versioning** | A2A Update phase | `AgentCard::version` | The only mechanism that lets a peer notice a card changed underneath it. Bumped on every edit. |
 | **Lifecycle-phase threat model** | the survey's Tables 3-6 | `guard.rs`, `prompt.rs`, `config.rs` | The survey's most reusable contribution. Its Creation/Operation/Update/Termination framing is a genuinely good checklist. |
-| **Prompt injection between agents treated as the primary threat** | MCP "tool poisoning", A2A "task injection" | `domain::envelope::Trust`, `runtime::prompt` | Both names describe one failure: wire content read as principal instruction. Guac tags provenance on the envelope and restates it in the system prompt. |
+| **Prompt injection between agents treated as the primary threat** | MCP "tool poisoning", A2A "task injection" | `domain::envelope::Trust`, `runtime::prompt` | Both names describe one failure: wire content read as principal instruction. Guaca tags provenance on the envelope and restates it in the system prompt. |
 
 ## Reduced
 
-| Idea | What the protocols specify | What Guac does | Why |
+| Idea | What the protocols specify | What Guaca does | Why |
 |---|---|---|---|
 | Agent Card hosting | Served at `/.well-known/agent-card.json` over HTTP | A row in SQLite | There is no network peer. An HTTP server to talk to yourself is pure overhead. |
 | Identity | W3C DIDs, `did:wba`, DID documents, signature verification (ANP) | A UUID | DIDs solve "prove you are who you claim across an untrusted network". Inside one process there is no claim to verify. |
-| Manifest signing | Sigstore, JWS, signed manifest diffs | Nothing | Signatures defend against a supply chain Guac does not have. Adding them would be security theatre with a maintenance cost. |
-| Transport | JSON-RPC 2.0 or REST over HTTP, SSE, gRPC | A `tokio::mpsc` channel per agent | The protocols' transport layer exists to cross a process boundary. Guac's agents share an address space. |
+| Manifest signing | Sigstore, JWS, signed manifest diffs | Nothing | Signatures defend against a supply chain Guaca does not have. Adding them would be security theatre with a maintenance cost. |
+| Transport | JSON-RPC 2.0 or REST over HTTP, SSE, gRPC | A `tokio::mpsc` channel per agent | The protocols' transport layer exists to cross a process boundary. Guaca's agents share an address space. |
 | Registry / broker | Central registry with runtime registration (ACP) | A `HashMap<AgentId, Inbox>` | Same reason. |
 | Lifecycle phases | Creation → Operation → Update → Termination | `Active`, `Paused`, `Terminated` | Creation and Update are transitions, not resting states. Modelling them as states creates states no observer can ever see. |
 
@@ -45,7 +48,7 @@ happens when agent A messages agent B, B replies to A, and A replies to B. That
 is not an edge case; it is the default behaviour of polite language models, and
 it costs real money on every cycle.
 
-Guac supplies five independent limits (`runtime::guard`), because each catches a
+Guaca supplies five independent limits (`runtime::guard`), because each catches a
 different shape of runaway and every one of them alone has a hole:
 
 | Limit | Catches |
@@ -71,7 +74,7 @@ Two further mechanisms have no analogue in the literature:
   sent Chef 3 messages this run" stops. An agent whose message silently vanishes
   retries.
 
-**Provenance.** The protocols carry no causality. Guac's envelope records
+**Provenance.** The protocols carry no causality. Guaca's envelope records
 `run_id`, `hop`, and `cause`, which is what makes a cascade reconstructable
 after the fact. This is the first thing you want when five agents have been
 talking and something went wrong.
@@ -95,3 +98,21 @@ Worth knowing if you read it alongside this code.
   taxonomy to three.
 
 The lifecycle threat tables are the part worth keeping.
+
+## Credit
+
+The protocols themselves, and the people behind them:
+
+- **MCP** — Model Context Protocol, Anthropic.
+- **A2A** — Agent-to-Agent Protocol, Google. The Agent Card, the directory as a
+  first-class operation, and the Update phase that card versioning comes from
+  are all A2A's, and they are the ideas this app leans on hardest.
+- **ACP** — Agent Communication Protocol, IBM Research / BeeAI. Typed ordered
+  multipart messages are ACP's shape.
+- **ANP** — Agent Network Protocol. Decentralised discovery, most of which this
+  app has no use for, and one idea it does.
+
+The survey above is what made comparing them tractable, and its
+Creation/Operation/Update/Termination threat framing is used directly in
+`guard.rs` and `prompt.rs`. Adopting an idea is not an endorsement by any of
+these authors, and every simplification recorded here is this app's own.
