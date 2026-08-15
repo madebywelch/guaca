@@ -16,6 +16,7 @@ use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{AgentId, GroupId, RunId};
+use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
@@ -352,6 +353,38 @@ pub fn send_message(state: State<'_, AppState>, agent_id: AgentId, text: String)
 #[tauri::command]
 pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)
+}
+
+/// What each of the given runs cost.
+///
+/// Asked for by the activity view, which knows which runs it is drawing. The
+/// alternative, joining usage onto every message, would send the same totals
+/// back once per message in the run.
+#[tauri::command]
+pub fn usage_for_runs(state: State<'_, AppState>, runs: Vec<RunId>) -> Reply<Vec<RunUsage>> {
+    Ok(state
+        .runtime
+        .store()
+        .usage_by_run(&runs)?
+        .into_iter()
+        .map(|(run_id, tokens)| RunUsage { run_id, tokens })
+        .collect())
+}
+
+/// What every group has spent, ever.
+///
+/// Cheap enough to ask for on load and after a run settles: it is one grouped
+/// sum over a local table. The live numbers between those points come from
+/// events, so this is a correction rather than a poll.
+#[tauri::command]
+pub fn usage_summary(state: State<'_, AppState>) -> Reply<Vec<GroupUsage>> {
+    Ok(state
+        .runtime
+        .store()
+        .usage_by_group()?
+        .into_iter()
+        .map(|(group_id, tokens)| GroupUsage { group_id, tokens })
+        .collect())
 }
 
 /// Empties every channel in a group. The crew stays; what it said does not.

@@ -232,6 +232,48 @@ button {
   transition: opacity 120ms ease, color 120ms ease;
 }
 
+/* What a group is spending, and whether it is spending it right now. */
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex: none;
+}
+
+.meter__spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 0.62rem;
+  width: 2.6rem;
+}
+
+.meter__bar {
+  flex: 1;
+  min-height: 0;
+  background: var(--rail-edge);
+  border-radius: 0.5px;
+  /* Only the height animates, and only upward from nothing, so a quiet meter
+     is flat rather than a row of stubs pretending to be activity. */
+  transition: height 220ms ease-out;
+}
+
+.meter[data-busy] .meter__bar {
+  background: var(--flesh-soft);
+}
+
+.meter__count {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.meter[data-busy] .meter__count {
+  color: var(--flesh-soft);
+}
+
 .rail__group-head:hover .rail__gear,
 .rail__gear:focus-visible {
   opacity: 1;
@@ -996,6 +1038,14 @@ button {
   font-size: 0.58rem;
   color: var(--faint);
   flex: none;
+}
+
+.run__tokens {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--faint);
+  flex: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .run__board {

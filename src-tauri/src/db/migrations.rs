@@ -214,6 +214,36 @@ CREATE INDEX routines_due ON routines (next_run_at);
 CREATE INDEX routines_agent ON routines (agent_id);
 "#,
     ),
+    (
+        10,
+        r#"
+-- What each model call cost, as the provider counted it.
+--
+-- One row per call rather than a running total on the agent, because the
+-- question an operator actually has is which run burned the tokens, and a
+-- counter cannot answer it. Rows are small and a busy day is a few thousand.
+--
+-- `group_id` is denormalised on purpose: an agent can be moved between groups,
+-- and what a group spent while an agent was in it does not move with it.
+CREATE TABLE usage (
+    id         INTEGER PRIMARY KEY,
+    agent_id   TEXT    NOT NULL REFERENCES agents(id),
+    group_id   TEXT    NOT NULL,
+    run_id     TEXT    NOT NULL,
+    model      TEXT    NOT NULL,
+    prompt     INTEGER NOT NULL,
+    completion INTEGER NOT NULL,
+    -- Dollars, when the provider prices the call. NULL for a local server,
+    -- which has nothing to charge: summing NULL as zero would quietly report
+    -- that a crew ran for free.
+    cost       REAL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX usage_group ON usage (group_id);
+CREATE INDEX usage_run ON usage (run_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

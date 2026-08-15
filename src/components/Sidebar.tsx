@@ -5,6 +5,7 @@ import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
+import { TokenMeter } from "./TokenMeter";
 
 interface Props {
   onNewAgent: () => void;
@@ -226,6 +227,8 @@ export function Sidebar({
                       {group.defaultModel}
                     </span>
                   )}
+                  <span style={{ flex: 1 }} />
+                  <TokenMeter groupId={group.id} />
                   <span className="rail__group-count">{members.length}</span>
                   <button
                     type="button"

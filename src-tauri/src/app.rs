@@ -134,6 +134,8 @@ pub fn run() {
             commands::send_message,
             commands::clear_channel,
             commands::clear_group,
+            commands::usage_summary,
+            commands::usage_for_runs,
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,

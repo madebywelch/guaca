@@ -15,9 +15,10 @@ use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
-use crate::domain::ids::{AgentId, GroupId, MessageId, RoutineId};
+use crate::domain::ids::{AgentId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::Routine;
+use crate::domain::usage::{Tokens, UsageEntry};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -605,6 +606,96 @@ impl Store {
             out.push(row??);
         }
         out.reverse();
+        Ok(out)
+    }
+
+    // ---- usage -----------------------------------------------------------
+
+    /// Records what one model call cost.
+    ///
+    /// Best-effort by design: a call that produced real work must not be
+    /// reported as a failure because its accounting row would not write.
+    pub fn record_usage(&self, entry: &UsageEntry) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO usage (agent_id,group_id,run_id,model,prompt,completion,cost,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                entry.agent_id.to_string(),
+                entry.group_id.to_string(),
+                entry.run_id.to_string(),
+                entry.model,
+                entry.prompt,
+                entry.completion,
+                entry.cost,
+                now_ms(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Everything each group has spent, ever.
+    pub fn usage_by_group(&self) -> Result<HashMap<GroupId, Tokens>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT group_id, SUM(prompt), SUM(completion), SUM(cost), COUNT(*)
+               FROM usage GROUP BY group_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                Tokens {
+                    prompt: row.get::<_, i64>(1)? as u64,
+                    completion: row.get::<_, i64>(2)? as u64,
+                    cost: row.get::<_, Option<f64>>(3)?,
+                    calls: row.get::<_, i64>(4)? as u64,
+                },
+            ))
+        })?;
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, tokens) = row?;
+            // A row whose group id no longer parses is accounting for a group
+            // that is gone. It stays in the table and out of the summary.
+            if let Ok(group) = id.parse::<GroupId>() {
+                out.insert(group, tokens);
+            }
+        }
+        Ok(out)
+    }
+
+    /// What each run cost, for the runs given. Empty input, empty answer.
+    pub fn usage_by_run(&self, runs: &[RunId]) -> Result<HashMap<RunId, Tokens>, StoreError> {
+        if runs.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let conn = self.conn()?;
+        let slots = std::iter::repeat_n("?", runs.len()).collect::<Vec<_>>().join(",");
+        let mut stmt = conn.prepare(&format!(
+            "SELECT run_id, SUM(prompt), SUM(completion), SUM(cost), COUNT(*) FROM usage
+              WHERE run_id IN ({slots}) GROUP BY run_id"
+        ))?;
+        let ids: Vec<String> = runs.iter().map(RunId::to_string).collect();
+        let rows = stmt.query_map(rusqlite::params_from_iter(ids), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                Tokens {
+                    prompt: row.get::<_, i64>(1)? as u64,
+                    completion: row.get::<_, i64>(2)? as u64,
+                    cost: row.get::<_, Option<f64>>(3)?,
+                    calls: row.get::<_, i64>(4)? as u64,
+                },
+            ))
+        })?;
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, tokens) = row?;
+            if let Ok(run) = id.parse::<RunId>() {
+                out.insert(run, tokens);
+            }
+        }
         Ok(out)
     }
 

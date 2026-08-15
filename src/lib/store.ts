@@ -16,9 +16,12 @@ import type {
   AgentId,
   Envelope,
   Group,
+  GroupId,
+  GroupUsage,
   MessageId,
   Participant,
   Settings,
+  Tokens,
   UiEvent,
 } from "./types";
 
@@ -42,6 +45,9 @@ export interface Pulse {
   color: string;
 }
 
+/** How long the group meters look back. */
+export const PULSE_WINDOW_MS = 90_000;
+
 interface State {
   agents: AgentCard[];
   groups: Group[];
@@ -49,6 +55,17 @@ interface State {
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
+
+  /** Everything each group has spent, ever. Keyed by group id. */
+  usage: Record<GroupId, Tokens | undefined>;
+  /**
+   * Calls in the last {@link PULSE_WINDOW_MS}, for the meters.
+   *
+   * Kept as raw points rather than as buckets: buckets would have to be
+   * rotated on a timer whether or not anything was happening, and the one
+   * thing this is for is showing that something is.
+   */
+  pulse: Record<GroupId, { at: number; tokens: number }[] | undefined>;
 
   selected: ChannelKey | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
@@ -60,6 +77,7 @@ interface State {
 
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
+  refreshUsage: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
   loadChannel: (key: ChannelKey) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
@@ -69,6 +87,20 @@ interface State {
 }
 
 let pulseSeq = 0;
+
+/** Group totals, addressed the way the UI reads them. */
+function byGroup(rows: GroupUsage[]): Record<GroupId, Tokens> {
+  const out: Record<GroupId, Tokens> = {};
+  for (const row of rows) {
+    out[row.groupId] = {
+      prompt: row.prompt,
+      completion: row.completion,
+      cost: row.cost,
+      calls: row.calls,
+    };
+  }
+  return out;
+}
 
 /** Keeps a channel's messages ordered and free of duplicates. */
 function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[] | undefined {
@@ -88,6 +120,8 @@ export const useStore = create<State>((set, get) => ({
   activity: {},
   lastActive: {},
   settings: null,
+  usage: {},
+  pulse: {},
   selected: null,
   messages: {},
   streams: {},
@@ -95,14 +129,15 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, groups, activity, lastActive, settings] = await Promise.all([
+    const [agents, groups, activity, lastActive, settings, usage] = await Promise.all([
       api.listAgents(),
       api.listGroups(),
       api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
+      api.usageSummary(),
     ]);
-    set({ agents, groups, activity, lastActive, settings });
+    set({ agents, groups, activity, lastActive, settings, usage: byGroup(usage) });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
@@ -141,6 +176,10 @@ export const useStore = create<State>((set, get) => ({
         ? await api.conversationFlow(400)
         : await api.channelMessages(key, 300);
     set((state) => ({ messages: { ...state.messages, [key]: messages } }));
+  },
+
+  async refreshUsage() {
+    set({ usage: byGroup(await api.usageSummary()) });
   },
 
   applyEvent(event) {
@@ -235,7 +274,45 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "tokensUsed": {
+        // Applied here rather than refetched: the whole point is a number that
+        // moves while an agent is still working. `runSettled` reconciles.
+        const spent = event.prompt + event.completion;
+        set((state) => {
+          const held = state.usage[event.groupId] ?? {
+            prompt: 0,
+            completion: 0,
+            cost: null,
+            calls: 0,
+          };
+          const cutoff = Date.now() - PULSE_WINDOW_MS;
+          const recent = (state.pulse[event.groupId] ?? []).filter((p) => p.at >= cutoff);
+          return {
+            usage: {
+              ...state.usage,
+              [event.groupId]: {
+                prompt: held.prompt + event.prompt,
+                completion: held.completion + event.completion,
+                // Not carried on the event: a price arrives per call and the
+                // running total is corrected when the run settles, rather than
+                // guessed at here from a rate this side does not know.
+                cost: held.cost,
+                calls: held.calls + 1,
+              },
+            },
+            pulse: {
+              ...state.pulse,
+              [event.groupId]: [...recent, { at: Date.now(), tokens: spent }],
+            },
+          };
+        });
+        break;
+      }
+
       case "runSettled":
+        // The live totals are additions to a number this corrects. Cheap: one
+        // grouped sum over a local table, and only when a run has gone quiet.
+        void get().refreshUsage();
         break;
     }
   },

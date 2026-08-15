@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::domain::envelope::{Envelope, Participant};
-use crate::domain::ids::{AgentId, MessageId, RunId};
+use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -70,6 +70,18 @@ pub enum UiEvent {
     ActivityChanged {
         agent_id: AgentId,
         activity: Activity,
+    },
+
+    /// A model call finished and reported what it cost.
+    ///
+    /// Emitted per call rather than per turn, so the number moves while an
+    /// agent is still working rather than once it has finished.
+    TokensUsed {
+        agent_id: AgentId,
+        group_id: GroupId,
+        run_id: RunId,
+        prompt: u32,
+        completion: u32,
     },
 
     /// Every agent in a run has gone quiet.

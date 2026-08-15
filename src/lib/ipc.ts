@@ -20,7 +20,9 @@ import type {
   Group,
   GroupDraft,
   GroupId,
+  GroupUsage,
   RunId,
+  RunUsage,
   Settings,
   SettingsPatch,
   UiEvent,
@@ -83,6 +85,8 @@ export const api = {
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
   /** Empties every channel in a group. Returns how many messages went. */
   clearGroup: (groupId: GroupId) => invoke<number>("clear_group", { groupId }),
+  usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
+  usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
 
   getSettings: () => invoke<Settings>("get_settings"),
 

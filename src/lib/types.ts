@@ -173,7 +173,33 @@ export type UiEvent =
   | { type: "streamDelta"; messageId: MessageId; channelId: AgentId; text: string }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
+  | {
+      type: "tokensUsed";
+      agentId: AgentId;
+      groupId: GroupId;
+      runId: RunId;
+      prompt: number;
+      completion: number;
+    }
   | { type: "runSettled"; runId: RunId; stepsUsed: number };
+
+/** Tokens spent, as the provider counted them. Never estimated. */
+export interface Tokens {
+  prompt: number;
+  completion: number;
+  /** Dollars, when the provider prices calls. Null for a local server. */
+  cost: number | null;
+  /** Model calls, not agent turns: one turn can make several. */
+  calls: number;
+}
+
+export interface GroupUsage extends Tokens {
+  groupId: GroupId;
+}
+
+export interface RunUsage extends Tokens {
+  runId: RunId;
+}
 
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {

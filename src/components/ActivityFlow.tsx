@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
-
+import { useEffect, useMemo, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import type { AgentCard, AgentId, Envelope, Participant } from "../lib/types";
+import { api } from "../lib/ipc";
+import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
+import { compact } from "./TokenMeter";
 import { MessageModal, type WirePeer } from "./WireRow";
 
 /**
@@ -55,6 +56,7 @@ interface Row {
 
 interface Block {
   key: string;
+  runId: RunId;
   startedAt: number;
   rows: Row[];
   lanes: Lane[];
@@ -89,6 +91,32 @@ export function ActivityFlow({ messages, byId }: Props) {
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
 
   const blocks = useMemo(() => buildBlocks(messages, byId), [messages, byId]);
+
+  // What each run cost. Asked for once per set of runs on screen rather than
+  // carried on every message, which would repeat one run's totals as many
+  // times as the run had messages.
+  const [spent, setSpent] = useState<Record<RunId, Tokens | undefined>>({});
+  const runs = useMemo(() => blocks.map((b) => b.runId).join(","), [blocks]);
+  useEffect(() => {
+    if (!runs) return;
+    let live = true;
+    void api.usageForRuns(runs.split(",") as RunId[]).then((rows) => {
+      if (!live) return;
+      const next: Record<RunId, Tokens> = {};
+      for (const row of rows) {
+        next[row.runId] = {
+          prompt: row.prompt,
+          completion: row.completion,
+          cost: row.cost,
+          calls: row.calls,
+        };
+      }
+      setSpent(next);
+    });
+    return () => {
+      live = false;
+    };
+  }, [runs]);
 
   if (blocks.length === 0) {
     return (
@@ -144,6 +172,18 @@ export function ActivityFlow({ messages, byId }: Props) {
                 <span className="run__count">
                   {block.rows.length} {block.rows.length === 1 ? "message" : "messages"}
                 </span>
+                {spent[block.runId] && (
+                  <span
+                    className="run__tokens"
+                    title={`${spent[block.runId]!.prompt.toLocaleString()} in, ${spent[
+                      block.runId
+                    ]!.completion.toLocaleString()} out, over ${spent[
+                      block.runId
+                    ]!.calls.toLocaleString()} model call(s)`}
+                  >
+                    {compact(spent[block.runId]!.prompt + spent[block.runId]!.completion)}
+                  </span>
+                )}
               </button>
 
               {isOpen && (
@@ -292,6 +332,7 @@ function buildBlocks(messages: Envelope[], byId: (id: AgentId) => AgentCard | un
     if (!current || message.runId !== run) {
       current = {
         key: message.id,
+        runId: message.runId,
         startedAt: message.createdAt,
         rows: [],
         lanes: [],

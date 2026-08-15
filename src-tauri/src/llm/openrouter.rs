@@ -160,8 +160,21 @@ struct WireRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'static str>,
     stream: bool,
+    /// Asks for the token counts in the stream's last frame.
+    ///
+    /// Without it a streamed completion reports nothing at all about what it
+    /// cost, and an operator watching a crew work has no way to tell a agent
+    /// thinking hard from one stuck in a loop. Part of the OpenAI wire format,
+    /// so a local server that does not implement it ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 // ---- response types ------------------------------------------------------
@@ -192,6 +205,23 @@ pub struct Completion {
     pub content: String,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<String>,
+    /// None when the provider did not report any. Never guessed: a made-up
+    /// token count is worse than no token count.
+    pub usage: Option<Usage>,
+}
+
+/// What one model call cost, as the provider counted it.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+pub struct Usage {
+    #[serde(default)]
+    pub prompt_tokens: u32,
+    #[serde(default)]
+    pub completion_tokens: u32,
+    /// Dollars, when the provider prices the call. OpenRouter does; an
+    /// OpenAI-compatible server run locally has nothing to charge and says
+    /// nothing, which is why this is optional rather than zero.
+    #[serde(default)]
+    pub cost: Option<f64>,
 }
 
 impl Completion {
@@ -319,6 +349,9 @@ fn classify_status(status: u16, body: &str, model: &str, retry_after: Option<u64
 struct StreamChunk {
     #[serde(default)]
     choices: Vec<StreamChoice>,
+    /// Sent once, in a frame that carries no choices.
+    #[serde(default)]
+    usage: Option<Usage>,
     #[serde(default)]
     error: Option<ApiErrorDetail>,
 }
@@ -452,6 +485,7 @@ impl LlmClient {
             tools: &request.tools,
             tool_choice: if request.tools.is_empty() { None } else { Some("auto") },
             stream: true,
+            stream_options: Some(StreamOptions { include_usage: true }),
             temperature: request.temperature,
         };
 
@@ -505,6 +539,7 @@ impl LlmClient {
         let mut content = String::new();
         let mut finish_reason = None;
         let mut saw_done = false;
+        let mut usage = None;
 
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
@@ -548,6 +583,10 @@ impl LlmClient {
                     });
                 }
 
+                if let Some(counted) = parsed.usage {
+                    usage = Some(counted);
+                }
+
                 for choice in parsed.choices {
                     if let Some(fragment) = choice.delta.content {
                         if !fragment.is_empty() {
@@ -573,7 +612,7 @@ impl LlmClient {
             return Err(LlmError::Truncated);
         }
 
-        Ok(Completion { content, tool_calls, finish_reason })
+        Ok(Completion { content, tool_calls, finish_reason, usage })
     }
 }
 
@@ -671,6 +710,49 @@ mod tests {
 
         assert_eq!(completion.content, "Hello, world");
         assert_eq!(tokens, vec!["Hel", "lo, ", "world"], "tokens must surface incrementally");
+    }
+
+    #[tokio::test]
+    async fn asks_for_token_counts_and_reads_them_from_the_last_frame() {
+        // The realistic shape: usage arrives alone, after the content, in a
+        // frame that carries no choices at all.
+        let (base, seen) = stub(|_| {
+            sse(&[
+                &text_frame("done"),
+                &serde_json::json!({
+                    "choices": [],
+                    "usage": {"prompt_tokens": 1204, "completion_tokens": 88, "total_tokens": 1292}
+                })
+                .to_string(),
+                "[DONE]",
+            ])
+        })
+        .await;
+
+        let client = LlmClient::new().unwrap();
+        let completion = client.stream_chat(&cfg(base), &request(), |_| {}).await.unwrap();
+
+        let usage = completion.usage.expect("the provider counted, so this build reads it");
+        assert_eq!(usage.prompt_tokens, 1204);
+        assert_eq!(usage.completion_tokens, 88);
+
+        // Nothing is counted unless it is asked for.
+        let body = seen.lock().unwrap()[0].clone();
+        assert_eq!(
+            body["stream_options"]["include_usage"],
+            serde_json::json!(true),
+            "a streamed call reports nothing at all without this: {body}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_counts_nothing_reports_nothing() {
+        // Rather than zero, which would read on screen exactly like a real
+        // count of zero and quietly understate what a crew was spending.
+        let (base, _) = stub(|_| sse(&[&text_frame("done"), "[DONE]"])).await;
+        let client = LlmClient::new().unwrap();
+        let completion = client.stream_chat(&cfg(base), &request(), |_| {}).await.unwrap();
+        assert!(completion.usage.is_none());
     }
 
     #[tokio::test]

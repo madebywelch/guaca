@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentCard, Envelope } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 
-vi.mock("../lib/ipc", () => ({ openExternal: vi.fn() }));
+vi.mock("../lib/ipc", () => ({
+  openExternal: vi.fn(),
+  api: { usageForRuns: async () => [] },
+}));
 
 function card(id: string, name: string, color = "#c7d96b"): AgentCard {
   return {

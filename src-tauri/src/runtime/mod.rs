@@ -695,6 +695,8 @@ impl Runtime {
                 }
             };
 
+            self.count_tokens(&card, run_id, &model, completion.usage);
+
             if !completion.content.is_empty() {
                 if !collected_text.is_empty() {
                     collected_text.push_str("\n\n");
@@ -1518,6 +1520,50 @@ impl Runtime {
 
         self.inner.events.emit(UiEvent::AgentsChanged);
         Ok((client, fresh))
+    }
+
+    /// Books one model call's cost and says so, immediately.
+    ///
+    /// The saying is the point. A crew working on its own errands showed the
+    /// operator one word, "thinking", for however long it took; a number that
+    /// climbs is the difference between watching work and watching a spinner.
+    ///
+    /// Providers that report nothing are left reporting nothing rather than
+    /// estimated, because a guessed count is indistinguishable from a real one
+    /// once it is on screen.
+    fn count_tokens(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        model: &str,
+        usage: Option<crate::llm::openrouter::Usage>,
+    ) {
+        let Some(usage) = usage else { return };
+        if usage.prompt_tokens == 0 && usage.completion_tokens == 0 {
+            return;
+        }
+
+        let entry = crate::domain::usage::UsageEntry {
+            agent_id: card.id,
+            group_id: card.group_id,
+            run_id,
+            model: model.to_string(),
+            prompt: usage.prompt_tokens,
+            completion: usage.completion_tokens,
+            cost: usage.cost,
+        };
+        // Accounting must never fail a turn that did real work.
+        if let Err(err) = self.inner.store.record_usage(&entry) {
+            tracing::warn!(%err, agent = %card.name, "could not record what a call cost");
+        }
+
+        self.inner.events.emit(UiEvent::TokensUsed {
+            agent_id: card.id,
+            group_id: card.group_id,
+            run_id,
+            prompt: usage.prompt_tokens,
+            completion: usage.completion_tokens,
+        });
     }
 
     /// Kills every sandbox this app made that no agent still refers to.
