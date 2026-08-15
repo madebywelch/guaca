@@ -608,6 +608,25 @@ impl Store {
         Ok(out)
     }
 
+    /// Empties every channel in a group: a fresh start for a whole crew.
+    ///
+    /// Agents survive, along with their notes and their machines. Only what was
+    /// said goes, which is also what an agent reads back as its history, so the
+    /// crew genuinely starts over rather than carrying a conversation it can no
+    /// longer be shown.
+    ///
+    /// Agents cannot message across a group boundary, so every message a group
+    /// produced is filed in a channel belonging to one of its agents. Deleted
+    /// agents are included: their transcripts are part of what this group said.
+    pub fn delete_group_messages(&self, group: GroupId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM messages
+              WHERE channel_id IN (SELECT id FROM agents WHERE group_id=?1)",
+            params![group.to_string()],
+        )?)
+    }
+
     pub fn delete_channel_messages(&self, channel: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM messages WHERE channel_id=?1", params![channel.to_string()])?)
@@ -902,6 +921,44 @@ mod tests {
         let orphans: Vec<_> =
             store.list_agents().unwrap().into_iter().filter(|c| c.group_id == group.id).collect();
         assert!(orphans.is_empty(), "no agent may point at a group that is gone");
+    }
+
+    #[test]
+    fn clearing_a_group_empties_its_crew_and_leaves_everyone_elses_channels() {
+        let f = fixture();
+        let other = f
+            .store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                base_url: None,
+                default_model: None,
+                api_key: None,
+            })
+            .unwrap();
+
+        let mut d = draft("Scholar");
+        d.group_id = Some(other.id);
+        let scholar = f.store.create_agent(&d).unwrap();
+        let bystander = f.store.create_agent(&draft("Manager")).unwrap();
+
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+        f.store.append(&envelope(Participant::Human, agent(scholar.id), "in scope", run)).unwrap();
+        f.store
+            .append(&envelope(Participant::Human, agent(bystander.id), "untouched", run))
+            .unwrap();
+
+        // A deleted agent's transcript is part of what the group said, so it
+        // goes too: leaving it behind is what "start fresh" is not.
+        f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
+
+        assert_eq!(f.store.delete_group_messages(other.id).unwrap(), 1);
+        assert!(f.store.channel_messages(scholar.id, 50).unwrap().is_empty());
+        assert_eq!(
+            f.store.channel_messages(bystander.id, 50).unwrap().len(),
+            1,
+            "clearing one group must not touch another"
+        );
     }
 
     #[test]

@@ -116,7 +116,7 @@ describe("ActivityFlow", () => {
     expect(within(screen.getByRole("dialog")).getByText("here are the holes")).toBeTruthy();
   });
 
-  it("marks where a new run begins", () => {
+  it("gives each run its own board, newest first", () => {
     const { container } = render(
       <ActivityFlow
         messages={[
@@ -127,8 +127,49 @@ describe("ActivityFlow", () => {
         byId={byId}
       />,
     );
-    // One divider per run, so the board reads as separate errands.
-    expect(container.querySelectorAll(".flow__divider")).toHaveLength(2);
+    const runs = container.querySelectorAll(".run");
+    expect(runs).toHaveLength(2);
+    // What just happened is what an operator came here for, so it is at the
+    // top and already open; the rest is one line each until asked for.
+    expect(runs[0]!.textContent).toContain("second task");
+    expect(runs[0]!.getAttribute("data-open")).toBe("true");
+    expect(runs[1]!.getAttribute("data-open")).toBeNull();
+  });
+
+  it("does not widen a run with participants that were not in it", () => {
+    // Lanes used to be global, so every agent that ever spoke held a column
+    // forever and each new one pushed the arrows further right.
+    const { container } = render(
+      <ActivityFlow
+        messages={[
+          msg(human, agent("manager"), "first task", 0, "r1"),
+          msg(agent("manager"), agent("critic"), "relay", 1, "r1"),
+          msg(human, agent("manager"), "second task", 0, "r2"),
+        ]}
+        byId={byId}
+      />,
+    );
+    // The open board is the second run: You and Manager, not Critic.
+    const lanes = container.querySelectorAll(".run[data-open] .flow__lane");
+    expect(lanes).toHaveLength(2);
+    expect([...lanes].map((l) => l.textContent)).not.toContain("Critic");
+  });
+
+  it("marks an agent that has been deleted, so two of a name are not confused", () => {
+    const gone = {
+      id: "ghost",
+      name: "Researcher",
+      color: "#8aa0a6",
+      avatar: "plain",
+      lifecycle: "terminated",
+    };
+    render(
+      <ActivityFlow
+        messages={[msg(human, agent("ghost"), "who are you", 0, "r1")]}
+        byId={(id) => (id === "ghost" ? (gone as never) : byId(id))}
+      />,
+    );
+    expect(screen.getByText("deleted")).toBeTruthy();
   });
 
   it("shows what was said without needing a click", () => {

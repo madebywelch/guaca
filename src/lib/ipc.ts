@@ -81,6 +81,8 @@ export const api = {
   sendMessage: (agentId: AgentId, text: string) => invoke<RunId>("send_message", { agentId, text }),
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
+  /** Empties every channel in a group. Returns how many messages went. */
+  clearGroup: (groupId: GroupId) => invoke<number>("clear_group", { groupId }),
 
   getSettings: () => invoke<Settings>("get_settings"),
 

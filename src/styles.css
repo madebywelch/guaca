@@ -854,8 +854,7 @@ button {
   display: flex;
   align-items: flex-end;
   gap: 0.75rem;
-  padding: 0.5rem var(--flow-pad) 0.4rem calc(var(--flow-pad) + var(--flow-gutter));
-  border-bottom: 1px solid var(--edge);
+  padding: 0.35rem var(--flow-pad) 0.4rem calc(var(--flow-pad) + var(--flow-gutter));
   background: var(--ground);
 }
 
@@ -900,7 +899,7 @@ button {
 
 .flow__body {
   position: relative;
-  padding: 0.35rem var(--flow-pad) 2rem;
+  padding: 0.35rem var(--flow-pad) 0.6rem;
 }
 
 /* The lifelines. Absolute so they run the whole height behind every row
@@ -921,22 +920,98 @@ button {
   background: var(--edge);
 }
 
-.flow__divider {
-  position: relative;
+/* One run, collapsed to a line until asked for. */
+.run {
+  border-bottom: 1px solid var(--edge);
+}
+
+.run__head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin: 0.7rem 0 0.3rem;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.5rem var(--flow-pad);
+  background: none;
+  border: 0;
+  text-align: left;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+
+.run__head:hover {
+  background: var(--sunken);
+}
+
+.run[data-open="true"] .run__head {
+  background: var(--sunken);
+}
+
+.run__caret {
+  font-size: 0.6rem;
+  color: var(--faint);
+  width: 0.7rem;
+  flex: none;
+}
+
+.run__when {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--faint);
+  flex: none;
+  display: flex;
+  gap: 0.3rem;
+}
+
+.run__day {
+  color: var(--muted);
+}
+
+.run__faces {
+  display: flex;
+  flex: none;
+}
+
+/* Overlapped, so a crowded run still costs a fixed strip of the header rather
+   than growing sideways the way the lanes used to. */
+.run__face + .run__face {
+  margin-left: -0.35rem;
+}
+
+.run__face[data-gone] {
+  opacity: 0.45;
+  filter: grayscale(0.7);
+}
+
+.run__opener {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.run__count {
   font-family: var(--font-mono);
   font-size: 0.58rem;
   color: var(--faint);
+  flex: none;
 }
 
-.flow__divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--edge);
+.run__board {
+  padding-bottom: 0.5rem;
+}
+
+.flow__gone {
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.flow__lane[data-gone] {
+  opacity: 0.55;
 }
 
 .flow__row {
@@ -1578,29 +1653,46 @@ button {
    agent's desktop by accident is worse than one extra click to take control.
    ========================================================================== */
 
+/* The gutter the transcript wraps around. Its width never changes, which is
+   the point: expanding used to widen this box, so the reading column reflowed
+   to a third of its measure and every line of the conversation moved. */
 .computer {
   position: sticky;
   top: 0.6rem;
   float: right;
   width: 19rem;
+  /* Reserved rather than measured: the gutter holds the same room whatever the
+     panel is doing, so opening the desktop never moves a line of the
+     conversation. The screen's own 16/10 plus the bar above it. */
+  height: calc(19rem * 10 / 16 + 1.6rem);
   margin: 0 0 0.8rem 1rem;
-  background: var(--rail-ground);
-  border: 1px solid var(--rail-edge);
-  border-radius: var(--radius);
-  overflow: hidden;
   z-index: 4;
-  box-shadow: 0 0.6rem 1.4rem -0.8rem rgb(24 33 27 / 0.4);
-  transition: width 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
   /* Belt to the listener's braces: stops a gesture that starts here from
      continuing into the transcript underneath. */
   overscroll-behavior: contain;
 }
 
+/* The panel itself, anchored to the gutter's right edge. Growing it leftwards
+   covers the transcript instead of pushing it. */
+.computer__panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 19rem;
+  background: var(--rail-ground);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 0.6rem 1.4rem -0.8rem rgb(24 33 27 / 0.4);
+  transition: width 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
 /* Taking control is worth the room: at preview size a desktop is legible as a
    picture but not usable as one. The width is animated and the frame inside is
    never remounted, so the desktop scales rather than reconnecting. */
-.computer[data-open="true"] {
-  width: min(52rem, 100%);
+.computer[data-open="true"] .computer__panel {
+  width: min(52rem, 76vw);
+  box-shadow: 0 1rem 2.4rem -0.9rem rgb(24 33 27 / 0.55);
 }
 
 .computer__bar {

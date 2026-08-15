@@ -133,6 +133,7 @@ pub fn run() {
             commands::conversation_flow,
             commands::send_message,
             commands::clear_channel,
+            commands::clear_group,
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,

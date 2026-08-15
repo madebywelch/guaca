@@ -31,6 +31,11 @@ export function ComputerPane({ agent }: Props) {
   // finishing an action always clears a half-pressed one.
   const [confirming, setConfirming] = useState<"sleep" | "destroy" | null>(null);
   const paneRef = useRef<HTMLDivElement>(null);
+  // Which agent the pane is currently about. A lookup started for one agent
+  // used to land after the operator had switched to another and paint that
+  // agent's machine into the new pane, so an agent with no computer showed the
+  // previous one's screen.
+  const showing = useRef(agent.id);
 
   // Nothing at all until there is a key. Offering to give an agent a computer
   // that cannot be made is worse than not mentioning computers.
@@ -50,19 +55,24 @@ export function ComputerPane({ agent }: Props) {
   }, [checked]);
 
   const look = useCallback(async () => {
+    const asked = agent.id;
     try {
-      setComputer(await api.agentComputer(agent.id));
+      const found = await api.agentComputer(asked);
+      if (showing.current !== asked) return;
+      setComputer(found);
       setError(null);
     } catch (caught) {
+      if (showing.current !== asked) return;
       // A missing key is not a failure worth a red banner: it means the feature
       // was never set up, and the pane says so instead.
       setError(errorMessage(caught));
     } finally {
-      setChecked(true);
+      if (showing.current === asked) setChecked(true);
     }
   }, [agent.id]);
 
   useEffect(() => {
+    showing.current = agent.id;
     setComputer(null);
     setChecked(false);
     setOpen(false);
@@ -73,7 +83,7 @@ export function ComputerPane({ agent }: Props) {
     setError(null);
     setConfirming(null);
     if (configured) void look();
-  }, [look, configured]);
+  }, [agent.id, look, configured]);
 
   // Sandboxes expire on their own, so a pane left open goes stale: it kept
   // showing a desktop that had been reclaimed, and clicking it did nothing.
@@ -84,15 +94,18 @@ export function ComputerPane({ agent }: Props) {
   }, [configured, look]);
 
   const act = async (run: () => Promise<Computer | null>) => {
+    const asked = agent.id;
     setBusy(true);
     setError(null);
     try {
-      setComputer(await run());
+      const next = await run();
+      if (showing.current !== asked) return;
+      setComputer(next);
       setConfirming(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (showing.current === asked) setError(errorMessage(caught));
     } finally {
-      setBusy(false);
+      if (showing.current === asked) setBusy(false);
     }
   };
 
@@ -103,143 +116,149 @@ export function ComputerPane({ agent }: Props) {
 
   return (
     <div className="computer" data-open={open ? "true" : undefined} ref={paneRef}>
-      <div className="computer__bar">
-        <span className="computer__title">Computer</span>
-        {computer && (
-          <span className="computer__state" data-state={computer.state}>
-            {computer.state}
-          </span>
-        )}
-
-        {running && (
-          <>
-            {confirming === "sleep" ? (
-              <>
-                <button
-                  type="button"
-                  className="computer__tab computer__tab--danger"
-                  disabled={busy}
-                  onClick={() => void act(() => api.stopAgentComputer(agent.id))}
-                >
-                  Sleep it
-                </button>
-                <button type="button" className="computer__tab" onClick={() => setConfirming(null)}>
-                  Keep awake
-                </button>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="computer__tab"
-                disabled={busy}
-                onClick={() => setConfirming("sleep")}
-                title="Sleep. The disk is kept, so it wakes signed in."
-              >
-                Sleep
-              </button>
-            )}
-            <button
-              type="button"
-              className="computer__tab"
-              onClick={() => setOpen((o) => !o)}
-              title={open ? "Shrink to a preview" : "Make it bigger"}
-            >
-              {open ? "Minimise" : "Expand"}
-            </button>
-          </>
-        )}
-      </div>
-
-      {running && computer?.vncUrl ? (
-        <div className="computer__screen">
-          <iframe
-            // Keyed on the machine alone, never on the size. Resizing is a CSS
-            // change and the connection survives it, so expanding no longer
-            // drops the desktop and reconnects to it.
-            //
-            // Which is also why noVNC's own `view_only` is not used: it is read
-            // once when the connection opens, so switching it would mean
-            // reconnecting. The veil below does that job instead, and does it
-            // without touching the connection.
-            key={computer.sandboxId}
-            title={`${agent.name}'s computer`}
-            src={computer.vncUrl}
-          />
-          {!open && (
-            // Swallows clicks aimed at the desktop while it is only meant to be
-            // watched, which is what makes noVNC's own read-only mode
-            // unnecessary and the connection worth keeping.
-            <button
-              type="button"
-              className="computer__veil"
-              onClick={() => setOpen(true)}
-              aria-label="Take control of this computer"
-            />
+      <div className="computer__panel">
+        <div className="computer__bar">
+          <span className="computer__title">Computer</span>
+          {computer && (
+            <span className="computer__state" data-state={computer.state}>
+              {computer.state}
+            </span>
           )}
-        </div>
-      ) : (
-        <div className="computer__empty">
-          {error ? (
-            <p className="computer__note">{error}</p>
-          ) : (
-            <p className="computer__note">
-              {busy
-                ? "Working on it. This takes a few seconds."
-                : asleep
-                  ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed
-                     into anything it was signed into. It sleeps again after
-                     ${settings?.computerIdleMinutes ?? 15} idle minutes.`
-                  : running
-                    ? "Running, but the desktop is not up yet."
-                    : "No computer yet. Agents get one the first time they use it."}
-            </p>
-          )}
-          <div className="computer__actions">
-            <button
-              type="button"
-              className="btn btn--primary"
-              disabled={busy}
-              onClick={() => void act(() => api.startAgentComputer(agent.id))}
-            >
-              {busy ? "Working…" : asleep ? "Wake" : running ? "Start the desktop" : "Give one"}
-            </button>
-            {computer &&
-              (confirming === "destroy" ? (
+
+          {running && (
+            <>
+              {confirming === "sleep" ? (
                 <>
                   <button
                     type="button"
-                    className="btn btn--danger"
+                    className="computer__tab computer__tab--danger"
                     disabled={busy}
-                    onClick={() =>
-                      void act(async () => {
-                        await api.deleteAgentComputer(agent.id);
-                        return null;
-                      })
-                    }
+                    onClick={() => void act(() => api.stopAgentComputer(agent.id))}
                   >
-                    Destroy it and its disk
+                    Sleep it
                   </button>
                   <button
                     type="button"
-                    className="btn btn--ghost"
+                    className="computer__tab"
                     onClick={() => setConfirming(null)}
                   >
-                    Keep
+                    Keep awake
                   </button>
                 </>
               ) : (
                 <button
                   type="button"
-                  className="btn btn--ghost"
+                  className="computer__tab"
                   disabled={busy}
-                  onClick={() => setConfirming("destroy")}
+                  onClick={() => setConfirming("sleep")}
+                  title="Sleep. The disk is kept, so it wakes signed in."
                 >
-                  Destroy
+                  Sleep
                 </button>
-              ))}
-          </div>
+              )}
+              <button
+                type="button"
+                className="computer__tab"
+                onClick={() => setOpen((o) => !o)}
+                title={open ? "Shrink to a preview" : "Make it bigger"}
+              >
+                {open ? "Minimise" : "Expand"}
+              </button>
+            </>
+          )}
         </div>
-      )}
+
+        {running && computer?.vncUrl ? (
+          <div className="computer__screen">
+            <iframe
+              // Keyed on the machine alone, never on the size. Resizing is a CSS
+              // change and the connection survives it, so expanding no longer
+              // drops the desktop and reconnects to it.
+              //
+              // Which is also why noVNC's own `view_only` is not used: it is read
+              // once when the connection opens, so switching it would mean
+              // reconnecting. The veil below does that job instead, and does it
+              // without touching the connection.
+              key={computer.sandboxId}
+              title={`${agent.name}'s computer`}
+              src={computer.vncUrl}
+            />
+            {!open && (
+              // Swallows clicks aimed at the desktop while it is only meant to be
+              // watched, which is what makes noVNC's own read-only mode
+              // unnecessary and the connection worth keeping.
+              <button
+                type="button"
+                className="computer__veil"
+                onClick={() => setOpen(true)}
+                aria-label="Take control of this computer"
+              />
+            )}
+          </div>
+        ) : (
+          <div className="computer__empty">
+            {error ? (
+              <p className="computer__note">{error}</p>
+            ) : (
+              <p className="computer__note">
+                {busy
+                  ? "Working on it. This takes a few seconds."
+                  : asleep
+                    ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed
+                     into anything it was signed into. It sleeps again after
+                     ${settings?.computerIdleMinutes ?? 15} idle minutes.`
+                    : running
+                      ? "Running, but the desktop is not up yet."
+                      : "No computer yet. Agents get one the first time they use it."}
+              </p>
+            )}
+            <div className="computer__actions">
+              <button
+                type="button"
+                className="btn btn--primary"
+                disabled={busy}
+                onClick={() => void act(() => api.startAgentComputer(agent.id))}
+              >
+                {busy ? "Working…" : asleep ? "Wake" : running ? "Start the desktop" : "Give one"}
+              </button>
+              {computer &&
+                (confirming === "destroy" ? (
+                  <>
+                    <button
+                      type="button"
+                      className="btn btn--danger"
+                      disabled={busy}
+                      onClick={() =>
+                        void act(async () => {
+                          await api.deleteAgentComputer(agent.id);
+                          return null;
+                        })
+                      }
+                    >
+                      Destroy it and its disk
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--ghost"
+                      onClick={() => setConfirming(null)}
+                    >
+                      Keep
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    disabled={busy}
+                    onClick={() => setConfirming("destroy")}
+                  >
+                    Destroy
+                  </button>
+                ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -30,6 +30,8 @@ export function GroupEditor({ group, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [cleared, setCleared] = useState<number | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -51,6 +53,23 @@ export function GroupEditor({ group, onClose }: Props) {
       onClose();
     } catch (caught) {
       setError(errorMessage(caught));
+      setBusy(false);
+    }
+  };
+
+  /** Start fresh: the crew stays, everything it said goes. */
+  const clear = async () => {
+    if (!group) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const gone = await api.clearGroup(group.id);
+      setCleared(gone);
+      setConfirmClear(false);
+      await refreshAgents();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
       setBusy(false);
     }
   };
@@ -176,6 +195,37 @@ export function GroupEditor({ group, onClose }: Props) {
                 onClick={() => setConfirmDelete(true)}
               >
                 Delete
+              </button>
+            ))}
+          {group &&
+            !confirmDelete &&
+            (confirmClear ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn--danger"
+                  disabled={busy}
+                  onClick={() => void clear()}
+                >
+                  Clear every chat
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  onClick={() => setConfirmClear(false)}
+                >
+                  Keep them
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn btn--ghost"
+                disabled={busy}
+                onClick={() => setConfirmClear(true)}
+                title="Empties every channel in this group. The agents, their notes and their computers stay."
+              >
+                {cleared === null ? "Start fresh" : `Cleared ${cleared}`}
               </button>
             ))}
           <span style={{ flex: 1 }} />

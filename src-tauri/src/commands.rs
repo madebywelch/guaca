@@ -354,6 +354,14 @@ pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<u
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)
 }
 
+/// Empties every channel in a group. The crew stays; what it said does not.
+#[tauri::command]
+pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<usize> {
+    let cleared = state.runtime.store().delete_group_messages(group_id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(cleared)
+}
+
 // ---- settings ------------------------------------------------------------
 
 /// Absent fields are left alone. `apiKey: ""` clears the key; omitting it
