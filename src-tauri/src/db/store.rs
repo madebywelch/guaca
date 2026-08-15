@@ -1058,6 +1058,55 @@ mod tests {
     }
 
     #[test]
+    fn usage_is_written_and_summed_against_the_real_schema() {
+        // The bug this covers: every query here was written against a table
+        // that a later edit was supposed to have given a `cost` column, and
+        // nothing in the suite ever ran one of them. The app compiled, shipped
+        // and failed on the first group that had spent anything.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let run = RunId::new();
+
+        f.store
+            .record_usage(&UsageEntry {
+                agent_id: card.id,
+                group_id: card.group_id,
+                run_id: run,
+                model: "test/model".into(),
+                prompt: 1000,
+                completion: 200,
+                cost: Some(0.25),
+            })
+            .unwrap();
+        // A local server prices nothing, and that is not the same as free.
+        f.store
+            .record_usage(&UsageEntry {
+                agent_id: card.id,
+                group_id: card.group_id,
+                run_id: run,
+                model: "local/model".into(),
+                prompt: 10,
+                completion: 5,
+                cost: None,
+            })
+            .unwrap();
+
+        let by_group = f.store.usage_by_group().unwrap();
+        let group = by_group.get(&card.group_id).expect("the group spent something");
+        assert_eq!(group.prompt, 1010);
+        assert_eq!(group.completion, 205);
+        assert_eq!(group.calls, 2, "calls, not turns");
+        assert_eq!(group.cost, Some(0.25));
+
+        let by_run = f.store.usage_by_run(&[run]).unwrap();
+        assert_eq!(by_run.get(&run).unwrap().total(), 1215);
+
+        // Asking about nothing is not an error, and must not build a query
+        // with an empty IN list.
+        assert!(f.store.usage_by_run(&[]).unwrap().is_empty());
+    }
+
+    #[test]
     fn editing_a_routine_leaves_its_next_firing_alone_unless_asked() {
         // Correcting a typo in what a routine says must not silently reset the
         // schedule it is keeping.

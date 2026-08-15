@@ -233,15 +233,25 @@ CREATE TABLE usage (
     model      TEXT    NOT NULL,
     prompt     INTEGER NOT NULL,
     completion INTEGER NOT NULL,
-    -- Dollars, when the provider prices the call. NULL for a local server,
-    -- which has nothing to charge: summing NULL as zero would quietly report
-    -- that a crew ran for free.
-    cost       REAL,
     created_at INTEGER NOT NULL
 );
 
 CREATE INDEX usage_group ON usage (group_id);
 CREATE INDEX usage_run ON usage (run_id);
+"#,
+    ),
+    (
+        11,
+        r#"
+-- Dollars, when the provider prices the call. NULL for a local server, which
+-- has nothing to charge: summing NULL as zero would quietly report that a crew
+-- ran for free.
+--
+-- Its own migration rather than a column in the one above, which had already
+-- run by the time this was wanted. A migration that has been applied anywhere
+-- is finished: editing it leaves databases that ran the old version with a
+-- schema no version number distinguishes from the new one.
+ALTER TABLE usage ADD COLUMN cost REAL;
 "#,
     ),
 ];
