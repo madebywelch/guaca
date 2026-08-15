@@ -25,7 +25,7 @@ function reportFatal(message: string) {
   wrap.style.cssText = "padding:2rem;max-width:48rem;margin:0 auto;font:14px/1.6 system-ui";
 
   const heading = document.createElement("h1");
-  heading.textContent = "Guac could not start";
+  heading.textContent = "Guaca could not start";
   heading.style.cssText = "font-size:1rem;margin:0 0 .5rem";
 
   const detail = document.createElement("pre");

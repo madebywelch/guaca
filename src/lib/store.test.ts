@@ -11,6 +11,7 @@ vi.mock("./ipc", () => ({
     getSettings: vi.fn(async () => null),
     channelMessages: vi.fn(async () => [] as Envelope[]),
     activityFeed: vi.fn(async () => [] as Envelope[]),
+    usageSummary: vi.fn(async () => []),
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -77,6 +78,8 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     messages,
     streams: {},
     pulses: [],
+    usage: {},
+    pulse: {},
     banner: null,
   });
 }
@@ -291,5 +294,35 @@ describe("activity", () => {
     apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
     apply({ type: "activityChanged", agentId: "manager", activity: { state: "idle" } });
     expect(useStore.getState().activity.chef).toEqual({ state: "thinking" });
+  });
+});
+
+describe("channelsCleared", () => {
+  it("drops what it is holding for the cleared channels, and the feed with them", async () => {
+    // The bug this covers: clearing a group left the open transcript on screen
+    // until the operator clicked away and back.
+    reset({
+      chef: [envelope()],
+      manager: [envelope({ channelId: "manager" })],
+      activity: [envelope()],
+    });
+
+    apply({ type: "channelsCleared", agents: ["chef"] });
+
+    expect(useStore.getState().messages.chef).toBeUndefined();
+    // The feed draws from every channel, so it is stale too.
+    expect(useStore.getState().messages.activity).toBeUndefined();
+    // A channel that was not cleared keeps what it had.
+    expect(useStore.getState().messages.manager).toHaveLength(1);
+  });
+
+  it("reads the open channel again rather than leaving it blank", async () => {
+    reset({ chef: [envelope()] });
+    apply({ type: "channelsCleared", agents: ["chef"] });
+
+    const { channelMessages } = (await import("./ipc")).api as unknown as {
+      channelMessages: ReturnType<typeof vi.fn>;
+    };
+    expect(channelMessages).toHaveBeenCalledWith("chef", 300);
   });
 });

@@ -108,7 +108,7 @@ describe("App", () => {
     // The rail is always present, whether or not there are agents. If this is
     // missing, the window is blank.
     expect(await screen.findByRole("navigation", { name: /agents/i })).toBeTruthy();
-    expect(screen.getByText("Guac")).toBeTruthy();
+    expect(screen.getByText("Guaca")).toBeTruthy();
   });
 
   it("offers a way in when there are no agents", async () => {

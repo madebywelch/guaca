@@ -173,6 +173,7 @@ export type UiEvent =
   | { type: "streamDelta"; messageId: MessageId; channelId: AgentId; text: string }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
+  | { type: "channelsCleared"; agents: AgentId[] }
   | {
       type: "tokensUsed";
       agentId: AgentId;
@@ -201,6 +202,14 @@ export interface GroupUsage extends Tokens {
 
 export interface RunUsage extends Tokens {
   runId: RunId;
+}
+
+/** What a reset took. Reported rather than assumed. */
+export interface GroupReset {
+  messages: number;
+  routines: number;
+  notes: number;
+  calls: number;
 }
 
 export type RoutineId = string;

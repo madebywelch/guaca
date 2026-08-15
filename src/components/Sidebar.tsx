@@ -173,7 +173,7 @@ export function Sidebar({
   return (
     <nav className="rail" aria-label="Agents">
       <div className="rail__brand" data-tauri-drag-region>
-        <span className="rail__wordmark">Guac</span>
+        <span className="rail__wordmark">Guaca</span>
       </div>
 
       <button

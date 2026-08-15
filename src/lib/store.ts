@@ -274,6 +274,30 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "channelsCleared": {
+        // Dropping the cache is not enough on its own: the channel on screen
+        // has to be read again, or it keeps showing what it already had until
+        // the operator clicks away and back, which is exactly what they had to
+        // do before this event existed.
+        const emptied = new Set<ChannelKey>(event.agents);
+        set((state) => {
+          const messages = { ...state.messages };
+          for (const key of Object.keys(messages) as ChannelKey[]) {
+            // The activity feed draws from every channel, so it is stale too.
+            if (emptied.has(key) || key === ACTIVITY_CHANNEL) delete messages[key];
+          }
+          return { messages };
+        });
+
+        const open = get().selected;
+        if (open && (emptied.has(open) || open === ACTIVITY_CHANNEL)) {
+          void get().loadChannel(open);
+        }
+        // The meters are counting rows that no longer exist.
+        void get().refreshUsage();
+        break;
+      }
+
       case "tokensUsed": {
         // Applied here rather than refetched: the whole point is a number that
         // moves while an agent is still working. `runSettled` reconciles.

@@ -461,10 +461,40 @@ pub fn usage_summary(state: State<'_, AppState>) -> Reply<Vec<GroupUsage>> {
 
 /// Empties every channel in a group. The crew stays; what it said does not.
 #[tauri::command]
-pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<usize> {
-    let cleared = state.runtime.store().delete_group_messages(group_id)?;
+pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<GroupReset> {
+    let store = state.runtime.store();
+    let agents = store.group_agent_ids(group_id)?;
+
+    let reset = GroupReset {
+        messages: store.delete_group_messages(group_id)?,
+        routines: store.delete_group_routines(group_id)?,
+        calls: store.delete_group_usage(group_id)?,
+        // Notes are files, not rows. An agent whose transcript, schedule and
+        // spend are gone but which still opens tomorrow believing what it
+        // wrote last week has not started fresh.
+        notes: agents
+            .iter()
+            .filter(|id| !state.runtime.workspace().read(**id).trim().is_empty())
+            .inspect(|id| state.runtime.workspace().remove(**id))
+            .count(),
+    };
+
+    // Named so open channels can drop what they are holding. `AgentsChanged`
+    // refetches the roster, which is not what went stale here: the operator
+    // had to click away and back to see an empty transcript.
+    state.runtime.emit(UiEvent::ChannelsCleared { agents });
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(cleared)
+    Ok(reset)
+}
+
+/// What a reset actually took, so the operator is told rather than reassured.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupReset {
+    pub messages: usize,
+    pub routines: usize,
+    pub notes: usize,
+    pub calls: usize,
 }
 
 // ---- settings ------------------------------------------------------------

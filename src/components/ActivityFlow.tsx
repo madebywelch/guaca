@@ -358,7 +358,7 @@ function buildBlocks(messages: Envelope[], byId: (id: AgentId) => AgentCard | un
           : participant.kind === "human"
             ? { peer: YOU, gone: false }
             : {
-                peer: { id: "system", name: "Guac", color: "#8a5a2f", avatar: "plain" },
+                peer: { id: "system", name: "Guaca", color: "#8a5a2f", avatar: "plain" },
                 gone: false,
               };
 

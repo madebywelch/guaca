@@ -72,6 +72,12 @@ pub enum UiEvent {
         activity: Activity,
     },
 
+    /// These channels were emptied. Anything holding their messages should
+    /// drop them and read again.
+    ChannelsCleared {
+        agents: Vec<AgentId>,
+    },
+
     /// A model call finished and reported what it cost.
     ///
     /// Emitted per call rather than per turn, so the number moves while an

@@ -139,7 +139,7 @@ export function SettingsDialog({ onClose }: Props) {
       <div className="dialog" role="dialog" aria-modal="true" aria-label="Settings">
         <h2 className="dialog__title">Settings</h2>
         <p className="dialog__lede">
-          Guac runs entirely on this machine. The only thing it sends anywhere is what you and your
+          Guaca runs entirely on this machine. The only thing it sends anywhere is what you and your
           agents type, to the endpoint below.
         </p>
 

@@ -761,6 +761,44 @@ impl Store {
         )?)
     }
 
+    /// Every routine held by a group's agents.
+    pub fn delete_group_routines(&self, group: GroupId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM routines
+              WHERE agent_id IN (SELECT id FROM agents WHERE group_id=?1)",
+            params![group.to_string()],
+        )?)
+    }
+
+    /// Everything a group has spent.
+    ///
+    /// Booked against the group rather than the agent, so an agent that has
+    /// since moved elsewhere does not take its old group's bill with it.
+    pub fn delete_group_usage(&self, group: GroupId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM usage WHERE group_id=?1", params![group.to_string()])?)
+    }
+
+    /// The agents a group holds, deleted ones included.
+    ///
+    /// Deleted agents still have transcripts and notes on disk, so a reset that
+    /// skipped them would leave the group half cleared.
+    pub fn group_agent_ids(&self, group: GroupId) -> Result<Vec<AgentId>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare("SELECT id FROM agents WHERE group_id=?1 ORDER BY rowid")?;
+        let rows = stmt.query_map(params![group.to_string()], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row?;
+            out.push(
+                raw.parse::<AgentId>()
+                    .map_err(|e| StoreError::Corrupt(format!("bad agent id {raw:?}: {e}")))?,
+            );
+        }
+        Ok(out)
+    }
+
     pub fn delete_channel_messages(&self, channel: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM messages WHERE channel_id=?1", params![channel.to_string()])?)
@@ -1166,7 +1204,30 @@ mod tests {
         // goes too: leaving it behind is what "start fresh" is not.
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
 
+        f.store.create_routine(scholar.id, "check the listings", Some(3600), 1).unwrap();
+        f.store
+            .record_usage(&UsageEntry {
+                agent_id: scholar.id,
+                group_id: other.id,
+                run_id: run,
+                model: "test/model".into(),
+                prompt: 10,
+                completion: 2,
+                cost: Some(0.01),
+            })
+            .unwrap();
+
         assert_eq!(f.store.delete_group_messages(other.id).unwrap(), 1);
+        assert_eq!(f.store.delete_group_routines(other.id).unwrap(), 1);
+        assert_eq!(f.store.delete_group_usage(other.id).unwrap(), 1);
+        assert!(f.store.agent_routines(scholar.id).unwrap().is_empty());
+        assert!(
+            !f.store.usage_by_group().unwrap().contains_key(&other.id),
+            "a reset group has spent nothing, or the meter keeps counting what is gone"
+        );
+        // A deleted agent is still one of the group's, so a reset takes its
+        // transcript too rather than leaving half of one behind.
+        assert!(f.store.group_agent_ids(other.id).unwrap().contains(&scholar.id));
         assert!(f.store.channel_messages(scholar.id, 50).unwrap().is_empty());
         assert_eq!(
             f.store.channel_messages(bystander.id, 50).unwrap().len(),

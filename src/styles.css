@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 /* ==========================================================================
-   Guac design tokens
+   Guaca design tokens
 
    A dark rail against a white page. The rail carries the identity — warm
    olive-black, ripe avocado flesh as the one bright accent, pit brown for
@@ -17,7 +17,7 @@
    ========================================================================== */
 
 :root {
-  /* The rail stays dark in both halves of the app: it is Guac's face, and a
+  /* The rail stays dark in both halves of the app: it is Guaca's face, and a
      dark rail against a white page is what makes the reading column read as
      paper rather than as another panel. */
   --rail-ground: #131c17;

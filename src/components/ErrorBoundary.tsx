@@ -25,7 +25,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error("Guac failed to render", error, info);
+    console.error("Guaca failed to render", error, info);
     this.setState({ info: info.componentStack ?? "" });
   }
 
@@ -35,9 +35,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
     return (
       <div style={{ padding: "2rem", maxWidth: "48rem", margin: "0 auto", overflow: "auto" }}>
-        <h1 className="dialog__title">Guac could not draw this window</h1>
+        <h1 className="dialog__title">Guaca could not draw this window</h1>
         <p className="dialog__lede">
-          This is a bug in Guac, not something you did. The details below say where it happened.
+          This is a bug in Guaca, not something you did. The details below say where it happened.
         </p>
         <pre
           className="chip chip--error"

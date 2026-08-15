@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { errorMessage, type Group, type GroupDraft } from "../lib/types";
+import { errorMessage, type Group, type GroupDraft, type GroupReset } from "../lib/types";
 
 interface Props {
   /** Absent means create. */
@@ -31,7 +31,7 @@ export function GroupEditor({ group, onClose }: Props) {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
-  const [cleared, setCleared] = useState<number | null>(null);
+  const [cleared, setCleared] = useState<GroupReset | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -57,7 +57,13 @@ export function GroupEditor({ group, onClose }: Props) {
     }
   };
 
-  /** Start fresh: the crew stays, everything it said goes. */
+  /**
+   * Start fresh: the crew stays, everything it has accumulated goes.
+   *
+   * Transcripts, schedules, notes and spend together, because clearing only
+   * the transcript left agents acting on notes about a conversation that no
+   * longer existed and keeping appointments nobody could see the reason for.
+   */
   const clear = async () => {
     if (!group) return;
     setBusy(true);
@@ -162,6 +168,17 @@ export function GroupEditor({ group, onClose }: Props) {
           </span>
         </label>
 
+        {cleared && (
+          <div className="banner" style={{ margin: "0.2rem 0 0.9rem" }}>
+            <span>
+              Reset: {cleared.messages} message{cleared.messages === 1 ? "" : "s"},{" "}
+              {cleared.routines} routine{cleared.routines === 1 ? "" : "s"}, {cleared.notes} set
+              {cleared.notes === 1 ? "" : "s"} of notes, and {cleared.calls} recorded call
+              {cleared.calls === 1 ? "" : "s"}.
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="banner banner--error" style={{ margin: "0.2rem 0 0.9rem" }}>
             <span>{error}</span>
@@ -207,7 +224,7 @@ export function GroupEditor({ group, onClose }: Props) {
                   disabled={busy}
                   onClick={() => void clear()}
                 >
-                  Clear every chat
+                  Reset every agent
                 </button>
                 <button
                   type="button"
@@ -223,9 +240,9 @@ export function GroupEditor({ group, onClose }: Props) {
                 className="btn btn--ghost"
                 disabled={busy}
                 onClick={() => setConfirmClear(true)}
-                title="Empties every channel in this group. The agents, their notes and their computers stay."
+                title="Resets every agent in this group: transcripts, routines and notes, and the spend counter. The agents and their computers stay."
               >
-                {cleared === null ? "Start fresh" : `Cleared ${cleared}`}
+                {cleared === null ? "Start fresh" : "Reset"}
               </button>
             ))}
           <span style={{ flex: 1 }} />
