@@ -38,6 +38,14 @@ const RAW_VNC_PORT: u16 = 5900;
 /// a blocked iframe that looks identical to a desktop that failed to start.
 pub const VIEWER_HOST: &str = "127.0.0.1";
 
+/// Chrome's remote interface, used to drive pages exactly rather than by
+/// aiming a pointer at pixels.
+const CDP_PORT: u16 = 9222;
+
+/// The driver Guac runs inside the sandbox. Kept as a file so it can be read
+/// and tested as Python rather than as a Rust string.
+const BROWSER_DRIVER: &str = include_str!("browser.py");
+
 /// envd, the agent daemon inside every sandbox.
 const ENVD_PORT: u16 = 49983;
 
@@ -374,6 +382,83 @@ impl E2bClient {
         .await
     }
 
+    /// Makes sure the browser is running with its remote interface open, and
+    /// that the driver script is on the machine.
+    ///
+    /// Chrome ignores `--remote-debugging-port` when it re-attaches to an
+    /// existing profile, so the browser Guac drives gets a profile of its own.
+    /// Everything here is idempotent; an agent should be able to browse without
+    /// knowing any of it happened.
+    async fn ensure_browser(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
+        self.start_desktop(sandbox, envd_token).await?;
+
+        let script = base64_encode(BROWSER_DRIVER.as_bytes());
+        self.run(
+            sandbox,
+            envd_token,
+            &format!(
+                "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/browser.py; \
+                 python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
+                 {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 google-chrome --no-sandbox \
+                 --no-first-run --user-data-dir=/tmp/guac-chrome \
+                 --remote-debugging-port={CDP_PORT} about:blank \
+                 >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
+                guard = port_open(CDP_PORT)
+            ),
+        )
+        .await?;
+
+        // Chrome takes a moment to open the port, and a browse that arrives
+        // first fails in a way that reads as the tool being broken.
+        for _ in 0..10 {
+            let up = self
+                .run(
+                    sandbox,
+                    envd_token,
+                    &format!("{} 2>/dev/null && echo up || echo down", port_open(CDP_PORT)),
+                )
+                .await?;
+            if up.stdout.trim() == "up" {
+                return Ok(());
+            }
+        }
+        Err(E2bError::Protocol("the browser did not open its remote interface".into()))
+    }
+
+    /// One browser action, answered as the driver's JSON.
+    pub async fn browse(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+        action: &str,
+        args: &serde_json::Value,
+    ) -> Result<String, E2bError> {
+        self.ensure_browser(sandbox, envd_token).await?;
+
+        let out = self
+            .run(
+                sandbox,
+                envd_token,
+                &format!(
+                    "python3 ~/.guac/browser.py {action} {}",
+                    quote(&serde_json::to_string(args).unwrap_or_else(|_| "{}".into()))
+                ),
+            )
+            .await?;
+
+        if out.exit_code != 0 || out.stdout.trim().is_empty() {
+            // The driver reports what went wrong on stderr in words meant for
+            // the model, so it is passed through rather than summarised.
+            let why = if out.stderr.trim().is_empty() {
+                out.stdout.trim().to_string()
+            } else {
+                out.stderr.trim().to_string()
+            };
+            return Err(E2bError::Protocol(why.chars().take(300).collect()));
+        }
+        Ok(out.stdout)
+    }
+
     /// A picture of the screen, as a `data:` URL ready to hand to a model.
     ///
     /// Sent at the display's own resolution on purpose. Scaling it down would
@@ -525,6 +610,22 @@ impl DesktopAction {
             }
         }
     }
+}
+
+/// Base64, so a script can be written into the sandbox through a shell without
+/// any of it being interpreted on the way.
+fn base64_encode(raw: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in raw.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    out
 }
 
 /// Single-quotes a string for a POSIX shell, including embedded quotes.
@@ -680,6 +781,20 @@ mod tests {
             frame_src.contains(VIEWER_HOST),
             "the window must be allowed to frame {VIEWER_HOST}, got {frame_src:?}"
         );
+    }
+
+    #[test]
+    fn base64_round_trips_through_the_decoder_it_is_paired_with() {
+        // The driver script is written into the sandbox this way, so a wrong
+        // encoder is a syntax error in a file nobody looks at.
+        for sample in ["", "a", "ab", "abc", "abcd", "hello world", "{\"x\": 1}\n"] {
+            assert_eq!(decode(&base64_encode(sample.as_bytes())), sample);
+        }
+    }
+
+    #[test]
+    fn the_browser_driver_is_shipped_with_the_binary() {
+        assert!(BROWSER_DRIVER.contains("__guacEls"), "the driver must be the real script");
     }
 
     #[test]

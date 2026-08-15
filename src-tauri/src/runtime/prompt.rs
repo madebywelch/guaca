@@ -64,6 +64,11 @@ pub fn system_prompt(
            visit a site, look at a page, or do anything a person would do in a window, for \
            example `google-chrome https://example.com`. The operator sees exactly what you \
            opened.\n\
+         - `browse` is how you use the web. The browser tells you exactly where every link, \
+           button and field is, so prefer it over looking at pixels for anything on a web \
+           page: `read` gives you the text and a numbered list of what you can use, then \
+           `click` and `type` take those numbers. It is what you want for signing in, \
+           reading a feed, filling a form or posting something.\n\
          - `use_screen` is how you work that screen. `look` returns a picture of it; then \
            click, type, press keys and scroll by the coordinates you saw. Look again after \
            anything that changes the screen, because you are always working from the last \
@@ -328,6 +333,10 @@ mod tests {
         assert!(prompt.contains("run_command"), "the tool has to be named, not just offered");
         assert!(prompt.contains("open_on_desktop"), "the screen has to be named too");
         assert!(prompt.contains("use_screen"), "and the way to work it");
+        assert!(
+            prompt.contains("browse"),
+            "the browser knows where things are; pixels are the fallback, not the default"
+        );
         assert!(
             prompt.contains("look"),
             "an agent that does not look first will click from memory of a screen it never saw"

@@ -21,6 +21,7 @@ pub const UPDATE_NOTES: &str = "update_notes";
 pub const RUN_COMMAND: &str = "run_command";
 pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 pub const USE_SCREEN: &str = "use_screen";
+pub const BROWSE: &str = "browse";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -111,6 +112,41 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: BROWSE.to_string(),
+            description: "Use the web browser on your computer. This is the right tool for \
+                          anything on the web: the browser tells you exactly where every link, \
+                          button and field is, so you never have to guess at a position. `read` \
+                          gives you the page's text and a numbered list of everything you can \
+                          use; `click` and `type` take one of those numbers. Read again after \
+                          anything that changes the page, because the numbers are renumbered \
+                          each time. The operator watches this happen on screen."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open", "read", "click", "type", "scroll", "back"],
+                        "description": "`open` a url, `read` the current page, then act on it."
+                    },
+                    "url": { "type": "string", "description": "For `open`." },
+                    "id": {
+                        "type": "integer",
+                        "description": "For `click` and `type`: the number `read` gave that element."
+                    },
+                    "text": { "type": "string", "description": "For `type`: what to enter." },
+                    "submit": {
+                        "type": "boolean",
+                        "description": "For `type`: press Enter afterwards, to search or submit."
+                    },
+                    "direction": { "type": "string", "enum": ["up", "down"] },
+                    "amount": { "type": "integer", "description": "For `scroll`: screenfuls." }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: USE_SCREEN.to_string(),
             description: "Look at your computer's screen and use it: click, type, press keys and \
                           scroll, exactly as a person would. Start with `look`, which returns a \
@@ -190,6 +226,7 @@ pub enum ToolInvocation {
     RunCommand { command: String },
     OpenOnDesktop { command: String },
     UseScreen { action: ScreenAction },
+    Browse { action: String, args: serde_json::Value },
 }
 
 /// What an agent can do to the screen it is looking at.
@@ -207,7 +244,7 @@ pub enum ScreenAction {
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command, open_on_desktop, use_screen."
+         run_command, open_on_desktop, use_screen, browse."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -224,6 +261,8 @@ pub enum ToolParseError {
     MissingDesktopCommand,
     #[error("use_screen needs a known `action`")]
     UnknownScreenAction,
+    #[error("browse needs a known `action`")]
+    UnknownBrowseAction,
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
 }
@@ -243,6 +282,11 @@ impl ToolParseError {
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
             ),
+            ToolParseError::UnknownBrowseAction => {
+                "Error: `action` must be one of open, read, click, type, scroll or back. \
+                 Call it with {\"action\": \"read\"} to see the page you are on."
+                    .to_string()
+            }
             ToolParseError::UnknownScreenAction => {
                 "Error: `action` must be one of look, click, double_click, right_click, move, \
                  type, key or scroll. Start with {\"action\": \"look\"} to see the screen."
@@ -355,6 +399,17 @@ fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolPa
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
+        BROWSE => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: BROWSE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let action = value.get("action").and_then(|v| v.as_str()).unwrap_or("read");
+            if !["open", "read", "click", "type", "scroll", "back"].contains(&action) {
+                return Err(ToolParseError::UnknownBrowseAction);
+            }
+            Ok(ToolInvocation::Browse { action: action.to_string(), args: value })
+        }
         USE_SCREEN => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: USE_SCREEN.to_string(),
@@ -568,12 +623,30 @@ mod tests {
     }
 
     #[test]
+    fn browsing_defaults_to_reading_the_page() {
+        // A model that calls `browse` with nothing useful should be shown the
+        // page rather than told off.
+        assert_eq!(
+            parse(&call(BROWSE, "{}")),
+            Ok(ToolInvocation::Browse { action: "read".into(), args: serde_json::json!({}) })
+        );
+    }
+
+    #[test]
+    fn an_invented_browse_action_is_refused_with_the_list() {
+        let err = parse(&call(BROWSE, "{\"action\": \"teleport\"}")).unwrap_err();
+        assert_eq!(err, ToolParseError::UnknownBrowseAction);
+        assert!(err.guidance().contains("read"), "the model needs the way out");
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs();
         assert_eq!(
             specs.len(),
-            6,
-            "directory, run_command, open_on_desktop, use_screen, send_message, update_notes"
+            7,
+            "directory, run_command, open_on_desktop, use_screen, browse, send_message, \
+             update_notes"
         );
         for spec in &specs {
             assert_eq!(

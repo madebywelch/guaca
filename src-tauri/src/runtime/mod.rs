@@ -22,6 +22,54 @@ use tokio::sync::{mpsc, Notify};
 
 use crate::config::{AppConfig, InferenceConfig};
 
+/// Turns the browser driver's JSON into something a model reads well.
+///
+/// The whole page and every element would be most of a context window, so this
+/// is bounded on purpose: enough text to understand the page, and the numbered
+/// controls, which are the part that has to be exact.
+fn render_page(raw: &str) -> String {
+    let Ok(page) = serde_json::from_str::<serde_json::Value>(raw) else {
+        return raw.chars().take(4000).collect();
+    };
+
+    let mut out = format!(
+        "{}\n{}",
+        page["title"].as_str().unwrap_or_default(),
+        page["url"].as_str().unwrap_or_default()
+    );
+
+    let scrolled = page["scroll"].as_i64().unwrap_or(0);
+    let height = page["height"].as_i64().unwrap_or(0);
+    if height > 0 {
+        out.push_str(&format!("\nscrolled {scrolled} of {height} pixels"));
+    }
+
+    if let Some(elements) = page["elements"].as_array() {
+        out.push_str("\n\nYou can use these, by number:\n");
+        for element in elements.iter().take(60) {
+            let text = element["text"].as_str().unwrap_or_default();
+            // An unlabelled control is usually an icon, and saying so is more
+            // use than an empty pair of quotes.
+            let label = if text.is_empty() { "(unlabelled)" } else { text };
+            out.push_str(&format!(
+                "  [{}] {} {label}\n",
+                element["id"].as_i64().unwrap_or_default(),
+                element["tag"].as_str().unwrap_or("?")
+            ));
+        }
+        if elements.len() > 60 {
+            out.push_str(&format!("  … and {} more\n", elements.len() - 60));
+        }
+    }
+
+    let text = page["text"].as_str().unwrap_or_default().trim();
+    if !text.is_empty() {
+        out.push_str("\nWhat the page says:\n");
+        out.extend(text.chars().take(4000));
+    }
+    out
+}
+
 /// What one tool call produced: what the model is told, what the transcript
 /// records, and a picture when the tool answers with one.
 struct ToolResult {
@@ -963,6 +1011,25 @@ impl Runtime {
                     rendered,
                     Part::ToolCall { name: tools::RUN_COMMAND.to_string(), arguments, outcome },
                 )
+            }
+
+            ToolInvocation::Browse { action, args } => {
+                let outcome = match self.ensure_computer(card).await {
+                    Ok((client, sandbox)) => {
+                        client.browse(&sandbox.id, &sandbox.envd_token, &action, &args).await
+                    }
+                    Err(err) => Err(err),
+                };
+                let (rendered, outcome) = match outcome {
+                    Ok(page) => {
+                        let summary = format!("{action} in the browser");
+                        (render_page(&page), ToolOutcome::Ok { summary })
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::ToolCall { name: tools::BROWSE.to_string(), arguments, outcome })
             }
 
             ToolInvocation::OpenOnDesktop { command } => {
