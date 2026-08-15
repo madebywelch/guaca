@@ -1965,7 +1965,13 @@ button {
   height: auto;
   width: auto;
   top: 0;
-  margin: -0.75rem -0.1rem 0.15rem 0.6rem;
+  /* Flush to the right edge, never past it. `.pane__scroll` sets `overflow-y`,
+     which computes `overflow-x` to `auto` rather than leaving it visible, so a
+     float bleeding even a fraction of a rem beyond the content box earns the
+     whole column a horizontal scrollbar. The column has no horizontal padding,
+     so zero here is already touching the edge, and the missing right border
+     plus the left-only radius are what make it read as attached to the side. */
+  margin: -0.75rem 0 0.15rem 0.6rem;
 }
 
 .computer__chip {
