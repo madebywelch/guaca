@@ -19,7 +19,7 @@ boundary, so importing that machinery would be cargo cult.
 
 | Idea | Source | Where it lives | Why it survived |
 |---|---|---|---|
-| **Agent Card** — a self-describing capability document used for discovery | A2A | `domain::agent::AgentCard` | An agent asked to "introduce yourself to everyone" needs a roster. The card is what makes `directory` answerable. |
+| **Agent Card**, a self-describing capability document used for discovery | A2A | `domain::agent::AgentCard` | An agent asked to "introduce yourself to everyone" needs a roster. The card is what makes `directory` answerable. |
 | **Directory as a first-class operation** | A2A, ANP | `llm::tools::DIRECTORY` | Hardcoding peers into prompts breaks the moment an agent is added. Discovery at call time is strictly better and costs one tool. |
 | **Typed, ordered multipart messages** rather than a bare string | ACP | `domain::envelope::Part` | A message can carry a guard notice, a tool trail, and prose without any of them being parsed back out of the others. |
 | **Explicit lifecycle** | all four | `domain::agent::Lifecycle` | Pause and delete need real states. See "Reduced" below for how it was trimmed. |
@@ -103,13 +103,13 @@ The lifecycle threat tables are the part worth keeping.
 
 The protocols themselves, and the people behind them:
 
-- **MCP** — Model Context Protocol, Anthropic.
-- **A2A** — Agent-to-Agent Protocol, Google. The Agent Card, the directory as a
+- **MCP**: Model Context Protocol, Anthropic.
+- **A2A**: Agent-to-Agent Protocol, Google. The Agent Card, the directory as a
   first-class operation, and the Update phase that card versioning comes from
   are all A2A's, and they are the ideas this app leans on hardest.
-- **ACP** — Agent Communication Protocol, IBM Research / BeeAI. Typed ordered
+- **ACP**: Agent Communication Protocol, IBM Research / BeeAI. Typed ordered
   multipart messages are ACP's shape.
-- **ANP** — Agent Network Protocol. Decentralised discovery, most of which this
+- **ANP**: Agent Network Protocol. Decentralised discovery, most of which this
   app has no use for, and one idea it does.
 
 The survey above is what made comparing them tractable, and its

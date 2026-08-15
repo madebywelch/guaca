@@ -39,6 +39,34 @@ lands on one side fails the build rather than at runtime.
 **`Store::open` has two SQLite lessons encoded in comments.** Do not reorder the
 pragmas or simplify the migration transaction without reading them.
 
+## Where things are
+
+```
+src/                 React + TypeScript. A view over the runtime, nothing more.
+src-tauri/src/
+  domain/            AgentCard, Envelope, Routine, ids. No I/O.
+  runtime/
+    guard.rs         The loop guard. Read this one first.
+    mod.rs           Agent actors and the message bus.
+    prompt.rs        Prompt assembly, including the trust boundary.
+    events.rs        Events pushed to the UI.
+  llm/               OpenAI-compatible client, SSE decoding, tool definitions.
+  db/                SQLite. Plain SQL, numbered migrations.
+  e2b.rs             Sandboxes: the machines agents work on.
+  proxy.rs           Loopback viewer for those machines.
+  eval.rs            Reads a run and says whether it communicated sensibly.
+  commands.rs        The entire IPC surface.
+  app.rs             The only file that knows Tauri exists.
+```
+
+The agent runtime lives in Rust, not the webview. Each agent is a `tokio` task
+with its own inbox, so sending is enqueue-and-return and N agents genuinely run
+concurrently. It also means your API key never crosses into the webview.
+
+`docs/ARCHITECTURE.md` covers the design decisions. `docs/PROTOCOL.md` records
+what the agent-interoperability literature contributed and what had to be
+invented.
+
 ## Conventions
 
 - Match the surrounding code. Comments explain why, never what.
@@ -65,7 +93,7 @@ that will catch you.
 The evals are a second suite asking a different question: not "did the runtime
 do as it was told" but "is the resulting traffic something an operator would
 want to watch". Every cascade defect this app has had passed the first suite and
-failed the second. If you change a prompt, run the live half — CI cannot see a
+failed the second. If you change a prompt, run the live half. CI cannot see a
 prompt that makes agents chattier.
 
 ```sh

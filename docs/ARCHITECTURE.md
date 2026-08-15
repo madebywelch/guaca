@@ -70,11 +70,28 @@ acknowledgement of an acknowledgement.
 
 Messages that do not expect a reply are batched: an agent waking to four replies
 reads all four in one turn. Because real replies arrive seconds apart rather
-than together, an agent will also wait briefly for replies it is still owed —
-counted as peers it has written to that have not written back — before reading
+than together, an agent will also wait briefly for replies it is still owed,
+counted as peers it has written to that have not written back, before reading
 what it already has. Waiting instead on "is anyone in this run still busy" was
 tried and was wrong: it made an agent sit through peers that had already
 answered and were finishing their own notes.
+
+## The five limits, and what each is for
+
+The guard is the backstop, not the mechanism. Each limit catches a different
+shape of runaway, so weakening one is not a local change. All are adjustable in
+Settings.
+
+| Limit | Default | Stops |
+|---|---|---|
+| Model calls per run | 60 | Runaway spend, whatever the shape |
+| Relay depth | 8 | Long delegation chains |
+| Messages between any two agents | 6 | Two agents ping-ponging |
+| Recipients per send | 8 | One message blasting the whole roster |
+| Identical message to the same peer | 1 | An agent restating itself |
+
+When a limit is hit the agent is told why, in words it can act on, and the
+reason appears on the transcript chip. Nothing is dropped silently.
 
 ## The budget counts model calls, not turns
 
@@ -92,7 +109,7 @@ principal. Guaca handles it in two places:
 
 1. `Trust` on the envelope: `Operator`, `Peer`, or `System`.
 2. The system prompt says what a peer may not do, and every incoming message is
-   prefixed with its true origin — `[OPERATOR]`, `[AGENT "Chef"]`, `[SYSTEM]` —
+   prefixed with its true origin (`[OPERATOR]`, `[AGENT "Chef"]`, `[SYSTEM]`),
    as the first thing the model reads. An agent that writes `[OPERATOR]` into
    its own message still arrives labelled as an agent. There is a test for that.
 
@@ -161,6 +178,28 @@ Three things came out of it, and all three are worth keeping:
 The lesson generalizes: "the process started and logged ready" is not evidence
 that the app works.
 
+## Two test suites, asking different questions
+
+The test suite answers "does the runtime do what it was told". The evals answer
+a different question: given an instruction someone would actually type, is the
+resulting traffic reasonable? Every cascade defect this app has had passed the
+first and failed the second, because each individual message was fine and the
+shape was not.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test evals   # scripted, in CI
+./scripts/evals.sh                                             # live, costs money
+```
+
+The scripted ones run a stub model playing a specific bad habit on purpose and
+check the runtime contains it. The live ones run the real prompts against your
+configured model and print the whole conversation, which is the only way to see
+that a prompt change made agents chattier.
+
+`src-tauri/src/eval.rs` is the analyser: it reads a run's envelopes and names
+what went wrong, and every fault it reports is decidable from the messages
+rather than judged.
+
 ## Known limitations
 
 Stated plainly rather than discovered later.
@@ -182,7 +221,7 @@ Stated plainly rather than discovered later.
   `send_message` rather than inferring it, which is the obvious next change if
   multi-round delegation starts mattering.
 - **Prompt instructions are guidance, not guarantees.** Several behaviours here
-  are steered by wording in `runtime/prompt.rs` — staying quiet when there is
-  nothing to add, not narrating that silence. A model can ignore any of it, so
+  are steered by wording in `runtime/prompt.rs`: staying quiet when there is
+  nothing to add, and not narrating that silence. A model can ignore any of it, so
   anything that must hold is enforced in the runtime and the rest is measured by
   the evals.
