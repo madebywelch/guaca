@@ -39,6 +39,8 @@ pub enum StoreError {
     GroupNotFound(GroupId),
     #[error("{name:?} still has {agents} agent(s); move or delete them before deleting the group")]
     GroupNotEmpty { name: String, agents: u32 },
+    #[error("every agent has to be in a group, so the first one cannot be deleted")]
+    CannotDeleteDefaultGroup,
 }
 
 /// Guards the one-time-per-file setup inside `Store::open`.
@@ -498,31 +500,34 @@ impl Store {
         Ok(self.list_groups()?.into_iter().find(|g| g.id == id))
     }
 
-    /// Deletes an empty group.
+    /// Deletes a group that no live agent is in.
     ///
-    /// Refuses while it still holds live agents rather than moving them
-    /// somewhere: relocating agents would quietly put them inside a boundary
-    /// they were deliberately kept out of, and deleting them would destroy work
-    /// on what reads like a tidy-up. The operator decides.
+    /// Refuses while it still holds agents that can act, rather than moving
+    /// them: relocating an agent would quietly put it inside a boundary it was
+    /// deliberately kept out of, and deleting it would destroy work on what
+    /// reads like a tidy-up. The operator decides.
+    ///
+    /// Deleted agents are a different matter. They are kept only so their
+    /// transcripts still render, and they cannot be reached or act, so they are
+    /// moved to the default group rather than holding a group open forever.
+    /// Counting them was why deleting every agent in a group still reported
+    /// three agents in it.
     pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
         let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
         if group.agent_count > 0 {
             return Err(StoreError::GroupNotEmpty { name: group.name, agents: group.agent_count });
         }
-        let conn = self.conn()?;
-        // Terminated agents keep pointing at the group so their transcripts
-        // still render, so the row cannot go while any of them remain.
-        let remaining: i64 = conn.query_row(
-            "SELECT count(*) FROM agents WHERE group_id=?1",
-            params![id.to_string()],
-            |r| r.get(0),
-        )?;
-        if remaining > 0 {
-            return Err(StoreError::GroupNotEmpty {
-                name: group.name,
-                agents: remaining.max(0) as u32,
-            });
+
+        let default = default_group_id();
+        if id == default {
+            return Err(StoreError::CannotDeleteDefaultGroup);
         }
+
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET group_id=?2 WHERE group_id=?1",
+            params![id.to_string(), default.to_string()],
+        )?;
         conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         Ok(())
     }
@@ -860,6 +865,62 @@ mod tests {
             let timeout: i64 = conn.query_row("PRAGMA busy_timeout", [], |r| r.get(0)).unwrap();
             assert!(timeout >= 5000, "busy timeout was not applied: {timeout}");
         }
+    }
+
+    #[test]
+    fn a_group_emptied_by_deleting_its_agents_can_then_be_deleted() {
+        // The bug this covers: deleting every agent in a group left it
+        // reporting three agents and refusing to go, because the rows are kept
+        // for their transcripts and were still being counted.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+        let group = store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                base_url: None,
+                default_model: None,
+                api_key: None,
+            })
+            .unwrap();
+
+        for name in ["One", "Two", "Three"] {
+            let mut d = draft(name);
+            d.group_id = Some(group.id);
+            let card = store.create_agent(&d).unwrap();
+            store.set_lifecycle(card.id, Lifecycle::Terminated).unwrap();
+        }
+
+        assert_eq!(
+            store.get_group(group.id).unwrap().unwrap().agent_count,
+            0,
+            "deleted agents are not agents you have"
+        );
+        store.delete_group(group.id).expect("an emptied group must be deletable");
+
+        // Their transcripts still have to render, so they keep a group.
+        let orphans: Vec<_> =
+            store.list_agents().unwrap().into_iter().filter(|c| c.group_id == group.id).collect();
+        assert!(orphans.is_empty(), "no agent may point at a group that is gone");
+    }
+
+    #[test]
+    fn a_group_with_live_agents_still_refuses_to_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let group = store
+            .create_group(&CleanGroup {
+                name: "Busy".into(),
+                base_url: None,
+                default_model: None,
+                api_key: None,
+            })
+            .unwrap();
+        let mut d = draft("Busy One");
+        d.group_id = Some(group.id);
+        store.create_agent(&d).unwrap();
+
+        assert!(matches!(store.delete_group(group.id), Err(StoreError::GroupNotEmpty { .. })));
     }
 
     #[test]

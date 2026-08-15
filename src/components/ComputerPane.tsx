@@ -26,6 +26,10 @@ export function ComputerPane({ agent }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState(false);
+  // Sleep sits beside Expand and Destroy throws work away, so neither happens
+  // on one click. Held here rather than in each button so switching agent or
+  // finishing an action always clears a half-pressed one.
+  const [confirming, setConfirming] = useState<"sleep" | "destroy" | null>(null);
   const paneRef = useRef<HTMLDivElement>(null);
 
   // Nothing at all until there is a key. Offering to give an agent a computer
@@ -67,6 +71,7 @@ export function ComputerPane({ agent }: Props) {
     // and made the terminal swallow every command silently.
     setBusy(false);
     setError(null);
+    setConfirming(null);
     if (configured) void look();
   }, [look, configured]);
 
@@ -83,6 +88,7 @@ export function ComputerPane({ agent }: Props) {
     setError(null);
     try {
       setComputer(await run());
+      setConfirming(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -107,15 +113,31 @@ export function ComputerPane({ agent }: Props) {
 
         {running && (
           <>
-            <button
-              type="button"
-              className="computer__tab"
-              disabled={busy}
-              onClick={() => void act(() => api.stopAgentComputer(agent.id))}
-              title="Sleep. The disk is kept, so it wakes signed in."
-            >
-              Sleep
-            </button>
+            {confirming === "sleep" ? (
+              <>
+                <button
+                  type="button"
+                  className="computer__tab computer__tab--danger"
+                  disabled={busy}
+                  onClick={() => void act(() => api.stopAgentComputer(agent.id))}
+                >
+                  Sleep it
+                </button>
+                <button type="button" className="computer__tab" onClick={() => setConfirming(null)}>
+                  Keep awake
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="computer__tab"
+                disabled={busy}
+                onClick={() => setConfirming("sleep")}
+                title="Sleep. The disk is kept, so it wakes signed in."
+              >
+                Sleep
+              </button>
+            )}
             <button
               type="button"
               className="computer__tab"
@@ -181,21 +203,40 @@ export function ComputerPane({ agent }: Props) {
             >
               {busy ? "Working…" : asleep ? "Wake" : running ? "Start the desktop" : "Give one"}
             </button>
-            {computer && (
-              <button
-                type="button"
-                className="btn btn--ghost"
-                disabled={busy}
-                onClick={() =>
-                  void act(async () => {
-                    await api.deleteAgentComputer(agent.id);
-                    return null;
-                  })
-                }
-              >
-                Destroy
-              </button>
-            )}
+            {computer &&
+              (confirming === "destroy" ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--danger"
+                    disabled={busy}
+                    onClick={() =>
+                      void act(async () => {
+                        await api.deleteAgentComputer(agent.id);
+                        return null;
+                      })
+                    }
+                  >
+                    Destroy it and its disk
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--ghost"
+                    onClick={() => setConfirming(null)}
+                  >
+                    Keep
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--ghost"
+                  disabled={busy}
+                  onClick={() => setConfirming("destroy")}
+                >
+                  Destroy
+                </button>
+              ))}
           </div>
         </div>
       )}

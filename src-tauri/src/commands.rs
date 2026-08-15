@@ -52,7 +52,9 @@ impl From<crate::db::StoreError> for CommandError {
             }
             // Its own kind: the UI can offer to move the agents, which it
             // cannot do for a generic storage failure.
-            StoreError::GroupNotEmpty { .. } => CommandError::new("groupNotEmpty", err.to_string()),
+            StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteDefaultGroup => {
+                CommandError::new("groupNotEmpty", err.to_string())
+            }
             other => CommandError::new("storage", other.to_string()),
         }
     }
@@ -249,7 +251,18 @@ pub fn update_agent(
 /// the other agents' channels. Hard-deleting would punch holes in transcripts
 /// that had nothing to do with this agent.
 #[tauri::command]
-pub fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    // The machine goes first. A deleted agent cannot be asked to tidy up after
+    // itself, and a sandbox nobody holds a reference to keeps billing.
+    let card = agent_card(&state, id)?;
+    // A missing key means no machine was ever made through this build, so there
+    // is nothing to release.
+    if let (Some(sandbox), Ok(client)) = (card.sandbox_id, computers(&state)) {
+        if let Err(err) = client.kill(&sandbox).await {
+            tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
+        }
+    }
+
     state.runtime.store().set_lifecycle(id, Lifecycle::Terminated)?;
     state.runtime.stop_agent(id);
     // The transcript survives a deletion, but the agent's private notes are

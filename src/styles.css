@@ -1770,3 +1770,10 @@ button {
   opacity: 0.55;
   font-style: italic;
 }
+
+/* A confirmation, not a warning: the button says what it will do and looks like
+   it means it. */
+.computer__tab--danger {
+  color: #e2a08a;
+  background: color-mix(in oklab, #e2a08a 14%, transparent);
+}

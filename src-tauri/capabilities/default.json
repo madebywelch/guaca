@@ -1,12 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capabilities for the single Guac window. Guac talks to the network only from Rust, so the webview gets no HTTP or filesystem access.",
-  "windows": ["main"],
+  "description": "Capabilities for the single Guac window. Guac talks to the network only from Rust, so the webview gets no HTTP or filesystem access. Opening a link in the operating system browser needs both the command and the url scope: the command alone is granted and then refuses every url.",
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:window:allow-start-dragging",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "opener:allow-default-urls"
   ]
 }
