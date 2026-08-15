@@ -20,7 +20,6 @@ import type {
   Group,
   GroupDraft,
   GroupId,
-  Output,
   RunId,
   Settings,
   SettingsPatch,
@@ -35,10 +34,6 @@ export const api = {
 
   /** Creates or wakes the sandbox, and brings the desktop up. Idempotent. */
   startAgentComputer: (id: AgentId) => invoke<Computer>("start_agent_computer", { id }),
-
-  /** The same call the agent's own tool makes, so both see one machine. */
-  runOnAgentComputer: (id: AgentId, command: string) =>
-    invoke<Output>("run_on_agent_computer", { id, command }),
 
   /** Destroys the sandbox and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),

@@ -151,6 +151,9 @@ struct Request {
     method: String,
     /// Header lines, minus the ones this rewrites.
     headers: Vec<String>,
+    /// A WebSocket upgrade, which must keep its connection open. Everything
+    /// else is answered one request per connection.
+    upgrade: bool,
     body: Vec<u8>,
 }
 
@@ -169,15 +172,25 @@ impl Request {
         let port: u16 = parts.next()?.parse().ok()?;
         let rest = parts.next().unwrap_or("");
 
-        let headers = lines
-            .filter(|line| {
-                let lower = line.to_ascii_lowercase();
-                // Host is replaced, and the token is added; anything already
-                // claiming to be one is not trusted from the webview.
-                !lower.starts_with("host:") && !lower.starts_with("e2b-traffic-access-token:")
-            })
-            .map(str::to_string)
-            .collect();
+        let mut upgrade = false;
+        let mut headers = Vec::new();
+        for line in lines {
+            let lower = line.to_ascii_lowercase();
+            if lower.starts_with("upgrade:") {
+                upgrade = true;
+            }
+            // Host is replaced and the token is added, so anything already
+            // claiming to be either is dropped rather than forwarded. The
+            // connection headers are decided below, not by the caller.
+            let rewritten = lower.starts_with("host:")
+                || lower.starts_with("e2b-traffic-access-token:")
+                || lower.starts_with("connection:")
+                || lower.starts_with("keep-alive:")
+                || lower.starts_with("proxy-connection:");
+            if !rewritten {
+                headers.push(line.to_string());
+            }
+        }
 
         Some(Request {
             sandbox,
@@ -185,6 +198,7 @@ impl Request {
             path: format!("/{rest}"),
             method,
             headers,
+            upgrade,
             body: body.as_bytes().to_vec(),
         })
     }
@@ -193,6 +207,18 @@ impl Request {
         let mut out = format!("{} {} HTTP/1.1\r\n", self.method, self.path);
         out.push_str(&format!("host: {host}\r\n"));
         out.push_str(&format!("e2b-traffic-access-token: {token}\r\n"));
+
+        // One request per connection, because only the first one on a
+        // connection is ever read and rewritten here: everything after the head
+        // is spliced through untouched. A browser reuses a connection for every
+        // asset on a page, so keep-alive sent the second request upstream with
+        // the proxy's own path still on it and noVNC's scripts never loaded.
+        // An upgrade is the exception; that connection has to stay open.
+        if self.upgrade {
+            out.push_str("connection: Upgrade\r\n");
+        } else {
+            out.push_str("connection: close\r\n");
+        }
         for header in &self.headers {
             if header.is_empty() {
                 continue;
@@ -211,6 +237,34 @@ mod tests {
 
     fn head(target: &str, extra: &str) -> Vec<u8> {
         format!("GET {target} HTTP/1.1\r\nhost: 127.0.0.1:9\r\n{extra}\r\n").into_bytes()
+    }
+
+    #[test]
+    fn an_ordinary_request_is_answered_one_per_connection() {
+        // Only the first request on a connection is read and rewritten; the
+        // rest of the bytes are spliced through. A browser reuses a connection
+        // for every asset, so keep-alive sent later requests upstream with the
+        // proxy's own path still attached and they came back as errors, which
+        // is a page whose scripts never load.
+        let req =
+            Request::parse(&head("/sbx/6080/app/ui.js", "connection: keep-alive\r\n")).unwrap();
+        assert!(!req.upgrade);
+        let out = req.rewritten("6080-sbx.e2b.app", "tok");
+        assert!(out.contains("connection: close\r\n"), "{out}");
+        assert!(!out.to_lowercase().contains("keep-alive"), "the caller's wish is not forwarded");
+    }
+
+    #[test]
+    fn an_upgrade_keeps_its_connection_open() {
+        let req = Request::parse(&head(
+            "/sbx/6080/websockify",
+            "connection: Upgrade\r\nupgrade: websocket\r\n",
+        ))
+        .unwrap();
+        assert!(req.upgrade);
+        let out = req.rewritten("6080-sbx.e2b.app", "tok");
+        assert!(out.contains("connection: Upgrade\r\n"), "{out}");
+        assert!(!out.contains("connection: close"), "closing it kills the desktop's socket");
     }
 
     #[test]

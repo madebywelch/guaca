@@ -906,6 +906,32 @@ impl Runtime {
                 )
             }
 
+            ToolInvocation::OpenOnDesktop { command } => {
+                let outcome = match self.ensure_computer(card).await {
+                    Ok((client, sandbox)) => {
+                        client.open_on_desktop(&sandbox.id, &sandbox.envd_token, &command).await
+                    }
+                    Err(err) => Err(err),
+                };
+                let (rendered, outcome) = match outcome {
+                    Ok(_) => (
+                        format!(
+                            "Opened `{command}` on your screen. The operator can see it. Use \
+                             run_command if you need to read anything back from the machine."
+                        ),
+                        ToolOutcome::Ok { summary: format!("opened {command}") },
+                    ),
+                    Err(err) => (
+                        format!("Error: could not open that on your screen ({err})."),
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
+                };
+                (
+                    rendered,
+                    Part::ToolCall { name: tools::OPEN_ON_DESKTOP.to_string(), arguments, outcome },
+                )
+            }
+
             ToolInvocation::SendMessage { to, text } => {
                 let deliveries = self.send_to_peers(
                     card,

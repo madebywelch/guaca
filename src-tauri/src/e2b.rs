@@ -342,6 +342,38 @@ impl E2bClient {
         Ok(())
     }
 
+    /// Starts a graphical program on the sandbox's screen.
+    ///
+    /// Brings the desktop up first, because an agent asked to open a browser
+    /// should not have to know that a display exists, and both steps are
+    /// idempotent. Detached the same way the desktop's own processes are, so
+    /// the window outlives the call that opened it.
+    pub async fn open_on_desktop(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+        program: &str,
+    ) -> Result<Output, E2bError> {
+        self.start_desktop(sandbox, envd_token).await?;
+
+        // Chrome cannot use its own sandbox inside one, and refuses to start
+        // without being told so. Harmless for anything else.
+        let program = if program.trim_start().starts_with("google-chrome")
+            && !program.contains("--no-sandbox")
+        {
+            program.replacen("google-chrome", "google-chrome --no-sandbox --no-first-run", 1)
+        } else {
+            program.to_string()
+        };
+
+        self.run(
+            sandbox,
+            envd_token,
+            &format!("(setsid env DISPLAY=:0 {program} >/tmp/guac-desktop-app.log 2>&1 </dev/null &) ; sleep 2; echo started"),
+        )
+        .await
+    }
+
     /// State plus, once the desktop answers, somewhere to watch it.
     pub async fn describe(
         &self,

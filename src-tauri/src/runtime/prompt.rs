@@ -54,11 +54,19 @@ pub fn system_prompt(
     // anything up.
     out.push_str("\n## Your computer\n");
     out.push_str(
-        "You have your own Linux machine. Call `run_command` to use it: it has a shell, a \
-         filesystem that persists between turns, and working internet access. Anything you do \
-         not already know, you can go and find out rather than declining. Look things up with \
-         `curl`, install what you need, write and run code. Say what you ran and what it \
-         returned rather than presenting the result as something you simply knew.\n",
+        "You have your own Linux machine, and it is not just a shell. It runs a full desktop \
+         with Google Chrome, Firefox, a file manager and an editor installed, and the operator \
+         can watch that screen and take control of it.\n\n\
+         - `run_command` runs a shell command on it. The filesystem persists between turns and \
+           the internet works, so anything you do not already know you can go and find out \
+           rather than declining. Use it to fetch text, install what you need, and run code.\n\
+         - `open_on_desktop` starts a program on the screen. Use it whenever you are asked to \
+           visit a site, look at a page, or do anything a person would do in a window, for \
+           example `google-chrome https://example.com`. The operator sees exactly what you \
+           opened.\n\n\
+         Never say you have no computer, no browser, or no way to look something up. You have \
+         all three. Say what you ran and what it returned rather than presenting a result as \
+         something you simply knew.\n",
     );
 
     // Placed before the roster and the rules: an agent's own accumulated
@@ -290,14 +298,21 @@ mod tests {
     }
 
     #[test]
-    fn every_agent_is_told_it_has_a_computer() {
-        // The failure this exists to stop: an agent with a working machine
-        // replying that it cannot access live data.
+    fn every_agent_is_told_it_has_a_computer_with_a_screen() {
+        // Two failures this exists to stop, both observed. An agent with a
+        // working machine replied that it could not access live data; and asked
+        // to go to a site, an agent with a running desktop and Chrome on it
+        // replied that it had no graphical browser.
         let prompt = system_prompt(&card("Manager"), &[], "", ReplyMode::ToOperator);
         assert!(prompt.contains("run_command"), "the tool has to be named, not just offered");
+        assert!(prompt.contains("open_on_desktop"), "the screen has to be named too");
         assert!(
             prompt.to_lowercase().contains("internet"),
             "an agent that does not know it can reach the network will decline instead of looking"
+        );
+        assert!(
+            prompt.to_lowercase().contains("chrome"),
+            "naming the browser is what stops it claiming it has none"
         );
     }
 

@@ -16,7 +16,7 @@ use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{AgentId, GroupId, RunId};
-use crate::e2b::{Computer, E2bClient, E2bError, Output};
+use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -147,21 +147,6 @@ pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Re
         client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(computer)
-}
-
-/// Runs one command on an agent's computer on the operator's behalf.
-///
-/// Goes through the same path the agent's own tool takes, so the terminal in
-/// the pane and the agent are looking at exactly one machine.
-#[tauri::command]
-pub async fn run_on_agent_computer(
-    state: State<'_, AppState>,
-    id: AgentId,
-    command: String,
-) -> Reply<Output> {
-    let card = agent_card(&state, id)?;
-    let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
-    Ok(client.run(&sandbox.id, &sandbox.envd_token, &command).await?)
 }
 
 /// Destroys the sandbox and everything on its disk.

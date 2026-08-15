@@ -19,6 +19,7 @@ pub const DIRECTORY: &str = "directory";
 pub const SEND_MESSAGE: &str = "send_message";
 pub const UPDATE_NOTES: &str = "update_notes";
 pub const RUN_COMMAND: &str = "run_command";
+pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -85,6 +86,30 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: OPEN_ON_DESKTOP.to_string(),
+            description: "Open a program on your computer's screen, where the operator can watch \
+                          it and take over. Your machine runs a full Linux desktop with \
+                          google-chrome, firefox-esr, a file manager and an editor installed. \
+                          Use this whenever you are asked to visit a site, look at a page, or do \
+                          anything a person would do in a window: `run_command` fetches text, \
+                          this shows the real thing on screen. The program keeps running after \
+                          this returns."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The program and its arguments, e.g. \
+                                        `google-chrome https://cnn.com`."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to one or more other agents. Delivery is asynchronous \
                           and non-blocking: this returns as soon as the messages are queued. \
@@ -121,13 +146,14 @@ pub enum ToolInvocation {
     SendMessage { to: Vec<String>, text: String },
     UpdateNotes { content: String },
     RunCommand { command: String },
+    OpenOnDesktop { command: String },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command."
+         run_command, open_on_desktop."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -140,6 +166,8 @@ pub enum ToolParseError {
     MissingContent,
     #[error("run_command needs a non-empty `command` string")]
     MissingCommand,
+    #[error("open_on_desktop needs a non-empty `command` string")]
+    MissingDesktopCommand,
 }
 
 impl ToolParseError {
@@ -157,6 +185,11 @@ impl ToolParseError {
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
             ),
+            ToolParseError::MissingDesktopCommand => {
+                "Error: `command` must name a graphical program to start, for example \
+                 {\"command\": \"google-chrome https://cnn.com\"}."
+                    .to_string()
+            }
             ToolParseError::MissingCommand => {
                 "Error: `command` must be a non-empty string, for example \
                  {\"command\": \"curl -s wttr.in/Charleston?format=3\"}."
@@ -195,6 +228,18 @@ struct SendArgs {
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
+        OPEN_ON_DESKTOP => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: OPEN_ON_DESKTOP.to_string(),
+                detail: e.to_string(),
+            })?;
+            match value.get("command").or_else(|| value.get("app")).or_else(|| value.get("url")) {
+                Some(serde_json::Value::String(command)) if !command.trim().is_empty() => {
+                    Ok(ToolInvocation::OpenOnDesktop { command: command.clone() })
+                }
+                _ => Err(ToolParseError::MissingDesktopCommand),
+            }
+        }
         RUN_COMMAND => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: RUN_COMMAND.to_string(),
@@ -367,9 +412,35 @@ mod tests {
     }
 
     #[test]
+    fn a_desktop_program_is_parsed_from_any_of_the_obvious_spellings() {
+        // Asked to visit a site, a model reaches for `url` as often as
+        // `command`, and refusing one of them wastes a whole turn.
+        for field in ["command", "app", "url"] {
+            let parsed =
+                parse(&call(OPEN_ON_DESKTOP, &format!("{{\"{field}\": \"google-chrome x\"}}")));
+            assert_eq!(
+                parsed,
+                Ok(ToolInvocation::OpenOnDesktop { command: "google-chrome x".into() })
+            );
+        }
+    }
+
+    #[test]
+    fn the_desktop_tool_names_a_browser_so_the_agent_knows_it_has_one() {
+        // The failure this exists to stop: an agent with a working desktop
+        // replying that it has no graphical browser.
+        let spec = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        assert!(spec.description.contains("google-chrome"), "{}", spec.description);
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs();
-        assert_eq!(specs.len(), 4, "directory, run_command, send_message, update_notes");
+        assert_eq!(
+            specs.len(),
+            5,
+            "directory, run_command, open_on_desktop, send_message, update_notes"
+        );
         for spec in &specs {
             assert_eq!(
                 spec.parameters["additionalProperties"], false,
