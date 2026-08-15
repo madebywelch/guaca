@@ -190,6 +190,9 @@ pub fn system_prompt(
              Everything you have already done this run is in the history above, including every \
              message you have already sent. Do not do it again because you have been reminded of \
              it.\n\n\
+             Do not write to a peer here. Nobody is waiting on you, so a message would only be \
+             an acknowledgement, and it will be refused. If you need something further from \
+             someone, say so in your note rather than asking them now.\n\n\
              If something does need saying, your final message is filed as a short note in your \
              own channel. One or two sentences, and only if it tells the operator something your \
              last note did not.\n"
@@ -502,6 +505,12 @@ mod tests {
         assert!(
             note.contains("already sent"),
             "being reminded of work is not a reason to do it again"
+        );
+        // Dropped once already, in the same edit that added the silence
+        // permission, and three agents spent a run thanking each other.
+        assert!(
+            note.contains("Do not write to a peer"),
+            "the mode that means nobody is waiting has to say so"
         );
     }
 

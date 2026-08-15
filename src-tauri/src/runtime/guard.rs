@@ -108,14 +108,37 @@ impl GuardLimits {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum Refusal {
-    HopLimit { hop: u16, max: u16 },
-    RunBudgetExhausted { used: u32, max: u32 },
-    PairLimit { recipient: String, sent: u32, max: u32 },
-    DuplicateContent { recipient: String },
-    FanOutTooWide { requested: usize, max: usize },
+    HopLimit {
+        hop: u16,
+        max: u16,
+    },
+    RunBudgetExhausted {
+        used: u32,
+        max: u32,
+    },
+    PairLimit {
+        recipient: String,
+        sent: u32,
+        max: u32,
+    },
+    DuplicateContent {
+        recipient: String,
+    },
+    FanOutTooWide {
+        requested: usize,
+        max: usize,
+    },
     SelfAddressed,
-    UnknownRecipient { recipient: String },
-    RecipientTerminated { recipient: String },
+    UnknownRecipient {
+        recipient: String,
+    },
+    RecipientTerminated {
+        recipient: String,
+    },
+    /// Both sides have spoken and neither is waiting. See `Runtime::run_turn`.
+    ExchangeSettled {
+        recipient: String,
+    },
 }
 
 impl Refusal {
@@ -155,6 +178,11 @@ impl Refusal {
             Refusal::RecipientTerminated { recipient } => {
                 format!("Refused: {recipient} has been deleted and cannot receive messages.")
             }
+            Refusal::ExchangeSettled { recipient } => format!(
+                "Refused: you and {recipient} have both had your say in this run and neither of \
+                 you is waiting on the other. Acknowledging an acknowledgement is not work. \
+                 Reply to the operator instead, and say there what you still need."
+            ),
         }
     }
 
@@ -173,6 +201,9 @@ impl Refusal {
             Refusal::SelfAddressed => "self-addressed message".to_string(),
             Refusal::UnknownRecipient { recipient } => format!("no agent named {recipient}"),
             Refusal::RecipientTerminated { recipient } => format!("{recipient} was deleted"),
+            Refusal::ExchangeSettled { recipient } => {
+                format!("nothing outstanding with {recipient}")
+            }
         }
     }
 }
@@ -298,6 +329,16 @@ impl RunState {
     }
 
     /// Checks fan-out width before any individual recipient is evaluated.
+    /// Whether `from` has written to `to` at any point in this run.
+    ///
+    /// Batch membership cannot answer this. Replies arrive milliseconds apart
+    /// and an actor drains whatever has landed, so three peers answering at
+    /// once can be split across turns: two of them then look like agents this
+    /// one has never spoken to, and get messages that demand answers.
+    pub fn has_written(&self, from: AgentId, to: AgentId) -> bool {
+        self.pair_counts.get(&(from, to)).copied().unwrap_or(0) > 0
+    }
+
     pub fn check_fanout(&self, requested: usize) -> Option<Refusal> {
         if requested > self.limits.max_fanout_per_call {
             return Some(Refusal::FanOutTooWide {

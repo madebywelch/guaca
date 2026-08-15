@@ -566,21 +566,10 @@ impl Runtime {
         // reply goes. Everything else in the batch is context.
         let reply_target = batch.iter().rev().find(|e| e.expects_reply).map(|e| e.from);
 
-        // Every peer that wrote in this batch, answered or not.
-        //
-        // Writing back to one of them continues an exchange rather than opening
-        // one, which is what decides whether the message demands an answer. It
-        // cannot be read off `reply_target`: that is a single envelope, and a
-        // batch of replies contains none that want answering at all, so a
-        // courtesy "thanks, noted" to one of three peers who had just replied
-        // was filed as a fresh approach and started the exchange over.
-        let correspondents: HashSet<AgentId> = batch
-            .iter()
-            .filter_map(|e| match e.from {
-                Participant::Agent { id } => Some(id),
-                _ => None,
-            })
-            .collect();
+        // Whether anything this agent woke up to actually asked it for
+        // something. When nothing did, an exchange it writes into has already
+        // finished: see `send_to_peers`.
+        let settled = reply_target.is_none();
         let mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
@@ -731,15 +720,7 @@ impl Runtime {
 
             for call in &completion.tool_calls {
                 let outcome = self
-                    .execute_tool(
-                        &card,
-                        run_id,
-                        inbound_hop,
-                        cause,
-                        &correspondents,
-                        &mut addressed,
-                        call,
-                    )
+                    .execute_tool(&card, run_id, inbound_hop, cause, settled, &mut addressed, call)
                     .await;
                 tool_parts.push(outcome.part);
                 messages.push(ChatMessage::Tool {
@@ -961,9 +942,8 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        // Peers that wrote to this agent in this batch, so a send aimed at one
-        // of them is recognised as continuing rather than as a fresh approach.
-        correspondents: &HashSet<AgentId>,
+        // True when nothing this agent woke up to asked it for anything.
+        settled: bool,
         // Peers this turn has already written to. See `emit_reply`.
         addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
@@ -971,16 +951,7 @@ impl Runtime {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
 
         let (rendered, part, image) = self
-            .dispatch_tool(
-                card,
-                run_id,
-                inbound_hop,
-                cause,
-                correspondents,
-                addressed,
-                call,
-                arguments,
-            )
+            .dispatch_tool(card, run_id, inbound_hop, cause, settled, addressed, call, arguments)
             .await;
         ToolResult { rendered, part, image }
     }
@@ -994,7 +965,7 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        correspondents: &HashSet<AgentId>,
+        settled: bool,
         addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
         arguments: serde_json::Value,
@@ -1170,7 +1141,7 @@ impl Runtime {
                     run_id,
                     inbound_hop,
                     cause,
-                    correspondents,
+                    settled,
                     addressed,
                     &to,
                     &text,
@@ -1326,8 +1297,7 @@ impl Runtime {
         run_id: RunId,
         inbound_hop: u16,
         cause: Option<MessageId>,
-        // Peers that wrote to this agent in the batch it is answering.
-        correspondents: &HashSet<AgentId>,
+        settled: bool,
         addressed: &mut HashSet<AgentId>,
         recipients: &[String],
         text: &str,
@@ -1412,7 +1382,27 @@ impl Runtime {
                     // replies, this agent replies to that, and the exchange only
                     // stops when the guard's dedup or hop limit fires. Two
                     // agents introducing themselves reached hop 7 of 8 that way.
-                    let answering = correspondents.contains(&target.id);
+                    // Has this peer written to me at any point in this run?
+                    // Asked of the whole run, not of the batch: replies land
+                    // milliseconds apart and an actor takes whatever is in the
+                    // inbox, so three peers answering at once can be split
+                    // across turns. Two of them then looked like agents this
+                    // one had never met, and got messages demanding answers.
+                    let heard_from =
+                        { self.inner.guard.lock().run(run_id).has_written(target.id, card.id) };
+
+                    // Nothing asked this agent anything, and this peer has
+                    // already had its say. There is nothing left to answer, and
+                    // a message here can only be an acknowledgement of an
+                    // acknowledgement, which is how a crew spends an afternoon
+                    // being polite at itself.
+                    if settled && heard_from {
+                        let refusal = Refusal::ExchangeSettled { recipient: target.name.clone() };
+                        out.push(Delivery::Refused { to: name.clone(), reason: refusal.explain() });
+                        continue;
+                    }
+
+                    let answering = heard_from;
 
                     let envelope = Envelope {
                         id: MessageId::new(),

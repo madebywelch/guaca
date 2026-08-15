@@ -1089,15 +1089,56 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
 }
 
 #[tokio::test]
-async fn thanking_one_of_several_peers_who_replied_together_ends_the_exchange() {
-    // Observed: a manager introduced itself to three agents, all three replied
-    // at once, and its courtesy "thanks" to one of them was filed as a fresh
-    // approach. That peer replied, the manager thanked it again, and the
-    // exchange walked out to hop 6 with the operator watching five near
-    // identical summaries arrive.
+async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
+    // The refusal is read mid-turn by the model that caused it, and it is the
+    // only thing standing between "stop being polite at each other" and a
+    // model that tries the same send again with different words.
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = seen.clone();
+    let stub = serve(move |body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if has_tool_result(body) {
+            recorder.lock().unwrap().push(text);
+            Script::Say("understood".into())
+        } else if text.contains("good to meet you") {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "thanks Chef".into() }
+        } else if text.contains("hello from manager") {
+            Script::SendTo { recipients: vec!["Manager".into()], text: "good to meet you".into() }
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    let told = seen.lock().unwrap().join("\n");
+    assert!(
+        told.contains("neither of you is waiting on the other"),
+        "the agent has to be told why, or it rewords and tries again: {told}"
+    );
+    assert!(
+        told.contains("Reply to the operator instead"),
+        "a refusal without a way forward is a dead end: {told}"
+    );
+}
+
+#[tokio::test]
+async fn an_introduction_ends_when_everyone_has_answered() {
+    // The whole shape, as an operator ran it: introduce yourself to three
+    // agents, all three answer, and the manager goes back round thanking them.
     //
-    // The batch is what makes it happen: replies do not expect answers, so the
-    // envelope the turn is "answering" is nobody, and every send looks new.
+    // The replies land milliseconds apart, so the manager's turn sees one of
+    // them and the other two arrive after. Deciding "am I answering this peer"
+    // from the batch made those two strangers, and strangers get messages that
+    // demand answers: the exchange went to hop 4 and produced four summaries
+    // for one instruction.
     let stub = serve(|body| {
         let text = body["messages"]
             .as_array()
@@ -1106,11 +1147,14 @@ async fn thanking_one_of_several_peers_who_replied_together_ends_the_exchange() 
 
         if has_tool_result(body) {
             Script::Say("introductions done".into())
-        } else if text.contains("glad to be here") {
-            // The manager thanks one of the three that just replied.
-            Script::SendTo { recipients: vec!["Chef".into()], text: "thanks Chef".into() }
-        } else if text.contains("hello from manager") || text.contains("thanks Chef") {
-            Script::SendTo { recipients: vec!["Manager".into()], text: "glad to be here".into() }
+        } else if text.contains("good to meet you") {
+            // The manager thanks all three, whatever the batch happened to hold.
+            Script::SendTo {
+                recipients: vec!["Chef".into(), "Baker".into(), "Grocer".into()],
+                text: "thanks all".into(),
+            }
+        } else if text.contains("hello from manager") {
+            Script::SendTo { recipients: vec!["Manager".into()], text: "good to meet you".into() }
         } else {
             Script::SendTo {
                 recipients: vec!["Chef".into(), "Baker".into(), "Grocer".into()],
@@ -1127,20 +1171,15 @@ async fn thanking_one_of_several_peers_who_replied_together_ends_the_exchange() 
 
     let feed = h.feed();
     let deepest = feed.iter().map(|e| e.hop).max().unwrap_or(0);
-    let thanks = feed
-        .iter()
-        .find(|e| e.plain_text().contains("thanks Chef"))
-        .expect("the manager's thanks must have been delivered");
-
-    assert!(
-        !thanks.expects_reply,
-        "writing back to a peer that just replied continues the exchange; demanding an \
-         answer restarts it"
+    assert_eq!(
+        deepest,
+        2,
+        "three approaches and three answers is the whole exchange, got {:?}",
+        feed.iter().map(|e| (e.hop, e.expects_reply)).collect::<Vec<_>>()
     );
     assert!(
-        deepest <= 4,
-        "the exchange must settle once everyone has been thanked, got hop {deepest} across {:?}",
-        feed.iter().map(|e| (e.hop, e.expects_reply)).collect::<Vec<_>>()
+        !feed.iter().any(|e| e.plain_text().contains("thanks all")),
+        "an exchange where nobody is waiting cannot be restarted with a courtesy"
     );
 }
 
