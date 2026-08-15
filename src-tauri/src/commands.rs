@@ -127,9 +127,10 @@ pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Op
     };
     let client = computers(&state)?;
 
-    if !client.is_alive(&sandbox).await? {
-        // E2B reclaims idle sandboxes, and a reclaimed one leaves a dangling
-        // id. Clearing it turns a dead end into an offer to make a new one.
+    if client.state(&sandbox).await? == crate::e2b::SandboxState::Gone {
+        // A reclaimed sandbox leaves a dangling id. Clearing it turns a dead
+        // end into an offer to make a new one. A sleeping one is left alone:
+        // it still holds the disk, and waking it is the operator's call.
         state.runtime.store().set_agent_sandbox(id, None)?;
         return Ok(None);
     }
@@ -147,6 +148,26 @@ pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Re
         client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(computer)
+}
+
+/// Puts an agent's machine to sleep.
+///
+/// Not a delete: the disk is kept, so a browser that was signed in still is
+/// when it wakes. This is what a bill-conscious operator wants, and what the
+/// idle timeout does on its own.
+#[tauri::command]
+pub async fn stop_agent_computer(
+    state: State<'_, AppState>,
+    id: AgentId,
+) -> Reply<Option<Computer>> {
+    let card = agent_card(&state, id)?;
+    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
+        return Ok(None);
+    };
+    let client = computers(&state)?;
+    client.pause(&sandbox).await?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
 }
 
 /// Destroys the sandbox and everything on its disk.
@@ -331,6 +352,7 @@ pub struct SettingsPatch {
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
+    pub computer_idle_minutes: Option<u32>,
 }
 
 #[tauri::command]
@@ -346,6 +368,11 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
     }
     if let Some(key) = patch.e2b_api_key {
         config.e2b.api_key = key.trim().to_string();
+    }
+    if let Some(minutes) = patch.computer_idle_minutes {
+        // A machine that sleeps after zero minutes can never be used, and one
+        // that never sleeps is a bill nobody chose.
+        config.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();

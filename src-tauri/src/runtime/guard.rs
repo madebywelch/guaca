@@ -45,6 +45,19 @@ pub struct GuardLimits {
     pub max_fanout_per_call: usize,
     /// Maximum messages one agent may send to one specific peer per run.
     pub max_sends_per_pair: u32,
+    /// Maximum model calls inside a single turn as an agent works through tool
+    /// results.
+    ///
+    /// Working a browser is a loop of read, act, read again, and each pass is
+    /// one of these. Four was enough when the only tools were messaging and
+    /// notes, and far too few once an agent could use a computer: it stopped
+    /// mid-task, having done part of the work and reported none of it.
+    #[serde(default = "default_tool_rounds")]
+    pub max_tool_rounds: u16,
+}
+
+pub fn default_tool_rounds() -> u16 {
+    24
 }
 
 impl Default for GuardLimits {
@@ -62,7 +75,13 @@ impl Default for GuardLimits {
         // The run budget is the real spend control. Hops and per-pair counts
         // exist to stop relay chains and ping-pong, so they only have to sit
         // above the depth of honest work.
-        Self { max_hops: 8, max_steps_per_run: 60, max_fanout_per_call: 8, max_sends_per_pair: 6 }
+        Self {
+            max_hops: 8,
+            max_steps_per_run: 60,
+            max_fanout_per_call: 8,
+            max_sends_per_pair: 6,
+            max_tool_rounds: default_tool_rounds(),
+        }
     }
 }
 
@@ -77,6 +96,9 @@ impl GuardLimits {
             max_steps_per_run: self.max_steps_per_run.clamp(1, 500),
             max_fanout_per_call: self.max_fanout_per_call.clamp(1, 64),
             max_sends_per_pair: self.max_sends_per_pair.clamp(1, 50),
+            // The run budget is the real spend control, so this can be generous:
+            // a browsing turn legitimately takes dozens of passes.
+            max_tool_rounds: self.max_tool_rounds.clamp(1, 100),
         }
     }
 }
@@ -365,6 +387,7 @@ mod tests {
             max_steps_per_run: 500,
             max_fanout_per_call: 64,
             max_sends_per_pair: 50,
+            max_tool_rounds: 24,
         }
     }
 
@@ -504,23 +527,27 @@ mod tests {
             max_steps_per_run: 0,
             max_fanout_per_call: 0,
             max_sends_per_pair: 0,
+            max_tool_rounds: 0,
         }
         .sanitized();
         assert_eq!(zeroed.max_hops, 1);
         assert_eq!(zeroed.max_steps_per_run, 1);
         assert_eq!(zeroed.max_fanout_per_call, 1);
         assert_eq!(zeroed.max_sends_per_pair, 1);
+        assert_eq!(zeroed.max_tool_rounds, 1, "a turn that cannot act is a turn that does nothing");
 
         let huge = GuardLimits {
             max_hops: u16::MAX,
             max_steps_per_run: u32::MAX,
             max_fanout_per_call: usize::MAX,
             max_sends_per_pair: u32::MAX,
+            max_tool_rounds: u16::MAX,
         }
         .sanitized();
         assert_eq!(huge.max_hops, 16);
         assert_eq!(huge.max_steps_per_run, 500);
         assert_eq!(huge.max_fanout_per_call, 64);
+        assert_eq!(huge.max_tool_rounds, 100);
         assert_eq!(huge.max_sends_per_pair, 50);
     }
 

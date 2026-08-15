@@ -69,7 +69,7 @@ export interface GroupDraft {
 /** An agent's sandbox: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
   sandboxId: string;
-  /** `running` or `stopped`. E2B reclaims idle sandboxes rather than parking them. */
+  /** `running`, `asleep` (disk kept, wakes on use) or `gone`. */
   state: string;
   /** Absent until the desktop processes are up inside the sandbox. */
   vncUrl: string | null;
@@ -121,11 +121,14 @@ export interface GuardLimits {
   maxStepsPerRun: number;
   maxFanoutPerCall: number;
   maxSendsPerPair: number;
+  /** Model calls inside one turn as an agent works through tool results. */
+  maxToolRounds: number;
 }
 
 export interface Settings {
   e2bKeySet: boolean;
   e2bKeyHint: string;
+  computerIdleMinutes: number;
   baseUrl: string;
   defaultModel: string;
   apiKeySet: boolean;
@@ -137,6 +140,7 @@ export interface Settings {
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
 export interface SettingsPatch {
   e2bApiKey?: string;
+  computerIdleMinutes?: number;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;

@@ -525,6 +525,7 @@ async fn two_agents_told_to_talk_forever_stop_on_their_own() {
             max_steps_per_run: 12,
             max_fanout_per_call: 8,
             max_sends_per_pair: 3,
+            max_tool_rounds: 24,
         },
     );
     let run = h.runtime.send_from_human(h.id("Ping"), "Talk to Pong forever.").unwrap();

@@ -85,6 +85,7 @@ const V0_LIMITS: GuardLimits = GuardLimits {
     max_steps_per_run: 40,
     max_fanout_per_call: 8,
     max_sends_per_pair: 3,
+    max_tool_rounds: 4,
 };
 
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -102,10 +103,27 @@ pub struct AppConfig {
 ///
 /// App-wide rather than per group: it is one E2B account, and a sandbox is
 /// billed to it no matter which crew asked for one.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct E2bConfig {
     pub api_key: String,
+    /// Minutes of inactivity before a machine puts itself to sleep.
+    ///
+    /// Sleeping keeps the disk, so a browser stays signed in; it is the bill
+    /// that stops, not the work. Refreshed on every use, so this is idle time
+    /// rather than a lifetime.
+    #[serde(default = "default_idle_minutes")]
+    pub idle_minutes: u32,
+}
+
+pub fn default_idle_minutes() -> u32 {
+    15
+}
+
+impl Default for E2bConfig {
+    fn default() -> Self {
+        Self { api_key: String::new(), idle_minutes: default_idle_minutes() }
+    }
 }
 
 /// Brings stored settings up to date, returning true if anything changed.
@@ -131,6 +149,11 @@ pub fn migrate(config: &mut AppConfig) -> bool {
     if config.limits.max_sends_per_pair == V0_LIMITS.max_sends_per_pair {
         config.limits.max_sends_per_pair = current.max_sends_per_pair;
     }
+    // Four was the hardcoded value before this was settable, and it is far too
+    // few for an agent working a browser.
+    if config.limits.max_tool_rounds == V0_LIMITS.max_tool_rounds {
+        config.limits.max_tool_rounds = current.max_tool_rounds;
+    }
 
     // Always worth persisting even when no limit moved: recording the version
     // is what stops this running again on every launch.
@@ -146,6 +169,7 @@ pub fn migrate(config: &mut AppConfig) -> bool {
 pub struct RedactedConfig {
     pub e2b_key_set: bool,
     pub e2b_key_hint: String,
+    pub computer_idle_minutes: u32,
     pub base_url: String,
     pub default_model: String,
     pub api_key_set: bool,
@@ -159,6 +183,7 @@ impl AppConfig {
         RedactedConfig {
             e2b_key_set: !self.e2b.api_key.trim().is_empty(),
             e2b_key_hint: hint_for(&self.e2b.api_key),
+            computer_idle_minutes: self.e2b.idle_minutes,
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
             api_key_set: !self.inference.api_key.trim().is_empty(),

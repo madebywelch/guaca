@@ -20,9 +20,16 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   apiKeySet: true,
   e2bKeySet: false,
   e2bKeyHint: "",
+  computerIdleMinutes: 15,
   apiKeyHint: "...9999",
   requestTimeoutSecs: 120,
-  limits: { maxHops: 4, maxStepsPerRun: 40, maxFanoutPerCall: 8, maxSendsPerPair: 3 },
+  limits: {
+    maxHops: 4,
+    maxStepsPerRun: 40,
+    maxFanoutPerCall: 8,
+    maxSendsPerPair: 3,
+    maxToolRounds: 24,
+  },
 }));
 
 vi.mock("./lib/ipc", () => ({
@@ -39,6 +46,7 @@ vi.mock("./lib/ipc", () => ({
         apiKeySet: false,
         e2bKeySet: false,
         e2bKeyHint: "",
+        computerIdleMinutes: 15,
         apiKeyHint: "",
       },
     ],
@@ -147,9 +155,16 @@ describe("App", () => {
       apiKeySet: false,
       e2bKeySet: false,
       e2bKeyHint: "",
+      computerIdleMinutes: 15,
       apiKeyHint: "",
       requestTimeoutSecs: 120,
-      limits: { maxHops: 4, maxStepsPerRun: 40, maxFanoutPerCall: 8, maxSendsPerPair: 3 },
+      limits: {
+        maxHops: 4,
+        maxStepsPerRun: 40,
+        maxFanoutPerCall: 8,
+        maxSendsPerPair: 3,
+        maxToolRounds: 24,
+      },
     });
     render(<App />);
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();

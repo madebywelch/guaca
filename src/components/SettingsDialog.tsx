@@ -25,6 +25,13 @@ const LIMITS: LimitField[] = [
     max: 500,
   },
   {
+    key: "maxToolRounds",
+    label: "Tool calls per turn",
+    hint: "How many times an agent can act and look again within one turn. Working a browser is a loop of read, click, read again, so this needs room.",
+    min: 1,
+    max: 100,
+  },
+  {
     key: "maxHops",
     label: "Relay depth",
     hint: "How far a message can travel from you. A relays to B relays to C is two hops.",
@@ -55,8 +62,15 @@ export function SettingsDialog({ onClose }: Props) {
   const [model, setModel] = useState(settings?.defaultModel ?? "");
   const [apiKey, setApiKey] = useState("");
   const [e2bKey, setE2bKey] = useState("");
+  const [idleMinutes, setIdleMinutes] = useState("");
   const [limits, setLimits] = useState<GuardLimits>(
-    settings?.limits ?? { maxHops: 8, maxStepsPerRun: 60, maxFanoutPerCall: 8, maxSendsPerPair: 6 },
+    settings?.limits ?? {
+      maxHops: 8,
+      maxStepsPerRun: 60,
+      maxFanoutPerCall: 8,
+      maxSendsPerPair: 6,
+      maxToolRounds: 24,
+    },
   );
   const [status, setStatus] = useState<{ tone: "ok" | "error" | "info"; text: string } | null>(
     null,
@@ -82,6 +96,7 @@ export function SettingsDialog({ onClose }: Props) {
         // Omitted when blank, so saving without retyping keeps the stored key.
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
+        ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
       });
       setSettings(next);
       setApiKey("");
@@ -104,6 +119,7 @@ export function SettingsDialog({ onClose }: Props) {
         defaultModel: model,
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
+        ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
       });
       setStatus({ tone: "ok", text: result });
     } catch (error) {
@@ -167,6 +183,21 @@ export function SettingsDialog({ onClose }: Props) {
           <span className="field__hint">
             Gives every agent its own computer: a desktop and a terminal in a sandbox, shown in the
             corner of its channel. Without a key that pane stays closed.
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field__label">Sleep computers after</span>
+          <input
+            className="input input--mono"
+            inputMode="numeric"
+            value={idleMinutes}
+            placeholder={`${settings?.computerIdleMinutes ?? 15} minutes`}
+            onChange={(event) => setIdleMinutes(event.target.value.replace(/[^0-9]/g, ""))}
+          />
+          <span className="field__hint">
+            Idle minutes before a machine sleeps. Sleeping keeps its disk, so a browser stays signed
+            in and wakes where it left off. Only the running time is billed.
           </span>
         </label>
 

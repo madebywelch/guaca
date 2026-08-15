@@ -79,6 +79,7 @@ export function ComputerPane({ agent }: Props) {
   if (!configured || !checked) return null;
 
   const running = computer?.state === "running";
+  const asleep = computer?.state === "asleep";
 
   return (
     <div className="computer" data-open={open ? "true" : undefined}>
@@ -91,14 +92,25 @@ export function ComputerPane({ agent }: Props) {
         )}
 
         {running && (
-          <button
-            type="button"
-            className="computer__tab"
-            onClick={() => setOpen((o) => !o)}
-            title={open ? "Shrink to a preview" : "Make it bigger"}
-          >
-            {open ? "Minimise" : "Expand"}
-          </button>
+          <>
+            <button
+              type="button"
+              className="computer__tab"
+              disabled={busy}
+              onClick={() => void act(() => api.stopAgentComputer(agent.id))}
+              title="Sleep. The disk is kept, so it wakes signed in."
+            >
+              Sleep
+            </button>
+            <button
+              type="button"
+              className="computer__tab"
+              onClick={() => setOpen((o) => !o)}
+              title={open ? "Shrink to a preview" : "Make it bigger"}
+            >
+              {open ? "Minimise" : "Expand"}
+            </button>
+          </>
         )}
       </div>
 
@@ -130,10 +142,14 @@ export function ComputerPane({ agent }: Props) {
           ) : (
             <p className="computer__note">
               {busy
-                ? "Building a machine. This takes a few seconds."
-                : running
-                  ? "Running, but the desktop is not up. Start it to watch, or use the terminal."
-                  : "No computer yet. Agents get one the first time they run a command."}
+                ? "Working on it. This takes a few seconds."
+                : asleep
+                  ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed
+                     into anything it was signed into. It sleeps again after
+                     ${settings?.computerIdleMinutes ?? 15} idle minutes.`
+                  : running
+                    ? "Running, but the desktop is not up yet."
+                    : "No computer yet. Agents get one the first time they use it."}
             </p>
           )}
           <div className="computer__actions">
@@ -143,7 +159,7 @@ export function ComputerPane({ agent }: Props) {
               disabled={busy}
               onClick={() => void act(() => api.startAgentComputer(agent.id))}
             >
-              {busy ? "Working…" : running ? "Start the desktop" : "Give one"}
+              {busy ? "Working…" : asleep ? "Wake" : running ? "Start the desktop" : "Give one"}
             </button>
             {computer && (
               <button

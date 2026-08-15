@@ -93,13 +93,6 @@ use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
 use prompt::{NameTable, ReplyMode};
 
-/// How many times one turn may call tools before it must produce prose.
-///
-/// Four is enough for `directory` then `send_message` with slack for a retry
-/// after a refusal, and low enough that a confused model cannot spend a run's
-/// entire budget inside a single turn.
-const MAX_TOOL_ROUNDS: usize = 4;
-
 /// How many messages one turn reads at once.
 const MAX_BATCH: usize = 12;
 
@@ -579,9 +572,10 @@ impl Runtime {
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
 
-        for round in 0..MAX_TOOL_ROUNDS {
+        let max_rounds = config.limits.sanitized().max_tool_rounds as usize;
+        for round in 0..max_rounds {
             // One claim per model call. Claiming per turn instead would let a
-            // tool-looping turn bill MAX_TOOL_ROUNDS times against one unit of
+            // tool-looping turn bill max_rounds times against one unit of
             // budget, which is how a bounded run still runs up a bill.
             let reserved = { self.inner.guard.lock().run(run_id).reserve_step() };
             if !reserved {
@@ -662,7 +656,7 @@ impl Runtime {
                 }
             }
 
-            if round == MAX_TOOL_ROUNDS - 1 {
+            if round == max_rounds - 1 {
                 hit_tool_ceiling = true;
             }
         }
@@ -675,7 +669,7 @@ impl Runtime {
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
-                    "{} reached the limit of {MAX_TOOL_ROUNDS} tool calls in one turn.",
+                    "{} reached the limit of {max_rounds} tool calls in one turn.",
                     card.name
                 ),
             });
@@ -1348,28 +1342,55 @@ impl Runtime {
         &self,
         card: &AgentCard,
     ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox), crate::e2b::E2bError> {
+        use crate::e2b::{E2bClient, E2bError, Sandbox, SandboxState};
+
         let config = self.config();
-        let client =
-            crate::e2b::E2bClient::new(&config.e2b.api_key).ok_or(crate::e2b::E2bError::NoKey)?;
+        let client = E2bClient::new(&config.e2b.api_key).ok_or(E2bError::NoKey)?;
+        let idle = config.e2b.idle_minutes.max(1) * 60;
 
         // A sandbox recorded without its tokens predates them and cannot be
         // reached, so it counts as absent rather than as something to retry.
-        let existing = match (&card.sandbox_id, &card.sandbox_envd_token) {
-            (Some(id), Some(envd)) if client.is_alive(id).await.unwrap_or(false) => {
-                Some(crate::e2b::Sandbox {
-                    id: id.clone(),
-                    envd_token: envd.clone(),
-                    traffic_token: card.sandbox_traffic_token.clone().unwrap_or_default(),
-                })
-            }
+        let known = match (&card.sandbox_id, &card.sandbox_envd_token) {
+            (Some(id), Some(envd)) => Some((id.clone(), envd.clone())),
             _ => None,
         };
 
-        if let Some(sandbox) = existing {
-            return Ok((client, sandbox));
+        if let Some((id, envd)) = known {
+            match client.state(&id).await.unwrap_or(SandboxState::Gone) {
+                SandboxState::Running => {
+                    // Every use pushes the sleep deadline back, which is what
+                    // makes the timeout idle time rather than a lifetime.
+                    client.keep_awake(&id, idle).await;
+                    return Ok((
+                        client,
+                        Sandbox {
+                            id,
+                            envd_token: envd,
+                            traffic_token: card.sandbox_traffic_token.clone().unwrap_or_default(),
+                        },
+                    ));
+                }
+                SandboxState::Paused => {
+                    // Woken rather than replaced. The disk is the point: a
+                    // browser that was signed in still is.
+                    let woken = client.resume(&id, idle).await?;
+                    // Both tokens are reissued on waking, so the stored ones are
+                    // now wrong. Keeping them is a machine that is running and
+                    // unreachable, which looks exactly like a broken one.
+                    if let Err(err) = self.inner.store.set_agent_sandbox(
+                        card.id,
+                        Some((&woken.id, &woken.envd_token, &woken.traffic_token)),
+                    ) {
+                        tracing::error!(%err, "could not record the woken machine's tokens");
+                    }
+                    self.inner.events.emit(UiEvent::AgentsChanged);
+                    return Ok((client, woken));
+                }
+                SandboxState::Gone => {}
+            }
         }
 
-        let fresh = client.create(&card.name).await?;
+        let fresh = client.create(&card.name, idle).await?;
 
         // A sandbox that cannot be written down is a sandbox nobody can reach
         // and nobody will stop paying for, so it is killed rather than left.
@@ -1381,7 +1402,7 @@ impl Runtime {
         {
             tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
             let _ = client.kill(&fresh.id).await;
-            return Err(crate::e2b::E2bError::Protocol(format!(
+            return Err(E2bError::Protocol(format!(
                 "the sandbox could not be recorded and was released ({err})"
             )));
         }

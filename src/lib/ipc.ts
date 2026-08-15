@@ -35,6 +35,9 @@ export const api = {
   /** Creates or wakes the sandbox, and brings the desktop up. Idempotent. */
   startAgentComputer: (id: AgentId) => invoke<Computer>("start_agent_computer", { id }),
 
+  /** Puts it to sleep. The disk is kept, so a signed-in browser stays signed in. */
+  stopAgentComputer: (id: AgentId) => invoke<Computer | null>("stop_agent_computer", { id }),
+
   /** Destroys the sandbox and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
 

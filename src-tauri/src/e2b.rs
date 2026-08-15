@@ -51,9 +51,10 @@ const ENVD_PORT: u16 = 49983;
 
 const API_BASE: &str = "https://api.e2b.app";
 
-/// How long a sandbox lives without being touched. E2B bills running sandboxes,
-/// and an abandoned desktop is indistinguishable from a busy one.
-const SANDBOX_TTL_SECS: u32 = 1800;
+/// Where the browser keeps its profile. Under the home directory rather than
+/// /tmp so a sign-in survives: this is the whole reason a machine sleeps
+/// instead of being destroyed.
+const CHROME_PROFILE: &str = "/home/user/.guac/chrome";
 
 /// Long enough for `apt-get install`, short enough that a hung command does not
 /// hold an agent's turn open indefinitely.
@@ -87,6 +88,16 @@ impl Computer {
     pub fn is_running(&self) -> bool {
         self.state == "running"
     }
+}
+
+/// What a machine is doing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxState {
+    Running,
+    /// Asleep. The disk is intact and it can be woken.
+    Paused,
+    /// Reclaimed. Nothing to wake.
+    Gone,
 }
 
 /// A freshly created sandbox, with the two tokens that reach it.
@@ -215,9 +226,13 @@ impl E2bClient {
     /// token, and `allow_public_traffic: false` does the same for the sandbox's
     /// public URLs. Left open, an agent's desktop is reachable by anyone who
     /// learns its id, and these desktops are meant to hold logged-in sessions.
-    pub async fn create(&self, agent: &str) -> Result<Sandbox, E2bError> {
+    pub async fn create(&self, agent: &str, idle_seconds: u32) -> Result<Sandbox, E2bError> {
         let row: SandboxRow = self
-            .control(self.http.post(format!("{API_BASE}/sandboxes")).json(&create_body(agent)))
+            .control(
+                self.http
+                    .post(format!("{API_BASE}/sandboxes"))
+                    .json(&create_body(agent, idle_seconds)),
+            )
             .await?;
         Ok(Sandbox {
             id: row.sandbox_id,
@@ -226,23 +241,100 @@ impl E2bClient {
         })
     }
 
-    /// Whether this sandbox is still alive.
+    /// What this sandbox is doing, without waking it.
     ///
-    /// E2B has no "get one sandbox" that reports a reclaimed one usefully, so
-    /// this asks the running list. A sandbox that is not in it is gone.
-    pub async fn is_alive(&self, sandbox: &str) -> Result<bool, E2bError> {
-        let rows: Vec<SandboxRow> =
-            self.control(self.http.get(format!("{API_BASE}/sandboxes"))).await?;
-        Ok(rows.iter().any(|r| r.sandbox_id == sandbox))
+    /// Asked of the sandbox itself rather than of the running list, because a
+    /// sleeping machine is absent from that list and treating it as gone would
+    /// throw away the disk this whole feature exists to keep.
+    pub async fn state(&self, sandbox: &str) -> Result<SandboxState, E2bError> {
+        let response = self
+            .http
+            .get(format!("{API_BASE}/sandboxes/{sandbox}"))
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| E2bError::Transport(e.to_string()))?;
+
+        if response.status().as_u16() == 404 {
+            return Ok(SandboxState::Gone);
+        }
+        let body = response.text().await.unwrap_or_default();
+        let state = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|v| v["state"].as_str().map(str::to_string))
+            .unwrap_or_default();
+
+        Ok(match state.as_str() {
+            "running" => SandboxState::Running,
+            "paused" => SandboxState::Paused,
+            _ => SandboxState::Gone,
+        })
+    }
+
+    /// Puts the machine to sleep. The disk is kept; the bill is not.
+    pub async fn pause(&self, sandbox: &str) -> Result<(), E2bError> {
+        let response = self
+            .http
+            .post(format!("{API_BASE}/sandboxes/{sandbox}/pause"))
+            .header("X-API-Key", &self.api_key)
+            .send()
+            .await
+            .map_err(|e| E2bError::Transport(e.to_string()))?;
+        if response.status().is_success() || response.status().as_u16() == 404 {
+            return Ok(());
+        }
+        Err(E2bError::Api {
+            status: response.status().as_u16(),
+            message: response.text().await.unwrap_or_default().chars().take(200).collect(),
+        })
+    }
+
+    /// Wakes it, and hands back the tokens it now answers to.
+    ///
+    /// Both tokens are reissued on waking. Keeping the old ones is a machine
+    /// that is running and unreachable, which looks exactly like one that is
+    /// broken.
+    pub async fn resume(&self, sandbox: &str, idle_seconds: u32) -> Result<Sandbox, E2bError> {
+        let row: SandboxRow = self
+            .control(
+                self.http
+                    .post(format!("{API_BASE}/sandboxes/{sandbox}/resume"))
+                    .json(&serde_json::json!({ "timeout": idle_seconds })),
+            )
+            .await?;
+        Ok(Sandbox {
+            id: row.sandbox_id,
+            envd_token: row.envd_token.unwrap_or_default(),
+            traffic_token: row.traffic_token.unwrap_or_default(),
+        })
+    }
+
+    /// Pushes the sleep deadline back to the full idle period.
+    ///
+    /// Called on every use, which is what turns a fixed lifetime into an idle
+    /// timeout. Failure is not worth interrupting an agent for: the worst case
+    /// is that the machine sleeps sooner and is woken again.
+    pub async fn keep_awake(&self, sandbox: &str, idle_seconds: u32) {
+        let _ = self
+            .http
+            .post(format!("{API_BASE}/sandboxes/{sandbox}/timeout"))
+            .header("X-API-Key", &self.api_key)
+            .json(&serde_json::json!({ "timeout": idle_seconds }))
+            .send()
+            .await;
     }
 
     /// Every sandbox this app made, whether or not anything still refers to it.
     ///
     /// Used to sweep up: a sandbox nobody holds a reference to bills exactly as
     /// much as one in use, and is invisible from inside the app.
+    ///
+    /// The v2 list is used because it includes sleeping ones. A sleeping orphan
+    /// still holds its disk, so listing only the running ones would leave it
+    /// billing quietly forever.
     pub async fn list_ours(&self) -> Result<Vec<String>, E2bError> {
         let rows: Vec<SandboxRow> =
-            self.control(self.http.get(format!("{API_BASE}/sandboxes"))).await?;
+            self.control(self.http.get(format!("{API_BASE}/v2/sandboxes"))).await?;
         Ok(rows
             .into_iter()
             .filter(|r| r.metadata.get("guac").map(String::as_str) == Some("true"))
@@ -400,7 +492,7 @@ impl E2bClient {
                 "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/browser.py; \
                  python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
                  {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 google-chrome --no-sandbox \
-                 --no-first-run --user-data-dir=/tmp/guac-chrome \
+                 --no-first-run --user-data-dir={CHROME_PROFILE} \
                  --remote-debugging-port={CDP_PORT} about:blank \
                  >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
                 guard = port_open(CDP_PORT)
@@ -520,14 +612,19 @@ impl E2bClient {
         envd_token: &str,
         viewer_port: u16,
     ) -> Result<Computer, E2bError> {
-        let alive = self.is_alive(sandbox).await?;
+        let state = self.state(sandbox).await?;
         let mut computer = Computer {
             sandbox_id: sandbox.to_string(),
-            state: if alive { "running" } else { "stopped" }.to_string(),
+            state: match state {
+                SandboxState::Running => "running",
+                SandboxState::Paused => "asleep",
+                SandboxState::Gone => "gone",
+            }
+            .to_string(),
             vnc_url: None,
         };
 
-        if alive {
+        if state == SandboxState::Running {
             // Asked of the port, not of the process list. A process that exists
             // is not the same as one that is serving, and this check used to
             // match the shell running it: the desktop was reported up when
@@ -566,10 +663,15 @@ impl E2bClient {
 /// and does nothing, and the sandbox comes back with no traffic token and its
 /// ports open to anyone who learns the id. The nesting below is the form that
 /// actually locks it.
-fn create_body(agent: &str) -> serde_json::Value {
+fn create_body(agent: &str, idle_seconds: u32) -> serde_json::Value {
     serde_json::json!({
         "templateID": DESKTOP_TEMPLATE,
-        "timeout": SANDBOX_TTL_SECS,
+        // Counted from the last time the machine was used, because the runtime
+        // pushes this forward on every action. What expires is idle time.
+        "timeout": idle_seconds,
+        // Makes that expiry a sleep rather than a death: the disk is kept, so
+        // the browser is still signed in when it wakes.
+        "autoPause": true,
         // Without this an agent cannot look anything up, which is the failure
         // that ended the previous provider.
         "allow_internet_access": true,
@@ -861,11 +963,20 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_sleeps_when_idle_rather_than_dying() {
+        // The disk is what carries a signed-in browser between sessions, so an
+        // idle machine must pause, not be destroyed.
+        let body = create_body("Manager", 900);
+        assert_eq!(body["autoPause"], true, "without this the timeout kills it");
+        assert_eq!(body["timeout"], 900, "the idle period, pushed back on every use");
+    }
+
+    #[test]
     fn a_new_sandbox_is_created_with_both_locks_and_a_network() {
         // Every one of these has been wrong at least once, and each failure is
         // silent: E2B accepts an unrecognised field and returns a sandbox with
         // no token and its ports wide open.
-        let body = create_body("Manager");
+        let body = create_body("Manager", 900);
         assert_eq!(body["secure"], true, "envd must refuse anonymous commands");
         assert_eq!(
             body["network"]["allowPublicTraffic"], false,
