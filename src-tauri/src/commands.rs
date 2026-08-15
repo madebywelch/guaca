@@ -15,7 +15,9 @@ use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
-use crate::domain::ids::{AgentId, GroupId, RunId};
+use crate::domain::ids::{AgentId, GroupId, RoutineId, RunId};
+use crate::domain::now_ms;
+use crate::domain::routine::{self, Routine};
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
@@ -353,6 +355,76 @@ pub fn send_message(state: State<'_, AppState>, agent_id: AgentId, text: String)
 #[tauri::command]
 pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)
+}
+
+// ---- routines ------------------------------------------------------------
+
+/// An agent's own schedule, as the operator sees it.
+#[tauri::command]
+pub fn agent_routines(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Routine>> {
+    Ok(state.runtime.store().agent_routines(id)?)
+}
+
+/// What an operator can set on a routine.
+///
+/// Deliberately the same shape the agent's own `schedule` tool takes, so a
+/// routine an operator writes and one an agent writes are the same thing. An
+/// absent `inSecs` on an edit leaves the next firing where it was: correcting
+/// a typo should not move the schedule.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoutineDraft {
+    pub what: String,
+    pub every_secs: Option<u32>,
+    pub in_secs: Option<u32>,
+}
+
+#[tauri::command]
+pub fn create_routine(
+    state: State<'_, AppState>,
+    agent_id: AgentId,
+    draft: RoutineDraft,
+) -> Reply<Routine> {
+    routine::validate(&draft.what, draft.every_secs, draft.in_secs)
+        .map_err(|e| CommandError::new("validation", e.to_string()))?;
+
+    // Without a delay it is due now, which is what "start doing this" means.
+    let first = now_ms() + i64::from(draft.in_secs.unwrap_or(0)) * 1000;
+    let routine =
+        state.runtime.store().create_routine(agent_id, &draft.what, draft.every_secs, first)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(routine)
+}
+
+#[tauri::command]
+pub fn update_routine(
+    state: State<'_, AppState>,
+    id: RoutineId,
+    draft: RoutineDraft,
+) -> Reply<Routine> {
+    routine::validate(&draft.what, draft.every_secs, draft.in_secs)
+        .map_err(|e| CommandError::new("validation", e.to_string()))?;
+
+    let existing = state
+        .runtime
+        .store()
+        .get_routine(id)?
+        .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
+    let next = match draft.in_secs {
+        Some(delay) => now_ms() + i64::from(delay) * 1000,
+        None => existing.next_run_at,
+    };
+
+    let routine = state.runtime.store().update_routine(id, &draft.what, draft.every_secs, next)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(routine)
+}
+
+#[tauri::command]
+pub fn delete_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<()> {
+    state.runtime.store().delete_routine(id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
 }
 
 /// What each of the given runs cost.

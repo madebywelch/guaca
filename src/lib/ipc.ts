@@ -21,6 +21,9 @@ import type {
   GroupDraft,
   GroupId,
   GroupUsage,
+  Routine,
+  RoutineDraft,
+  RoutineId,
   RunId,
   RunUsage,
   Settings,
@@ -85,6 +88,12 @@ export const api = {
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
   /** Empties every channel in a group. Returns how many messages went. */
   clearGroup: (groupId: GroupId) => invoke<number>("clear_group", { groupId }),
+  agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
+  createRoutine: (agentId: AgentId, draft: RoutineDraft) =>
+    invoke<Routine>("create_routine", { agentId, draft }),
+  updateRoutine: (id: RoutineId, draft: RoutineDraft) =>
+    invoke<Routine>("update_routine", { id, draft }),
+  deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
 

@@ -42,6 +42,8 @@ pub enum StoreError {
     GroupNotEmpty { name: String, agents: u32 },
     #[error("every agent has to be in a group, so the first one cannot be deleted")]
     CannotDeleteDefaultGroup,
+    #[error("no routine with id {0}")]
+    RoutineNotFound(RoutineId),
 }
 
 /// Guards the one-time-per-file setup inside `Store::open`.
@@ -333,6 +335,47 @@ impl Store {
             ],
         )?;
         Ok(routine)
+    }
+
+    pub fn get_routine(&self, id: RoutineId) -> Result<Option<Routine>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+               FROM routines WHERE id=?1",
+        )?;
+        match stmt.query_row(params![id.to_string()], row_to_routine).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Rewrites a routine in place.
+    ///
+    /// `next_run_at` is passed rather than derived: an operator editing "every
+    /// six hours" into "every hour" usually wants the next one in an hour, and
+    /// an operator fixing a typo does not want the schedule to move at all.
+    /// The caller knows which of the two it is doing.
+    pub fn update_routine(
+        &self,
+        id: RoutineId,
+        what: &str,
+        every_secs: Option<u32>,
+        next_run_at: i64,
+    ) -> Result<Routine, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE routines SET what=?2, every_secs=?3, next_run_at=?4 WHERE id=?1",
+            params![id.to_string(), what.trim(), every_secs, next_run_at],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::RoutineNotFound(id));
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+               FROM routines WHERE id=?1",
+        )?;
+        stmt.query_row(params![id.to_string()], row_to_routine)?
     }
 
     pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
@@ -1012,6 +1055,37 @@ mod tests {
         let orphans: Vec<_> =
             store.list_agents().unwrap().into_iter().filter(|c| c.group_id == group.id).collect();
         assert!(orphans.is_empty(), "no agent may point at a group that is gone");
+    }
+
+    #[test]
+    fn editing_a_routine_leaves_its_next_firing_alone_unless_asked() {
+        // Correcting a typo in what a routine says must not silently reset the
+        // schedule it is keeping.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made =
+            f.store.create_routine(card.id, "check the listings", Some(3600), 1_000_000).unwrap();
+
+        let fixed = f
+            .store
+            .update_routine(
+                made.id,
+                "check the listings and say what is new",
+                Some(3600),
+                made.next_run_at,
+            )
+            .unwrap();
+        assert_eq!(fixed.what, "check the listings and say what is new");
+        assert_eq!(fixed.next_run_at, made.next_run_at, "the schedule did not move");
+        assert_eq!(fixed.every_secs, Some(3600));
+
+        // And a routine that is gone is a clear error rather than a silent
+        // success, so an operator editing a stale screen is told.
+        f.store.delete_routine(made.id).unwrap();
+        assert!(matches!(
+            f.store.update_routine(made.id, "anything", None, 1),
+            Err(StoreError::RoutineNotFound(_))
+        ));
     }
 
     #[test]

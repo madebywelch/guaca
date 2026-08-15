@@ -11,6 +11,7 @@ import {
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
+import { RoutineList } from "./RoutineList";
 
 interface Props {
   /** Absent when creating. */
@@ -279,6 +280,8 @@ export function AgentEditor({ agent, onClose }: Props) {
             </span>
           </label>
         )}
+
+        {agent && <RoutineList agentId={agent.id} />}
 
         <label className="field">
           <span className="field__label">Instructions</span>

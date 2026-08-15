@@ -99,17 +99,26 @@ pub fn system_prompt(
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should colour how it reads everything after.
     out.push_str("\n## Your notes\n");
+    out.push_str(
+        "This is your memory. It is a file of your own, it is shown to you at the start of every \
+         turn, and it is the only thing you carry between conversations: everything else you are \
+         reading now is this conversation, and it goes. Keeping it is your job, and nobody else \
+         does it for you.\n\n\
+         `update_notes` replaces the whole file, so send back everything you want to keep, not \
+         just the new part. Write what will still matter next week: how you work, standing \
+         preferences you have been given, decisions that hold across conversations, what you \
+         have learned about the people and agents you work with. Leave out what this \
+         conversation already says.\n\n\
+         Keep it current. Correct what turns out to be wrong and delete what has gone stale, \
+         because you will act on this as though it were true: a note you have outgrown does more \
+         damage than one you never wrote.\n\n",
+    );
     if notes.trim().is_empty() {
-        out.push_str(
-            "Empty. Call `update_notes` when you learn something that will still matter next \
-             week: how you work, the operator's standing preferences, or a decision that holds \
-             across conversations.\n",
-        );
+        out.push_str("It is empty. Nothing has been worth keeping yet.\n");
     } else {
+        out.push_str("What you have kept so far:\n\n");
         out.push_str(notes.trim());
-        out.push_str(
-            "\n\nThese are yours to maintain. Call `update_notes` to correct or replace them.\n",
-        );
+        out.push('\n');
     }
 
     if !card.skills.is_empty() {
@@ -396,6 +405,32 @@ mod tests {
     }
 
     #[test]
+    fn every_agent_is_told_its_memory_is_its_own_to_keep() {
+        // An agent that treats its notes as a scratch pad writes one fact and
+        // never revisits it, so the file rots into something it still acts on.
+        let empty = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        let held =
+            prompt_for(&card("Manager"), &[], "- The operator is Robert.", ReplyMode::ToPeer);
+
+        for prompt in [&empty, &held] {
+            assert!(prompt.contains("update_notes"), "it must know how to write");
+            assert!(
+                prompt.contains("replaces the whole file"),
+                "a partial write silently drops everything else it had kept"
+            );
+            assert!(
+                prompt.contains("delete what has gone stale"),
+                "keeping it current is the part that is actually hard"
+            );
+            assert!(
+                prompt.contains("between conversations"),
+                "it has to know this is the only thing that survives"
+            );
+        }
+        assert!(held.contains("- The operator is Robert."));
+    }
+
+    #[test]
     fn every_agent_knows_who_it_works_for_without_being_told() {
         // The operator should never have to say "remember my name": it is one
         // fact about the workspace, not something each agent discovers and
@@ -425,7 +460,7 @@ mod tests {
     #[test]
     fn an_agent_with_no_notes_is_told_what_belongs_there() {
         let prompt = prompt_for(&card("Manager"), &[], "   ", ReplyMode::ToOperator);
-        assert!(prompt.contains("Empty."));
+        assert!(prompt.contains("It is empty."));
         assert!(prompt.contains("still matter next week"));
     }
 

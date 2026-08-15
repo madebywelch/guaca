@@ -1476,6 +1476,64 @@ button {
   margin-bottom: 0.95rem;
 }
 
+/* An agent's schedule, in the editor beside its notes. */
+.routines {
+  margin-bottom: 0.95rem;
+}
+
+.routines__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.32rem;
+}
+
+.routines__head .field__label {
+  margin-bottom: 0;
+}
+
+.routine {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+.routine__row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.routine__when {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--faint);
+  flex: 1;
+  min-width: 6rem;
+}
+
+.input--slim {
+  width: auto;
+  padding: 0.2rem 0.3rem;
+  font-size: 0.7rem;
+}
+
+.input--number {
+  width: 3.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.btn--small {
+  padding: 0.2rem 0.5rem;
+  font-size: 0.66rem;
+}
+
 .field__label {
   display: block;
   font-family: var(--font-mono);

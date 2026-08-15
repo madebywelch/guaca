@@ -201,6 +201,28 @@ export interface RunUsage extends Tokens {
   runId: RunId;
 }
 
+export type RoutineId = string;
+
+/** An agent's own schedule. Set by the agent, or by hand. */
+export interface Routine {
+  id: RoutineId;
+  agentId: AgentId;
+  /** The instruction, delivered to the agent when it fires. */
+  what: string;
+  /** Null fires once and is done. */
+  everySecs: number | null;
+  nextRunAt: number;
+  lastRunAt: number | null;
+  createdAt: number;
+}
+
+/** Absent `inSecs` on an edit leaves the next firing where it was. */
+export interface RoutineDraft {
+  what: string;
+  everySecs: number | null;
+  inSecs: number | null;
+}
+
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {
   kind:
