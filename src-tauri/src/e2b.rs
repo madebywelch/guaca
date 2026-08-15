@@ -374,6 +374,60 @@ impl E2bClient {
         .await
     }
 
+    /// A picture of the screen, as a `data:` URL ready to hand to a model.
+    ///
+    /// Sent at the display's own resolution on purpose. Scaling it down would
+    /// shrink the payload, but every coordinate the model then gives back would
+    /// be in a different space from the one clicks land in, and a click that is
+    /// subtly wrong is worse than a larger image.
+    ///
+    /// JPEG rather than PNG: a desktop screenshot is a photograph-like image,
+    /// and PNG costs about four times as much for no benefit a model can use.
+    pub async fn screenshot(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+    ) -> Result<(String, String), E2bError> {
+        self.start_desktop(sandbox, envd_token).await?;
+
+        let out = self
+            .run(
+                sandbox,
+                envd_token,
+                "DISPLAY=:0 scrot -o /tmp/guac-screen.png \
+                 && ffmpeg -y -loglevel error -i /tmp/guac-screen.png -q:v 5 /tmp/guac-screen.jpg \
+                 && echo -n SIZE: && (DISPLAY=:0 xdotool getdisplaygeometry | tr ' ' 'x') \
+                 && base64 -w0 /tmp/guac-screen.jpg",
+            )
+            .await?;
+
+        let (geometry, encoded) = out
+            .stdout
+            .split_once('\n')
+            .map(|(head, rest)| (head.trim_start_matches("SIZE:").trim().to_string(), rest.trim()))
+            .unwrap_or_default();
+
+        if encoded.is_empty() {
+            return Err(E2bError::Protocol(format!(
+                "the screen could not be captured ({})",
+                out.stderr.trim()
+            )));
+        }
+
+        Ok((format!("data:image/jpeg;base64,{encoded}"), geometry))
+    }
+
+    /// Drives the mouse and keyboard, the same way E2B's own desktop SDK does.
+    pub async fn act_on_desktop(
+        &self,
+        sandbox: &str,
+        envd_token: &str,
+        action: &DesktopAction,
+    ) -> Result<Output, E2bError> {
+        self.start_desktop(sandbox, envd_token).await?;
+        self.run(sandbox, envd_token, &format!("DISPLAY=:0 {}", action.command())).await
+    }
+
     /// State plus, once the desktop answers, somewhere to watch it.
     pub async fn describe(
         &self,
@@ -440,6 +494,42 @@ fn create_body(agent: &str) -> serde_json::Value {
         "network": { "allowPublicTraffic": false },
         "metadata": { "guac": "true", "guac-agent": agent },
     })
+}
+
+/// One thing an agent can do to its screen.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DesktopAction {
+    Click { x: i32, y: i32, button: u8, count: u8 },
+    Move { x: i32, y: i32 },
+    Type { text: String },
+    Key { keys: String },
+    Scroll { down: bool, amount: u8 },
+}
+
+impl DesktopAction {
+    /// The xdotool invocation. Everything the model supplied is quoted, because
+    /// this is model output going into a shell.
+    pub fn command(&self) -> String {
+        match self {
+            DesktopAction::Click { x, y, button, count } => {
+                format!("xdotool mousemove {x} {y} click --repeat {} {button}", (*count).max(1))
+            }
+            DesktopAction::Move { x, y } => format!("xdotool mousemove {x} {y}"),
+            // `--` stops xdotool reading text that begins with a dash as flags.
+            DesktopAction::Type { text } => {
+                format!("xdotool type --delay 12 -- {}", quote(text))
+            }
+            DesktopAction::Key { keys } => format!("xdotool key -- {}", quote(keys)),
+            DesktopAction::Scroll { down, amount } => {
+                format!("xdotool click --repeat {} {}", (*amount).max(1), if *down { 5 } else { 4 })
+            }
+        }
+    }
+}
+
+/// Single-quotes a string for a POSIX shell, including embedded quotes.
+fn quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
 /// A command that starts a long-lived process if `guard` says it is not up.
@@ -590,6 +680,38 @@ mod tests {
             frame_src.contains(VIEWER_HOST),
             "the window must be allowed to frame {VIEWER_HOST}, got {frame_src:?}"
         );
+    }
+
+    #[test]
+    fn model_supplied_text_cannot_escape_the_shell() {
+        // Everything here is written by a model and handed to bash, so a stray
+        // quote is a command injection rather than a typo.
+        let command = DesktopAction::Type { text: "it's fine; rm -rf /".into() }.command();
+        assert!(command.starts_with("xdotool type --delay 12 -- "), "{command}");
+        // The embedded quote is closed and reopened rather than ending the
+        // argument, so the rest stays text instead of becoming a command.
+        assert!(command.contains("'it'\\''s fine; rm -rf /'"), "{command}");
+        assert_eq!(quote("plain"), "'plain'");
+    }
+
+    #[test]
+    fn a_click_moves_first_so_it_lands_where_the_model_meant() {
+        assert_eq!(
+            DesktopAction::Click { x: 40, y: 12, button: 1, count: 1 }.command(),
+            "xdotool mousemove 40 12 click --repeat 1 1"
+        );
+        assert_eq!(
+            DesktopAction::Click { x: 1, y: 2, button: 3, count: 2 }.command(),
+            "xdotool mousemove 1 2 click --repeat 2 3"
+        );
+    }
+
+    #[test]
+    fn scrolling_down_and_up_are_different_buttons() {
+        assert!(DesktopAction::Scroll { down: true, amount: 3 }.command().ends_with(" 5"));
+        assert!(DesktopAction::Scroll { down: false, amount: 3 }.command().ends_with(" 4"));
+        // A zero repeat is a no-op that reads as a broken tool.
+        assert!(DesktopAction::Scroll { down: true, amount: 0 }.command().contains("--repeat 1"));
     }
 
     #[test]

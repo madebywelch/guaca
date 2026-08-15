@@ -63,7 +63,12 @@ pub fn system_prompt(
          - `open_on_desktop` starts a program on the screen. Use it whenever you are asked to \
            visit a site, look at a page, or do anything a person would do in a window, for \
            example `google-chrome https://example.com`. The operator sees exactly what you \
-           opened.\n\n\
+           opened.\n\
+         - `use_screen` is how you work that screen. `look` returns a picture of it; then \
+           click, type, press keys and scroll by the coordinates you saw. Look again after \
+           anything that changes the screen, because you are always working from the last \
+           picture you took rather than from what is there now. This is how you read a page, \
+           follow a link, fill a form, or use an app you are already signed into.\n\n\
          Never say you have no computer, no browser, or no way to look something up. You have \
          all three. Say what you ran and what it returned rather than presenting a result as \
          something you simply knew.\n",
@@ -213,6 +218,22 @@ pub fn build_messages(
 
 #[cfg(test)]
 mod tests {
+    /// The text of a user turn, whatever shape it arrived in.
+    fn user_text(content: &crate::llm::openrouter::UserContent) -> String {
+        use crate::llm::openrouter::{ContentPart, UserContent};
+        match content {
+            UserContent::Text(text) => text.clone(),
+            UserContent::Parts(parts) => parts
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join(""),
+        }
+    }
+
     use super::*;
     use crate::domain::agent::Lifecycle;
     use crate::domain::envelope::{Part, Trust};
@@ -306,6 +327,11 @@ mod tests {
         let prompt = system_prompt(&card("Manager"), &[], "", ReplyMode::ToOperator);
         assert!(prompt.contains("run_command"), "the tool has to be named, not just offered");
         assert!(prompt.contains("open_on_desktop"), "the screen has to be named too");
+        assert!(prompt.contains("use_screen"), "and the way to work it");
+        assert!(
+            prompt.contains("look"),
+            "an agent that does not look first will click from memory of a screen it never saw"
+        );
         assert!(
             prompt.to_lowercase().contains("internet"),
             "an agent that does not know it can reach the network will decline instead of looking"
@@ -389,7 +415,7 @@ mod tests {
 
         assert!(matches!(messages[0], ChatMessage::System { .. }));
         match &messages[1] {
-            ChatMessage::User { content } => assert!(content.starts_with("[OPERATOR]")),
+            ChatMessage::User { content } => assert!(user_text(content).starts_with("[OPERATOR]")),
             other => panic!("expected user, got {other:?}"),
         }
         match &messages[2] {
@@ -400,7 +426,10 @@ mod tests {
         }
         match &messages[3] {
             ChatMessage::User { content } => {
-                assert!(content.starts_with("[AGENT \"Chef\"]"), "peer must be attributed by name")
+                assert!(
+                    user_text(content).starts_with("[AGENT \"Chef\"]"),
+                    "peer must be attributed by name"
+                );
             }
             other => panic!("expected user, got {other:?}"),
         }
@@ -420,7 +449,9 @@ mod tests {
             ReplyMode::NoteOnly,
         );
         match messages.last().unwrap() {
-            ChatMessage::User { content } => assert!(content.contains("a deleted agent")),
+            ChatMessage::User { content } => {
+                assert!(user_text(content).contains("a deleted agent"))
+            }
             other => panic!("expected user, got {other:?}"),
         }
     }
@@ -447,7 +478,10 @@ mod tests {
         match messages.last().unwrap() {
             ChatMessage::User { content } => {
                 for name in ["Chef", "Host", "Barista", "Sommelier"] {
-                    assert!(content.contains(&format!("[AGENT \"{name}\"]")), "missing {name}");
+                    assert!(
+                        user_text(content).contains(&format!("[AGENT \"{name}\"]")),
+                        "missing {name}"
+                    );
                 }
             }
             other => panic!("expected user, got {other:?}"),
@@ -490,8 +524,9 @@ mod tests {
         match messages.last().unwrap() {
             ChatMessage::User { content } => {
                 assert!(
-                    content.starts_with("[AGENT \"Chef\"]"),
-                    "the true origin must be the first thing the model reads: {content}"
+                    user_text(content).starts_with("[AGENT \"Chef\"]"),
+                    "the true origin must be the first thing the model reads: {}",
+                    user_text(content)
                 );
             }
             other => panic!("expected user, got {other:?}"),

@@ -24,7 +24,7 @@ pub enum ChatMessage {
         content: String,
     },
     User {
-        content: String,
+        content: UserContent,
     },
     Assistant {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,13 +38,54 @@ pub enum ChatMessage {
     },
 }
 
+/// What a user turn carries. A plain string for ordinary text, or a list of
+/// parts when one of them is an image.
+///
+/// Untagged so both forms serialise the way OpenAI-compatible endpoints expect:
+/// a bare string, or the array of `{type: ...}` objects. Sending the array form
+/// for every message would work too, but it is noisier on the wire and some
+/// endpoints handle the string form better.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UserContent {
+    Text(String),
+    Parts(Vec<ContentPart>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageSource },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageSource {
+    /// A `data:` URL. Screenshots never leave the machine as files, so there is
+    /// nothing to host and nothing to clean up.
+    pub url: String,
+}
+
 impl ChatMessage {
+    /// A user turn carrying a picture, which is how an agent sees its screen.
+    ///
+    /// The text goes first: a model shown an image with no framing tends to
+    /// describe it, and what is wanted is for it to act on it.
+    pub fn user_seeing(text: impl Into<String>, image_data_url: impl Into<String>) -> Self {
+        ChatMessage::User {
+            content: UserContent::Parts(vec![
+                ContentPart::Text { text: text.into() },
+                ContentPart::ImageUrl { image_url: ImageSource { url: image_data_url.into() } },
+            ]),
+        }
+    }
+
     pub fn system(content: impl Into<String>) -> Self {
         ChatMessage::System { content: content.into() }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
-        ChatMessage::User { content: content.into() }
+        ChatMessage::User { content: UserContent::Text(content.into()) }
     }
 
     pub fn assistant(content: impl Into<String>) -> Self {

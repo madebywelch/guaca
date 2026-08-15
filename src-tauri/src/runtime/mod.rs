@@ -21,6 +21,16 @@ use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, Notify};
 
 use crate::config::{AppConfig, InferenceConfig};
+
+/// What one tool call produced: what the model is told, what the transcript
+/// records, and a picture when the tool answers with one.
+struct ToolResult {
+    rendered: String,
+    part: Part,
+    /// A `data:` URL, present only for a look at the screen. It is the one
+    /// answer a model cannot act on as text.
+    image: Option<String>,
+}
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{AgentCard, DirectoryEntry, Lifecycle};
 use crate::domain::envelope::{
@@ -576,7 +586,7 @@ impl Runtime {
             });
 
             for call in &completion.tool_calls {
-                let (result, part) = self
+                let outcome = self
                     .execute_tool(
                         &card,
                         run_id,
@@ -587,8 +597,21 @@ impl Runtime {
                         call,
                     )
                     .await;
-                tool_parts.push(part);
-                messages.push(ChatMessage::Tool { tool_call_id: call.id.clone(), content: result });
+                tool_parts.push(outcome.part);
+                messages.push(ChatMessage::Tool {
+                    tool_call_id: call.id.clone(),
+                    content: outcome.rendered,
+                });
+
+                // A picture cannot travel inside a tool result, which is text,
+                // so it follows as a turn of its own. This is the whole reason
+                // an agent can work a screen rather than only describe one.
+                if let Some(image) = outcome.image {
+                    messages.push(ChatMessage::user_seeing(
+                        "This is what your screen looks like now.",
+                        image,
+                    ));
+                }
             }
 
             if round == MAX_TOOL_ROUNDS - 1 {
@@ -800,9 +823,38 @@ impl Runtime {
         // Peers this turn has already written to. See `emit_reply`.
         addressed: &mut HashSet<AgentId>,
         call: &ToolCall,
-    ) -> (String, Part) {
+    ) -> ToolResult {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
 
+        let (rendered, part, image) = self
+            .dispatch_tool(
+                card,
+                run_id,
+                inbound_hop,
+                cause,
+                reply_target,
+                addressed,
+                call,
+                arguments,
+            )
+            .await;
+        ToolResult { rendered, part, image }
+    }
+
+    /// The body of `execute_tool`, kept separate so every arm can go on
+    /// returning a pair while only the screen arm produces a picture.
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_tool(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        inbound_hop: u16,
+        cause: Option<MessageId>,
+        reply_target: Option<Participant>,
+        addressed: &mut HashSet<AgentId>,
+        call: &ToolCall,
+        arguments: serde_json::Value,
+    ) -> (String, Part, Option<String>) {
         let invocation = match tools::parse(call) {
             Ok(invocation) => invocation,
             Err(err) => {
@@ -813,11 +865,18 @@ impl Runtime {
                         arguments,
                         outcome: ToolOutcome::Failed { error: err.to_string() },
                     },
+                    None,
                 );
             }
         };
 
-        match invocation {
+        if let ToolInvocation::UseScreen { action } = invocation {
+            return self.use_screen(card, action, arguments).await;
+        }
+
+        let (rendered, part) = match invocation {
+            // Handled above, where it can answer with a picture.
+            ToolInvocation::UseScreen { .. } => unreachable!("taken by the branch above"),
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
                 let payload =
@@ -966,6 +1025,107 @@ impl Runtime {
                     Part::ToolCall { name: tools::SEND_MESSAGE.to_string(), arguments, outcome },
                 )
             }
+        };
+
+        (rendered, part, None)
+    }
+
+    /// Looking at, and acting on, the screen.
+    ///
+    /// Split out because it is the only tool that answers with a picture: a
+    /// model cannot act on a screen described to it in prose, so a look comes
+    /// back as an image in the conversation rather than as text.
+    async fn use_screen(
+        &self,
+        card: &AgentCard,
+        action: tools::ScreenAction,
+        arguments: serde_json::Value,
+    ) -> (String, Part, Option<String>) {
+        let failed = |message: String, err: String, arguments: serde_json::Value| {
+            (
+                message,
+                Part::ToolCall {
+                    name: tools::USE_SCREEN.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Failed { error: err },
+                },
+                None,
+            )
+        };
+
+        let (client, sandbox) = match self.ensure_computer(card).await {
+            Ok(pair) => pair,
+            Err(err) => {
+                return failed(
+                    format!("Error: your screen is not available ({err})."),
+                    err.to_string(),
+                    arguments,
+                )
+            }
+        };
+
+        if matches!(action, tools::ScreenAction::Look) {
+            return match client.screenshot(&sandbox.id, &sandbox.envd_token).await {
+                Ok((image, geometry)) => (
+                    format!(
+                        "Here is your screen, {geometry} pixels. Coordinates are measured from \
+                         the top left of this picture."
+                    ),
+                    Part::ToolCall {
+                        name: tools::USE_SCREEN.to_string(),
+                        arguments,
+                        outcome: ToolOutcome::Ok {
+                            summary: format!("looked at the screen ({geometry})"),
+                        },
+                    },
+                    Some(image),
+                ),
+                Err(err) => failed(
+                    format!("Error: could not see the screen ({err})."),
+                    err.to_string(),
+                    arguments,
+                ),
+            };
+        }
+
+        let (desktop, described) = match &action {
+            tools::ScreenAction::Look => unreachable!("handled above"),
+            tools::ScreenAction::Click { x, y, button, count } => (
+                crate::e2b::DesktopAction::Click { x: *x, y: *y, button: *button, count: *count },
+                format!("clicked at {x}, {y}"),
+            ),
+            tools::ScreenAction::Move { x, y } => (
+                crate::e2b::DesktopAction::Move { x: *x, y: *y },
+                format!("moved the pointer to {x}, {y}"),
+            ),
+            tools::ScreenAction::Type { text } => (
+                crate::e2b::DesktopAction::Type { text: text.clone() },
+                format!("typed {} characters", text.chars().count()),
+            ),
+            tools::ScreenAction::Key { keys } => {
+                (crate::e2b::DesktopAction::Key { keys: keys.clone() }, format!("pressed {keys}"))
+            }
+            tools::ScreenAction::Scroll { down, amount } => (
+                crate::e2b::DesktopAction::Scroll { down: *down, amount: *amount },
+                format!("scrolled {} {amount}", if *down { "down" } else { "up" }),
+            ),
+        };
+
+        match client.act_on_desktop(&sandbox.id, &sandbox.envd_token, &desktop).await {
+            Ok(_) => (
+                format!("{described}. Look again to see what changed."),
+                Part::ToolCall {
+                    name: tools::USE_SCREEN.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Ok { summary: described },
+                },
+                None,
+            ),
+            Err(err) => failed(
+                format!("Error: that did not reach the screen ({err})."),
+                err.to_string(),
+                arguments,
+            ),
         }
     }
 

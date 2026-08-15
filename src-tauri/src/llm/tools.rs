@@ -20,6 +20,7 @@ pub const SEND_MESSAGE: &str = "send_message";
 pub const UPDATE_NOTES: &str = "update_notes";
 pub const RUN_COMMAND: &str = "run_command";
 pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
+pub const USE_SCREEN: &str = "use_screen";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -110,6 +111,47 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: USE_SCREEN.to_string(),
+            description: "Look at your computer's screen and use it: click, type, press keys and \
+                          scroll, exactly as a person would. Start with `look`, which returns a \
+                          picture of the screen; every coordinate you give afterwards is in that \
+                          picture's pixels, measured from the top left. Look again after anything \
+                          that changes the screen, because you are working from the last picture \
+                          you took, not from what is there now. This is how you read a page, fill \
+                          a form, follow a link, or work in an app you have opened."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["look", "click", "double_click", "right_click", "move",
+                                 "type", "key", "scroll"],
+                        "description": "What to do. `look` first, then act on what you saw."
+                    },
+                    "x": { "type": "integer", "description": "Pixels from the left edge." },
+                    "y": { "type": "integer", "description": "Pixels from the top edge." },
+                    "text": { "type": "string", "description": "For `type`: the text to enter." },
+                    "keys": {
+                        "type": "string",
+                        "description": "For `key`: an xdotool key name or chord, such as \
+                                        `Return`, `ctrl+t`, `alt+F4`, `ctrl+shift+Tab`."
+                    },
+                    "direction": {
+                        "type": "string",
+                        "enum": ["up", "down"],
+                        "description": "For `scroll`."
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "For `scroll`: how many notches. Three is about a screenful."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to one or more other agents. Delivery is asynchronous \
                           and non-blocking: this returns as soon as the messages are queued. \
@@ -147,13 +189,25 @@ pub enum ToolInvocation {
     UpdateNotes { content: String },
     RunCommand { command: String },
     OpenOnDesktop { command: String },
+    UseScreen { action: ScreenAction },
+}
+
+/// What an agent can do to the screen it is looking at.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScreenAction {
+    Look,
+    Click { x: i32, y: i32, button: u8, count: u8 },
+    Move { x: i32, y: i32 },
+    Type { text: String },
+    Key { keys: String },
+    Scroll { down: bool, amount: u8 },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command, open_on_desktop."
+         run_command, open_on_desktop, use_screen."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -168,6 +222,10 @@ pub enum ToolParseError {
     MissingCommand,
     #[error("open_on_desktop needs a non-empty `command` string")]
     MissingDesktopCommand,
+    #[error("use_screen needs a known `action`")]
+    UnknownScreenAction,
+    #[error("use_screen {action} needs {needs}")]
+    IncompleteScreenAction { action: String, needs: String },
 }
 
 impl ToolParseError {
@@ -184,6 +242,15 @@ impl ToolParseError {
             ToolParseError::BadJson { name, detail } => format!(
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
+            ),
+            ToolParseError::UnknownScreenAction => {
+                "Error: `action` must be one of look, click, double_click, right_click, move, \
+                 type, key or scroll. Start with {\"action\": \"look\"} to see the screen."
+                    .to_string()
+            }
+            ToolParseError::IncompleteScreenAction { action, needs } => format!(
+                "Error: `{action}` needs {needs}. Take a look first if you are not sure where \
+                 things are."
             ),
             ToolParseError::MissingDesktopCommand => {
                 "Error: `command` must name a graphical program to start, for example \
@@ -225,9 +292,76 @@ struct SendArgs {
     agent: Option<String>,
 }
 
+/// Reads one screen action, with the coordinates it needs.
+///
+/// A missing coordinate is reported as a missing coordinate rather than being
+/// defaulted to zero: a click at the top-left corner is a real click on
+/// something, and silently making one is worse than saying no.
+fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolParseError> {
+    let action = value.get("action").and_then(|v| v.as_str()).unwrap_or_default();
+    let coord = |name: &str| value.get(name).and_then(|v| v.as_i64()).map(|n| n as i32);
+    let point = |action_name: &str| match (coord("x"), coord("y")) {
+        (Some(x), Some(y)) => Ok((x, y)),
+        _ => Err(ToolParseError::IncompleteScreenAction {
+            action: action_name.to_string(),
+            needs: "both `x` and `y`".to_string(),
+        }),
+    };
+
+    match action {
+        "look" | "screenshot" => Ok(ScreenAction::Look),
+        "click" | "left_click" => {
+            let (x, y) = point("click")?;
+            Ok(ScreenAction::Click { x, y, button: 1, count: 1 })
+        }
+        "double_click" => {
+            let (x, y) = point("double_click")?;
+            Ok(ScreenAction::Click { x, y, button: 1, count: 2 })
+        }
+        "right_click" => {
+            let (x, y) = point("right_click")?;
+            Ok(ScreenAction::Click { x, y, button: 3, count: 1 })
+        }
+        "move" | "move_mouse" => {
+            let (x, y) = point("move")?;
+            Ok(ScreenAction::Move { x, y })
+        }
+        "type" | "write" => match value.get("text").and_then(|v| v.as_str()) {
+            Some(text) if !text.is_empty() => Ok(ScreenAction::Type { text: text.to_string() }),
+            _ => Err(ToolParseError::IncompleteScreenAction {
+                action: "type".to_string(),
+                needs: "a non-empty `text`".to_string(),
+            }),
+        },
+        "key" | "press" => {
+            match value.get("keys").or_else(|| value.get("key")).and_then(|v| v.as_str()) {
+                Some(keys) if !keys.trim().is_empty() => {
+                    Ok(ScreenAction::Key { keys: keys.to_string() })
+                }
+                _ => Err(ToolParseError::IncompleteScreenAction {
+                    action: "key".to_string(),
+                    needs: "a `keys` name such as `Return` or `ctrl+t`".to_string(),
+                }),
+            }
+        }
+        "scroll" => Ok(ScreenAction::Scroll {
+            down: value.get("direction").and_then(|v| v.as_str()).unwrap_or("down") != "up",
+            amount: value.get("amount").and_then(|v| v.as_i64()).unwrap_or(3).clamp(1, 15) as u8,
+        }),
+        _ => Err(ToolParseError::UnknownScreenAction),
+    }
+}
+
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
+        USE_SCREEN => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: USE_SCREEN.to_string(),
+                detail: e.to_string(),
+            })?;
+            parse_screen_action(&value).map(|action| ToolInvocation::UseScreen { action })
+        }
         OPEN_ON_DESKTOP => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: OPEN_ON_DESKTOP.to_string(),
@@ -438,8 +572,8 @@ mod tests {
         let specs = specs();
         assert_eq!(
             specs.len(),
-            5,
-            "directory, run_command, open_on_desktop, send_message, update_notes"
+            6,
+            "directory, run_command, open_on_desktop, use_screen, send_message, update_notes"
         );
         for spec in &specs {
             assert_eq!(
