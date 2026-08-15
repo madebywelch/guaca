@@ -1508,14 +1508,7 @@ impl Runtime {
             return Ok(0);
         };
 
-        let known: std::collections::HashSet<String> = self
-            .inner
-            .store
-            .list_agents()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|c| c.sandbox_id)
-            .collect();
+        let known = claimed_sandboxes(&self.inner.store.list_agents().unwrap_or_default());
 
         let mut swept = 0;
         for sandbox in client.list_ours().await? {
@@ -1713,4 +1706,62 @@ async fn actor_loop(
     }
 
     tracing::debug!(agent = %id.short(), "actor stopped");
+}
+
+/// The sandboxes an agent could still be using.
+///
+/// Only a live agent holds a claim. A deleted agent keeps its row so its
+/// transcript still reads, and that row keeps its sandbox id, but the agent can
+/// never act again. Counting it as a referrer let its machine shield itself
+/// from the sweep for as long as the row existed, which is forever.
+fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
+    cards
+        .iter()
+        .filter(|card| card.lifecycle != Lifecycle::Terminated)
+        .filter_map(|card| card.sandbox_id.clone())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn card(lifecycle: Lifecycle, sandbox: &str) -> AgentCard {
+        AgentCard {
+            id: AgentId::new(),
+            group_id: crate::domain::ids::GroupId::new(),
+            name: "Agent".into(),
+            avatar: "avocado".into(),
+            color: "#7fb069".into(),
+            model: "m".into(),
+            system_prompt: String::new(),
+            skills: Vec::new(),
+            sandbox_id: Some(sandbox.into()),
+            sandbox_envd_token: None,
+            sandbox_traffic_token: None,
+            lifecycle,
+            version: 1,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_deleted_agents_machine_is_nobodys() {
+        let cards = [
+            card(Lifecycle::Active, "keep-me"),
+            card(Lifecycle::Paused, "keep-me-too"),
+            card(Lifecycle::Terminated, "sweep-me"),
+        ];
+        let claimed = claimed_sandboxes(&cards);
+
+        // A paused agent is coming back and its logins are worth keeping; a
+        // deleted one is not.
+        assert!(claimed.contains("keep-me"));
+        assert!(claimed.contains("keep-me-too"));
+        assert!(
+            !claimed.contains("sweep-me"),
+            "a terminated agent's sandbox must not shield itself from the sweep"
+        );
+    }
 }
