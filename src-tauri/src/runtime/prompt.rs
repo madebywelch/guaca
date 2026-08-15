@@ -181,10 +181,18 @@ pub fn system_prompt(
              question that needs one.\n"
         }
         ReplyMode::NoteOnly => {
-            "You are reading messages that do not need an answer. Your final message is filed as \
-             a short note in your own channel for the operator to read. Summarize what you \
-             learned in one or two sentences. Do not address a peer, and do not send messages \
-             unless something genuinely still needs doing.\n"
+            "You are reading messages that did not ask for anything. Nothing here needs an \
+             answer.\n\n\
+             Saying nothing is allowed here, and it is usually right. Reply with nothing at all \
+             unless something has changed that the operator does not already know. An \
+             acknowledgement does not need acknowledging, and thanking someone for thanking you \
+             is how a crew spends an afternoon talking to itself.\n\n\
+             Everything you have already done this run is in the history above, including every \
+             message you have already sent. Do not do it again because you have been reminded of \
+             it.\n\n\
+             If something does need saying, your final message is filed as a short note in your \
+             own channel. One or two sentences, and only if it tells the operator something your \
+             last note did not.\n"
         }
     });
 
@@ -479,7 +487,22 @@ mod tests {
 
         let note = prompt_for(&c, &roster, "", ReplyMode::NoteOnly);
         assert!(note.contains("filed as a short note"));
-        assert!(note.contains("Do not address a peer"));
+    }
+
+    #[test]
+    fn an_agent_woken_by_acknowledgements_is_allowed_to_say_nothing() {
+        // Observed: a manager told three agents the time, all three said
+        // thanks, and it woke to a mode that told it to summarize what it had
+        // learned. So it re-sent the announcement to all three, was refused as
+        // a duplicate, and filed a second note saying what its first one said.
+        // Silence was never offered as the answer, so it never chose it.
+        let note = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", ReplyMode::NoteOnly);
+        assert!(note.contains("Saying nothing is allowed"), "silence has to be an option");
+        assert!(note.contains("usually right"), "and the expected one, or it will not be taken");
+        assert!(
+            note.contains("already sent"),
+            "being reminded of work is not a reason to do it again"
+        );
     }
 
     #[test]

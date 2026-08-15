@@ -164,8 +164,11 @@ describe("an agent's own record of what it did", () => {
       }),
     );
     expect(screen.getByText(/Not delivered to Chef/)).toBeTruthy();
+    // On the chip and again in full when opened, which is why this counts
+    // rather than asserting a single match.
+    expect(screen.getAllByText(/hop limit reached/).length).toBe(1);
     fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByText(/hop limit reached/)).toBeTruthy();
+    expect(screen.getAllByText(/hop limit reached/).length).toBeGreaterThan(1);
   });
 
   it("marks only the recipients a half-delivered send actually missed", () => {
@@ -187,6 +190,24 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText(/Sent to Chef/)).toBeTruthy();
     expect(screen.getByText(/Sent to Sous/)).toBeTruthy();
     expect(screen.queryByText(/Sent to Ghost/)).toBeNull();
+  });
+
+  it("says why a message did not go, without needing a click", () => {
+    // A row of bare "not delivered" chips reads as the app breaking. The
+    // reason is usually a guard doing its job, and it was behind a click.
+    show(
+      record({
+        type: "toolCall",
+        name: "send_message",
+        arguments: { to: ["Chef"], text: "the same thing again" },
+        outcome: {
+          status: "refused",
+          reason:
+            "Refused: you already sent Chef this exact message in this run. Repeating it will not produce a different reply. Move on.",
+        },
+      }),
+    );
+    expect(screen.getByText("you already sent Chef this exact message in this run")).toBeTruthy();
   });
 
   it("keeps a directory lookup quiet and unclickable", () => {

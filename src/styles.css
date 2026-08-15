@@ -1216,6 +1216,15 @@ button {
   white-space: nowrap;
 }
 
+.wire__why {
+  font-size: 0.68rem;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .wire__meta {
   opacity: 0.6;
   flex: none;

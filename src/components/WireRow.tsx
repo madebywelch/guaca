@@ -38,6 +38,19 @@ interface Props {
   refusal?: string | null;
 }
 
+/**
+ * The readable half of a refusal.
+ *
+ * Guard refusals are written to be read by a model mid-turn, so they open with
+ * "Refused:" and close with what to do instead. On a chip the operator wants
+ * the middle: what happened, once, in a few words.
+ */
+export function why(reason: string): string {
+  const body = reason.replace(/^Refused:\s*/i, "");
+  const first = body.split(/(?<=\.)\s/)[0] ?? body;
+  return first.replace(/\.$/, "");
+}
+
 function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -67,6 +80,11 @@ export function WireRow({ direction, peer, counterpart, hop, at, body, refusal }
             {refusal ? "⊘" : arrow}
           </span>
           <span className="wire__label">{refusal ? `Not delivered to ${peer.name}` : label}</span>
+          {/* The reason, not just the fact. A row of bare "not delivered"
+              chips reads as the app breaking; the reason is usually a guard
+              doing exactly its job, and hiding it behind a click meant the
+              operator had to go asking. */}
+          {refusal && <span className="wire__why">{why(refusal)}</span>}
           {hop !== undefined && <span className="wire__meta">hop {hop}</span>}
           <span className="wire__meta">{clockTime(at)}</span>
         </button>
