@@ -90,7 +90,10 @@ pub fn run() {
                 let runtime = runtime.clone();
                 tauri::async_runtime::spawn(async move {
                     match runtime.sweep_computers().await {
-                        Ok(0) => {}
+                        // Said even when it is nothing, because "no orphans" and
+                        // "the sweep never ran" look identical from the outside
+                        // and only one of them is fine.
+                        Ok(0) => tracing::debug!("swept: no orphaned sandboxes"),
                         Ok(n) => tracing::info!(released = n, "released orphaned sandboxes"),
                         Err(err) => tracing::warn!(%err, "could not sweep sandboxes"),
                     }
