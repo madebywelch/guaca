@@ -73,6 +73,64 @@ export interface GroupDraft {
   apiKey?: string;
 }
 
+export type ConnectorId = string;
+
+/**
+ * A credential the whole group's machines are given.
+ *
+ * The value is never on this side of the boundary: there is no command that
+ * returns one. `secretSet` and `secretHint` are all the UI ever sees.
+ */
+export interface Connector {
+  id: ConnectorId;
+  groupId: GroupId;
+  /** What it is for: `GitHub`, `Linear`, `Stripe`. */
+  service: string;
+  /** Who it acts as, so the agent knows whose account it is using. */
+  account: string;
+  /** The environment variable the agent finds it in. */
+  envVar: string;
+  /** One line the agent reads: `read-only`, `production, do not write`. */
+  note: string;
+  secretSet: boolean;
+  /** Last four characters, so two tokens can be told apart. Never the value. */
+  secretHint: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * There is no edit command: a credential is forgotten and re-added rather than
+ * rewritten, so this is the only call that ever carries a value.
+ */
+export interface ConnectorDraft {
+  groupId: GroupId;
+  service: string;
+  account: string;
+  envVar: string;
+  note: string;
+  secret: string;
+}
+
+/**
+ * A site an agent's browser turned out to be signed in to.
+ *
+ * Nobody types these. They are read off the machine by asking Chrome what
+ * cookies it holds, so an agent signed in a minute ago advertises it without
+ * anyone recording anything.
+ */
+export interface Signin {
+  agentId: AgentId;
+  /** The host, normalised: `linkedin.com`. */
+  domain: string;
+  /** A recognised service's real name, or the domain when it is a guess. */
+  service: string;
+  /** False when this came from the weaker visited-plus-session-cookie rule. */
+  recognised: boolean;
+  firstSeenAt: number;
+  lastSeenAt: number;
+}
+
 /** An agent's sandbox: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
   sandboxId: string;

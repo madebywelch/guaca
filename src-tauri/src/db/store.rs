@@ -13,11 +13,13 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
+use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
-use crate::domain::ids::{AgentId, GroupId, MessageId, RoutineId, RunId};
+use crate::domain::ids::{AgentId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::Routine;
+use crate::domain::signin::Signin;
 use crate::domain::usage::{Tokens, UsageEntry};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
@@ -44,6 +46,10 @@ pub enum StoreError {
     CannotDeleteDefaultGroup,
     #[error("no routine with id {0}")]
     RoutineNotFound(RoutineId),
+    #[error("no connector with id {0}")]
+    ConnectorNotFound(ConnectorId),
+    #[error("{0} is already used by another credential in this group")]
+    DuplicateEnvVar(String),
 }
 
 /// Guards the one-time-per-file setup inside `Store::open`.
@@ -444,6 +450,179 @@ impl Store {
         Ok(conn.execute("DELETE FROM routines WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
+    // ---- connectors ------------------------------------------------------
+
+    pub fn create_connector(&self, clean: &CleanConnector) -> Result<Connector, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let id = ConnectorId::new();
+
+        conn.execute(
+            "INSERT INTO connectors
+                (id,group_id,service,account,env_var,secret,note,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)",
+            params![
+                id.to_string(),
+                clean.group_id.to_string(),
+                clean.service,
+                clean.account,
+                clean.env_var,
+                clean.secret,
+                clean.note,
+                now,
+            ],
+        )
+        .map_err(|e| classify_connector(e, &clean.env_var))?;
+
+        self.get_connector(id)?.ok_or(StoreError::ConnectorNotFound(id))
+    }
+
+    pub fn get_connector(&self, id: ConnectorId) -> Result<Option<Connector>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{CONNECTOR_COLUMNS} WHERE id=?1"))?;
+        match stmt.query_row(params![id.to_string()], row_to_connector).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Every credential one crew holds. Secrets are reported as set or not,
+    /// never returned: this is what the UI and the prompt are both built from.
+    pub fn group_connectors(&self, group: GroupId) -> Result<Vec<Connector>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare(&format!("{CONNECTOR_COLUMNS} WHERE group_id=?1 ORDER BY service, rowid"))?;
+        let rows = stmt.query_map(params![group.to_string()], row_to_connector)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// The credentials one group's machines are given, as environment
+    /// variables.
+    ///
+    /// The only path a stored secret takes out of this table, and it leads
+    /// straight into a sandbox. Nothing here is ever rendered into a prompt or
+    /// returned over IPC, which is why it is a separate query rather than a
+    /// field on `Connector`.
+    pub fn connector_env(
+        &self,
+        group: GroupId,
+    ) -> Result<std::collections::BTreeMap<String, String>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT env_var, secret FROM connectors
+              WHERE group_id=?1 AND env_var <> '' AND secret <> ''",
+        )?;
+        let rows = stmt.query_map(params![group.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = std::collections::BTreeMap::new();
+        for row in rows {
+            let (name, value) = row?;
+            out.insert(name, value);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_connector(&self, id: ConnectorId) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM connectors WHERE id=?1", params![id.to_string()])? > 0)
+    }
+
+    // ---- sign-ins --------------------------------------------------------
+
+    /// Records what one machine's browser turned out to be signed in to.
+    ///
+    /// Replaces the agent's whole set rather than merging, because this is a
+    /// cache of something that lives elsewhere: an entry that outlives the
+    /// logout it should have noticed keeps the crew routing work to an agent
+    /// that will hit a login wall. `first_seen_at` is carried across so
+    /// "signed in since Tuesday" survives a rescan.
+    pub fn replace_signins(
+        &self,
+        agent: AgentId,
+        found: &[Signin],
+    ) -> Result<Vec<Signin>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            let mut earliest =
+                tx.prepare("SELECT first_seen_at FROM signins WHERE agent_id=?1 AND domain=?2")?;
+            let mut insert = tx.prepare(
+                "INSERT INTO signins (agent_id,domain,service,recognised,first_seen_at,last_seen_at)
+                 VALUES (?1,?2,?3,?4,?5,?6)",
+            )?;
+
+            let mut carried: Vec<(String, i64)> = Vec::new();
+            for signin in found {
+                let since: Option<i64> = earliest
+                    .query_row(params![agent.to_string(), signin.domain], |row| row.get(0))
+                    .optional()?;
+                carried.push((signin.domain.clone(), since.unwrap_or(signin.first_seen_at)));
+            }
+
+            tx.execute("DELETE FROM signins WHERE agent_id=?1", params![agent.to_string()])?;
+
+            for (signin, (_, since)) in found.iter().zip(carried) {
+                insert.execute(params![
+                    agent.to_string(),
+                    signin.domain,
+                    signin.service,
+                    signin.recognised as i64,
+                    since,
+                    signin.last_seen_at,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        self.agent_signins(agent)
+    }
+
+    pub fn agent_signins(&self, agent: AgentId) -> Result<Vec<Signin>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT agent_id,domain,service,recognised,first_seen_at,last_seen_at
+               FROM signins WHERE agent_id=?1 ORDER BY service",
+        )?;
+        let rows = stmt.query_map(params![agent.to_string()], row_to_signin)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// What every machine in one group is signed in to.
+    ///
+    /// Terminated agents are excluded: their sandboxes are destroyed, so a row
+    /// left behind would put an unreachable account on the roster.
+    pub fn group_signins(&self, group: GroupId) -> Result<Vec<Signin>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT s.agent_id,s.domain,s.service,s.recognised,s.first_seen_at,s.last_seen_at
+               FROM signins s
+               JOIN agents a ON a.id = s.agent_id
+              WHERE a.group_id=?1 AND a.lifecycle <> 'terminated'
+              ORDER BY s.service",
+        )?;
+        let rows = stmt.query_map(params![group.to_string()], row_to_signin)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Forgets what a machine was signed in to. Called when the agent, and
+    /// therefore its sandbox and its cookies, are destroyed.
+    pub fn delete_agent_signins(&self, agent: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM signins WHERE agent_id=?1", params![agent.to_string()])?)
+    }
+
     // ---- groups ----------------------------------------------------------
 
     /// Every group, with its live agent count, oldest first.
@@ -572,6 +751,10 @@ impl Store {
             "UPDATE agents SET group_id=?2 WHERE group_id=?1",
             params![id.to_string(), default.to_string()],
         )?;
+        // The group's accounts go with it. They are scoped to it, so moving
+        // them would hand another crew credentials nobody gave it, and leaving
+        // them would fail the foreign key on the row below.
+        conn.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
         conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         Ok(())
     }
@@ -934,6 +1117,64 @@ fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
     })())
 }
 
+/// The column list every connector read uses, kept in one place so a new column
+/// cannot be added to one query and forgotten in the other.
+const CONNECTOR_COLUMNS: &str = "SELECT id,group_id,service,account,env_var,secret,note,\
+                                 created_at,updated_at FROM connectors";
+
+/// Maps the unique index on `(group_id, env_var)` onto something an operator
+/// can act on. The raw driver message names an index, not a decision.
+fn classify_connector(err: rusqlite::Error, env_var: &str) -> StoreError {
+    if let rusqlite::Error::SqliteFailure(inner, _) = &err {
+        if inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
+            return StoreError::DuplicateEnvVar(env_var.to_string());
+        }
+    }
+    StoreError::Sqlite(err)
+}
+
+fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
+    let id_raw: String = row.get(0)?;
+    let group_raw: String = row.get(1)?;
+    let secret: String = row.get(5)?;
+
+    Ok((|| {
+        Ok(Connector {
+            id: id_raw
+                .parse::<ConnectorId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad connector id {id_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            service: row.get(2)?,
+            account: row.get(3)?,
+            env_var: row.get(4)?,
+            note: row.get(6)?,
+            secret_set: !secret.trim().is_empty(),
+            secret_hint: crate::config::hint_for(&secret),
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
+        })
+    })())
+}
+
+fn row_to_signin(row: &Row<'_>) -> RowResult<Signin> {
+    let agent_raw: String = row.get(0)?;
+
+    Ok((|| {
+        Ok(Signin {
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            domain: row.get(1)?,
+            service: row.get(2)?,
+            recognised: row.get::<_, i64>(3)? != 0,
+            first_seen_at: row.get(4)?,
+            last_seen_at: row.get(5)?,
+        })
+    })())
+}
+
 fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
     let id_raw: String = row.get(0)?;
     let api_key: Option<String> = row.get(5)?;
@@ -1042,6 +1283,170 @@ mod tests {
             cause: None,
             created_at: now_ms(),
         }
+    }
+
+    fn group_named(name: &str) -> CleanGroup {
+        CleanGroup { name: name.into(), base_url: None, default_model: None, api_key: None }
+    }
+
+    fn key_for(group: GroupId, env_var: &str, secret: &str) -> CleanConnector {
+        CleanConnector {
+            group_id: group,
+            service: "GitHub".into(),
+            account: "madebywelch".into(),
+            env_var: env_var.into(),
+            note: String::new(),
+            secret: secret.into(),
+        }
+    }
+
+    fn signin_at(agent: AgentId, service: &str, domain: &str, at: i64) -> Signin {
+        Signin {
+            agent_id: agent,
+            domain: domain.into(),
+            service: service.into(),
+            recognised: true,
+            first_seen_at: at,
+            last_seen_at: at,
+        }
+    }
+
+    #[test]
+    fn a_connector_round_trips_without_its_secret_coming_back() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        let stored = f
+            .store
+            .create_connector(&key_for(agent.group_id, "GITHUB_TOKEN", "ghp_hunter2"))
+            .unwrap();
+
+        assert!(stored.secret_set, "the operator has to be able to see that one is set");
+        assert_eq!(stored.secret_hint, "...ter2");
+        let json = serde_json::to_string(&stored).unwrap();
+        assert!(!json.contains("hunter2"), "a secret reached the wire: {json}");
+
+        // And the value is still there, on the one path that is allowed to see it.
+        let env = f.store.connector_env(agent.group_id).unwrap();
+        assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp_hunter2"));
+    }
+
+    #[test]
+    fn a_second_credential_cannot_take_a_variable_name_already_in_use() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.create_connector(&key_for(agent.group_id, "TOKEN", "a")).unwrap();
+
+        let clash = f.store.create_connector(&key_for(agent.group_id, "TOKEN", "b"));
+        assert!(
+            matches!(clash, Err(StoreError::DuplicateEnvVar(ref name)) if name == "TOKEN"),
+            "expected a named refusal, got {clash:?}"
+        );
+    }
+
+    #[test]
+    fn a_crew_cannot_reach_another_crews_credentials() {
+        let f = fixture();
+        let mine = f.store.create_agent(&draft("Researcher")).unwrap();
+        let other_group = f.store.create_group(&group_named("Research")).unwrap();
+
+        f.store.create_connector(&key_for(mine.group_id, "MINE", "a")).unwrap();
+        f.store.create_connector(&key_for(other_group.id, "THEIRS", "b")).unwrap();
+
+        assert_eq!(f.store.group_connectors(mine.group_id).unwrap().len(), 1);
+        assert!(!f.store.connector_env(mine.group_id).unwrap().contains_key("THEIRS"));
+    }
+
+    #[test]
+    fn a_deleted_group_takes_its_credentials_with_it() {
+        // Not tidiness: connectors carry a foreign key to the group, so leaving
+        // them makes the delete fail outright.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Research")).unwrap();
+        f.store.create_connector(&key_for(group.id, "TOKEN", "a")).unwrap();
+
+        f.store.delete_group(group.id).expect("a group with credentials must still delete");
+        assert!(f.store.group_connectors(group.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_scan_replaces_what_a_machine_was_signed_in_to() {
+        // A cache of something that lives on the machine, so a logout has to
+        // remove the row. Left behind, the crew keeps routing work to an agent
+        // that will hit a login wall.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+
+        f.store
+            .replace_signins(
+                agent.id,
+                &[
+                    signin_at(agent.id, "LinkedIn", "linkedin.com", 100),
+                    signin_at(agent.id, "GitHub", "github.com", 100),
+                ],
+            )
+            .unwrap();
+        assert_eq!(f.store.agent_signins(agent.id).unwrap().len(), 2);
+
+        // Logged out of GitHub; the next scan only sees LinkedIn.
+        let after = f
+            .store
+            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 200)])
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].service, "LinkedIn");
+    }
+
+    #[test]
+    fn rescanning_keeps_how_long_a_session_has_been_there() {
+        // "Signed in since Tuesday" has to survive a scan, or every refresh
+        // makes every session look brand new.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+
+        f.store
+            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 100)])
+            .unwrap();
+        let again = f
+            .store
+            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 900)])
+            .unwrap();
+
+        assert_eq!(again[0].first_seen_at, 100, "the first sighting must not move");
+        assert_eq!(again[0].last_seen_at, 900, "and the latest one must");
+    }
+
+    #[test]
+    fn a_group_sees_every_live_machines_sessions_and_no_dead_ones() {
+        let f = fixture();
+        let mine = f.store.create_agent(&draft("Researcher")).unwrap();
+        let peer = f.store.create_agent(&draft("Scribe")).unwrap();
+        let gone = f.store.create_agent(&draft("Ghost")).unwrap();
+
+        for (agent, service) in [(mine.id, "LinkedIn"), (peer.id, "GitHub"), (gone.id, "Gmail")] {
+            f.store.replace_signins(agent, &[signin_at(agent, service, "x.example", 1)]).unwrap();
+        }
+        f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
+
+        let visible: Vec<String> =
+            f.store.group_signins(mine.group_id).unwrap().into_iter().map(|s| s.service).collect();
+        assert!(visible.contains(&"LinkedIn".to_string()));
+        assert!(visible.contains(&"GitHub".to_string()));
+        assert!(
+            !visible.contains(&"Gmail".to_string()),
+            "a deleted agent's machine is destroyed, so its sessions are not on the roster"
+        );
+    }
+
+    #[test]
+    fn deleting_an_agent_forgets_what_its_browser_held() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store
+            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 1)])
+            .unwrap();
+
+        assert_eq!(f.store.delete_agent_signins(agent.id).unwrap(), 1);
+        assert!(f.store.agent_signins(agent.id).unwrap().is_empty());
     }
 
     #[test]

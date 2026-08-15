@@ -99,11 +99,16 @@ impl AgentCard {
     /// The directory entry a peer sees. Deliberately excludes `system_prompt`:
     /// one agent should not be able to read another's instructions just by
     /// listing the directory.
-    pub fn directory_entry(&self) -> DirectoryEntry {
+    ///
+    /// `reaches` is passed in rather than read from the card because accounts
+    /// live in their own table, and because deciding what a peer may know about
+    /// them is a judgement the caller has to make deliberately.
+    pub fn directory_entry(&self, reaches: Vec<String>) -> DirectoryEntry {
         DirectoryEntry {
             id: self.id,
             name: self.name.clone(),
             skills: self.skills.clone(),
+            reaches,
             lifecycle: self.lifecycle,
             version: self.version,
         }
@@ -116,6 +121,14 @@ pub struct DirectoryEntry {
     pub id: AgentId,
     pub name: String,
     pub skills: Vec<String>,
+    /// Accounts signed in on this agent's machine, as `Gmail as robert@…`.
+    ///
+    /// A skill is a claim its agent wrote about itself; this is a fact the
+    /// operator established. It is here so an agent asked for something it has
+    /// no account for can name the peer that does, instead of reporting that
+    /// the crew cannot do it.
+    #[serde(default)]
+    pub reaches: Vec<String>,
     pub lifecycle: Lifecycle,
     pub version: u32,
 }
@@ -311,8 +324,10 @@ mod tests {
             created_at: 0,
             updated_at: 0,
         };
-        let json = serde_json::to_string(&card.directory_entry()).unwrap();
+        let json =
+            serde_json::to_string(&card.directory_entry(vec!["Gmail as robert@x".into()])).unwrap();
         assert!(!json.contains("SECRET"), "directory entry leaked the prompt: {json}");
+        assert!(json.contains("Gmail as robert@x"), "a peer has to be able to see who to ask");
     }
 
     #[test]

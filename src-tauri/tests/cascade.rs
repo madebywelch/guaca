@@ -19,9 +19,11 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
+use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::now_ms;
+use guac_lib::domain::signin::Signin;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
@@ -992,5 +994,133 @@ async fn a_one_off_routine_does_not_come_due_twice() {
     assert!(
         h.runtime.store().agent_routines(h.id("Sleeper")).unwrap().is_empty(),
         "a one-off must be gone once it has run, not left with a time in the past"
+    );
+}
+
+/// The system prompt each agent was actually sent, by name.
+fn prompts_by_agent(stub: &harness::Stub) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for body in stub.transcript.lock().iter() {
+        out.insert(
+            speaker(body),
+            body["messages"][0]["content"].as_str().unwrap_or_default().to_string(),
+        );
+    }
+    out
+}
+
+fn signin_on(agent: guac_lib::domain::ids::AgentId, service: &str) -> Signin {
+    Signin {
+        agent_id: agent,
+        domain: format!("{}.example", service.to_lowercase()),
+        service: service.into(),
+        recognised: true,
+        first_seen_at: 0,
+        last_seen_at: 0,
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
+    // The whole point, end to end. Two failures it exists to stop, and they are
+    // opposites: an agent whose browser is signed in and does not know, so it
+    // declines; and an agent told about a session on another machine, so it
+    // tries and hits a login wall.
+    let stub = serve(|_| Script::Say("Noted.".into())).await;
+    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+
+    let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
+    h.runtime
+        .store()
+        .replace_signins(h.id("Researcher"), &[signin_on(h.id("Researcher"), "LinkedIn")])
+        .unwrap();
+    h.runtime
+        .store()
+        .create_connector(&CleanConnector {
+            group_id: group,
+            service: "GitHub".into(),
+            account: "madebywelch".into(),
+            env_var: "GITHUB_TOKEN".into(),
+            note: String::new(),
+            secret: "ghp_hunter2".into(),
+        })
+        .unwrap();
+
+    for agent in ["Manager", "Researcher"] {
+        let run = h.runtime.send_from_human(h.id(agent), "hello").unwrap();
+        h.settle(run).await;
+    }
+
+    let prompts = prompts_by_agent(&stub);
+    let researcher = prompts.get("Researcher").expect("Researcher ran");
+    let manager = prompts.get("Manager").expect("Manager ran");
+
+    // The machine that holds the session knows it holds it.
+    assert!(
+        researcher.contains("Your browser is signed in to these")
+            && researcher.contains("- LinkedIn"),
+        "the agent whose browser is signed in must be told so: {researcher}"
+    );
+    // The one that is not, is not told it is.
+    assert!(
+        !manager.contains("Your browser is signed in to these"),
+        "cookies are on one disk; claiming otherwise produces a login wall: {manager}"
+    );
+    // But it is told who to ask, which is the answer it should give instead.
+    assert!(
+        manager.contains("Researcher") && manager.contains("signed in to LinkedIn"),
+        "the roster has to name the agent that can do it: {manager}"
+    );
+
+    // A credential is a string, so both machines have it, and neither prompt
+    // has the value.
+    for prompt in [researcher, manager] {
+        assert!(prompt.contains("$GITHUB_TOKEN"), "the variable is named: {prompt}");
+        assert!(!prompt.contains("ghp_hunter2"), "a secret reached a model: {prompt}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_directory_says_which_peer_is_signed_in_to_what() {
+    // The roster in the prompt is one path; `directory` is the other, and an
+    // agent that calls it mid-turn to decide who to delegate to reads this one.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Researcher can.".into())
+        } else {
+            Script::Directory
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    h.runtime
+        .store()
+        .replace_signins(h.id("Researcher"), &[signin_on(h.id("Researcher"), "LinkedIn")])
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "who can post to LinkedIn?").unwrap();
+    h.settle(run).await;
+
+    let listing: String = stub
+        .transcript
+        .lock()
+        .iter()
+        .flat_map(|body| {
+            body["messages"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|m| m["role"] == "tool")
+                .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        listing.contains("LinkedIn"),
+        "the directory has to say what a peer is signed in to: {listing}"
     );
 }

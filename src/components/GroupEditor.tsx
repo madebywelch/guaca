@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { errorMessage, type Group, type GroupDraft, type GroupReset } from "../lib/types";
+import { CredentialList } from "./CredentialList";
 
 interface Props {
   /** Absent means create. */
@@ -167,6 +168,10 @@ export function GroupEditor({ group, onClose }: Props) {
             stored one.
           </span>
         </label>
+
+        {/* Credentials belong to the crew, not to any one agent: every machine
+            in this group is handed them. */}
+        {group && <CredentialList groupId={group.id} />}
 
         {cleared && (
           <div className="banner" style={{ margin: "0.2rem 0 0.9rem" }}>

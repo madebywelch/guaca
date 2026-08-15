@@ -1,8 +1,10 @@
 pub mod agent;
+pub mod connector;
 pub mod envelope;
 pub mod group;
 pub mod ids;
 pub mod routine;
+pub mod signin;
 pub mod usage;
 
 use std::sync::atomic::{AtomicI64, Ordering};

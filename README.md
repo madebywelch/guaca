@@ -113,6 +113,62 @@ of its channel: a live picture while you read, and interactive when expanded.
 Without an E2B key none of this appears, and the other four tools are not
 offered.
 
+## Connectors
+
+An agent with a computer can already reach almost anything. What it cannot do is
+know what it is already allowed into: sign its browser in to LinkedIn and it
+will still tell you it has no way to post. The access was never missing. The
+knowledge was.
+
+Two halves, and which one you get is decided by the service rather than by a
+preference.
+
+**Sign in on the agent's computer.** Open its screen, log in to whatever you
+like, and that is the whole procedure. Nothing is declared anywhere: Chrome is
+holding the cookies, so Guaca asks the browser what it is signed in to and puts
+the answer in that agent's prompt and on every other agent's roster. Log out and
+it disappears the same way. There is nowhere to type a password because Guaca
+never handles one.
+
+**Credentials, on the group.** For an API with a plain token, paste it into the
+group's settings and name a variable. Every machine in that group gets it in the
+environment of every command it runs.
+
+Two things follow from where each half physically lives, and both are load
+bearing:
+
+- A browser session is cookies on **one** machine, so it belongs to one agent.
+  The rest of the crew is told who holds it, in the same roster that lists
+  skills, so an agent asked to post to LinkedIn says "Researcher can do that"
+  rather than "I am not signed in". A skill is a claim an agent wrote about
+  itself; a session is a fact read off a disk.
+- A credential is a string, so the whole group gets it, and **it never reaches
+  the model.** It goes from SQLite into the environment of a sandbox command and
+  nowhere else: not into a prompt, not into the transcript, not into the
+  webview, not onto the sandbox's disk. The agent is told the variable's name
+  and told not to print it.
+
+Detection is deliberately cautious, because a wrong claim is worse than a
+missing one: an agent that believes it can read Gmail wastes a turn finding out
+it cannot, and you see a broken account rather than an absent one. Sites are
+recognised by the cookie that actually means somebody logged in, so a browser
+holding `google.com` cookies it collected while signed out is correctly reported
+as signed out. Anything not on that list is only mentioned if the browser has
+genuinely visited it *and* holds a cookie implying an identity, and it is passed
+to the agent as a maybe. On a real profile holding a thousand cookies across
+three hundred domains, that combination reported exactly the one account the
+machine actually had.
+
+The recognised-service list lives in `domain/signin.rs` and adding one is a
+line. There is no OAuth: a local, open-source app cannot honestly ship "Log in
+with Google", because Gmail scopes are restricted and verification is per-app.
+Signing in on the agent's own browser gets you Gmail today, through the same
+door a person uses.
+
+Being signed in is also what makes a hostile web page worth writing, so every
+page an agent reads arrives labelled as content rather than instruction, and the
+system prompt says what a signed-in agent must stop short of. See **Credit**.
+
 ## Data
 
 Everything lives in one directory:
@@ -166,6 +222,28 @@ and Saket Kumar ([arXiv 2505.02279](https://arxiv.org/abs/2505.02279)). A2A in
 particular gave the Agent Card, discovery as a first-class operation, and card
 versioning. `docs/PROTOCOL.md` records what was taken from each, what was cut,
 and what had to be invented, chiefly termination, which none of them specify.
+
+Connectors have two kinds rather than one because of *Beyond Browsing: API-Based
+Web Agents* by Yueqi Song, Frank Xu, Shuyan Zhou and Graham Neubig
+([arXiv 2410.16464](https://arxiv.org/abs/2410.16464)). Putting API-calling and
+browsing agents on the same WebArena tasks, they found APIs beat browsing, and a
+hybrid that could choose beat both, by 24.0 points absolute over browsing alone.
+The design that follows is not "an API when there is one, a browser otherwise":
+it is telling one agent about both and letting it pick, which is what the
+prompt's **What you can reach** section is for.
+
+The security half comes from *BrowseSafe: Understanding and Preventing Prompt
+Injection Within AI Browser Agents* by Kaiyuan Zhang, Mark Tenenholtz, Kyle
+Polley, Jerry Ma, Denis Yarats and Ninghui Li
+([arXiv 2511.20597](https://arxiv.org/abs/2511.20597)). Its useful move is to
+benchmark injections that drive real-world *actions* rather than text output,
+which is exactly what a signed-in session turns a web page into: the payload no
+longer has to talk an agent into obtaining access, because it already has the
+operator's. Guaca takes the architectural half of their defence-in-depth
+argument, which is what a local app can actually hold: page content is labelled
+at the point it enters the turn, credentials never enter the model's context at
+all, and the signed-in agent is told where to stop. Neither paper's authors
+endorse any of this.
 
 ## Licence
 

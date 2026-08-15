@@ -1557,6 +1557,143 @@ button {
   min-width: 6rem;
 }
 
+.connectors {
+  margin-bottom: 1.15rem;
+}
+
+/* The services a credential can be added for. A grid of real tiles: the
+   previous version borrowed the avatar picker, which forces square cells sized
+   for a drawing, so a row of text buttons came out cramped and ragged. */
+.services {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.service {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  text-align: left;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.service:hover {
+  background: var(--sunken);
+  /* Picks up the brand colour it is about to commit to. */
+  border-color: color-mix(in oklab, var(--mark, var(--flesh)) 45%, var(--edge));
+}
+
+.service__name {
+  font-size: 0.8rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The brand's mark in the brand's colour, on a neutral chip.
+   A coloured chip with a white glyph would be the obvious choice and is the
+   wrong one here: several of these brands are black, so their tiles would be
+   four identical squares, and the services with no published icon would sit in
+   the same grid looking like a mistake rather than a fallback. */
+.mark {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.36rem;
+  display: grid;
+  place-items: center;
+  background: var(--sunken);
+  border: 1px solid var(--edge);
+  color: var(--mark, var(--muted));
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.mark__icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  display: block;
+}
+
+.mark--other {
+  background: none;
+  border: 1px dashed var(--edge);
+  color: var(--faint);
+  font-size: 0.85rem;
+}
+
+.connector {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.5rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+.connector__row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.connector__service {
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.connector__account {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--faint);
+}
+
+.connector__where {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--faint);
+  flex: 1;
+  min-width: 6rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connector__when {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  color: var(--faint);
+  margin-left: auto;
+}
+
+.connector__ok,
+.connector__warn {
+  margin: 0;
+  font-size: 0.62rem;
+}
+
+.connector__ok {
+  color: var(--mint);
+}
+
+.connector__warn {
+  color: var(--alarm);
+}
+
 .input--slim {
   width: auto;
   padding: 0.2rem 0.3rem;
@@ -1820,31 +1957,43 @@ button {
 }
 
 /* Stowed: a chip, and nothing else. An agent that will never have a computer
-   should not spend a third of the reading column saying so. */
+   should not spend a third of the reading column saying so.
+   Pulled up into the column's top padding and out to the right edge, so it
+   reads as a tab attached to the side of the window rather than as a control
+   floating in the text. */
 .computer--stowed {
   height: auto;
   width: auto;
-  margin: 0 0 0.2rem 0.6rem;
+  top: 0;
+  margin: -0.75rem -0.1rem 0.15rem 0.6rem;
 }
 
 .computer__chip {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.15rem 0.4rem;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem 0.3rem 0.6rem;
   background: var(--rail-ground);
   border: 1px solid var(--rail-edge);
-  border-radius: 0.35rem;
+  /* A bubble on the left, flush on the right: the side it is attached to. */
+  border-right: 0;
+  border-radius: 999px 0 0 999px;
   font-family: var(--font-mono);
-  font-size: 0.55rem;
+  font-size: 0.57rem;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--rail-muted);
-  opacity: 0.62;
+  opacity: 0.8;
+  box-shadow: -0.15rem 0.15rem 0.6rem -0.25rem rgb(24 33 27 / 0.35);
+  transition:
+    opacity 120ms ease,
+    padding 120ms ease;
 }
 
 .computer__chip:hover {
   opacity: 1;
+  /* Leans out of the edge a little when reached for. */
+  padding-right: 1rem;
 }
 
 .computer__chip-dot {
