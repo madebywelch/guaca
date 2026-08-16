@@ -98,7 +98,10 @@ pub fn system_prompt(
          doing. When a routine fires you receive its instruction as a new message, so write it \
          as something you can act on with nothing else in front of you. Use it whenever you are \
          asked for something recurring, and prefer one routine that does the whole job over \
-         several that each do a piece of it.\n\n\
+         several that each do a piece of it. Never schedule a check for a reply, a result or \
+         anything else you are waiting on: those reach you as new messages by themselves. A \
+         routine that fires to go looking finds nothing, because whatever you were waiting for \
+         would already have arrived.\n\n\
          Never say you have no computer, no browser, or no way to look something up. You have \
          all three. Say what you ran and what it returned rather than presenting a result as \
          something you simply knew.\n",
@@ -260,7 +263,18 @@ pub fn system_prompt(
 
     out.push_str(
         "\n## Talking to other agents\n\
-         - `directory` lists the agents you can reach. Call it when you are unsure of a name.\n\
+         - `directory` lists the agents you can reach and what each one is for. It answers who \
+         should do a piece of work, not merely how a name is spelled.\n\
+         - Send to the agents whose skills fit the work, and to nobody else. Deciding who fits is \
+         the work of delegating, and spreading a task over everyone available skips it. Cutting \
+         it into a piece each is the same mistake with a plan attached: a question about history \
+         handed to a mathematician is still handed to the wrong agent, however the covering note \
+         is worded. A peer with no part in this costs the operator a model call and answers from \
+         outside its competence, which is worse than not answering. One fitting agent means one \
+         message.\n\
+         - Send to everyone only when the content is genuinely for everyone, such as an \
+         announcement. If nobody fits, handle it yourself or tell the operator the crew has no \
+         one for it; the nearest available name is not a fit.\n\
          - `send_message` delivers to one or more agents. It is asynchronous and non-blocking: it \
          returns once the message is queued. Any reply arrives later as a separate message. Never \
          wait for a reply, and never call `send_message` again just to check for one.\n\
@@ -666,6 +680,75 @@ mod tests {
             "knowing who has it is only useful with the instruction to use them"
         );
         assert!(prompt.contains("not yours to use"), "and that it cannot borrow the session");
+    }
+
+    #[test]
+    fn an_agent_is_told_to_pick_recipients_by_fit() {
+        // The observed failure, and it was not a broadcast. A coordinator asked
+        // for research called `directory`, read back three names, and wrote
+        // three different briefs: the history to a Mathematician, the casualty
+        // figures to a Scientist to "independently assess". Every message was
+        // well formed and each had a rationale. The roster printed skills and
+        // never said what they were for, so with no criterion for narrowing,
+        // one piece per available body is the reading that looks most like
+        // work.
+        let prompt = prompt_for(
+            &card("Manager"),
+            &[
+                entry("Researcher", &["web research"]),
+                entry("Mathematician", &["arithmetic"]),
+                entry("Scientist", &["experiments"]),
+            ],
+            "",
+            ReplyMode::ToOperator,
+        );
+        assert!(
+            prompt.contains("whose skills fit the work, and to nobody else"),
+            "the roster's skills have to be named as the basis for choosing"
+        );
+        assert!(
+            prompt.contains("Cutting it into a piece each"),
+            "the shape that was actually observed was a split, not one text sent to everyone, \
+             and a rule that only forbids broadcasting leaves it untouched"
+        );
+        assert!(
+            prompt.contains("Send to everyone only when"),
+            "an announcement is still a real thing; the rule cannot forbid it outright"
+        );
+        assert!(
+            prompt.contains("the nearest available name is not a fit"),
+            "an agent with nobody to ask needs somewhere to go that is not the wrong peer"
+        );
+    }
+
+    #[test]
+    fn the_directory_is_offered_as_a_decision_rather_than_a_spelling_check() {
+        // Described as a name lookup, it was used as one: the names came back
+        // and all of them were used. What an agent is for is the half that
+        // decides who should get the work.
+        let prompt =
+            prompt_for(&card("Manager"), &[entry("Chef", &["cooking"])], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("what each one is for"));
+        assert!(
+            !prompt.contains("Call it when you are unsure of a name"),
+            "the old framing is what produced the broadcast"
+        );
+    }
+
+    #[test]
+    fn an_agent_is_told_not_to_schedule_a_check_for_a_reply() {
+        // A fired routine is a fresh run with a fresh budget, so polling for a
+        // reply is the one use of `schedule` that routes around every limit on
+        // what a run may spend. Observed twice in one turn, 19 and 34 seconds
+        // out, both of them ahead of any reply.
+        let prompt =
+            prompt_for(&card("Manager"), &[entry("Chef", &["cooking"])], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("Never schedule a check for a reply"));
+        assert!(
+            prompt.contains("arrive as new messages")
+                || prompt.contains("reach you as new messages"),
+            "the prohibition only holds if the agent knows what happens instead"
+        );
     }
 
     #[test]

@@ -29,9 +29,13 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
-            description: "List the other agents in this workspace, with their skills and current \
-                          status. Call this before send_message whenever you are not certain of \
-                          an agent's exact name."
+            // Framed as the routing decision, not a spelling check. Described
+            // as a name lookup, it got used as one: a coordinator called it,
+            // read three names, and sent the same research task to all three.
+            description: "List the agents you can reach, with what each one is for and its \
+                          current status. Call this to decide who should do a piece of work: \
+                          the skills are how you tell which agent the task belongs to, not \
+                          decoration on a list of addresses."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -114,12 +118,18 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SCHEDULE.to_string(),
+            // The prohibition is here because a fired routine is a fresh run
+            // with a fresh budget: polling for a reply is the one use of this
+            // tool that routes around every limit on what a run may spend.
             description: "Keep your own schedule. Use this to do something later, or to keep \
                           doing it: `add` with `every_secs` repeats, `add` with only `in_secs` \
                           fires once. When it fires you get the instruction back as a new \
                           message and work as usual, so write it as something you will be able \
                           to act on with no other context. Nothing is running while you wait, \
-                          and a routine outlives restarts."
+                          and a routine outlives restarts. Never schedule a check for a reply, a \
+                          result, or anything else you are waiting on: those arrive as new \
+                          messages on their own, so a routine that fires to look for one only \
+                          spends a turn finding nothing."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -223,10 +233,16 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SEND_MESSAGE.to_string(),
-            description: "Send a message to one or more other agents. Delivery is asynchronous \
-                          and non-blocking: this returns as soon as the messages are queued. \
-                          Replies, if any, arrive later as new messages addressed to you. Do not \
-                          wait for a reply and do not call this again to check for one."
+            description: "Send a message to the other agents a piece of work belongs to. Choose \
+                          them by fit: the agents whose skills cover this task, and no others. \
+                          Reaching every agent in the directory is not thoroughness, it is \
+                          skipping the decision, and cutting the task into a piece each is the \
+                          same thing with a plan attached: both buy answers from agents the work \
+                          was never for. Address several only when the content is genuinely for \
+                          all of them. Delivery is asynchronous and non-blocking: this returns as \
+                          soon as the messages are queued. Replies, if any, arrive later as new \
+                          messages addressed to you. Do not wait for a reply and do not call \
+                          this again to check for one."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -235,7 +251,8 @@ pub fn specs() -> Vec<ToolSpec> {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
-                        "description": "Exact agent names, as returned by directory."
+                        "description": "Exact agent names, as returned by directory. Only the \
+                                        agents this particular message is for."
                     },
                     "text": {
                         "type": "string",
@@ -728,6 +745,62 @@ mod tests {
         // replying that it has no graphical browser.
         let spec = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
         assert!(spec.description.contains("google-chrome"), "{}", spec.description);
+    }
+
+    /// The one description under test, by name.
+    fn description(name: &str) -> String {
+        specs().into_iter().find(|s| s.name == name).unwrap().description
+    }
+
+    #[test]
+    fn the_directory_reads_as_a_routing_decision() {
+        // Described as a name lookup, it was used as one: a coordinator asked
+        // for research called it, read three names back, and sent the task to
+        // all three. The schema cannot express "pick the right one", so this
+        // sentence is the only place the decision can live.
+        let spec = description(DIRECTORY);
+        assert!(spec.contains("decide who should do a piece of work"), "{spec}");
+        assert!(
+            !spec.contains("not certain of an agent's exact name"),
+            "the spelling-check framing is what produced the broadcast: {spec}"
+        );
+    }
+
+    #[test]
+    fn send_message_tells_the_model_to_choose_its_recipients() {
+        // `to` is an array with minItems 1 and no maximum, so one call to every
+        // agent costs the model exactly what one call to the right agent costs.
+        // Nothing in the schema can charge for breadth; the description has to.
+        let spec = description(SEND_MESSAGE);
+        assert!(spec.contains("Choose them by fit"), "{spec}");
+        assert!(spec.contains("no others"), "{spec}");
+        assert!(
+            spec.contains("genuinely for all of them"),
+            "an announcement is legitimate, so the rule has to leave room for one: {spec}"
+        );
+
+        let to = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap().parameters
+            ["properties"]["to"]["description"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            to.contains("this particular message is for"),
+            "the parameter is read closer to the call than the description is: {to}"
+        );
+    }
+
+    #[test]
+    fn schedule_forbids_polling_for_something_that_will_arrive_by_itself() {
+        // A fired routine is a fresh run with a fresh step budget. Scheduling a
+        // check for a reply is therefore the one use of this tool that spends
+        // outside every limit the guard applies to the run that made it.
+        let spec = description(SCHEDULE);
+        assert!(spec.contains("Never schedule a check for a reply"), "{spec}");
+        assert!(
+            spec.contains("arrive as new messages on their own"),
+            "a prohibition without the alternative gets reworded and retried: {spec}"
+        );
     }
 
     #[test]
