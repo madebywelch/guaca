@@ -509,15 +509,95 @@ mod live {
     }
 
     /// Everything a live scenario needs: real agents, real model, real prompt.
-    async fn run_live(names: &[&str], instruction: &str) -> Option<Eval> {
-        let config = configured()?;
-        let h = live_harness(config, names);
-        let run = h.runtime.send_from_human(h.id(names[0]), instruction).unwrap();
+    async fn run_live(names: &[&'static str], instruction: &str) -> Option<Eval> {
+        let crew: Vec<LiveAgent> = names.iter().map(|n| LiveAgent::generic(n)).collect();
         // Generous: several sequential model calls, over a network, and a
         // failure here should mean "this crew never stopped talking", not
         // "the endpoint was slow".
-        h.settle_within(run, 180).await;
-        Some(read(&h, names))
+        run_live_crew(&crew, instruction, 180).await.map(|(_, eval)| eval)
+    }
+
+    /// The same, for scenarios that have to look at who was messaged rather
+    /// than at how much was said. The harness comes back because the answer is
+    /// in the envelopes, and `Conversation` counts peer traffic without
+    /// recording where any of it went.
+    ///
+    /// `secs` is per scenario because the settle window is a property of the
+    /// work, not of the network. These run against the operator's own limits,
+    /// which allow a hundred tool rounds, so an agent handed a real task starts
+    /// a machine and uses it: the first run of this took longer than three
+    /// minutes with nothing wrong.
+    async fn run_live_crew(
+        crew: &[LiveAgent],
+        instruction: &str,
+        secs: u64,
+    ) -> Option<(Harness, Eval)> {
+        let config = configured()?;
+        let before = machines_now(&config).await;
+        let h = live_crew(config.clone(), crew);
+        let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
+        let run = h.runtime.send_from_human(h.id(names[0]), instruction).unwrap();
+
+        let settled = h.settled_within(run, secs).await;
+        // Before the assertions, because an assertion that fails takes the rest
+        // of the function with it, and what is left standing is a real machine
+        // billing for its idle period. Twenty accumulated this way in an
+        // afternoon, and the timeouts left the most behind.
+        release_machines(&config, before).await;
+
+        assert!(settled, "run did not settle in {secs}s. messages so far:\n{}", h.transcript());
+        let eval = read(&h, &names);
+        Some((h, eval))
+    }
+
+    /// Every sandbox this account holds, by id.
+    async fn machines_now(config: &guac_lib::config::AppConfig) -> Vec<String> {
+        match guac_lib::e2b::E2bClient::new(&config.e2b.api_key) {
+            Some(client) => client.list_ours().await.unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Kills whatever this run brought into existence, and nothing else.
+    ///
+    /// A diff against a baseline rather than a walk over the crew's rows. An
+    /// agent whose first machine does not answer starts another and records
+    /// only the newest, so the rows name one of the several a single run can
+    /// leave behind; seventeen survived a cleanup written that way.
+    ///
+    /// It is also why `Runtime::sweep_computers` cannot be borrowed for this.
+    /// That kills every Guac sandbox its own store does not claim, so run from
+    /// a throwaway store it would spare this crew's machines and take the
+    /// operator's running app apart instead.
+    async fn release_machines(config: &guac_lib::config::AppConfig, before: Vec<String>) {
+        let Some(client) = guac_lib::e2b::E2bClient::new(&config.e2b.api_key) else {
+            return;
+        };
+        let existing: std::collections::HashSet<String> = before.into_iter().collect();
+        for sandbox in client.list_ours().await.unwrap_or_default() {
+            if existing.contains(&sandbox) {
+                continue;
+            }
+            match client.kill(&sandbox).await {
+                Ok(()) => println!("released {sandbox}"),
+                Err(err) => eprintln!("could not release {sandbox}: {err}"),
+            }
+        }
+    }
+
+    /// Which peers were sent something, by name, with a count each.
+    fn recipients(h: &Harness, names: &[&str]) -> Vec<(String, usize)> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for envelope in h.feed() {
+            if let Some(id) = envelope.to.agent_id() {
+                if let Some(name) = names.iter().find(|n| h.id(n) == id) {
+                    *counts.entry((*name).to_string()).or_default() += 1;
+                }
+            }
+        }
+        let mut out: Vec<(String, usize)> = counts.into_iter().collect();
+        out.sort();
+        out
     }
 
     fn report(scenario: &str, eval: &Eval) {
@@ -597,6 +677,108 @@ mod live {
 
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
+    async fn live_work_goes_only_to_the_agent_it_is_for() {
+        // The observed failure, reproduced with the crew that produced it. A
+        // coordinator told it does not do the work itself was asked a research
+        // question and sent it to the Researcher, the Mathematician and the
+        // Scientist. Every message was well formed. Nothing refused it: three
+        // recipients is inside a fan-out limit of eight, so the guard is not
+        // the thing that was supposed to catch this and lowering it would only
+        // break announcements.
+        //
+        // What was missing was a reason to choose. The roster printed each
+        // peer's skills and never said what they were for, and `directory` was
+        // described as a way to check a name. So this eval asks the one
+        // question CI cannot: reading the prompts as they now stand, does a
+        // coordinator narrow?
+        // The crew is copied off the machine this happened on, because every
+        // detail that looked incidental turned out to matter. The skills really
+        // are one word each. No card carries a system prompt: the standing
+        // instruction arrived as the operator's message, which is why it is at
+        // the front of the instruction below rather than on the Manager. And
+        // the coordinator runs a different model from the crew it directs,
+        // which is the agent under test here, so a crew put entirely on the
+        // default model is not this scenario.
+        //
+        // Three questions and three peers is what makes this the hard case. The
+        // easy reading is one question per agent, and it is wrong: all three
+        // questions are history, and only one of these agents does history.
+        let crew = [
+            LiveAgent {
+                name: "Manager",
+                skills: &["Manager"],
+                prompt: Some(""),
+                model: Some("openai/gpt-5.6-luna"),
+            },
+            LiveAgent {
+                name: "Researcher",
+                skills: &["researcher"],
+                prompt: Some(""),
+                model: None,
+            },
+            LiveAgent {
+                name: "Mathematician",
+                skills: &["mathematics"],
+                prompt: Some(""),
+                model: None,
+            },
+            LiveAgent { name: "Scientist", skills: &["scientist"], prompt: Some(""), model: None },
+        ];
+        let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
+
+        // Generous, because all three specialists start machines and read
+        // Wikipedia before answering, exactly as they did on the day. A
+        // timeout here would fail the eval for the wrong reason.
+        let Some((h, eval)) = run_live_crew(
+            &crew,
+            "You are the Manager, you do not work, you delegate and escalate to me only when \
+             necessary. Now, I want research done. How many Japanese died fighting in China? Why \
+             did Japan invade China? What was the U.S.'s involvement?",
+            420,
+        )
+        .await
+        else {
+            eprintln!("no configured model; skipping");
+            return;
+        };
+        report("research delegated to a mixed crew", &eval);
+
+        let got = recipients(&h, &names);
+        println!("messaged: {got:?}");
+
+        let strangers: Vec<&(String, usize)> =
+            got.iter().filter(|(name, _)| name == "Mathematician" || name == "Scientist").collect();
+        assert!(
+            strangers.is_empty(),
+            "a research question reached {strangers:?}, who have no research skill between \
+             them. Delegating to everyone is the failure this eval exists for.\n\n{}",
+            eval.convo.script
+        );
+        assert!(
+            got.iter().any(|(name, _)| name == "Researcher"),
+            "the work still has to be delegated, and the Researcher is who it is for\n\n{}",
+            eval.convo.script
+        );
+        eval.expect_clean("research delegated to a mixed crew");
+
+        // The second half of the same turn. A fired routine starts a fresh run
+        // with a fresh step budget, so a coordinator that schedules a check for
+        // replies spends outside every limit applied to the run that scheduled
+        // it. The one observed booked two, 19 and 34 seconds out, both ahead of
+        // any reply.
+        let booked = h.runtime.store().agent_routines(h.id("Manager")).unwrap();
+        assert!(
+            booked.is_empty(),
+            "the Manager scheduled {} routine(s) instead of waiting for replies that arrive on \
+             their own: {:?}\n\n{}",
+            booked.len(),
+            booked.iter().map(|r| r.what.clone()).collect::<Vec<_>>(),
+            eval.convo.script
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
     async fn live_two_step_delegation() {
         // The hard one for the current design: a manager that needs two
         // different specialists in sequence.
@@ -617,27 +799,65 @@ mod live {
     }
 }
 
+/// One agent in a live crew.
+///
+/// Skills are here because a scenario about who should get a piece of work is
+/// not testable without them: a crew of four agents with no stated skills gives
+/// a coordinator nothing to choose between, and the broadcast it produces is
+/// then the right answer.
+struct LiveAgent {
+    name: &'static str,
+    skills: &'static [&'static str],
+    /// `None` takes a serviceable default. `Some("")` means the card really
+    /// carries no instructions, which is how most agents are created and is
+    /// what the workspace rules have to hold up without.
+    prompt: Option<&'static str>,
+    /// Overrides the configured default. A crew is not obliged to share a
+    /// model, and a coordinator on a different one from the agents it directs
+    /// is the arrangement that produced the defect these evals were written
+    /// for: putting everyone on the default quietly tests a different app.
+    model: Option<&'static str>,
+}
+
+impl LiveAgent {
+    /// An agent for scenarios that are not about who does what.
+    fn generic(name: &'static str) -> Self {
+        LiveAgent { name, skills: &[], prompt: None, model: None }
+    }
+
+    fn system_prompt(&self) -> String {
+        match self.prompt {
+            Some(prompt) => prompt.to_string(),
+            None => format!(
+                "You are the {}. Work with your team the way the workspace rules say.",
+                self.name
+            ),
+        }
+    }
+}
+
 /// A harness pointed at the real configured endpoint rather than a stub.
-fn live_harness(config: guac_lib::config::AppConfig, names: &[&str]) -> Harness {
+fn live_crew(config: guac_lib::config::AppConfig, crew: &[LiveAgent]) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = guac_lib::db::Store::open(&dir.path().join("guac.db")).unwrap();
 
     let mut ids = HashMap::new();
-    for name in names {
+    for agent in crew {
         let card = store
             .create_agent(&CleanDraft {
-                name: (*name).to_string(),
+                name: agent.name.to_string(),
                 avatar: "plain".into(),
                 color: "#c7d96b".into(),
-                model: config.inference.default_model.clone(),
-                system_prompt: format!(
-                    "You are the {name}. Work with your team the way the workspace rules say."
-                ),
-                skills: vec![],
+                model: agent
+                    .model
+                    .map(str::to_string)
+                    .unwrap_or_else(|| config.inference.default_model.clone()),
+                system_prompt: agent.system_prompt(),
+                skills: agent.skills.iter().map(|s| (*s).to_string()).collect(),
                 group_id: None,
             })
             .unwrap();
-        ids.insert((*name).to_string(), card.id);
+        ids.insert(agent.name.to_string(), card.id);
     }
 
     let sink = guac_lib::runtime::events::RecordingSink::new();

@@ -343,6 +343,19 @@ impl Harness {
     /// delegation is several in sequence. The stub timeout was reporting live
     /// runs that were merely thinking as runs that had hung.
     pub async fn settle_within(&self, run: RunId, secs: u64) {
+        if !self.settled_within(run, secs).await {
+            panic!("run did not settle. messages so far:\n{}", self.transcript());
+        }
+    }
+
+    /// The same wait, reporting rather than panicking.
+    ///
+    /// A live run holds real machines, and a panic here skips whatever the
+    /// caller meant to release: the timeouts are exactly the runs that leave
+    /// the most behind, because a run that overruns is a run whose agents are
+    /// all still working. A caller that owns something has to be able to clean
+    /// up before it fails.
+    pub async fn settled_within(&self, run: RunId, secs: u64) -> bool {
         let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
             let settled = self
@@ -352,19 +365,22 @@ impl Harness {
                 // Let any final persistence land before assertions read it.
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 assert_eq!(settled, 1, "RunSettled must fire exactly once per run");
-                return;
+                return true;
             }
             if Instant::now() > deadline {
-                panic!(
-                    "run did not settle. messages so far:\n{:#?}",
-                    self.sink
-                        .appended_messages()
-                        .iter()
-                        .map(|m| format!("{:?} -> {:?}: {}", m.from, m.to, m.plain_text()))
-                        .collect::<Vec<_>>()
-                );
+                return false;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    /// Everything said so far, for a failure that has to be actionable.
+    pub fn transcript(&self) -> String {
+        self.sink
+            .appended_messages()
+            .iter()
+            .map(|m| format!("  {:?} -> {:?}: {}", m.from, m.to, m.plain_text()))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
