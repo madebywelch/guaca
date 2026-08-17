@@ -13,6 +13,7 @@ interface Props {
   onNewGroup: () => void;
   onEditGroup: (group: Group) => void;
   onOpenSettings: () => void;
+  onOpenSearch: () => void;
   /** Where the operator right-clicked, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
@@ -21,12 +22,21 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
+/**
+ * How this machine writes the find shortcut.
+ *
+ * Both modifiers open it wherever the app runs; only the label changes, and a
+ * label naming a key the keyboard does not have is worse than none.
+ */
+const FIND_KEY = /mac/i.test(navigator.platform || navigator.userAgent) ? "⌘K" : "Ctrl K";
+
 export function Sidebar({
   onNewAgent,
   onEditAgent,
   onNewGroup,
   onEditGroup,
   onOpenSettings,
+  onOpenSearch,
   onOpenMenu,
 }: Props) {
   const agents = useLiveAgents();
@@ -191,6 +201,17 @@ export function Sidebar({
       <div className="rail__brand" data-tauri-drag-region>
         <span className="rail__wordmark">Guaca</span>
       </div>
+
+      {/* Looks like a field and behaves like a button, because the field it
+          opens onto is the one that does the searching. Two inputs would mean
+          deciding which of them holds the query. */}
+      <button type="button" className="rail__search" onClick={onOpenSearch}>
+        <span aria-hidden="true" className="rail__glass">
+          ⌕
+        </span>
+        <span className="rail__search-label">Search</span>
+        <kbd className="rail__key">{FIND_KEY}</kbd>
+      </button>
 
       <button
         type="button"
