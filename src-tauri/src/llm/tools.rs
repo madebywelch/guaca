@@ -315,19 +315,86 @@ pub fn specs() -> Vec<ToolSpec> {
                         "description": "The message body, written as if speaking directly to the \
                                         recipient. Do not address several agents in one body; \
                                         send the same text to each instead."
+                    },
+                    "files": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Files to send with the message. Each is either the name \
+                                        of a file already attached to something in your channel, \
+                                        or a path on your own computer, for example \
+                                        `/home/user/work/proposal.docx`. The recipient gets the \
+                                        file itself: a document lands in its inbox directory, a \
+                                        picture and a text file it simply reads. This is how work \
+                                        moves between agents. Naming a file in your message \
+                                        without attaching it sends nothing, because your machine \
+                                        is yours alone and nobody else can reach it."
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["work", "courtesy"],
+                        "description": "What this message is for. `work` means the recipient has \
+                                        something to do or answer because of it: a task, a \
+                                        question, a decision they need, or information they must \
+                                        act on. `courtesy` is everything else: thanks, an \
+                                        acknowledgement, a closing note. A courtesy to an agent \
+                                        that has already answered you in this conversation is not \
+                                        delivered, because two agents being polite at each other \
+                                        is how a crew spends an afternoon saying nothing. Label a \
+                                        message by what it is: calling a courtesy `work` gets it \
+                                        through and wastes a colleague's turn on nothing."
                     }
                 },
-                "required": ["to", "text"],
+                "required": ["to", "text", "intent"],
                 "additionalProperties": false
             }),
         },
     ]
 }
 
+/// What a message is for, as its sender declares it.
+///
+/// The loop guard needs one thing from a message it cannot read: whether the
+/// recipient has anything to do because of it. It cannot be inferred from the
+/// wire, where a second instruction and a thank-you are the same shape, and
+/// guessing from the shape refused real work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Intent {
+    /// The recipient has something to do or answer because of this.
+    Work,
+    /// Thanks, an acknowledgement, a closing note.
+    ///
+    /// The default on purpose. A model that does not say gets today's
+    /// behaviour, so a field nobody fills in cannot quietly open the door the
+    /// guard is holding shut.
+    #[default]
+    Courtesy,
+}
+
+impl Intent {
+    pub fn is_work(self) -> bool {
+        self == Intent::Work
+    }
+
+    /// Read from whatever the model actually sent.
+    ///
+    /// Only the declared word counts. A synonym table would be the same guess
+    /// this field exists to replace, and a model that improvises a value gets
+    /// one refusal naming the word to use, which it can act on in the same
+    /// turn. Deserialized as a string rather than an enum for the same reason:
+    /// an invented value must not fail the whole call.
+    fn parse(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("work") {
+            Intent::Work
+        } else {
+            Intent::Courtesy
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolInvocation {
     Directory,
-    SendMessage { to: Vec<String>, text: String },
+    SendMessage { to: Vec<String>, text: String, intent: Intent, files: Vec<String> },
     UpdateNotes { content: String },
     RunCommand { command: String },
     OpenOnDesktop { command: String },
@@ -491,6 +558,15 @@ struct SendArgs {
     message: Option<String>,
     #[serde(default)]
     agent: Option<String>,
+    /// Absent, misspelled or invented values all read as `courtesy`: the
+    /// permissive half of the schema must not be the half that opens a door.
+    #[serde(default)]
+    intent: Option<serde_json::Value>,
+    #[serde(default)]
+    files: Option<serde_json::Value>,
+    /// Reached for by analogy, and meaning the same thing.
+    #[serde(default)]
+    attachments: Option<serde_json::Value>,
 }
 
 /// Reads one screen action, with the coordinates it needs.
@@ -731,7 +807,16 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 .filter(|t| !t.is_empty())
                 .ok_or(ToolParseError::MissingText)?;
 
-            Ok(ToolInvocation::SendMessage { to, text })
+            let intent = args
+                .intent
+                .as_ref()
+                .and_then(|v| v.as_str())
+                .map(Intent::parse)
+                .unwrap_or_default();
+
+            let files = normalize_list(args.files.as_ref().or(args.attachments.as_ref()));
+
+            Ok(ToolInvocation::SendMessage { to, text, intent, files })
         }
         other => Err(ToolParseError::UnknownTool { name: other.to_string() }),
     }
@@ -1010,14 +1095,75 @@ mod tests {
 
     #[test]
     fn send_message_parses_the_specified_shape() {
-        let parsed =
-            parse(&call(SEND_MESSAGE, r#"{"to":["Chef","Barista"],"text":"hello"}"#)).unwrap();
+        let parsed = parse(&call(
+            SEND_MESSAGE,
+            r#"{"to":["Chef","Barista"],"text":"hello","intent":"work"}"#,
+        ))
+        .unwrap();
         assert_eq!(
             parsed,
             ToolInvocation::SendMessage {
                 to: vec!["Chef".into(), "Barista".into()],
-                text: "hello".into()
+                text: "hello".into(),
+                intent: Intent::Work,
+                files: Vec::new()
             }
+        );
+    }
+
+    #[test]
+    fn intent_is_read_from_the_declared_word_and_nothing_else() {
+        // The word is the whole mechanism: it decides whether the guard lets a
+        // message through to a peer that has already answered.
+        let cases = [
+            (r#""work""#, Intent::Work),
+            (r#"" WORK ""#, Intent::Work),
+            (r#""courtesy""#, Intent::Courtesy),
+            // Improvised, so it does not count. The refusal that follows names
+            // the word to use, and the model can send it again in the same turn.
+            (r#""instruct""#, Intent::Courtesy),
+            (r#""urgent""#, Intent::Courtesy),
+            (r#""""#, Intent::Courtesy),
+        ];
+        for (declared, expected) in cases {
+            let json = format!(r#"{{"to":["Chef"],"text":"hi","intent":{declared}}}"#);
+            match parse(&call(SEND_MESSAGE, &json)).unwrap() {
+                ToolInvocation::SendMessage { intent, .. } => {
+                    assert_eq!(intent, expected, "{declared} read as {intent:?}")
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_message_that_declares_no_intent_is_a_courtesy() {
+        // The conservative default. A model that says nothing gets the
+        // behaviour that held before the field existed, so a field left unset
+        // cannot quietly open the door the guard is holding shut.
+        match parse(&call(SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi"}"#)).unwrap() {
+            ToolInvocation::SendMessage { intent, .. } => assert_eq!(intent, Intent::Courtesy),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_invented_intent_still_delivers_the_message() {
+        // Rejecting the call outright would cost the recipient a message over a
+        // word, which is the retry loop this parser exists to avoid.
+        let parsed =
+            parse(&call(SEND_MESSAGE, r#"{"to":["Chef"],"text":"hi","intent":{"kind":"work"}}"#));
+        assert!(parsed.is_ok(), "{parsed:?}");
+    }
+
+    #[test]
+    fn the_send_message_schema_offers_intent_as_a_closed_choice() {
+        let spec = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let intent = &spec.parameters["properties"]["intent"];
+        assert_eq!(intent["enum"], serde_json::json!(["work", "courtesy"]));
+        assert!(
+            spec.parameters["required"].as_array().unwrap().contains(&serde_json::json!("intent")),
+            "a model that is not asked for it will not send it"
         );
     }
 
@@ -1026,7 +1172,12 @@ mod tests {
         let parsed = parse(&call(SEND_MESSAGE, r#"{"to":"Chef","text":"hi"}"#)).unwrap();
         assert_eq!(
             parsed,
-            ToolInvocation::SendMessage { to: vec!["Chef".into()], text: "hi".into() }
+            ToolInvocation::SendMessage {
+                to: vec!["Chef".into()],
+                text: "hi".into(),
+                intent: Intent::Courtesy,
+                files: Vec::new()
+            }
         );
     }
 
@@ -1038,7 +1189,9 @@ mod tests {
             parsed,
             ToolInvocation::SendMessage {
                 to: vec!["Chef".into(), "Barista".into(), "Host".into()],
-                text: "hi".into()
+                text: "hi".into(),
+                intent: Intent::Courtesy,
+                files: Vec::new()
             }
         );
     }
@@ -1052,7 +1205,9 @@ mod tests {
             parsed,
             ToolInvocation::SendMessage {
                 to: vec!["Chef".into(), "Host".into()],
-                text: "hi".into()
+                text: "hi".into(),
+                intent: Intent::Courtesy,
+                files: Vec::new()
             }
         );
     }
@@ -1073,7 +1228,12 @@ mod tests {
         let parsed = parse(&call(SEND_MESSAGE, r#"{"to":["Chef"],"message":"hi"}"#)).unwrap();
         assert_eq!(
             parsed,
-            ToolInvocation::SendMessage { to: vec!["Chef".into()], text: "hi".into() }
+            ToolInvocation::SendMessage {
+                to: vec!["Chef".into()],
+                text: "hi".into(),
+                intent: Intent::Courtesy,
+                files: Vec::new()
+            }
         );
     }
 
@@ -1082,7 +1242,12 @@ mod tests {
         let parsed = parse(&call(SEND_MESSAGE, r#"{"agent":"Chef","text":"hi"}"#)).unwrap();
         assert_eq!(
             parsed,
-            ToolInvocation::SendMessage { to: vec!["Chef".into()], text: "hi".into() }
+            ToolInvocation::SendMessage {
+                to: vec!["Chef".into()],
+                text: "hi".into(),
+                intent: Intent::Courtesy,
+                files: Vec::new()
+            }
         );
     }
 

@@ -7,7 +7,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen, TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
@@ -128,7 +128,9 @@ export const api = {
   /** The whole conversation, for the activity flow board. */
   conversationFlow: (limit?: number) => invoke<Envelope[]>("conversation_flow", { limit }),
 
-  sendMessage: (agentId: AgentId, text: string) => invoke<RunId>("send_message", { agentId, text }),
+  /** `files` are absolute paths from a drop; the bytes never cross IPC. */
+  sendMessage: (agentId: AgentId, text: string, files: string[] = []) =>
+    invoke<RunId>("send_message", { agentId, text, files }),
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
 
@@ -174,4 +176,29 @@ export function openExternal(url: string): Promise<void> {
 /** Subscribes to runtime events. Returns an unsubscribe function. */
 export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<UnlistenFn> {
   return listen<UiEvent>(EVENT_CHANNEL, (message) => handler(message.payload));
+}
+
+/**
+ * Files dragged onto the window.
+ *
+ * Tauri hands over paths rather than bytes, which is the whole reason
+ * `dragDropEnabled` is on: a dropped document is read by the Rust side and
+ * never enters the renderer. `over` fires while a drag is above the window and
+ * is what the drop target highlights on.
+ */
+export async function onFileDrop(handlers: {
+  dropped: (paths: string[]) => void;
+  over: (inside: boolean) => void;
+}): Promise<UnlistenFn> {
+  const stops = await Promise.all([
+    listen(TauriEvent.DRAG_ENTER, () => handlers.over(true)),
+    listen(TauriEvent.DRAG_LEAVE, () => handlers.over(false)),
+    listen<{ paths: string[] }>(TauriEvent.DRAG_DROP, (message) => {
+      handlers.over(false);
+      handlers.dropped(message.payload.paths ?? []);
+    }),
+  ]);
+  return () => {
+    for (const stop of stops) stop();
+  };
 }

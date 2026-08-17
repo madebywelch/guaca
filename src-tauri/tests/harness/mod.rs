@@ -26,10 +26,12 @@ use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
+use guac_lib::files::FileStore;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::Runtime;
+use guac_lib::trajectory::{self, Trajectory};
 use guac_lib::workspace::Workspace;
 
 // ---- scripted model ------------------------------------------------------
@@ -39,8 +41,14 @@ use guac_lib::workspace::Workspace;
 pub enum Script {
     /// Emit plain text.
     Say(String),
-    /// Emit a `send_message` tool call.
+    /// Emit a `send_message` tool call, declared as a courtesy: what a model
+    /// sends when it is being polite, and what most of these scenarios play.
     SendTo { recipients: Vec<String>, text: String },
+    /// The same call, declared as work. The distinction is the only thing that
+    /// lets a peer be instructed twice in one run.
+    Instruct { recipients: Vec<String>, text: String },
+    /// A `send_message` carrying files, named the way a model names them.
+    SendFiles { recipients: Vec<String>, text: String, files: Vec<String> },
     /// Emit a `directory` tool call.
     Directory,
     /// Emit an `update_notes` tool call.
@@ -63,6 +71,14 @@ pub fn frame(value: serde_json::Value) -> String {
     format!("data: {value}\n\n")
 }
 
+/// What every scripted call reports having cost.
+///
+/// Fixed rather than proportional to the text: the point is that a real
+/// provider counts, so the runtime's accounting runs end to end and a total
+/// can be asserted exactly. A stub that reported nothing left `count_tokens`,
+/// the usage table and the budget's own arithmetic untested.
+pub const CALL_TOKENS: (u32, u32) = (100, 20);
+
 pub fn render(script: &Script) -> String {
     let mut body = String::new();
     match script {
@@ -79,8 +95,19 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
             ));
         }
-        Script::SendTo { recipients, text } => {
-            let args = serde_json::json!({ "to": recipients, "text": text }).to_string();
+        Script::SendTo { recipients, text }
+        | Script::Instruct { recipients, text }
+        | Script::SendFiles { recipients, text, .. } => {
+            let intent = if matches!(script, Script::SendTo { .. }) { "courtesy" } else { "work" };
+            let mut args = serde_json::json!({
+                "to": recipients,
+                "text": text,
+                "intent": intent,
+            });
+            if let Script::SendFiles { files, .. } = script {
+                args["files"] = serde_json::json!(files);
+            }
+            let args = args.to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_send","type":"function",
                  "function":{"name":"send_message","arguments":""}}
@@ -132,6 +159,12 @@ pub fn render(script: &Script) -> String {
             ));
         }
     }
+    // As a provider sends it: alone, after the content, in a frame carrying no
+    // choices at all.
+    body.push_str(&frame(serde_json::json!({
+        "choices": [],
+        "usage": {"prompt_tokens": CALL_TOKENS.0, "completion_tokens": CALL_TOKENS.1},
+    })));
     body.push_str("data: [DONE]\n\n");
     body
 }
@@ -292,11 +325,26 @@ pub fn harness_in_groups(
         LlmClient::new().unwrap(),
         config,
         Workspace::new(dir.path().join("workspace")),
+        FileStore::new(dir.path().join("files")),
         sink.clone(),
     );
     runtime.start_all().unwrap();
 
     Harness { runtime, sink, ids, _dir: dir }
+}
+
+/// Fails naming the anomaly and printing the whole ledger.
+///
+/// The ledger is the point. "one anomaly" is unactionable; the sequence that
+/// produced it is what a person reads to find the defect.
+pub fn expect_normal(trajectory: &Trajectory, scenario: &str) {
+    let anomalies = trajectory.anomalies();
+    assert!(
+        anomalies.is_empty(),
+        "{scenario}\n\n{}\nwhat went wrong:\n{}",
+        trajectory.ledger,
+        anomalies.iter().map(|a| format!("  - {}", a.explain())).collect::<Vec<_>>().join("\n")
+    );
 }
 
 /// Every `role: "tool"` message the stub was sent, in order. This is how a test
@@ -345,6 +393,34 @@ impl Harness {
             .into_iter()
             .filter(|e| e.from.is_agent() && e.to.is_agent())
             .collect()
+    }
+
+    /// What the run's machinery did, read from the events the UI is drawn
+    /// from. See `guac_lib::trajectory`.
+    pub fn trajectory(&self, run: RunId) -> Trajectory {
+        let names: HashMap<AgentId, String> =
+            self.ids.iter().map(|(name, id)| (*id, name.clone())).collect();
+        // Agents hired mid-run are not in the harness's table, so the store is
+        // the fallback: an anomaly about "?" is one nobody can act on.
+        let store_names: HashMap<AgentId, String> = self
+            .runtime
+            .store()
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|card| (card.id, card.name))
+            .collect();
+        trajectory::read(&self.sink.snapshot(), run, &move |id| {
+            names.get(&id).or_else(|| store_names.get(&id)).cloned().unwrap_or_else(|| "?".into())
+        })
+    }
+
+    /// The same, asserted. Returns it so a scenario can go on to ask what it
+    /// cost.
+    pub fn expect_normal(&self, run: RunId, scenario: &str) -> Trajectory {
+        let trajectory = self.trajectory(run);
+        expect_normal(&trajectory, scenario);
+        trajectory
     }
 
     /// Polls until `check` holds, or panics on timeout.

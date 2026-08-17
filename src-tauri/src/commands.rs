@@ -459,13 +459,37 @@ pub fn conversation_flow(state: State<'_, AppState>, limit: Option<u32>) -> Repl
     Ok(state.runtime.store().conversation_flow(limit.unwrap_or(400).min(2000))?)
 }
 
+/// Sends the operator's message, with anything they dropped on the window.
+///
+/// `files` are paths on the operator's own disk, never bytes: the webview hands
+/// over what was dropped and this side reads it, so a document never crosses
+/// IPC and never sits in the renderer's memory.
 #[tauri::command]
-pub fn send_message(state: State<'_, AppState>, agent_id: AgentId, text: String) -> Reply<RunId> {
+pub fn send_message(
+    state: State<'_, AppState>,
+    agent_id: AgentId,
+    text: String,
+    files: Option<Vec<String>>,
+) -> Reply<RunId> {
     let trimmed = text.trim();
-    if trimmed.is_empty() {
+    let paths = files.unwrap_or_default();
+    // A file on its own is a message. "Here, read this" with the document
+    // attached is the most natural way to send one, and rejecting it as empty
+    // would be the app arguing with the operator.
+    if trimmed.is_empty() && paths.is_empty() {
         return Err(CommandError::new("validation", "message must not be empty"));
     }
-    Ok(state.runtime.send_from_human(agent_id, trimmed)?)
+
+    let mut attached = Vec::new();
+    for path in &paths {
+        match state.runtime.files().take(std::path::Path::new(path)) {
+            Ok(file) => attached.push(file),
+            // Named, because the operator picked this file deliberately and a
+            // message that quietly went without it is worse than an error.
+            Err(err) => return Err(CommandError::new("file", err.to_string())),
+        }
+    }
+    Ok(state.runtime.send_from_human_with(agent_id, trimmed, attached)?)
 }
 
 /// Sends a failed turn's message again, as a new run.

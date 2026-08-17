@@ -33,6 +33,12 @@ export type Part =
   | { type: "notice"; kind: NoticeKind; text: string }
   | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
   /**
+   * A file the message carries. The bytes stay in the runtime's file store and
+   * are addressed by `digest`; a transcript is read in bulk, so a document is
+   * never inlined into one.
+   */
+  | { type: "file"; digest: string; name: string; mime: string; bytes: number }
+  /**
    * An agent asking the operator for permission. Carries its own wording, so an
    * old channel still says what was asked; what came of it is read from
    * {@link Approval} state by `id`.

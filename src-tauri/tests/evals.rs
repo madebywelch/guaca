@@ -26,9 +26,10 @@ use std::sync::atomic::Ordering;
 
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::envelope::Envelope;
-use guac_lib::domain::ids::AgentId;
+use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::eval::{analyse, faults, Conversation, Fault};
 use guac_lib::runtime::guard::GuardLimits;
+use guac_lib::trajectory::Trajectory;
 
 use harness::*;
 
@@ -36,6 +37,10 @@ use harness::*;
 struct Eval {
     convo: Conversation,
     faults: Vec<Fault>,
+    /// What the machinery under the conversation did. The two are read
+    /// together because they fail apart: a crew can say exactly the right
+    /// things through a runtime that left a placeholder open forever.
+    trajectory: Trajectory,
 }
 
 impl Eval {
@@ -54,6 +59,10 @@ impl Eval {
                 .collect::<Vec<_>>()
                 .join("\n")
         );
+        // And the machinery under it: a crew that said exactly the right
+        // things through a runtime that left a placeholder open is not a
+        // passing eval. See `guac_lib::trajectory`.
+        expect_normal(&self.trajectory, scenario);
     }
 
     /// How many times one agent spoke to the operator.
@@ -80,7 +89,7 @@ impl Eval {
     }
 }
 
-fn read(h: &Harness, names: &[&str]) -> Eval {
+fn read(h: &Harness, run: RunId, names: &[&str]) -> Eval {
     let lookup: HashMap<AgentId, String> =
         names.iter().map(|n| (h.id(n), (*n).to_string())).collect();
     let name_of = move |id: AgentId| lookup.get(&id).cloned().unwrap_or_else(|| "?".into());
@@ -100,7 +109,11 @@ fn read(h: &Harness, names: &[&str]) -> Eval {
     }
     messages.sort_by_key(|e| (e.created_at, e.id));
 
-    Eval { convo: analyse(&messages, &name_of), faults: faults(&messages, &name_of) }
+    Eval {
+        convo: analyse(&messages, &name_of),
+        faults: faults(&messages, &name_of),
+        trajectory: h.trajectory(run),
+    }
 }
 
 // ---- scripted scenarios --------------------------------------------------
@@ -167,7 +180,7 @@ async fn an_introduction_to_one_agent_is_two_messages() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &["Manager", "Chef"]);
+    let eval = read(&h, run, &["Manager", "Chef"]);
     eval.expect_clean("introducing yourself to one agent");
     eval.expect_at_most_peer_messages(2, "introducing yourself to one agent");
     eval.expect_told_operator("Manager", 1, "introducing yourself to one agent");
@@ -207,7 +220,7 @@ async fn an_introduction_to_a_whole_team_does_not_scale_into_a_conversation() {
         h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to your team.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("introducing yourself to three agents");
     // Three out, three back. Anything more is the crew talking to itself.
     eval.expect_at_most_peer_messages(6, "introducing yourself to three agents");
@@ -254,7 +267,7 @@ async fn an_announcement_is_not_repeated_to_anyone() {
         .unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("announcing something to everyone");
     eval.expect_at_most_peer_messages(2, "announcing something to everyone");
 }
@@ -282,7 +295,7 @@ async fn delegating_and_reporting_back_is_one_round_trip() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Ask Chef for the answer.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("delegating a question and reporting the answer");
     eval.expect_at_most_peer_messages(2, "delegating a question and reporting the answer");
     eval.expect_told_operator("Manager", 1, "delegating a question and reporting the answer");
@@ -308,7 +321,7 @@ async fn a_model_that_will_not_stop_is_stopped_and_the_operator_still_gets_an_an
     let run = h.runtime.send_from_human(h.id("Manager"), "Talk to Chef.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     assert!(
         !eval.convo.refusals.is_empty(),
         "a model that only ever sends must be refused by something:\n{}",
@@ -341,7 +354,7 @@ async fn agents_in_separate_groups_produce_no_traffic_at_all() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Say hello to Chef.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_at_most_peer_messages(0, "messaging across a group boundary");
     eval.expect_told_operator("Manager", 1, "messaging across a group boundary");
     assert!(
@@ -365,7 +378,7 @@ async fn an_agent_asked_something_it_cannot_do_still_answers_the_operator() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Reboot the mainframe.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("being asked for something impossible");
     eval.expect_told_operator("Manager", 1, "being asked for something impossible");
 }
@@ -385,7 +398,7 @@ async fn a_lone_agent_answers_without_inventing_anyone_to_talk_to() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Who else is here?").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &["Manager"]);
+    let eval = read(&h, run, &["Manager"]);
     eval.expect_clean("asking a lone agent who else is here");
     eval.expect_at_most_peer_messages(0, "asking a lone agent who else is here");
     eval.expect_told_operator("Manager", 1, "asking a lone agent who else is here");
@@ -419,7 +432,7 @@ async fn a_crew_told_to_stay_quiet_costs_one_model_call_per_agent() {
         h.runtime.send_from_human(h.id("Manager"), "Tell Chef the kitchen is closed.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("telling one agent something that needs no answer");
     eval.expect_at_most_peer_messages(1, "telling one agent something that needs no answer");
 
@@ -466,7 +479,7 @@ async fn replies_that_arrive_apart_are_still_read_together() {
     let run = h.runtime.send_from_human(h.id("Manager"), "Tell the team hello.").unwrap();
     h.settle(run).await;
 
-    let eval = read(&h, &names);
+    let eval = read(&h, run, &names);
     eval.expect_clean("three peers answering a broadcast at different speeds");
     eval.expect_told_operator("Manager", 1, "three peers answering at different speeds");
 
@@ -546,7 +559,7 @@ mod live {
         release_machines(&config, before).await;
 
         assert!(settled, "run did not settle in {secs}s. messages so far:\n{}", h.transcript());
-        let eval = read(&h, &names);
+        let eval = read(&h, run, &names);
         Some((h, eval))
     }
 
@@ -866,6 +879,7 @@ fn live_crew(config: guac_lib::config::AppConfig, crew: &[LiveAgent]) -> Harness
         guac_lib::llm::openrouter::LlmClient::new().unwrap(),
         config,
         guac_lib::workspace::Workspace::new(dir.path().join("workspace")),
+        guac_lib::files::FileStore::new(dir.path().join("files")),
         sink.clone(),
     );
     runtime.start_all().unwrap();

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::approval::{DetailField, ProtectedAction};
+use super::attachment::Attachment;
 use super::ids::{AgentId, ApprovalId, MessageId, RunId};
 
 /// Who is at one end of an envelope.
@@ -112,6 +113,14 @@ pub enum Part {
         arguments: serde_json::Value,
         outcome: ToolOutcome,
     },
+    /// A file this message carries.
+    ///
+    /// The reference only: see `domain::attachment`. `plain_text` skips it, so
+    /// an attachment never lands in a prompt by accident, a dedup fingerprint,
+    /// or a channel preview. What a model is shown, and where the bytes are put
+    /// for it, is the runtime's decision and depends on what kind of file it
+    /// is.
+    File(Attachment),
     /// An agent asking the operator for permission, rendered as buttons.
     ///
     /// The request travels in the transcript rather than in a dialog, because
@@ -388,6 +397,52 @@ mod tests {
 
         let to_human = Envelope { to: Participant::Human, ..base.clone() };
         assert!(!to_human.is_inter_agent());
+    }
+
+    #[test]
+    fn an_attachment_crosses_the_boundary_flat_and_in_camel_case() {
+        // The frontend switches on `type` and reads these fields directly, and
+        // the contract test cannot see a part that only one side knows about.
+        let json = serde_json::to_value(Part::File(super::Attachment {
+            digest: "a".repeat(64),
+            name: "brief.pdf".into(),
+            mime: "application/pdf".into(),
+            bytes: 2048,
+        }))
+        .unwrap();
+        assert_eq!(json["type"], "file");
+        assert_eq!(json["name"], "brief.pdf");
+        assert_eq!(json["bytes"], 2048);
+        assert!(json["digest"].is_string(), "the bytes are addressed by digest: {json}");
+    }
+
+    #[test]
+    fn a_file_never_reaches_a_prompt_as_text_by_accident() {
+        // `plain_text` feeds prompt assembly, the dedup fingerprint and every
+        // channel preview. A document that leaked in here would be pasted into
+        // all three.
+        let env = Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: AgentId::new(),
+            from: Participant::Human,
+            to: agent(AgentId::new()),
+            parts: vec![
+                Part::text("here is the draft"),
+                Part::File(super::Attachment {
+                    digest: "b".repeat(64),
+                    name: "draft.docx".into(),
+                    mime: "application/msword".into(),
+                    bytes: 58_000,
+                }),
+            ],
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            cause: None,
+            created_at: 0,
+        };
+        assert_eq!(env.plain_text(), "here is the draft");
     }
 
     #[test]

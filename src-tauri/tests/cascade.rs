@@ -615,6 +615,42 @@ async fn streamed_text_matches_the_persisted_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
+    // Every event is an IPC hop and a re-render in the operator's window, and a
+    // model writes faster than a screen refreshes. Emitting one per token spent
+    // the main thread on work no eye could resolve; with five agents answering
+    // at once it stopped painting altogether, which is what an operator
+    // reported as the app freezing and the text arriving in a lump.
+    let reply = "the quick brown fox jumps over the lazy dog.".repeat(40);
+    let expected = reply.clone();
+    let stub = serve(move |_| Script::Say(reply.clone())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "say a lot").unwrap();
+    h.settle(run).await;
+
+    let deltas = h.sink.count_of(|e| matches!(e, UiEvent::StreamDelta { .. }));
+    assert!(
+        deltas <= 12,
+        "{deltas} events for a reply the provider sent in {} pieces",
+        expected.len().div_ceil(7)
+    );
+
+    // And not one character was coalesced away. The buffer is flushed when the
+    // call ends, or the tail of every reply would be lost.
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+    assert_eq!(h.sink.streamed_text(stream_id), expected);
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), expected);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_run_concurrently_rather_than_one_after_another() {
     // Each peer's response is delayed. If the runtime were serial, five agents
     // at 300ms each would take 1.5s; concurrent should be closer to one delay.
@@ -838,6 +874,105 @@ async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
         told.contains("Reply to the operator instead"),
         "a refusal without a way forward is a dead end: {told}"
     );
+    assert!(
+        told.contains(r#"intent "work""#),
+        "and when the message really was work, the way through has to be named: {told}"
+    );
+}
+
+#[tokio::test]
+async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
+    // Found in a real session. The operator authorised an external send, the
+    // coordinator relayed it, read the answer, and was refused when it tried to
+    // instruct again: the guard cannot tell a second instruction from a thank
+    // you, and it was aimed at the thank you. Every delegation needing two
+    // rounds died there, so the sender now says which it is.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if who == "Chef" {
+            if text.contains("go ahead and send it") {
+                Script::Say("Sent.".into())
+            } else {
+                Script::Say("Ready, but I need you to confirm before I send.".into())
+            }
+        } else if text.contains("I need you to confirm") {
+            // The turn this test exists for: woken by an answer, nobody is
+            // waiting on the Manager, and it has genuinely new work to give.
+            Script::Instruct {
+                recipients: vec!["Chef".into()],
+                text: "Confirmed by the operator: go ahead and send it.".into(),
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef has been told to send it.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "prepare the mailing".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Have Chef send the mailing.").unwrap();
+    h.settle(run).await;
+
+    let to_chef: Vec<String> = h
+        .feed()
+        .into_iter()
+        .filter(|e| e.to == Participant::Agent { id: h.id("Chef") })
+        .map(|e| e.plain_text())
+        .collect();
+    assert!(
+        to_chef.iter().any(|t| t.contains("go ahead and send it")),
+        "the follow-up instruction never reached Chef: {to_chef:?}"
+    );
+    assert!(
+        h.channel_texts("Chef").iter().any(|t| t.contains("Sent.")),
+        "and Chef never acted on it:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn a_courtesy_to_a_peer_that_already_answered_is_still_refused() {
+    // The other half. Declaring intent is not a way around the guard: the
+    // thank-you that used to run a crew in circles is turned away exactly as
+    // before, and only a message that says it carries work gets through.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if has_tool_result(body) {
+            Script::Say("understood".into())
+        } else if text.contains("good to meet you") {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "thanks Chef".into() }
+        } else if text.contains("hello from manager") {
+            Script::SendTo { recipients: vec!["Manager".into()], text: "good to meet you".into() }
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    let to_chef: Vec<String> = h
+        .feed()
+        .into_iter()
+        .filter(|e| e.to == Participant::Agent { id: h.id("Chef") })
+        .map(|e| e.plain_text())
+        .collect();
+    assert!(
+        !to_chef.iter().any(|t| t.contains("thanks")),
+        "a courtesy reached a peer that had already answered: {to_chef:?}"
+    );
 }
 
 #[tokio::test]
@@ -947,6 +1082,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         LlmClient::new().unwrap(),
         config,
         Workspace::new(dir.path().join("workspace")),
+        guac_lib::files::FileStore::new(dir.path().join("files")),
         sink.clone(),
     );
     runtime.start_all().unwrap();

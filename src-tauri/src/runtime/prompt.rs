@@ -9,8 +9,9 @@
 use std::collections::HashMap;
 
 use crate::domain::agent::{AgentCard, DirectoryEntry};
+use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
-use crate::domain::envelope::{Envelope, Participant};
+use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
@@ -337,9 +338,12 @@ pub fn system_prompt(
              Everything you have already done this run is in the history above, including every \
              message you have already sent. Do not do it again because you have been reminded of \
              it.\n\n\
-             Do not write to a peer here. Nobody is waiting on you, so a message would only be \
-             an acknowledgement, and it will be refused. If you need something further from \
-             someone, say so in your note rather than asking them now.\n\n\
+             Do not write to a peer to acknowledge one. Nobody is waiting on you, so a thank-you \
+             or a note that you have read something will be refused. The one exception is real \
+             work: if what you have just read means a peer has something to do, send it with \
+             `send_message` and intent \"work\", saying plainly what you need done. Wanting to \
+             stay in touch is not work. Anything else you still need belongs in your note rather \
+             than in a message.\n\n\
              If something does need saying, your final message is filed as a short note in your \
              own channel. One or two sentences, and only if it tells the operator something your \
              last note did not.\n"
@@ -349,8 +353,40 @@ pub fn system_prompt(
     out
 }
 
+/// The files a message carries, in the order it carries them.
+pub fn attachments(envelope: &Envelope) -> Vec<&Attachment> {
+    envelope
+        .parts
+        .iter()
+        .filter_map(|part| match part {
+            Part::File(file) => Some(file),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True when a message has nothing in it worth a turn.
+///
+/// A message can be nothing but a file: "here is the draft" is a courtesy, and
+/// models routinely send the document with no words at all. Judging emptiness
+/// by text alone dropped those on the floor, which is the worst possible
+/// failure for this feature: the agent is never told the file exists.
+fn is_empty(envelope: &Envelope) -> bool {
+    envelope.plain_text().is_empty() && attachments(envelope).is_empty()
+}
+
 fn render_incoming(envelope: &Envelope, names: &NameTable) -> String {
-    let body = envelope.plain_text();
+    let mut body = envelope.plain_text();
+    // Announced inside the labelled block, so a file from a peer inherits the
+    // provenance of the message carrying it. What the file *is* arrives
+    // separately: the runtime shows a picture, reads out text, or puts it on
+    // this agent's machine, and says which it did.
+    for file in attachments(envelope) {
+        if !body.is_empty() {
+            body.push('\n');
+        }
+        body.push_str(&format!("[FILE \"{}\" {}, {}]", file.name, file.mime, file.size()));
+    }
     match envelope.from {
         Participant::Human => format!("[OPERATOR]\n{body}"),
         Participant::System => format!("[SYSTEM]\n{body}"),
@@ -389,13 +425,12 @@ pub fn build_messages(
     ))];
 
     for envelope in history {
-        let body = envelope.plain_text();
-        if body.is_empty() {
+        if is_empty(envelope) {
             continue;
         }
         match envelope.from {
             Participant::Agent { id } if id == card.id => {
-                messages.push(ChatMessage::assistant(body));
+                messages.push(ChatMessage::assistant(envelope.plain_text()));
             }
             _ => messages.push(ChatMessage::user(render_incoming(envelope, names))),
         }
@@ -403,11 +438,8 @@ pub fn build_messages(
 
     // The batch being answered. Several envelopes collapse into one user turn
     // so a burst of replies costs one inference instead of several.
-    let rendered: Vec<String> = inbound
-        .iter()
-        .filter(|e| !e.plain_text().is_empty())
-        .map(|e| render_incoming(e, names))
-        .collect();
+    let rendered: Vec<String> =
+        inbound.iter().filter(|e| !is_empty(e)).map(|e| render_incoming(e, names)).collect();
 
     if !rendered.is_empty() {
         messages.push(ChatMessage::user(rendered.join("\n\n")));
@@ -473,6 +505,7 @@ mod tests {
 
     use super::*;
     use crate::domain::agent::Lifecycle;
+    use crate::domain::attachment::Attachment;
     use crate::domain::envelope::{Part, Trust};
     use crate::domain::ids::{GroupId, MessageId, RunId};
 
@@ -976,8 +1009,16 @@ mod tests {
         // Dropped once already, in the same edit that added the silence
         // permission, and three agents spent a run thanking each other.
         assert!(
-            note.contains("Do not write to a peer"),
+            note.contains("Do not write to a peer to acknowledge"),
             "the mode that means nobody is waiting has to say so"
+        );
+        // And the exception, or the mode forbids the one thing a coordinator
+        // legitimately does here: pass on an instruction it has just been
+        // given. A real run died on that, with the prompt and the guard
+        // agreeing on the wrong answer.
+        assert!(
+            note.contains(r#"intent "work""#),
+            "reading an answer can leave a peer with something to do"
         );
         // Live evals caught this: told it could stay quiet, a real model wrote
         // "No reply needed here" to the operator instead of writing nothing.
@@ -985,6 +1026,39 @@ mod tests {
             note.contains("Nothing means nothing"),
             "an agent will narrate its own silence unless told not to"
         );
+    }
+
+    #[test]
+    fn a_file_in_the_history_is_still_there_next_turn() {
+        // History is filtered by whether a message has anything in it. Judging
+        // that by text alone dropped a document sent with no covering note, so
+        // an agent asked about it a turn later had never heard of it.
+        let card = card("Manager");
+        let peer = AgentId::new();
+        let mut names = NameTable::new();
+        names.insert(peer, "Chef".to_string());
+
+        let mut carrying = env(Participant::Agent { id: peer }, "");
+        carrying.parts = vec![Part::File(Attachment {
+            digest: "c".repeat(64),
+            name: "menu.pdf".into(),
+            mime: "application/pdf".into(),
+            bytes: 4096,
+        })];
+
+        let messages =
+            messages_for(&card, &[], &names, "", &[carrying], &[], ReplyMode::ToOperator);
+        let history = messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::User { content } => Some(user_text(content)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(history.contains("menu.pdf"), "the file left the history: {history}");
+        assert!(history.contains("[AGENT \"Chef\"]"), "and it came from somebody: {history}");
+        assert!(history.contains("4 KB"), "with a size the model can reason about: {history}");
     }
 
     #[test]

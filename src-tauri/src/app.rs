@@ -11,6 +11,7 @@ use tauri::{Emitter, Manager};
 use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
+use crate::files::FileStore;
 use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
@@ -61,6 +62,10 @@ pub fn run() {
             // Plain markdown on disk, one file per agent, so the operator can
             // read and edit an agent's memory without going through the app.
             let workspace_dir = data_dir.join("workspace");
+            // Attachments, addressed by content and shared by every agent. Kept
+            // beside the memories rather than in SQLite: a proposal document
+            // does not belong in a table that is read forty rows at a time.
+            let files_dir = data_dir.join("files");
 
             let store = Store::open(&db_path)?;
             // A permission request is answered by a turn that is holding the
@@ -83,6 +88,7 @@ pub fn run() {
                 LlmClient::new()?,
                 app_config,
                 Workspace::new(workspace_dir.clone()),
+                FileStore::new(files_dir),
                 sink,
             );
             let started = runtime.start_all()?;

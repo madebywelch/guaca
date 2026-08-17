@@ -802,6 +802,13 @@ impl DesktopAction {
 
 /// Base64, so a script can be written into the sandbox through a shell without
 /// any of it being interpreted on the way.
+///
+/// Public because attachments take the same route onto a machine, and a second
+/// encoder would be a second place for the alphabet or the padding to be wrong.
+pub fn encode(raw: &[u8]) -> String {
+    base64_encode(raw)
+}
+
 fn base64_encode(raw: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
@@ -1044,6 +1051,16 @@ fn collect(body: &[u8]) -> Result<Output, E2bError> {
 
 /// Connect's JSON mapping sends `bytes` as base64.
 fn decode(raw: &str) -> String {
+    String::from_utf8_lossy(&decode_bytes(raw)).into_owned()
+}
+
+/// The same, kept as bytes.
+///
+/// Public because a file pulled off a machine comes back this way, and a
+/// document is not text: running it through the lossy conversion above would
+/// replace every byte that is not valid UTF-8 and hand back a corrupt file that
+/// looks fine until somebody opens it.
+pub fn decode_bytes(raw: &str) -> Vec<u8> {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut bits = 0u32;
     let mut have = 0u8;
@@ -1059,7 +1076,7 @@ fn decode(raw: &str) -> String {
             out.push((bits >> have) as u8);
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 
 #[cfg(test)]

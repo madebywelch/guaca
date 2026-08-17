@@ -17,6 +17,14 @@ change.
 **`expects_reply` is what makes cascades converge**, not the guard. The guard is
 the backstop. See `docs/ARCHITECTURE.md`.
 
+**A courtesy to a peer that has already answered is refused; work is not.**
+`send_message` carries an `intent`, and the sender declares it, because a second
+instruction and a thank-you are the same shape on the wire and guessing from the
+shape refused real work. Anything not declared `work`, including a value nobody
+defined, is a courtesy: the permissive half of the parser must not be the half
+that opens the door. `runtime/prompt.rs` says the same thing to the model in the
+mode where it matters, and the two have to agree.
+
 **Whether a send is "answering" is a question about the run, not the batch.**
 Replies land milliseconds apart and an actor drains whatever is in its inbox, so
 a batch is a timing artifact: three peers answering at once can be split across
@@ -40,6 +48,34 @@ database at the same `user_version` with a different schema. Add another.
 **Budget counts model calls, not agent turns.** One turn can make several calls
 working through tool results. Counting turns lets a bounded run bill many times
 over. There is a test named after this.
+
+**A run settles when nothing is outstanding, and an envelope is what is
+outstanding.** `deliver` books one against the run as it queues an envelope,
+and the turn that reads it releases it. Any new path that takes an envelope and
+does not turn it into a turn has to release it too: an agent deleted while
+holding queued work used to take the booking with it, and that run never ended.
+Nothing else decrements.
+
+**A file's bytes never travel in an envelope, and never cross IPC.** A message
+carries a `Part::File` naming the digest; the bytes sit once in `files.rs`,
+addressed by content, and a drop hands Rust the *path* rather than the file.
+Both follow from the same fact: a transcript is read in bulk, forty messages
+into every prompt and hundreds into the activity view. What a model gets depends
+on what the file is: a picture is shown, text is read out, and anything else is
+written to `~/inbox` on the agent's own machine, because a Linux box knows more
+file formats than this runtime ever will. When placing fails the model is told
+so in words, since an agent that hears nothing describes a document it never
+read.
+
+**Every event is an IPC hop and a render, so tokens are coalesced before they
+leave.** A model writes faster than a screen refreshes. One event per token
+spent the operator's main thread on work no eye could resolve, and with five
+agents answering at once it stopped painting at all, which reads as the window
+freezing and the text arriving in a lump rather than streaming. `Pen` in
+`runtime/mod.rs` buffers to 16ms and flushes when the call ends. On the other
+side, only the component drawing the live bubbles subscribes to `streams`: with
+that subscription in `ChannelView` a single token re-rendered every message in
+the transcript. `ChannelView.perf.test.tsx` counts both.
 
 **Anything crossing IPC is camelCase.** `rename_all` on a tagged enum renames
 variants, not fields; you also need `rename_all_fields`. `ipc.contract.test.ts`
@@ -113,6 +149,8 @@ src-tauri/src/
   e2b.rs             Sandboxes: the machines agents work on.
   proxy.rs           Loopback viewer for those machines.
   eval.rs            Reads a run and says whether it communicated sensibly.
+  trajectory.rs      Reads a run's events and says whether the machinery did.
+  files.rs           Attachments, addressed by the SHA-256 of their contents.
   commands.rs        The entire IPC surface.
   app.rs             The only file that knows Tauri exists.
 ```
@@ -139,7 +177,7 @@ invented.
 ## Verify
 
 ```sh
-./scripts/ci.sh          # lint, typecheck, build, both test suites
+./scripts/ci.sh          # lint, typecheck, build, every test suite
 ./scripts/ci.sh rust     # Rust only
 GUAC_LOG=guac=debug pnpm app
 ```
@@ -156,4 +194,15 @@ prompt that makes agents chattier.
 
 ```sh
 ./scripts/evals.sh       # live, against the configured model, costs money
+```
+
+The trajectory suite asks the third question, about the machinery rather than
+the talk: every placeholder closed, every parked turn released, every model
+call on the run's bill, nothing filed against a run already reported finished.
+Both other suites read the messages, and a run whose messages are all correct
+can still have left a half-arrived bubble on screen. If you touch streaming,
+settle detection, retries or the budget, this is the one that will catch you.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
 ```

@@ -166,6 +166,7 @@ enum Permission {
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{AgentCard, CleanDraft, DirectoryEntry, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, DetailField, ProtectedAction};
+use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{
     channel_for, Envelope, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome, Trust,
@@ -173,8 +174,9 @@ use crate::domain::envelope::{
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::signin::Signin;
+use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
-use crate::llm::tools::{self, Delivery, ToolInvocation};
+use crate::llm::tools::{self, Delivery, Intent, ToolInvocation};
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
@@ -185,6 +187,13 @@ const MAX_BATCH: usize = 12;
 
 /// How much transcript is replayed into a prompt.
 const HISTORY_WINDOW: u32 = 40;
+
+/// Where a file sent to an agent lands on that agent's machine.
+const INBOX: &str = "/home/user/inbox";
+
+/// Base64 characters per write when placing a file. Comfortably inside a
+/// command line, and few enough round trips to be worth it.
+const PLACE_CHUNK: usize = 192 * 1024;
 
 /// How long an agent will wait for peers that are still answering the same
 /// thing, before reading what it already has.
@@ -252,6 +261,9 @@ struct Inner {
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     /// Per-agent notes on disk.
     workspace: Workspace,
+    /// The bytes of everything anybody has attached. Shared, because one file
+    /// sent to four agents is one file.
+    files: FileStore,
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
@@ -275,9 +287,18 @@ impl Runtime {
         llm: LlmClient,
         config: AppConfig,
         workspace: Workspace,
+        files: FileStore,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        Self::with_handle(tokio::runtime::Handle::current(), store, llm, config, workspace, events)
+        Self::with_handle(
+            tokio::runtime::Handle::current(),
+            store,
+            llm,
+            config,
+            workspace,
+            files,
+            events,
+        )
     }
 
     pub fn with_handle(
@@ -286,6 +307,7 @@ impl Runtime {
         llm: LlmClient,
         config: AppConfig,
         workspace: Workspace,
+        files: FileStore,
         events: Arc<dyn EventSink>,
     ) -> Self {
         let limits = config.limits;
@@ -301,6 +323,7 @@ impl Runtime {
                 inflight: Mutex::new(HashMap::new()),
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
+                files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
                 live_actors: Arc::new(AtomicUsize::new(0)),
@@ -519,6 +542,18 @@ impl Runtime {
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
 
         if let Participant::Agent { id } = envelope.to {
+            // Booked here rather than by the sender, because this is the only
+            // place that knows whether anybody took it. A run settles when
+            // nothing is outstanding, and the turn that reads an envelope is
+            // what releases it, so an envelope counted but never queued leaves
+            // its run waiting on a turn that cannot happen.
+            //
+            // Before the send, never after: an envelope queued first can be
+            // read, answered and released by a turn that finishes before the
+            // booking lands, which settles the run twice.
+            let run = envelope.run_id;
+            self.track_inflight(run, 1);
+
             let queued = {
                 let inboxes = self.inner.inboxes.lock();
                 match inboxes.get(&id) {
@@ -536,19 +571,264 @@ impl Runtime {
                 }
             };
 
-            if let Some(depth) = queued {
-                // An agent mid-inference keeps its Thinking badge; the queue
-                // depth is only interesting when it is not already working.
-                let thinking = { self.inner.activity.lock().get(&id) == Some(&Activity::Thinking) };
-                if !thinking {
-                    self.set_activity(id, Activity::Queued { depth });
+            match queued {
+                Some(depth) => {
+                    // An agent mid-inference keeps its Thinking badge; the queue
+                    // depth is only interesting when it is not already working.
+                    let thinking =
+                        { self.inner.activity.lock().get(&id) == Some(&Activity::Thinking) };
+                    if !thinking {
+                        self.set_activity(id, Activity::Queued { depth });
+                    }
                 }
+                // The agent was stopped between whatever check found it and
+                // this send. Nobody will ever read this, so it stops counting
+                // now rather than holding the run open forever.
+                None => self.abandon(run, 1),
             }
         }
         Ok(())
     }
 
-    /// Operator sends a message to one agent. Returns the run it starts.
+    pub fn files(&self) -> &FileStore {
+        &self.inner.files
+    }
+
+    /// How much of a text file is read into a prompt.
+    ///
+    /// Generous enough for a brief or a spreadsheet exported as CSV, short
+    /// enough that a log file cannot crowd out the conversation it arrived in.
+    /// Past this the agent is told it was cut and where the whole thing is.
+    const FILE_TEXT_LIMIT: usize = 24_000;
+
+    /// The largest file this will push onto a machine one command at a time.
+    ///
+    /// Bytes reach a sandbox as base64 inside a shell command, which is what
+    /// already puts the browser driver there. That has a ceiling, and a real
+    /// upload endpoint is the fix; until then a file too big to place says so
+    /// rather than failing halfway through with a truncated document.
+    const PLACEABLE_BYTES: u64 = 8 * 1024 * 1024;
+
+    /// Hands the files in this batch to the model in whatever way it can
+    /// actually use.
+    ///
+    /// Three cases, and the rule is one sentence: a file the model can read is
+    /// read to it, and a file it cannot is put on its machine. A picture goes
+    /// as a picture, because that is the one thing a model cannot be told about
+    /// in words. Text goes inline, so a brief can be answered without paying
+    /// for a machine to open it. Everything else, a proposal in Word or a
+    /// spreadsheet, is written into `~/inbox` and the agent is told the path,
+    /// because a Linux box with python on it knows more file formats than this
+    /// runtime ever will.
+    async fn deliver_files(
+        &self,
+        card: &AgentCard,
+        batch: &[Envelope],
+        messages: &mut Vec<ChatMessage>,
+    ) {
+        for envelope in batch {
+            for file in prompt::attachments(envelope) {
+                let note = if file.is_image() {
+                    match self.inner.files.read(&file.digest) {
+                        Ok(bytes) => {
+                            let data =
+                                format!("data:{};base64,{}", file.mime, crate::e2b::encode(&bytes));
+                            messages.push(ChatMessage::user_seeing(
+                                format!("The attached file {} looks like this.", file.name),
+                                data,
+                            ));
+                            continue;
+                        }
+                        Err(err) => format!("{} could not be opened: {err}", file.name),
+                    }
+                } else if file.is_text() {
+                    match self.inner.files.read_text(&file.digest, Self::FILE_TEXT_LIMIT) {
+                        Ok((text, cut)) => {
+                            let tail = if cut {
+                                format!(
+                                    "\n\n[cut at {} characters. The whole file is on your \
+                                     machine at {}]",
+                                    Self::FILE_TEXT_LIMIT,
+                                    self.place(card, file).await.unwrap_or_else(|err| err)
+                                )
+                            } else {
+                                String::new()
+                            };
+                            format!("The attached file {} contains:\n\n{text}{tail}", file.name)
+                        }
+                        Err(err) => format!("{} could not be read: {err}", file.name),
+                    }
+                } else {
+                    match self.place(card, file).await {
+                        Ok(path) => format!(
+                            "The attached file {} is on your machine at {path}. Open it there: \
+                             this is a {} file, so read it with a tool that understands one \
+                             rather than guessing at its contents.",
+                            file.name, file.mime
+                        ),
+                        Err(why) => format!(
+                            "The attached file {} could not be put on your machine: {why}. Say so \
+                             rather than describing a file you have not read.",
+                            file.name
+                        ),
+                    }
+                };
+                messages.push(ChatMessage::user(note));
+            }
+        }
+    }
+
+    /// Turns the names an agent asked to send into files that can travel.
+    ///
+    /// Two places to look, in this order. A file already attached to something
+    /// in this agent's channel is here on disk and needs no machine at all,
+    /// which is what forwarding is: a coordinator passing on a brief it was
+    /// handed should not have to start a computer to do it. Otherwise the name
+    /// is a path on the agent's own machine, which is where an agent that
+    /// *produced* a document has it, and the bytes are pulled off.
+    ///
+    /// Returns what travelled and, for everything that did not, a line worded
+    /// for the model: an agent that believes it attached a document will go on
+    /// to discuss a file nobody else can see.
+    async fn resolve_files(
+        &self,
+        card: &AgentCard,
+        wanted: &[String],
+    ) -> (Vec<Attachment>, Vec<String>) {
+        let mut found = Vec::new();
+        let mut missing = Vec::new();
+        if wanted.is_empty() {
+            return (found, missing);
+        }
+
+        let known = self.attachments_in_channel(card.id);
+        for name in wanted {
+            let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+            if let Some(file) = known.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
+                found.push(file.clone());
+                continue;
+            }
+            // Not something it was sent, so it is something it made.
+            match self.pull_file(card, name).await {
+                Ok(file) => found.push(file),
+                Err(why) => missing.push(format!(
+                    "{name} was not attached: {why}. The recipient did not get it, so do not \
+                     tell them it is on the way."
+                )),
+            }
+        }
+        (found, missing)
+    }
+
+    /// Every file this agent can already see in its own channel, newest first.
+    fn attachments_in_channel(&self, agent: AgentId) -> Vec<Attachment> {
+        let mut seen: Vec<Attachment> = self
+            .inner
+            .store
+            .channel_messages(agent, HISTORY_WINDOW * 4)
+            .unwrap_or_default()
+            .iter()
+            .rev()
+            .flat_map(|envelope| prompt::attachments(envelope).into_iter().cloned())
+            .collect();
+        // A name reused later refers to the newer file, which is the one an
+        // agent means when it says "send the draft".
+        seen.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+        seen
+    }
+
+    /// Reads a file off an agent's machine and into the store.
+    async fn pull_file(&self, card: &AgentCard, path: &str) -> Result<Attachment, String> {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path).trim().to_string();
+        if name.is_empty() {
+            return Err("that is not a file name".to_string());
+        }
+        if path.contains('\'') {
+            return Err("a path with a quote in it cannot be read".to_string());
+        }
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+
+        // Size first, so a file too big to carry is refused before it is read
+        // into this process twice over.
+        let sized = client
+            .run(&sandbox.id, &sandbox.envd_token, &format!("test -f '{path}' && wc -c < '{path}'"))
+            .await
+            .map_err(|e| e.to_string())?;
+        if sized.exit_code != 0 {
+            return Err(format!("there is no file at {path} on your computer"));
+        }
+        let bytes: u64 = sized.stdout.trim().parse().unwrap_or(u64::MAX);
+        if bytes > crate::domain::attachment::MAX_FILE_BYTES {
+            return Err(format!(
+                "it is {} bytes and the limit is {}",
+                bytes,
+                crate::domain::attachment::MAX_FILE_BYTES
+            ));
+        }
+
+        let read = client
+            .run(&sandbox.id, &sandbox.envd_token, &format!("base64 -w0 '{path}'"))
+            .await
+            .map_err(|e| e.to_string())?;
+        if read.exit_code != 0 {
+            return Err(format!("{path} could not be read: {}", read.stderr.trim()));
+        }
+        self.inner
+            .files
+            .put(&name, &crate::e2b::decode_bytes(read.stdout.trim()))
+            .map_err(|e| e.to_string())
+    }
+
+    /// Writes one attachment into the agent's own machine, starting it if
+    /// necessary, and answers with the path or with why not.
+    ///
+    /// The error is worded for the model, because it is the model that has to
+    /// decide what to do instead.
+    async fn place(&self, card: &AgentCard, file: &Attachment) -> Result<String, String> {
+        if file.bytes > Self::PLACEABLE_BYTES {
+            return Err(format!(
+                "it is {} and only files up to {} can be placed",
+                file.size(),
+                Attachment { bytes: Self::PLACEABLE_BYTES, ..file.clone() }.size()
+            ));
+        }
+        let bytes = self.inner.files.read(&file.digest).map_err(|e| e.to_string())?;
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+
+        let path = format!("{INBOX}/{}", file.name);
+        // In pieces, because the whole payload travels inside one shell
+        // command and a command line has a ceiling. The first write truncates
+        // and the rest append, so a retry of a half-written file replaces it
+        // rather than doubling it.
+        let encoded = crate::e2b::encode(&bytes);
+        let mut first = true;
+        for chunk in encoded.as_bytes().chunks(PLACE_CHUNK) {
+            let chunk = String::from_utf8_lossy(chunk);
+            let redirect = if first { ">" } else { ">>" };
+            let command =
+                format!("mkdir -p {INBOX} && printf %s '{chunk}' | base64 -d {redirect} '{path}'");
+            client
+                .run(&sandbox.id, &sandbox.envd_token, &command)
+                .await
+                .map_err(|e| e.to_string())?;
+            first = false;
+        }
+        Ok(path)
+    }
+
+    /// Releases work that will never become a turn.
+    ///
+    /// Every envelope in an inbox is counted against its run, and the turn that
+    /// reads one is what releases it. An agent deleted while holding queued
+    /// work takes those bookings with it: without this the run stays in flight
+    /// for the life of the process, never settles, and its spend is never
+    /// reconciled against the store.
+    fn abandon(&self, run: RunId, envelopes: usize) {
+        if envelopes > 0 {
+            self.track_inflight(run, -(envelopes as i64));
+        }
+    }
+
     /// Delivers a routine's instruction, as though the operator had asked.
     ///
     /// Attributed to the system rather than to the operator so the transcript
@@ -576,7 +856,6 @@ impl Runtime {
             created_at: now_ms(),
         };
 
-        self.track_inflight(run_id, 1);
         self.deliver(envelope)?;
         Ok(run_id)
     }
@@ -625,7 +904,18 @@ impl Runtime {
         });
     }
 
+    /// Operator sends a message to one agent. Returns the run it starts.
     pub fn send_from_human(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
+        self.send_from_human_with(to, text, Vec::new())
+    }
+
+    /// The same, carrying files the operator dropped in.
+    pub fn send_from_human_with(
+        &self,
+        to: AgentId,
+        text: &str,
+        files: Vec<Attachment>,
+    ) -> Result<RunId, RuntimeError> {
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
         if card.lifecycle == Lifecycle::Terminated {
             return Err(RuntimeError::AgentTerminated(card.name));
@@ -638,7 +928,7 @@ impl Runtime {
             channel_id: to,
             from: Participant::Human,
             to: Participant::Agent { id: to },
-            parts: vec![Part::text(text.trim())],
+            parts: with_files(text.trim(), files),
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
@@ -646,7 +936,6 @@ impl Runtime {
             created_at: now_ms(),
         };
 
-        self.track_inflight(run_id, 1);
         self.deliver(envelope)?;
         Ok(run_id)
     }
@@ -679,7 +968,6 @@ impl Runtime {
             ..original
         };
 
-        self.track_inflight(run_id, 1);
         self.deliver(envelope)?;
         Ok(run_id)
     }
@@ -862,14 +1150,22 @@ impl Runtime {
     // ---- one agent turn --------------------------------------------------
 
     async fn run_turn(&self, agent_id: AgentId, batch: Vec<Envelope>) {
+        // Single-run by construction: the batch only ever drains envelopes
+        // belonging to the same run as its first.
+        let run_id = batch[0].run_id;
+
+        // The agent can be deleted between the actor's own check and this one.
+        // Releasing rather than returning, because the batch is already off the
+        // queue and its run is still counting on it.
         let Some(card) = self.inner.store.get_agent(agent_id).ok().flatten() else {
+            self.abandon(run_id, batch.len());
             return;
         };
         if card.lifecycle == Lifecycle::Terminated {
+            self.abandon(run_id, batch.len());
             return;
         }
 
-        let run_id = batch[0].run_id;
         let inbound_hop = batch.iter().map(|e| e.hop).max().unwrap_or(0);
         let cause = batch.last().map(|e| e.id);
 
@@ -938,6 +1234,7 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
+        #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
             &self.config().operator_name,
@@ -950,6 +1247,10 @@ impl Runtime {
             &batch,
             mode,
         );
+        // After assembly, because what a file becomes depends on things the
+        // prompt cannot reach: bytes on disk, and a machine that may have to be
+        // started to hold them.
+        self.deliver_files(&card, &batch, &mut messages).await;
 
         // Where the finished message will land, and who it is for. Both are
         // known before the first token, so the UI never has to guess and then
@@ -1143,20 +1444,18 @@ impl Runtime {
                 stream.reopen(&*self.inner.events);
             }
 
-            let events = self.inner.events.clone();
             let message_id = stream.message_id;
             let channel_id = stream.channel_id;
-            let result = self
-                .inner
-                .llm
-                .stream_chat(inference, request, |token| {
-                    events.emit(UiEvent::StreamDelta {
-                        message_id,
-                        channel_id,
-                        text: token.to_string(),
-                    });
-                })
-                .await;
+            // Tokens are coalesced before they cross into the window. Each
+            // event is an IPC hop and a render, and a model produces them
+            // faster than a screen refreshes, so emitting per token spent the
+            // operator's main thread on work no eye could resolve. With
+            // several agents answering at once it stopped painting at all,
+            // which read as the app freezing and the text arriving in a lump.
+            let mut pen = Pen::new(self.inner.events.clone(), message_id, channel_id);
+            let result =
+                self.inner.llm.stream_chat(inference, request, |token| pen.write(token)).await;
+            pen.flush();
 
             match result {
                 Ok(completion) => return Ok(completion),
@@ -1302,9 +1601,6 @@ impl Runtime {
             created_at: now_ms(),
         };
 
-        if to.is_agent() {
-            self.track_inflight(run_id, 1);
-        }
         if let Err(err) = self.deliver(envelope) {
             tracing::error!(%err, "failed to deliver reply");
         }
@@ -1522,7 +1818,8 @@ impl Runtime {
                 )
             }
 
-            ToolInvocation::SendMessage { to, text } => {
+            ToolInvocation::SendMessage { to, text, intent, files } => {
+                let (attached, missing) = self.resolve_files(card, &files).await;
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -1532,6 +1829,8 @@ impl Runtime {
                     addressed,
                     &to,
                     &text,
+                    intent,
+                    &attached,
                 );
                 let rendered = tools::render_deliveries(&deliveries);
                 let queued =
@@ -1567,6 +1866,14 @@ impl Runtime {
                             .unwrap_or("no recipients")
                             .to_string(),
                     }
+                };
+                // What did not travel matters as much as what did: an agent
+                // that thinks it sent a document goes on to talk about a file
+                // the recipient has never seen.
+                let rendered = if missing.is_empty() {
+                    rendered
+                } else {
+                    format!("{rendered}\n{}", missing.join("\n"))
                 };
                 (
                     rendered,
@@ -1914,6 +2221,8 @@ impl Runtime {
         addressed: &mut HashSet<AgentId>,
         recipients: &[String],
         text: &str,
+        intent: Intent,
+        files: &[Attachment],
     ) -> Vec<Delivery> {
         // Fan-out width is checked before any recipient, so a blast at the
         // whole roster is refused as one thing rather than partly delivered.
@@ -2004,12 +2313,20 @@ impl Runtime {
                     let heard_from =
                         { self.inner.guard.lock().run(run_id).has_written(target.id, card.id) };
 
-                    // Nothing asked this agent anything, and this peer has
-                    // already had its say. There is nothing left to answer, and
-                    // a message here can only be an acknowledgement of an
-                    // acknowledgement, which is how a crew spends an afternoon
-                    // being polite at itself.
-                    if settled && heard_from {
+                    // Nothing asked this agent anything and this peer has
+                    // already had its say, so nothing here is owed an answer.
+                    // What is left is either a courtesy, which is how a crew
+                    // spends an afternoon being polite at itself, or genuinely
+                    // new work.
+                    //
+                    // The two are the same shape on the wire, and deciding from
+                    // the shape refused real work: an operator authorised a
+                    // send, the coordinator relayed the authorisation, read the
+                    // answer, and was refused when it tried to instruct again.
+                    // Every delegation that takes two rounds died there. So the
+                    // sender declares which it is, and only the courtesy is
+                    // turned away.
+                    if settled && heard_from && !intent.is_work() {
                         let refusal = Refusal::ExchangeSettled { recipient: target.name.clone() };
                         out.push(Delivery::Refused { to: name.clone(), reason: refusal.explain() });
                         continue;
@@ -2023,7 +2340,7 @@ impl Runtime {
                         channel_id,
                         from,
                         to,
-                        parts: vec![Part::text(text)],
+                        parts: with_files(text, files.to_vec()),
                         trust: Trust::Peer,
                         hop,
                         expects_reply: !answering,
@@ -2031,19 +2348,15 @@ impl Runtime {
                         created_at: now_ms(),
                     };
 
-                    self.track_inflight(run_id, 1);
                     match self.deliver(envelope) {
                         Ok(()) => {
                             addressed.insert(target.id);
                             out.push(Delivery::Queued { to: target.name.clone() })
                         }
-                        Err(err) => {
-                            self.track_inflight(run_id, -1);
-                            out.push(Delivery::Refused {
-                                to: target.name.clone(),
-                                reason: format!("Refused: delivery failed ({err})."),
-                            });
-                        }
+                        Err(err) => out.push(Delivery::Refused {
+                            to: target.name.clone(),
+                            reason: format!("Refused: delivery failed ({err})."),
+                        }),
                     }
                 }
             }
@@ -2464,6 +2777,14 @@ async fn actor_loop(
             }
         }
         if abandoned {
+            // Everything this inbox is holding dies with the agent, and the
+            // run counting on it has to be told. `first` was already taken off
+            // the queue; the rest would go silently when `rx` drops.
+            runtime.abandon(first.run_id, 1);
+            while let Ok(orphan) = rx.try_recv() {
+                depth.fetch_sub(1, Ordering::SeqCst);
+                runtime.abandon(orphan.run_id, 1);
+            }
             break;
         }
 
@@ -2514,6 +2835,66 @@ async fn actor_loop(
     }
 
     tracing::debug!(agent = %id.short(), "actor stopped");
+}
+
+/// Longest a token waits before the operator sees it.
+///
+/// Under one frame at 60Hz, so text still appears to arrive as it is written;
+/// far above the gap between tokens, so a burst becomes one event instead of
+/// forty.
+const PEN_FLUSH: Duration = Duration::from_millis(16);
+
+/// Buffers a stream's tokens into events the window can keep up with.
+///
+/// Time-based rather than size-based: a slow model must not have its first
+/// sentence held back waiting for a buffer to fill, and a fast one must not
+/// flood. Whatever is unflushed when the call ends is written by `flush`, so
+/// no token is ever dropped.
+struct Pen {
+    events: Arc<dyn EventSink>,
+    message_id: MessageId,
+    channel_id: AgentId,
+    held: String,
+    last: Instant,
+}
+
+impl Pen {
+    fn new(events: Arc<dyn EventSink>, message_id: MessageId, channel_id: AgentId) -> Self {
+        Self { events, message_id, channel_id, held: String::new(), last: Instant::now() }
+    }
+
+    fn write(&mut self, token: &str) {
+        self.held.push_str(token);
+        if self.last.elapsed() >= PEN_FLUSH {
+            self.flush();
+        }
+    }
+
+    fn flush(&mut self) {
+        if self.held.is_empty() {
+            return;
+        }
+        self.events.emit(UiEvent::StreamDelta {
+            message_id: self.message_id,
+            channel_id: self.channel_id,
+            text: std::mem::take(&mut self.held),
+        });
+        self.last = Instant::now();
+    }
+}
+
+/// A message body and the files it carries, as parts.
+///
+/// The text part is dropped when there is nothing to say, because dropping the
+/// file instead would lose the whole message: sending a document on its own,
+/// with no covering note, is a normal thing to do.
+fn with_files(text: &str, files: Vec<Attachment>) -> Vec<Part> {
+    let mut parts = Vec::new();
+    if !text.is_empty() {
+        parts.push(Part::text(text));
+    }
+    parts.extend(files.into_iter().map(Part::File));
+    parts
 }
 
 /// The agent a name refers to, within the sender's group.

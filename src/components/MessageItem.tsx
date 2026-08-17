@@ -1,3 +1,5 @@
+import { memo } from "react";
+
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
@@ -82,8 +84,14 @@ function plainBody(message: Envelope): string {
  *   Rendering these as bubbles buried the operator's own conversation under
  *   machine chatter they were never meant to read line by line.
  * - agent to system: that agent's own record of what it did on its turn.
+ *
+ * Memoised because a transcript is redrawn whenever any message is appended,
+ * and rendering one of these parses its markdown. Thirty messages re-parsed
+ * every time an agent says anything is work nobody asked for: the envelopes
+ * themselves never change, so an entry that is already on screen is already
+ * correct.
  */
-export function MessageItem({ message, lookups, continued, feed }: Props) {
+export const MessageItem = memo(function MessageItem({ message, lookups, continued, feed }: Props) {
   const { from, to } = message;
 
   // Ahead of everything else: a request for permission is addressed to the
@@ -113,7 +121,7 @@ export function MessageItem({ message, lookups, continued, feed }: Props) {
   }
 
   return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
-}
+});
 
 /** What an agent did on its own turn: who it wrote to, and any guard stops. */
 function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Lookups }) {
@@ -209,6 +217,9 @@ function ChatBubble({
   const notices = parts.filter(
     (e): e is { part: Extract<Part, { type: "notice" }>; key: string } => e.part.type === "notice",
   );
+  const files = parts.filter(
+    (e): e is { part: Extract<Part, { type: "file" }>; key: string } => e.part.type === "file",
+  );
 
   return (
     <article
@@ -257,8 +268,34 @@ function ChatBubble({
         {texts.map(({ part, key }) => (
           <Markdown key={key}>{part.text}</Markdown>
         ))}
+
+        {files.map(({ part, key }) => (
+          <FileRow key={key} file={part} />
+        ))}
       </div>
     </article>
+  );
+}
+
+/** Sizes the way a person says them, matching what the agent is told. */
+function readableSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${bytes} bytes`;
+}
+
+/**
+ * A file on a message.
+ *
+ * Named and sized, and that is all: the operator dropped it or watched an agent
+ * send it, so what matters here is that it went, not a preview of it.
+ */
+function FileRow({ file }: { file: Extract<Part, { type: "file" }> }) {
+  return (
+    <div className="file" title={file.mime}>
+      <span className="file__name">{file.name}</span>
+      <span className="file__size">{readableSize(file.bytes)}</span>
+    </div>
   );
 }
 
