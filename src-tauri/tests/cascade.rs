@@ -1250,6 +1250,58 @@ async fn a_one_off_routine_does_not_come_due_twice() {
     );
 }
 
+#[tokio::test]
+async fn an_agent_with_no_e2b_key_is_not_offered_a_computer_and_is_told_it_has_none() {
+    // The README: without an E2B key the computer tools are not offered.
+    // This checks what the model was actually sent, on both sides of the
+    // setting, because the runtime is where the tool list and the prompt are
+    // put together and a unit test on either half cannot see the join.
+    let stub = serve(|_| Script::Say("noted".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    assert!(h.runtime.config().e2b.api_key.is_empty(), "the harness has no E2B key");
+
+    let run = h.runtime.send_from_human(h.id("Clerk"), "hello").unwrap();
+    h.settle(run).await;
+
+    let without = stub.transcript.lock().last().cloned().expect("the model was called");
+    let offered = tool_names(&without);
+    for tool in ["run_command", "open_on_desktop", "use_screen", "browse"] {
+        assert!(!offered.contains(&tool.to_string()), "{tool} offered with nothing behind it");
+    }
+    assert!(offered.contains(&"send_message".to_string()), "the rest are still there: {offered:?}");
+    let prompt = without["messages"][0]["content"].as_str().unwrap_or_default();
+    assert!(prompt.contains("do not have one"), "the prompt says so too: {prompt}");
+
+    // The operator adds a key. The next turn has a machine.
+    let mut config = h.runtime.config();
+    config.e2b.api_key = "e2b_test".into();
+    h.runtime.set_config(config);
+
+    let run = h.runtime.send_from_human(h.id("Clerk"), "hello again").unwrap();
+    h.settle(run).await;
+
+    let with = stub.transcript.lock().last().cloned().unwrap();
+    let offered = tool_names(&with);
+    for tool in ["run_command", "open_on_desktop", "use_screen", "browse"] {
+        assert!(offered.contains(&tool.to_string()), "{tool} must be back: {offered:?}");
+    }
+    let prompt = with["messages"][0]["content"].as_str().unwrap_or_default();
+    assert!(prompt.contains("Never say you have no computer"), "and the prompt says so: {prompt}");
+}
+
+/// The tools a request offered, by name.
+fn tool_names(body: &serde_json::Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|t| t["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The system prompt each agent was actually sent, by name.
 fn prompts_by_agent(stub: &harness::Stub) -> HashMap<String, String> {
     let mut out = HashMap::new();
@@ -1281,6 +1333,12 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     // tries and hits a login wall.
     let stub = serve(|_| Script::Say("Noted.".into())).await;
     let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    // A sign-in lives in a browser and a credential goes into a shell, so what
+    // an agent can reach is only said to one with a machine. Nothing below
+    // starts one; the key only has to be set.
+    let mut config = h.runtime.config();
+    config.e2b.api_key = "e2b_test".into();
+    h.runtime.set_config(config);
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     h.runtime

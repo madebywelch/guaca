@@ -125,6 +125,15 @@ pub struct E2bConfig {
     pub idle_minutes: u32,
 }
 
+impl E2bConfig {
+    /// Whether agents have machines at all. Decided here, by the key, rather
+    /// than by asking a sandbox: a machine that is asleep is still an agent's
+    /// machine, and one that was never possible is not.
+    pub fn is_configured(&self) -> bool {
+        !self.api_key.trim().is_empty()
+    }
+}
+
 pub fn default_idle_minutes() -> u32 {
     15
 }
@@ -192,7 +201,7 @@ impl AppConfig {
     pub fn redacted(&self) -> RedactedConfig {
         RedactedConfig {
             operator_name: self.operator_name.clone(),
-            e2b_key_set: !self.e2b.api_key.trim().is_empty(),
+            e2b_key_set: self.e2b.is_configured(),
             e2b_key_hint: hint_for(&self.e2b.api_key),
             computer_idle_minutes: self.e2b.idle_minutes,
             base_url: self.inference.base_url.clone(),

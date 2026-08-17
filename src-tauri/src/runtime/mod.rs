@@ -1246,13 +1246,19 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
+        // Settings are read once for the turn, so the prompt and the tool list
+        // agree: a turn told it has a machine is offered the tools for one, and
+        // a turn told it has none is not.
+        let config = self.config();
+        let has_computer = config.e2b.is_configured();
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
-            &self.config().operator_name,
+            &config.operator_name,
             &roster,
             &credentials,
             &signins,
+            has_computer,
             &names,
             &notes,
             &history,
@@ -1281,7 +1287,6 @@ impl Runtime {
         };
         stream.open(&*self.inner.events);
 
-        let config = self.config();
         let mut collected_text = String::new();
         // Settings resolve agent over group over app. An agent that names its own
         // model keeps it; otherwise the group's choice applies; otherwise the
@@ -1315,7 +1320,7 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                tools: tools::specs(),
+                tools: tools::offered(has_computer),
                 temperature: None,
             };
 
