@@ -195,6 +195,29 @@ invented.
 - Errors an agent reads mid-turn need a way forward, not just a reason. A
   refusal that only says no gets reworded and retried.
 
+## Ownership
+
+**A person owns every commit, and the tool that helped write it is not a
+co-author.** Whoever commits answers for the change: in review, in the incident,
+and a year later when the reason matters more than the diff. That
+accountability does not divide and does not transfer, so the record must not
+suggest it did. Use whatever tools you like and sign your own work.
+
+No machine signature anywhere. No `Co-authored-by` trailer naming a model, no
+"Generated with" footer, no session or tool link, in commits, PR titles and
+bodies, issues, comments or code. A name in an author list is a claim that the
+thing behind it can answer a question about the code, and a model on a later
+version cannot answer for this one.
+
+**A trailer written on a contributor's branch still reaches `main`.** GitHub's
+squash-merge collects `Co-authored-by` lines out of the commits it squashes and
+appends them to the squash message, so a trailer nobody chose arrives on the
+default branch through the merge box. Two commits reached `main` that way before
+anyone noticed, and taking them back out meant rewriting published history. Read
+the merge box before confirming it. Claude Code emits the trailer by default and
+stops when `includeCoAuthoredBy` is `false` in its settings, which is the fix at
+the source rather than at the end.
+
 ## Verify
 
 ```sh
