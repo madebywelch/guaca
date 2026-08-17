@@ -62,6 +62,16 @@ expired, because nothing holds a parked turn across a restart. "Always allow" is
 the decision row itself, scoped to the one agent that asked. See
 `docs/ARCHITECTURE.md`.
 
+**No channel holds a conversation between two agents, so do not build one from
+`channel_messages`.** A send is filed under the recipient and the answer under
+the sender, and an automatic reply leaves no trace at all in the channel of the
+agent that wrote it, because only explicit tool calls are recorded there. A
+thread assembled from one channel's rows is missing messages nobody can account
+for. `pair_messages` reads both directions from the messages themselves; the
+channel only summarises, in `lib/transcript.ts`. A refusal never folds into that
+summary: it is the runtime stopping a message rather than a message. See
+`docs/ARCHITECTURE.md`.
+
 **A repeat is a shape, not a number of seconds.** `every weekday` and `every
 month` cannot be gaps, and `every day` should not be one: a day is 23 or 25
 hours twice a year, so a daily nine o'clock routine stored as 86400 seconds
@@ -229,6 +239,7 @@ goes through `openMessage` rather than `select`.
 
 ```
 src/                 React + TypeScript. A view over the runtime, nothing more.
+  lib/transcript.ts  What a channel shows, and what it collapses. Read first.
 src-tauri/src/
   domain/            AgentCard, Envelope, Routine, Connector, Signin, Approval,
                      Search, ids. No I/O.
