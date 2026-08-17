@@ -276,11 +276,27 @@ async fn a_computer_is_made_as_a_container_a_volume_and_a_network() {
          whose exit is how a machine sleeps. It is {init:?}"
     );
     // The file that watchdog measures, and that the app touches on every use.
-    // It has to be writable by whichever account `exec` runs as, which is not
-    // necessarily the one PID 1 runs as.
+    // Two different accounts touch it: PID 1 creates it as root, and the idle
+    // ticker writes it through `exec` as uid 1000, which is why the image makes
+    // it writable by both rather than by its owner.
     let beat = spike.run("stat -c '%Y %a' /run/guaca/heartbeat").await;
     assert!(beat.trim().split(' ').next().unwrap_or_default().parse::<u64>().is_ok(), "{beat:?}");
     spike.run("touch /run/guaca/heartbeat").await;
+
+    // The home volume, handed to uid 1000 by that same root PID 1 on every
+    // boot. This is the regression that a live run found: with `USER user` in
+    // the image, PID 1 was itself uid 1000, a fresh volume's root belonged to
+    // root, and nothing could write the home — the skeleton never arrived, XFCE
+    // could not save its own config, and three tests failed on `Permission
+    // denied` some way past the thing that caused it.
+    let home = spike.run("stat -c '%u %g' /home/user").await;
+    assert_eq!(
+        home.trim(),
+        "1000 1000",
+        "the home volume must belong to the account commands run as, or an agent cannot write \
+         its own home"
+    );
+    spike.run("touch /home/user/.guac-write-test && rm /home/user/.guac-write-test").await;
 }
 
 /// 2. Execute a command and preserve stdout, stderr, and exit code.
@@ -364,23 +380,24 @@ async fn a_credential_reaches_one_command_and_nothing_else() {
     assert_eq!(after.trim(), "absent", "a credential must not outlive the command it was for");
 
     // Nor into the container's own environment, which every later `exec` would
-    // inherit. Read defensively: `/proc/1/environ` is readable only by the
-    // account PID 1 runs as, and a redirect that failed would count zero
-    // matches and pass this for the wrong reason.
-    let named = |variable: &str| {
-        format!(
+    // inherit if the runtime ever passed one along.
+    //
+    // Read defensively, and expect not to be able to read it at all: PID 1 is
+    // root — the image leaves `USER` unset so that it can prepare the volume —
+    // while commands arrive as uid 1000, and `/proc/1/environ` belongs to the
+    // account that owns the process. A plain redirect would fail, count zero
+    // matches, and pass this for the wrong reason, so the unreadable case is
+    // told apart from the empty one.
+    let inherited = spike
+        .run(
             "if [ -r /proc/1/environ ]; then tr '\\0' '\\n' < /proc/1/environ | \
-             grep -c '^{variable}=' || true; else echo unreadable; fi"
+             grep -c '^GUAC_SPIKE_TOKEN=' || true; else echo unreadable; fi",
         )
-    };
-    let inherited = spike.run(&named("GUAC_SPIKE_TOKEN")).await;
+        .await;
     assert!(
         matches!(inherited.trim(), "0" | "unreadable"),
         "the container's own environment holds the credential: {inherited}"
     );
-    if inherited.trim() == "unreadable" {
-        println!("note: PID 1 runs as a different account than `exec` does");
-    }
 
     let described = container(&["inspect", &spike.handle.provider_id]).await;
     assert!(
@@ -388,12 +405,12 @@ async fn a_credential_reaches_one_command_and_nothing_else() {
         "the value must not be readable from `container inspect`"
     );
 
-    // The idle period is the one value this app ever writes into a container's
-    // environment, and the watchdog is the thing that reads it: a machine that
-    // never received it falls back to the image's default and sleeps on a
-    // schedule the operator did not choose.
-    let idle = spike.run(&named("GUAC_IDLE_SECONDS")).await;
-    assert_ne!(idle.trim(), "0", "PID 1 never received the operator's idle setting");
+    // The idle period is the one value this app does write into a container's
+    // environment, and the watchdog is what reads it. It is not asserted from
+    // in here — a uid-1000 session cannot read root's environment, so any check
+    // from this side passes whether or not the setting arrived. The test that
+    // proves it is the sleep one, which makes a machine with twenty seconds and
+    // watches it stop.
 }
 
 /// 4. Place a binary attachment through the shared chunked `exec` path and read

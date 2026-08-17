@@ -30,6 +30,13 @@ BEAT_DIR=/run/guaca
 BEAT=$BEAT_DIR/heartbeat
 CHROME_PROFILE=$HOME_DIR/.guac/chrome
 
+# Who ends up owning the home. Numbers rather than the `user` account, because
+# the number is what the provider asks for: `container exec --uid 1000 --gid
+# 1000` is how every agent command arrives, and a name resolved here against a
+# passwd file would be one more thing that has to agree with it.
+GUEST_UID=1000
+GUEST_GID=1000
+
 # The idle period the operator chose, arriving as `--env GUAC_IDLE_SECONDS` on
 # the container. Anything that is not a number would abort the arithmetic below
 # and take PID 1 with it, which reads to an operator as a computer that refuses
@@ -42,26 +49,20 @@ case "$IDLE" in
   ;;
 esac
 
-# Both accounts have to work. The image names `user` as the account commands run
-# as, and preparing the volume needs root: a freshly created volume's root
-# directory belongs to root, and an unprivileged process cannot write into it,
-# let alone chown it. Which of the two this process is depends on how the
-# runtime reads the image's `USER`, so it asks rather than assumes, and `user`
-# has passwordless sudo for exactly this.
-as_root() {
-  if [ "$(id -u)" = 0 ]; then
-    "$@"
-  else
-    sudo -n "$@"
-  fi
-}
-
-# Said once, loudly, rather than discovered as a home directory that is somehow
-# read-only. Everything below tolerates its own failure so that a machine still
-# boots and can be looked at; this is the line that explains what went wrong.
-if ! as_root true 2>/dev/null; then
-  echo "guaca-init: running as $(id -un) with no way to become root; the home volume cannot be \
-prepared, and the browser wrapper, PATH and file ownership will be missing" >&2
+# This has to be root, and the image leaves `USER` unset so that it is. A fresh
+# volume's root directory belongs to root, so an unprivileged PID 1 cannot write
+# the home, let alone give it away: measured on Apple Container 1.2.2 as three
+# conformance failures, all of them `Permission denied` under /home/user, with
+# XFCE unable to write its own config among them.
+#
+# Said once and loudly rather than discovered later as a home directory that is
+# somehow read-only. Everything below tolerates its own failure, so the machine
+# still boots and can be looked at; this is the line that explains why it is
+# broken.
+if [ "$(id -u)" != 0 ]; then
+  echo "guaca-init: running as uid $(id -u) rather than root. A volume the runtime has just made \
+belongs to root, so a home that has never been prepared cannot be prepared now; one an earlier \
+boot already handed over still works. Run this image without a --user override." >&2
 fi
 
 wind_down() {
@@ -81,24 +82,34 @@ wind_down() {
 # ignored, and the runtime waits out its grace period before killing the VM.
 trap wind_down TERM INT
 
-# Where the machine's own account can write, whichever account touches it. The
-# heartbeat is written by Guaca through `container exec`, and that session may
-# not be the account running this process; a file only root can touch is a
-# machine that goes to sleep with an agent working on it.
-if ! as_root mkdir -p "$BEAT_DIR" || ! as_root touch "$BEAT"; then
+# Writable by whoever touches it, which is not this process. Guaca touches the
+# heartbeat through `container exec`, and that session is uid 1000 while this
+# one is root; a file only root can write is a machine that goes to sleep with
+# an agent working on it.
+if ! mkdir -p "$BEAT_DIR" || ! touch "$BEAT"; then
   echo "guaca-init: could not create $BEAT; this machine will not stop itself when idle" >&2
 fi
-as_root chmod 0777 "$BEAT_DIR" 2>/dev/null || true
-as_root chmod 0666 "$BEAT" 2>/dev/null || true
+chmod 0777 "$BEAT_DIR" 2>/dev/null || true
+chmod 0666 "$BEAT" 2>/dev/null || true
 
-# The volume, on every boot. `-n` never overwrites, so the skeleton is what a
-# new machine starts with and what an old one falls back to for anything it has
+# The mount point itself, which is where an unprivileged process gets stopped:
+# a volume the runtime has just created is an empty filesystem owned by root,
+# and every write an agent makes lands directly in it. Asked before it is
+# changed, because on every boot after the first it is already right and a
+# needless chown of a mount root is a needless write.
+if [ "$(stat -c %u "$HOME_DIR" 2>/dev/null || echo -)" != "$GUEST_UID" ]; then
+  chown "$GUEST_UID:$GUEST_GID" "$HOME_DIR" \
+    || echo "guaca-init: $HOME_DIR could not be given to uid $GUEST_UID, so nothing an agent runs \
+can write its own home" >&2
+fi
+
+# The skeleton, on every boot. `-n` never overwrites, so it is what a new
+# machine starts with and what an old one falls back to for anything it has
 # lost, while an agent's own edits to a dotfile survive every boot after the
 # first. `-p` keeps the mode, which is what makes the copied Chrome wrapper
-# executable; ownership is fixed immediately below.
-as_root chown user:user "$HOME_DIR" \
-  || echo "guaca-init: $HOME_DIR does not belong to the account that works in it" >&2
-as_root cp -Rpn "$SKELETON/." "$HOME_DIR/" 2>/dev/null
+# executable; ownership is fixed immediately below, since a root process copying
+# root's files makes more of root's files.
+cp -Rpn "$SKELETON/." "$HOME_DIR/" 2>/dev/null
 # Judged by what arrived rather than by an exit status: `cp -n` skipping a file
 # an agent already has is the ordinary case on every boot but the first, and
 # whether that counts as a failure differs between implementations of `cp`.
@@ -108,12 +119,13 @@ if [ ! -x "$HOME_DIR/.local/bin/google-chrome" ]; then
 PATH and a desktop icon that opens a profile no agent can drive" >&2
 fi
 
-# Only the paths the skeleton names, rather than the whole home. On a first boot
-# those are everything there is, so this is the `chown -R` a new volume needs;
-# on every boot after it, a recursive chown would walk a browser profile and
-# gigabytes of an agent's work to fix nothing.
+# Every path the skeleton names, and only those. On a first boot that is
+# everything in the volume, so it is the recursive chown a new home needs; on
+# every boot after it, walking the whole home would mean a browser profile and
+# gigabytes of an agent's work re-chowned to fix nothing. The walk is over the
+# skeleton, so its cost is the skeleton's size rather than the home's.
 (cd "$SKELETON" && find . -mindepth 1) | while read -r entry; do
-  as_root chown user:user "$HOME_DIR/${entry#./}" 2>/dev/null || true
+  chown "$GUEST_UID:$GUEST_GID" "$HOME_DIR/${entry#./}" 2>/dev/null || true
 done
 
 # Chrome writes this when it opens a profile and removes it when it closes.
@@ -121,7 +133,7 @@ done
 # the profile "in use" and refuses it: the browser opens with no session, an
 # agent reports being signed out of everything, and the volume that was supposed
 # to make sleeping safe looks like it lost the sign-in.
-as_root rm -f "$CHROME_PROFILE/SingletonLock" \
+rm -f "$CHROME_PROFILE/SingletonLock" \
   || echo "guaca-init: $CHROME_PROFILE/SingletonLock is still there; the browser will refuse this \
 profile as in use" >&2
 
@@ -145,8 +157,8 @@ while :; do
     # counts as a use: a machine that stays up too long costs the operator
     # nothing they cannot see, and one that stops mid-task loses the work.
     echo "guaca-init: $BEAT is missing; recreating it" >&2
-    as_root touch "$BEAT" 2>/dev/null || true
-    as_root chmod 0666 "$BEAT" 2>/dev/null || true
+    touch "$BEAT" 2>/dev/null || true
+    chmod 0666 "$BEAT" 2>/dev/null || true
     continue
   fi
 

@@ -55,12 +55,19 @@ should stop.
 named volume mounted at `/home/user`, and a volume hides whatever the image put
 underneath it. So the skeleton — `.profile`, the Chrome wrapper, the desktop
 entry — is built somewhere else and copied in on every boot without overwriting
-anything already there. The same boot chowns what it copied, because a fresh
-volume's root belongs to root, and removes Chrome's `SingletonLock`, which a
-stopped container leaves behind and which would otherwise make the next Chrome
-refuse the profile as "in use". `guaca-init` reaches for `sudo` when it is not
-root, because whether the image's `USER` applies to PID 1 or only to `exec`
-sessions is the runtime's decision and not this file's.
+anything already there. The same boot chowns what it copied, and removes
+Chrome's `SingletonLock`, which a stopped container leaves behind and which
+would otherwise make the next Chrome refuse the profile as "in use".
+
+**PID 1 is root, and that is not a statement about who agents are.** The image
+sets no `USER`, so the init process is root and can hand a freshly created
+volume — an empty filesystem owned by root — to uid 1000 before anything else
+runs. Agents are still unprivileged: `apple.rs` passes `--uid 1000 --gid 1000`
+on every `exec`, which Apple Container 1.2.2 requires anyway, because `exec`
+there ran as uid 0 whatever the image's `USER` said. The version with `USER
+user` was measured and failed: PID 1 could not write `/home/user` at all, so
+the skeleton never arrived, XFCE could not save its config, and three
+conformance tests failed on `Permission denied` a long way from the cause.
 
 There is deliberately no `VOLUME /home/user` in the Dockerfile. The provider
 names its volume and labels it; a `VOLUME` line would add an *anonymous* one

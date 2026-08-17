@@ -77,11 +77,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       curl git ca-certificates sudo procps psmisc util-linux iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# The account every command runs as. uid 1000 because the home volume is
-# chowned to it on first boot and a uid that moves between image versions would
-# leave an agent locked out of its own disk. Passwordless sudo because agents
-# `apt-get install` and because `guaca-init` may be running as this account when
-# it has root's work to do.
+# The account every command runs as. The number matters more than the name: the
+# provider asks for uid 1000 by number on every `exec`, and PID 1 hands the home
+# volume to that number on every boot, so a uid that moved between image
+# versions would lock an agent out of its own disk. Passwordless sudo because
+# agents `apt-get install`, which is a thing the E2B machines let them do too.
 RUN useradd --uid 1000 --create-home --home-dir /home/user --shell /bin/bash user \
     && printf '%s\n' 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/guaca-user \
     && chmod 0440 /etc/sudoers.d/guaca-user
@@ -199,7 +199,23 @@ ENV HOME=/home/user \
 # home directory's worth of disk until a person finds it by hand. The
 # declaration buys nothing the `--mount` does not already give.
 WORKDIR /home/user
-USER user
+
+# And deliberately no `USER user`, which is not the same question as who an
+# agent's commands run as. Both halves were measured on Apple Container 1.2.2:
+#
+# - The init process *does* take the image's `USER`. With `USER user` it was
+#   uid 1000, and a fresh volume's root belongs to root, so PID 1 could not
+#   write the home at all: the skeleton never arrived, XFCE could not write its
+#   own config, and three of the ten conformance tests failed on `Permission
+#   denied` in `/home/user`. Preparing that volume is root's work and has to
+#   happen before anything else runs.
+# - `exec` does *not* take it. It ran as uid 0 whatever this line said, which
+#   is why `apple.rs` passes `--uid 1000 --gid 1000` explicitly. An agent's
+#   commands are the unprivileged account because the provider says so, not
+#   because the image does.
+#
+# So PID 1 is root, it hands the home to uid 1000 on every boot, and nothing an
+# agent runs is root unless the agent reaches for `sudo`.
 
 # Deliberately not wrapped in an init: this process exiting is how the machine
 # stops itself. See the comment at the top of `guaca-init`.
