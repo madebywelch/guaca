@@ -902,7 +902,15 @@ fn chrome_flags(program: &str) -> String {
         return program.to_string();
     };
 
-    let mut flags = vec!["--no-sandbox", "--no-first-run"];
+    // `--password-store=basic` keeps Chrome away from the system keyring.
+    // There is no unlocked keyring daemon on these machines, so Chrome asks to
+    // create a keyring password: a modal over the window, which an agent
+    // reading the screen reports as a fresh profile that is not signed in to
+    // anything. It also decides how cookies are encrypted, and a profile
+    // written under one store and reopened under another cannot read its own
+    // jar, which is a session that silently evaporates. Same flag everywhere,
+    // or the profile is only usable by whichever route opened it first.
+    let mut flags = vec!["--no-sandbox", "--no-first-run", "--password-store=basic"];
     let profile = format!("--user-data-dir={CHROME_PROFILE}");
     let port = format!("--remote-debugging-port={CDP_PORT}");
     // Without the port, a window opened here would hold the profile with no
@@ -945,7 +953,8 @@ fn install_chrome_shim() -> String {
          for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
          /usr/bin/chromium /usr/bin/chromium-browser; do\n\
          \x20 [ -x \"$real\" ] && exec \"$real\" --no-sandbox --no-first-run \
-         --user-data-dir={CHROME_PROFILE} --remote-debugging-port={CDP_PORT} \"$@\"\n\
+         --password-store=basic --user-data-dir={CHROME_PROFILE} \
+         --remote-debugging-port={CDP_PORT} \"$@\"\n\
          done\n\
          echo 'no chrome on this machine' >&2\n\
          exit 127\n"
@@ -1118,6 +1127,15 @@ mod tests {
                  {launched}"
             );
             assert!(launched.contains("--no-sandbox"), "{launched}");
+            // Observed: Chrome opened on the screen, asked to create a system
+            // keyring password, and the agent driving it reported that the
+            // profile was fresh and Gmail unavailable. The flag also fixes how
+            // the cookie jar is encrypted, so a session survives being reopened
+            // by a different route.
+            assert!(
+                launched.contains("--password-store=basic"),
+                "without this Chrome blocks on a keyring prompt: {launched}"
+            );
         }
 
         // The shim covers what the call site cannot see: a name typed into a
@@ -1125,6 +1143,20 @@ mod tests {
         let shim = install_chrome_shim();
         assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
         assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
+
+        // What actually lands on the machine, rather than what the command
+        // looks like: the wrapper and the desktop entry travel base64'd.
+        let written: String = shim
+            .split_whitespace()
+            .filter(|token| token.len() > 40)
+            .map(decode)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(written.contains("exec"), "the wrapper should have decoded: {written}");
+        // The operator's own click has to land on the same store as an agent's
+        // launch, or one of them writes a cookie jar the other cannot read.
+        assert!(written.contains("--password-store=basic"), "{written}");
+        assert!(written.contains(CHROME_PROFILE), "{written}");
     }
 
     #[test]

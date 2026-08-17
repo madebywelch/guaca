@@ -101,11 +101,14 @@ pub fn specs() -> Vec<ToolSpec> {
             name: OPEN_ON_DESKTOP.to_string(),
             description: "Open a program on your computer's screen, where the operator can watch \
                           it and take over. Your machine runs a full Linux desktop with \
-                          google-chrome, firefox-esr, a file manager and an editor installed. \
-                          Use this whenever you are asked to visit a site, look at a page, or do \
-                          anything a person would do in a window: `run_command` fetches text, \
-                          this shows the real thing on screen. The program keeps running after \
-                          this returns."
+                          google-chrome, a file manager and an editor installed. Use this \
+                          whenever you are asked to visit a site, look at a page, or do anything \
+                          a person would do in a window: `run_command` fetches text, this shows \
+                          the real thing on screen. The program keeps running after this \
+                          returns. For the web, open `google-chrome` and nothing else. It is the \
+                          one browser `browse` drives and the one holding whatever accounts you \
+                          are signed in to, so another browser on the screen is a window that \
+                          knows none of your accounts and that your other tools cannot see."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -168,7 +171,10 @@ pub fn specs() -> Vec<ToolSpec> {
                           gives you the page's text and a numbered list of everything you can \
                           use; `click` and `type` take one of those numbers. Read again after \
                           anything that changes the page, because the numbers are renumbered \
-                          each time. The operator watches this happen on screen."
+                          each time. The operator watches this happen on screen. This drives \
+                          Chrome, which is also the browser holding your accounts: if you have \
+                          another browser open, this is not looking at it, and clicking by \
+                          coordinates with `use_screen` may not be either."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1106,6 +1112,31 @@ mod tests {
         assert_eq!(
             parse(&call(SCHEDULE, "{}")),
             Ok(ToolInvocation::Schedule { action: ScheduleAction::List })
+        );
+    }
+
+    #[test]
+    fn the_desktop_tool_offers_one_browser_because_only_one_is_wired_up() {
+        // Observed: an agent asked to send mail opened firefox, drove it with
+        // `use_screen`, and read the page with `browse`, which was looking at
+        // Chrome the whole time. It then reported the account missing. Only
+        // Chrome is on the profile the accounts live on and the only one
+        // `browse` can drive, so it is the only one worth naming.
+        let desktop = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        assert!(!desktop.description.contains("firefox"), "{}", desktop.description);
+        assert!(desktop.description.contains("google-chrome"), "{}", desktop.description);
+        assert!(
+            desktop.description.contains("knows none of your accounts"),
+            "the reason has to travel with the rule: {}",
+            desktop.description
+        );
+
+        let browse = specs().into_iter().find(|s| s.name == BROWSE).unwrap();
+        assert!(
+            browse.description.contains("drives\n                          Chrome")
+                || browse.description.contains("drives Chrome"),
+            "browse has to say which browser it is on: {}",
+            browse.description
         );
     }
 
