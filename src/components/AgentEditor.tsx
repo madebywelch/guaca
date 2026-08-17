@@ -46,6 +46,9 @@ export function AgentEditor({ agent, onClose }: Props) {
   const [notesDirty, setNotesDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [modelOptions, setModelOptions] = useState<string[] | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
 
@@ -84,6 +87,41 @@ export function AgentEditor({ agent, onClose }: Props) {
   }, [onClose]);
 
   const patch = (fields: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...fields }));
+
+  const invalidateModelOptions = () => {
+    setModelOptions(null);
+    setModelFetchError(null);
+  };
+
+  const fetchModelOptions = async () => {
+    const groupId = draft.groupId ?? groups[0]?.id;
+    if (!groupId) {
+      setModelFetchError("This agent has no group whose inference settings can be used.");
+      return;
+    }
+
+    setFetchingModels(true);
+    setModelOptions(null);
+    setModelFetchError(null);
+    try {
+      const models = await api.fetchModels({ groupId });
+      if (models.length === 0) {
+        setModelFetchError(
+          "The inference endpoint returned no models. Check the group or app settings and try again.",
+        );
+        return;
+      }
+      setModelOptions(models);
+      setDraft((current) => ({
+        ...current,
+        model: models.includes(current.model) ? current.model : models[0]!,
+      }));
+    } catch (caught) {
+      setModelFetchError(errorMessage(caught));
+    } finally {
+      setFetchingModels(false);
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -221,7 +259,10 @@ export function AgentEditor({ agent, onClose }: Props) {
             <select
               className="input input--mono"
               value={draft.groupId ?? groups[0]?.id ?? ""}
-              onChange={(event) => patch({ groupId: event.target.value })}
+              onChange={(event) => {
+                patch({ groupId: event.target.value });
+                invalidateModelOptions();
+              }}
             >
               {groups.map((group) => (
                 <option key={group.id} value={group.id}>
@@ -235,18 +276,53 @@ export function AgentEditor({ agent, onClose }: Props) {
           </label>
         )}
 
-        <label className="field">
-          <span className="field__label">Model</span>
-          <input
-            className="input input--mono"
-            value={draft.model}
-            placeholder={settings?.defaultModel || "anthropic/claude-sonnet-4.5"}
-            onChange={(event) => patch({ model: event.target.value })}
-          />
+        <div className="field">
+          <div className="field__head">
+            <label className="field__label" htmlFor="agent-model">
+              Model
+            </label>
+            <button
+              type="button"
+              className="field__action"
+              aria-label="Fetch models"
+              aria-busy={fetchingModels}
+              disabled={fetchingModels}
+              onClick={() => void fetchModelOptions()}
+            >
+              {fetchingModels ? "Fetching…" : "Fetch"}
+            </button>
+          </div>
+          {modelOptions ? (
+            <select
+              id="agent-model"
+              className="select input--mono"
+              value={draft.model}
+              onChange={(event) => patch({ model: event.target.value })}
+            >
+              {modelOptions.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="agent-model"
+              className="input input--mono"
+              value={draft.model}
+              placeholder={settings?.defaultModel || "anthropic/claude-sonnet-4.5"}
+              onChange={(event) => patch({ model: event.target.value })}
+            />
+          )}
           <span className="field__hint">
             Any model slug your endpoint accepts. Agents can each use a different one.
           </span>
-        </label>
+          {modelFetchError && (
+            <span className="field__hint field__hint--error" role="alert">
+              {modelFetchError}
+            </span>
+          )}
+        </div>
 
         <label className="field">
           <span className="field__label">Skills</span>

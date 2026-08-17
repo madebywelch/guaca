@@ -720,18 +720,23 @@ pub fn update_settings(state: State<'_, AppState>, patch: SettingsPatch) -> Repl
 
 /// Lists model IDs from the configured OpenAI-compatible `/models` endpoint.
 ///
-/// Like connection testing, this uses what is currently on screen without
-/// persisting it. The stored key is filled in only on this side when the patch
-/// omits one, and the successful provider response is reduced to model IDs
-/// before it crosses IPC.
+/// Like connection testing, this can use what is currently on screen without
+/// persisting it. A group id instead layers that group's endpoint and stored
+/// key over the app defaults. In both cases the successful provider response
+/// is reduced to model IDs before it crosses IPC.
 #[tauri::command]
 pub async fn fetch_models(
     state: State<'_, AppState>,
     patch: Option<SettingsPatch>,
+    group_id: Option<GroupId>,
 ) -> Reply<Vec<String>> {
     let mut config = state.runtime.config();
     if let Some(patch) = patch {
         apply_patch(&mut config, patch)?;
+    }
+    if let Some(group_id) = group_id {
+        config.inference =
+            state.runtime.store().group_inference(group_id)?.apply(&config.inference);
     }
     state.runtime.available_models(&config).await.map_err(|err| {
         CommandError::new(

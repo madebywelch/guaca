@@ -140,10 +140,12 @@ export function SettingsDialog({ onClose }: Props) {
     setModelFetchError(null);
     try {
       const models = await api.fetchModels({
-        baseUrl,
-        // A blank field means "use the stored key". A typed replacement is
-        // sent for this request without being persisted.
-        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        patch: {
+          baseUrl,
+          // A blank field means "use the stored key". A typed replacement is
+          // sent for this request without being persisted.
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+        },
       });
       if (models.length === 0) {
         setModelFetchError(

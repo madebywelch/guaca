@@ -155,8 +155,9 @@ export const api = {
 
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
 
-  /** Uses the on-screen endpoint/key while keeping any stored key in Rust. */
-  fetchModels: (patch?: SettingsPatch) => invoke<string[]>("fetch_models", { patch }),
+  /** Uses on-screen settings or a group's resolved endpoint/key without exposing stored keys. */
+  fetchModels: (options: { patch?: SettingsPatch; groupId?: GroupId } = {}) =>
+    invoke<string[]>("fetch_models", options),
 
   /**
    * Tests what is currently on screen, not what was last saved. Testing the

@@ -4,12 +4,17 @@ import { useStore } from "../lib/store";
 import type { Settings, SettingsPatch } from "../lib/types";
 import { SettingsDialog } from "./SettingsDialog";
 
-const fetchModels = vi.fn<(patch?: SettingsPatch) => Promise<string[]>>();
+interface FetchModelsOptions {
+  patch?: SettingsPatch;
+  groupId?: string;
+}
+
+const fetchModels = vi.fn<(options?: FetchModelsOptions) => Promise<string[]>>();
 const onClose = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
   api: {
-    fetchModels: (patch?: SettingsPatch) => fetchModels(patch),
+    fetchModels: (options?: FetchModelsOptions) => fetchModels(options),
   },
 }));
 
@@ -52,7 +57,7 @@ describe("SettingsDialog model catalogue", () => {
     // An empty password field means the stored key, so it must remain omitted
     // rather than replacing that key with an empty string.
     expect(fetchModels).toHaveBeenCalledWith({
-      baseUrl: "https://openrouter.ai/api/v1",
+      patch: { baseUrl: "https://openrouter.ai/api/v1" },
     });
   });
 
@@ -67,8 +72,10 @@ describe("SettingsDialog model catalogue", () => {
 
     await waitFor(() =>
       expect(fetchModels).toHaveBeenCalledWith({
-        baseUrl: "https://openrouter.ai/api/v1",
-        apiKey: "sk-unsaved",
+        patch: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          apiKey: "sk-unsaved",
+        },
       }),
     );
     const dropdown = await screen.findByRole<HTMLSelectElement>("combobox", {
