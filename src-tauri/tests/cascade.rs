@@ -19,13 +19,14 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
+use guac_lib::domain::approval::Decision;
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::now_ms;
 use guac_lib::domain::signin::Signin;
 use guac_lib::llm::openrouter::LlmClient;
-use guac_lib::runtime::events::{RecordingSink, UiEvent};
+use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::runtime::Runtime;
 use guac_lib::workspace::Workspace;
@@ -1123,4 +1124,270 @@ async fn the_directory_says_which_peer_is_signed_in_to_what() {
         listing.contains("LinkedIn"),
         "the directory has to say what a peer is signed in to: {listing}"
     );
+}
+
+// ---- adding an agent -----------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
+    // The whole point of the mechanism: the turn stops, nothing exists yet, and
+    // a person decides. An agent that could staff its own workspace could spend
+    // the operator's money in a shape they never chose.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Chief of Product is set up.".into())
+        } else {
+            Script::Hire {
+                name: "Chief of Product".into(),
+                instructions: "You own the roadmap.".into(),
+                notes: "# Context\nB2B services, founder-led sales.".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Create a chief of product.").unwrap();
+
+    let request = h.awaited_request().await;
+    assert!(
+        h.agent_named("Chief of Product").is_none(),
+        "an agent existed before anybody was asked about it"
+    );
+    assert_eq!(
+        h.runtime.activity_snapshot().get(&h.id("Manager")),
+        Some(&Activity::AwaitingApproval),
+        "a parked agent has to be distinguishable from a thinking one"
+    );
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.settle(run).await;
+
+    let hired = h.agent_named("Chief of Product").expect("the operator allowed it");
+    let manager = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap();
+    assert_eq!(hired.group_id, manager.group_id, "a new agent lands inside its maker's wall");
+    assert!(hired.model.is_empty(), "what it costs to run stays the operator's decision");
+    assert!(hired.lifecycle.accepts_work(), "and it is running, not queued behind a start");
+    assert_eq!(hired.system_prompt, "You own the roadmap.");
+    assert!(
+        h.runtime.workspace().read(hired.id).contains("founder-led sales"),
+        "an agent handed starting notes has to open with them, not find an empty file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refusal_reaches_the_model_as_a_decision_rather_than_a_failure() {
+    // A refusal worded as an error gets retried. This one has to read as
+    // settled, or the next turn asks the operator the same question again.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Understood, no new agent.".into())
+        } else {
+            Script::Hire {
+                name: "Scout".into(),
+                instructions: "You look things up.".into(),
+                notes: String::new(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Create a scout.").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    assert!(h.agent_named("Scout").is_none(), "a denial has to mean nothing was created");
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("said no"), "the model has to be told what happened: {told}");
+    assert!(told.contains("do not ask again"), "and that it is settled: {told}");
+
+    // The operator still gets an answer rather than a dead turn.
+    let said = h.channel_texts("Manager");
+    assert!(said.iter().any(|t| t.contains("no new agent")), "{said:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn always_allow_means_the_same_agent_is_not_asked_twice() {
+    // The second request is the one that must not appear. Asking again after
+    // "always" is how a permission prompt becomes something to click through.
+    let hires = Arc::new(AtomicUsize::new(0));
+    let counter = hires.clone();
+    let stub = serve(move |body| {
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else {
+            let nth = counter.fetch_add(1, Ordering::SeqCst);
+            Script::Hire {
+                name: format!("Scout {nth}"),
+                instructions: "You look things up.".into(),
+                notes: String::new(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+
+    let first = h.runtime.send_from_human(h.id("Manager"), "Create a scout.").unwrap();
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::AlwaysAllow).unwrap();
+    h.settle(first).await;
+
+    let second = h.runtime.send_from_human(h.id("Manager"), "Create another scout.").unwrap();
+    h.settle(second).await;
+
+    assert!(h.agent_named("Scout 0").is_some(), "the approved one");
+    assert!(h.agent_named("Scout 1").is_some(), "and the one that needed no asking");
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })),
+        1,
+        "the operator answered once and should not have been asked again"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_name_already_taken_is_refused_without_troubling_the_operator() {
+    // Approving a create that then fails on a duplicate name spends the
+    // operator's attention on nothing at all.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("There is already a Chef.".into())
+        } else {
+            Script::Hire {
+                name: "Chef".into(),
+                instructions: "You cook.".into(),
+                notes: String::new(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Create a chef.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })),
+        0,
+        "nobody should have been asked"
+    );
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("already an agent called Chef"), "{told}");
+}
+
+// ---- surviving a bad connection ------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_connection_that_drops_once_is_retried_rather_than_reported() {
+    // The failure an operator actually hits: a laptop changes network, one
+    // request never lands, and an agent that would have answered fine reports
+    // that it could not reach the endpoint. Retrying is what the operator would
+    // have done, so the runtime does it first.
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let counter = attempts.clone();
+    let stub = serve(move |_body| {
+        if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+            Script::Unavailable
+        } else {
+            Script::Say("Answered on the second attempt.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "hello").unwrap();
+    h.settle(run).await;
+
+    assert!(attempts.load(Ordering::SeqCst) >= 2, "the failed call was never tried again");
+    let said = h.channel_texts("Manager");
+    assert!(said.iter().any(|t| t.contains("second attempt")), "{said:?}");
+    assert!(
+        !said.iter().any(|t| t.contains("could not reach")),
+        "a failure the runtime recovered from must not reach the operator: {said:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_call_that_keeps_failing_is_reported_with_the_message_to_send_again() {
+    // Once retries are spent the operator has to be told, and told next to the
+    // thing that failed, or the only way back is to retype what they asked.
+    let stub = serve(|_body| Script::Unavailable).await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "what is the plan?").unwrap();
+    h.settle(run).await;
+
+    let failure = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| {
+            m.parts.iter().any(|p| {
+                matches!(
+                    p,
+                    Part::Notice {
+                        kind: guac_lib::domain::envelope::NoticeKind::UpstreamError,
+                        ..
+                    }
+                )
+            })
+        })
+        .expect("the operator has to be told the call failed");
+
+    let cause = failure.cause.expect("the notice must name what to send again");
+    assert_eq!(
+        h.runtime.store().get_message(cause).unwrap().unwrap().plain_text(),
+        "what is the plan?",
+        "retrying has to re-deliver the message the turn was answering"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retrying_delivers_the_same_message_again_under_a_fresh_budget() {
+    let stub = serve(|_body| Script::Say("Answered.".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+
+    let first = h.runtime.send_from_human(h.id("Manager"), "the question").unwrap();
+    h.settle(first).await;
+
+    let original = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|m| m.plain_text() == "the question")
+        .unwrap();
+
+    let again = h.runtime.retry_turn(h.id("Manager"), original.id).unwrap();
+    assert_ne!(again, first, "a retry is the operator acting, so it gets a run of its own");
+    h.settle(again).await;
+
+    let asked = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 50)
+        .unwrap()
+        .into_iter()
+        .filter(|m| m.plain_text() == "the question")
+        .count();
+    assert_eq!(asked, 2, "the agent has to read what it read before, not a summary of it");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retrying_something_that_is_no_longer_there_says_so() {
+    let stub = serve(|_body| Script::Say("hi".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+
+    let gone = guac_lib::domain::ids::MessageId::new();
+    assert!(matches!(
+        h.runtime.retry_turn(h.id("Manager"), gone),
+        Err(guac_lib::runtime::RuntimeError::NothingToRetry)
+    ));
 }

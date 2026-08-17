@@ -55,6 +55,13 @@ const ENVD_PORT: u16 = 49983;
 
 const API_BASE: &str = "https://api.e2b.app";
 
+/// Everything Guaca puts on a machine. Spelled absolutely rather than as `~`,
+/// because a command daemon that runs as a different user resolves `~`
+/// somewhere else, and the failure that produces is not an error: it is a
+/// browser profile written in one place and read from another, reporting an
+/// empty jar on a machine that is signed in.
+const GUAC_DIR: &str = "/home/user/.guac";
+
 /// Where the browser keeps its profile. Under the home directory rather than
 /// /tmp so a sign-in survives: this is the whole reason a machine sleeps
 /// instead of being destroyed.
@@ -436,6 +443,10 @@ impl E2bClient {
     /// ones that would otherwise stack up a second copy.
     pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         for command in [
+            // Before anything can be opened on the screen, so there is no
+            // window through which the wrong profile can be reached.
+            install_chrome_shim(),
+            evict_wrong_profile_browser(),
             daemon(
                 "pgrep -x Xvfb",
                 "Xvfb",
@@ -478,15 +489,7 @@ impl E2bClient {
     ) -> Result<Output, E2bError> {
         self.start_desktop(sandbox, envd_token).await?;
 
-        // Chrome cannot use its own sandbox inside one, and refuses to start
-        // without being told so. Harmless for anything else.
-        let program = if program.trim_start().starts_with("google-chrome")
-            && !program.contains("--no-sandbox")
-        {
-            program.replacen("google-chrome", "google-chrome --no-sandbox --no-first-run", 1)
-        } else {
-            program.to_string()
-        };
+        let program = chrome_flags(program);
 
         self.run(
             sandbox,
@@ -752,8 +755,8 @@ pub async fn signed_in_state(
             sandbox,
             envd_token,
             &format!(
-                "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/sessions.py && \
-                 python3 ~/.guac/sessions.py"
+                "mkdir -p {GUAC_DIR} && echo {script} | base64 -d > {GUAC_DIR}/sessions.py && \
+                 python3 {GUAC_DIR}/sessions.py {CHROME_PROFILE}/Default"
             ),
         )
         .await?;
@@ -849,6 +852,118 @@ fn daemon(guard: &str, name: &str, command: &str) -> String {
 /// needs to be installed in the sandbox.
 fn port_open(port: u16) -> String {
     format!("(exec 3<>/dev/tcp/127.0.0.1/{port})")
+}
+
+/// Closes a browser that is already holding the wrong profile.
+///
+/// The shim decides where the *next* Chrome goes. A machine made before it, or
+/// one where somebody launched Chrome another way, can already have a window
+/// open on the old profile, and Chrome re-attaches to a running instance: the
+/// operator would sign in again into the same invisible jar and see the same
+/// empty list. So a browser on any other profile is ended, once, and whatever
+/// opens next opens correctly.
+///
+/// Precise about which processes it looks at. Chrome's renderers and zygotes
+/// are the same binary and do not all carry `--user-data-dir`, so matching them
+/// would read the app's own browser as a stray and close it mid-task. Only the
+/// main processes are considered, and only when one of them is on a profile
+/// that is not ours.
+fn evict_wrong_profile_browser() -> String {
+    format!(
+        "if pgrep -af 'google-chrome|chromium' | grep -v -- '--type=' | \
+         grep -v -- '--user-data-dir={CHROME_PROFILE}' | grep -q .; then \
+         pkill -f 'google-chrome|chromium' || true; sleep 1; fi"
+    )
+}
+
+/// Rewrites a browser invocation so it lands in the one profile that counts.
+///
+/// The shim on PATH does this too, and this does it again at the call site,
+/// because the two fail differently: the shim covers a name typed into a shell
+/// and the icon on the desktop, and this covers the machine whose `~/.profile`
+/// does not put `~/.local/bin` first. A duplicated flag with the same value is
+/// nothing; a window on the wrong profile is a session no agent can use.
+///
+/// Chrome also cannot use its own sandbox inside one and refuses to start
+/// without being told so, which is why `--no-sandbox` is here.
+fn chrome_flags(program: &str) -> String {
+    let trimmed = program.trim_start();
+    let Some(binary) = ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]
+        .into_iter()
+        .find(|name| trimmed.starts_with(name))
+    else {
+        return program.to_string();
+    };
+
+    let mut flags = vec!["--no-sandbox", "--no-first-run"];
+    let profile = format!("--user-data-dir={CHROME_PROFILE}");
+    let port = format!("--remote-debugging-port={CDP_PORT}");
+    // Without the port, a window opened here would hold the profile with no
+    // remote interface, and `browse` would find Chrome running, re-attach, and
+    // never get the port it needs. That is the failure the second profile was
+    // invented to avoid, so it has to be closed here rather than reintroduced.
+    if !program.contains("--user-data-dir") {
+        flags.push(&profile);
+    }
+    if !program.contains("--remote-debugging-port") {
+        flags.push(&port);
+    }
+    flags.retain(|flag| !program.contains(flag));
+
+    program.replacen(binary, &format!("{binary} {}", flags.join(" ")), 1)
+}
+
+/// Puts one Chrome on the machine, and makes every route to it the same one.
+///
+/// There used to be two profiles. `browse` gave itself one because Chrome
+/// ignores `--remote-debugging-port` when it re-attaches to an existing
+/// profile; everything else — an agent's `open_on_desktop`, the icon on the
+/// desktop, a `google-chrome` an agent typed into a shell — got the default. An
+/// operator who signed in on the screen therefore signed in to a browser no
+/// agent could use, and nothing said so: detection reads the profile `browse`
+/// drives and truthfully reported an empty jar.
+///
+/// So the name is shadowed rather than the callers being trusted to remember.
+/// A wrapper earlier on PATH takes the flags with it wherever it is invoked
+/// from, and a desktop entry in the user's own XDG directory takes precedence
+/// over the packaged one, which is what the icon and the menu read. Both are
+/// written every time the desktop starts, because the alternative is a machine
+/// that behaves differently depending on when it was made.
+fn install_chrome_shim() -> String {
+    // Resolved past the shim itself: `/usr/bin/google-chrome` is a symlink to
+    // the first of these, and calling by name would find the wrapper again.
+    let wrapper = format!(
+        "#!/bin/sh\n\
+         # Guaca: one profile on this machine, the one agents can use.\n\
+         for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
+         /usr/bin/chromium /usr/bin/chromium-browser; do\n\
+         \x20 [ -x \"$real\" ] && exec \"$real\" --no-sandbox --no-first-run \
+         --user-data-dir={CHROME_PROFILE} --remote-debugging-port={CDP_PORT} \"$@\"\n\
+         done\n\
+         echo 'no chrome on this machine' >&2\n\
+         exit 127\n"
+    );
+    let entry = "[Desktop Entry]\n\
+                 Version=1.0\n\
+                 Type=Application\n\
+                 Name=Google Chrome\n\
+                 Exec=/home/user/.local/bin/google-chrome %U\n\
+                 Icon=google-chrome\n\
+                 Terminal=false\n\
+                 Categories=Network;WebBrowser;\n\
+                 MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;\n";
+
+    format!(
+        "mkdir -p /home/user/.local/bin /home/user/.local/share/applications && \
+         echo {wrapper} | base64 -d > /home/user/.local/bin/google-chrome && \
+         chmod +x /home/user/.local/bin/google-chrome && \
+         ln -sf /home/user/.local/bin/google-chrome /home/user/.local/bin/google-chrome-stable && \
+         echo {entry} | base64 -d > /home/user/.local/share/applications/google-chrome.desktop && \
+         (grep -q '.local/bin' ~/.profile 2>/dev/null || \
+          echo 'PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.profile)",
+        wrapper = base64_encode(wrapper.as_bytes()),
+        entry = base64_encode(entry.as_bytes()),
+    )
 }
 
 /// envd's address for one sandbox.
@@ -966,6 +1081,84 @@ mod tests {
             frame_src.contains(VIEWER_HOST),
             "the window must be allowed to frame {VIEWER_HOST}, got {frame_src:?}"
         );
+    }
+
+    #[test]
+    fn every_way_of_opening_chrome_lands_in_the_profile_agents_can_use() {
+        // The bug this closes: an operator signs in on the screen, and the
+        // session goes to a profile no agent drives. Nothing errors, and
+        // detection truthfully reports an empty jar for the browser it reads.
+        for typed in [
+            "google-chrome https://mail.google.com",
+            "google-chrome-stable",
+            "chromium https://example.com",
+        ] {
+            let launched = chrome_flags(typed);
+            assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
+            assert!(
+                launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
+                "a window without the port re-attaches and leaves browse with no interface: \
+                 {launched}"
+            );
+            assert!(launched.contains("--no-sandbox"), "{launched}");
+        }
+
+        // The shim covers what the call site cannot see: a name typed into a
+        // shell, and the icon on the desktop.
+        let shim = install_chrome_shim();
+        assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
+        assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
+    }
+
+    #[test]
+    fn a_browser_already_on_the_wrong_profile_is_ended_but_ours_is_left_alone() {
+        // Chrome re-attaches to a running instance, so a window left open on
+        // the old profile would swallow the next sign-in too. The filter has to
+        // be exact: renderers and zygotes are the same binary and do not all
+        // carry the flag, and matching them would close the app's own browser
+        // in the middle of a task.
+        let evict = evict_wrong_profile_browser();
+        assert!(evict.contains(&format!("--user-data-dir={CHROME_PROFILE}")), "{evict}");
+        assert!(evict.contains("--type="), "helper processes must be excluded: {evict}");
+        assert!(evict.contains("pkill"), "{evict}");
+    }
+
+    #[test]
+    fn a_flag_the_caller_already_set_is_not_set_twice() {
+        let once = chrome_flags("google-chrome --no-sandbox --user-data-dir=/tmp/x");
+        assert_eq!(once.matches("--no-sandbox").count(), 1, "{once}");
+        assert_eq!(once.matches("--user-data-dir").count(), 1, "{once}");
+        // And a caller that named its own profile keeps it: only `browse` does
+        // that, and it names this one.
+        assert!(once.contains("--user-data-dir=/tmp/x"), "{once}");
+    }
+
+    #[test]
+    fn a_program_that_is_not_a_browser_is_left_alone() {
+        assert_eq!(
+            chrome_flags("xdg-open /home/user/report.pdf"),
+            "xdg-open /home/user/report.pdf"
+        );
+        assert_eq!(chrome_flags("thunar"), "thunar");
+    }
+
+    #[test]
+    fn the_session_reader_is_pointed_at_the_profile_the_browser_actually_uses() {
+        // These two have to name one directory. When they did not, nothing
+        // failed: the browser wrote its cookies where it was told and the
+        // reader looked somewhere else, so every machine came back signed in to
+        // nothing and no error was raised anywhere. A path is a contract
+        // between two files here, so it is passed in rather than spelled twice.
+        assert!(
+            SESSION_READER.contains("sys.argv[1]"),
+            "the reader must take the profile from its caller, not guess at it"
+        );
+        assert!(
+            !SESSION_READER.contains("expanduser"),
+            "`~` resolves against whoever runs the command, which is not who runs the browser"
+        );
+        assert!(CHROME_PROFILE.starts_with(GUAC_DIR), "the profile lives inside Guaca's directory");
+        assert!(CHROME_PROFILE.starts_with('/'), "an absolute path, for the same reason");
     }
 
     #[test]

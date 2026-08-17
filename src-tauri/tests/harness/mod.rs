@@ -45,6 +45,15 @@ pub enum Script {
     Directory,
     /// Emit an `update_notes` tool call.
     Notes(String),
+    /// Emit a `create_agent` tool call.
+    Hire { name: String, instructions: String, notes: String },
+    /// Answer with a 503.
+    ///
+    /// Stands in for every failure worth retrying: a provider having a bad
+    /// minute, a request that timed out, a connection that never opened. They
+    /// arrive as different `LlmError`s and all answer `is_transient`, which is
+    /// the only thing the retry loop asks them.
+    Unavailable,
 }
 
 pub fn frame(value: serde_json::Value) -> String {
@@ -94,6 +103,20 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
+        Script::Hire { name, instructions, notes } => {
+            let args =
+                serde_json::json!({ "name": name, "instructions": instructions, "notes": notes })
+                    .to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_hire","type":"function",
+                 "function":{"name":"create_agent","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        // Never rendered: the server answers it with a status, not a body.
+        Script::Unavailable => {}
         Script::Directory => {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_dir","type":"function",
@@ -163,6 +186,13 @@ where
                 call_counter.fetch_add(1, Ordering::SeqCst);
                 recorder.lock().push(body.0.clone());
                 let script = decide(&body.0);
+                if matches!(script, Script::Unavailable) {
+                    return (
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "the model provider is having a moment",
+                    )
+                        .into_response();
+                }
                 ([("content-type", "text/event-stream")], render(&script)).into_response()
             }
         }),
@@ -319,6 +349,35 @@ impl Harness {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+    }
+
+    /// Waits for an agent to park on a permission request, and returns it.
+    ///
+    /// Polling the event sink rather than the store because the request the
+    /// test wants to answer is the one the UI would be drawing, and a turn is
+    /// holding its line open until somebody does.
+    pub async fn awaited_request(&self) -> guac_lib::domain::ids::ApprovalId {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let asked = self.sink.snapshot().into_iter().find_map(|event| match event {
+                UiEvent::ApprovalRequested { approval_id, .. } => Some(approval_id),
+                _ => None,
+            });
+            if let Some(id) = asked {
+                return id;
+            }
+            assert!(Instant::now() < deadline, "no permission request arrived");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    pub fn agent_named(&self, name: &str) -> Option<guac_lib::domain::agent::AgentCard> {
+        self.runtime
+            .store()
+            .list_agents()
+            .unwrap()
+            .into_iter()
+            .find(|card| card.name == name && card.lifecycle != Lifecycle::Terminated)
     }
 
     pub fn pause(&self, name: &str) {

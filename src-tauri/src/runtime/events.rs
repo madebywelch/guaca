@@ -9,8 +9,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Participant};
-use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -23,6 +24,11 @@ pub enum Activity {
     Queued {
         depth: usize,
     },
+    /// Parked mid-turn on a permission request. Its own state rather than
+    /// `Thinking`, because the difference between a model that is working and
+    /// one that is waiting on the operator is the difference between leaving it
+    /// alone and going to answer it.
+    AwaitingApproval,
     /// Not processing; messages accumulate.
     Paused,
 }
@@ -97,6 +103,21 @@ pub enum UiEvent {
     RunSettled {
         run_id: RunId,
         steps_used: u32,
+    },
+
+    /// An agent is waiting on the operator.
+    ///
+    /// The request itself travels in the transcript, as a part of the message
+    /// that carries it. Only the id is here, because what the UI is missing at
+    /// this point is not the wording but the fact that it is still live.
+    ApprovalRequested {
+        approval_id: ApprovalId,
+        agent_id: AgentId,
+    },
+    /// Answered, timed out, or abandoned by a restart.
+    ApprovalSettled {
+        approval_id: ApprovalId,
+        state: ApprovalState,
     },
 }
 

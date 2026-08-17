@@ -221,7 +221,8 @@ pub fn system_prompt(
     if roster.is_empty() {
         out.push_str(
             "You are currently the only agent in the workspace. `send_message` has no valid \
-             recipients until another agent is created.\n",
+             recipients until there is somebody to send to, and `create_agent` is how one \
+             appears.\n",
         );
     } else {
         out.push_str("One human operator, plus these agents:\n");
@@ -280,6 +281,26 @@ pub fn system_prompt(
          wait for a reply, and never call `send_message` again just to check for one.\n\
          - Guaca limits how far a chain of agent messages can travel. If a send is refused, the \
          refusal explains why. Accept it and report back rather than retrying.\n",
+    );
+
+    // Said in the prompt as well as in the tool schema, because an agent asked
+    // for something the crew has nobody for reasons about the crew here, before
+    // it has any reason to go looking at a tool list. Asked to staff ten roles,
+    // one with this tool available still replied that it could not create
+    // agents from this interface.
+    out.push_str(
+        "\n## Growing the crew\n\
+         `create_agent` adds a colleague: its own instructions, its own computer, its own memory, \
+         reachable by name the moment it exists. Reach for it when the workspace is missing a \
+         role, not when you are missing an afternoon's work: a task belongs to you or to an agent \
+         already here.\n\
+         - The operator approves every one, and the request waits for them. Their answer settles \
+         it. If they decline, say what you would have created and carry on without it.\n\
+         - A new agent is idle and stays idle until something reaches it. Creating one is not \
+         delegating to it; send it the first piece of work yourself.\n\
+         - You are never unable to create an agent. If the crew has nobody for a role the \
+         operator needs, propose it or create it rather than reporting that the workspace will \
+         not let you.\n",
     );
 
     out.push_str("\n## Your reply\n");
@@ -841,9 +862,31 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_agent_is_told_it_has_no_one_to_message() {
+    fn a_lone_agent_is_told_it_has_no_one_to_message_and_how_that_changes() {
         let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
         assert!(prompt.contains("only agent in the workspace"));
+        assert!(
+            prompt.contains("`create_agent` is how one appears"),
+            "an agent alone in a workspace is exactly the one that needs to know: {prompt}"
+        );
+    }
+
+    #[test]
+    fn an_agent_is_told_it_can_staff_the_workspace_and_on_what_terms() {
+        // The failure this exists to stop: asked to fill ten roles, an agent
+        // with this tool available replied that it could not create agents from
+        // this interface. A tool schema alone did not reach the answer.
+        let prompt = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("create_agent"), "the tool has to be named, not just offered");
+        assert!(prompt.contains("operator approves every one"), "{prompt}");
+        assert!(
+            prompt.contains("never unable to create an agent"),
+            "the exact wrong answer has to be ruled out by name: {prompt}"
+        );
+        assert!(
+            prompt.contains("Creating one is not delegating to it"),
+            "a crew created and then left waiting is the other half of the failure: {prompt}"
+        );
     }
 
     #[test]

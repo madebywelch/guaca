@@ -23,6 +23,7 @@ pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
+pub const CREATE_AGENT: &str = "create_agent";
 
 /// Tool definitions offered on every agent turn.
 pub fn specs() -> Vec<ToolSpec> {
@@ -232,6 +233,58 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: CREATE_AGENT.to_string(),
+            // Three failures this description exists to prevent: an agent made
+            // for one afternoon's task, a refusal treated as an obstacle to
+            // route around, and a crew created and then left waiting because
+            // nobody realised a new agent does nothing until it is spoken to.
+            description: "Add an agent to this workspace: a new colleague with its own \
+                          instructions, its own computer and its own memory, which you and \
+                          everyone else can then reach by name with `send_message`. It joins your \
+                          own group and can only ever talk to the agents you can. Create one for a \
+                          role the operator will still need next week; work that ends with this \
+                          conversation belongs to you or to an agent that already exists. The \
+                          operator has to approve it, so this waits for their answer, and their \
+                          answer is final: if they decline, say what you would have created and \
+                          carry on without it. A new agent starts idle and does nothing at all \
+                          until somebody messages it, so send it its first piece of work yourself."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "What it is called, and how it is addressed. Name it for \
+                                        the role, e.g. `Chief of Product`."
+                    },
+                    "instructions": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Its standing instructions, written as if speaking to it: \
+                                        who it is, what it owns, and how it should work. This is \
+                                        all it will know about its job, so write the whole brief \
+                                        rather than a job title."
+                    },
+                    "skills": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Short capability lines. This is what the rest of the crew \
+                                        reads when deciding whether a task is this agent's, so \
+                                        write what it does, not what it is."
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Optional. Seeds its memory file: facts it should start \
+                                        out knowing, in markdown. It maintains this itself \
+                                        afterwards."
+                    }
+                },
+                "required": ["name", "instructions"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to the other agents a piece of work belongs to. Choose \
                           them by fit: the agents whose skills cover this task, and no others. \
@@ -279,6 +332,19 @@ pub enum ToolInvocation {
     UseScreen { action: ScreenAction },
     Browse { action: String, args: serde_json::Value },
     Schedule { action: ScheduleAction },
+    CreateAgent { draft: NewAgent },
+}
+
+/// The agent an agent asked for. Not yet validated, and not yet approved.
+///
+/// No model field: what a new agent costs to run is the operator's decision,
+/// so it inherits its group's model the way an agent created in the UI does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewAgent {
+    pub name: String,
+    pub instructions: String,
+    pub skills: Vec<String>,
+    pub notes: String,
 }
 
 /// What an agent can do to its own schedule.
@@ -311,7 +377,7 @@ pub enum ScreenAction {
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command, open_on_desktop, use_screen, browse, schedule."
+         run_command, open_on_desktop, use_screen, browse, schedule, create_agent."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -336,6 +402,8 @@ pub enum ToolParseError {
     IncompleteSchedule { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
+    #[error("create_agent needs {needs}")]
+    IncompleteAgent { needs: String },
 }
 
 impl ToolParseError {
@@ -394,6 +462,12 @@ impl ToolParseError {
             ToolParseError::MissingText => {
                 "Error: `text` must be a non-empty string containing the message body.".to_string()
             }
+            ToolParseError::IncompleteAgent { needs } => format!(
+                "Error: to create an agent you need {needs}. For example {{\"name\": \"Chief of \
+                 Product\", \"instructions\": \"You own the product roadmap. Decide what gets \
+                 built and in what order, and say why.\", \"skills\": [\"roadmap\", \
+                 \"prioritisation\"]}}."
+            ),
             ToolParseError::MissingContent => {
                 "Error: `content` must be a string holding the complete new notes. To clear your \
                  notes, pass an empty string."
@@ -579,6 +653,44 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 _ => Err(ToolParseError::MissingContent),
             }
         }
+        CREATE_AGENT => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: CREATE_AGENT.to_string(),
+                detail: e.to_string(),
+            })?;
+            // Aliases for the same two ideas, because a model that has just been
+            // told to write a colleague's brief reaches for whichever word its
+            // training used. Rejecting a near miss costs a whole turn, and this
+            // is the one tool where the retry also costs the operator a second
+            // permission prompt for the same request.
+            let field = |names: &[&str]| {
+                names
+                    .iter()
+                    .find_map(|name| value.get(*name).and_then(|v| v.as_str()))
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_string)
+            };
+
+            let name =
+                field(&["name", "agent_name", "agent"]).ok_or(ToolParseError::IncompleteAgent {
+                    needs: "a `name` for the agent".to_string(),
+                })?;
+            let instructions = field(&["instructions", "system_prompt", "prompt", "role"]).ok_or(
+                ToolParseError::IncompleteAgent {
+                    needs: "`instructions` saying what the agent is for".to_string(),
+                },
+            )?;
+
+            Ok(ToolInvocation::CreateAgent {
+                draft: NewAgent {
+                    name,
+                    instructions,
+                    skills: normalize_list(value.get("skills")),
+                    notes: field(&["notes"]).unwrap_or_default(),
+                },
+            })
+        }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SEND_MESSAGE.to_string(),
@@ -588,7 +700,7 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 ToolParseError::BadJson { name: SEND_MESSAGE.to_string(), detail: e.to_string() }
             })?;
 
-            let mut to = normalize_recipients(args.to.as_ref());
+            let mut to = normalize_list(args.to.as_ref());
             if to.is_empty() {
                 // `agent: "Chef"` is a common near-miss worth accepting.
                 if let Some(single) =
@@ -614,12 +726,12 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
     }
 }
 
-/// Coerces the several shapes models actually emit into a list of names.
+/// Coerces the several shapes models actually emit into a list of strings.
 ///
 /// Specified as an array of strings. Observed in the wild: a bare string, a
 /// comma-separated string, an array containing objects with a `name` field.
 /// Each is unambiguous, so rejecting them buys nothing but a retry.
-fn normalize_recipients(value: Option<&serde_json::Value>) -> Vec<String> {
+fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
     let mut out = Vec::new();
     match value {
         Some(serde_json::Value::String(one)) => {
@@ -853,9 +965,9 @@ mod tests {
         let specs = specs();
         assert_eq!(
             specs.len(),
-            8,
+            9,
             "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
-             send_message, update_notes"
+             create_agent, send_message, update_notes"
         );
         for spec in &specs {
             assert_eq!(
@@ -1050,6 +1162,100 @@ mod tests {
         assert!(text.contains("do not record the conversation"));
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
         assert!(text.contains("space is limited"));
+    }
+
+    #[test]
+    fn creating_an_agent_takes_a_name_and_a_brief() {
+        // Doubled hashes: the markdown heading in `notes` would otherwise close
+        // an `r#"..."#` literal early.
+        let parsed = parse(&call(
+            CREATE_AGENT,
+            r##"{"name":"  Chief of Product  ","instructions":"You own the roadmap.",
+                 "skills":["roadmap","pricing"],"notes":"# Context\nB2B."}"##,
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::CreateAgent {
+                draft: NewAgent {
+                    name: "Chief of Product".into(),
+                    instructions: "You own the roadmap.".into(),
+                    skills: vec!["roadmap".into(), "pricing".into()],
+                    notes: "# Context\nB2B.".into(),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn the_brief_is_accepted_under_the_names_a_model_reaches_for() {
+        // A wrong guess here is not just a wasted turn: the retry asks the
+        // operator to approve the same agent a second time.
+        for field in ["instructions", "system_prompt", "prompt", "role"] {
+            let parsed =
+                parse(&call(CREATE_AGENT, &format!(r#"{{"name":"Scout","{field}":"You look."}}"#)));
+            match parsed {
+                Ok(ToolInvocation::CreateAgent { draft }) => {
+                    assert_eq!(draft.instructions, "You look.", "{field} was not read")
+                }
+                other => panic!("{field} gave {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_agent_with_no_brief_is_refused_with_a_usable_example() {
+        // A nameless or briefless agent would reach the operator as a request
+        // to approve nothing in particular.
+        for arguments in [r#"{"instructions":"You look."}"#, r#"{"name":"Scout"}"#, "{}"] {
+            let err = parse(&call(CREATE_AGENT, arguments)).unwrap_err();
+            assert!(matches!(err, ToolParseError::IncompleteAgent { .. }), "{arguments}");
+            assert!(
+                err.guidance().contains("instructions"),
+                "the way out has to be in the message"
+            );
+        }
+
+        let blank = parse(&call(CREATE_AGENT, r#"{"name":"  ","instructions":"x"}"#)).unwrap_err();
+        assert!(matches!(blank, ToolParseError::IncompleteAgent { .. }));
+    }
+
+    #[test]
+    fn skills_survive_the_shapes_a_model_sends_them_in() {
+        let parsed = parse(&call(
+            CREATE_AGENT,
+            r#"{"name":"Scout","instructions":"You look.","skills":"research, fact checking"}"#,
+        ));
+        match parsed {
+            Ok(ToolInvocation::CreateAgent { draft }) => {
+                assert_eq!(draft.skills, vec!["research".to_string(), "fact checking".to_string()])
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    #[test]
+    fn creating_an_agent_says_it_needs_permission_and_starts_idle() {
+        // Both were real failures in the conversation this tool came from: an
+        // agent that reported it could not create anyone, and a crew created
+        // and then left waiting for work that was never sent.
+        let spec = description(CREATE_AGENT);
+        assert!(spec.contains("operator has to approve"), "{spec}");
+        assert!(spec.contains("does nothing at all until somebody messages it"), "{spec}");
+        assert!(
+            spec.contains("still need next week"),
+            "without this it creates an agent per task: {spec}"
+        );
+    }
+
+    #[test]
+    fn creating_an_agent_offers_no_choice_of_model() {
+        // What a new agent costs to run is the operator's call, not a field a
+        // model can set on its own behalf.
+        let spec = specs().into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
+        let properties = spec.parameters["properties"].as_object().unwrap();
+        assert!(!properties.contains_key("model"), "{properties:?}");
+        assert!(!properties.contains_key("group_id"), "an agent must not place one elsewhere");
     }
 
     #[test]

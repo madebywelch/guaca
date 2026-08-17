@@ -10,7 +10,8 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::ids::{AgentId, MessageId, RunId};
+use super::approval::{DetailField, ProtectedAction};
+use super::ids::{AgentId, ApprovalId, MessageId, RunId};
 
 /// Who is at one end of an envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -110,6 +111,18 @@ pub enum Part {
         name: String,
         arguments: serde_json::Value,
         outcome: ToolOutcome,
+    },
+    /// An agent asking the operator for permission, rendered as buttons.
+    ///
+    /// The request travels in the transcript rather than in a dialog, because
+    /// what was asked has to stay readable next to what the agent did next. It
+    /// carries its own wording so an old channel still says what was asked; how
+    /// it was answered is a fact about now and is read from the store by `id`.
+    Approval {
+        id: ApprovalId,
+        action: ProtectedAction,
+        summary: String,
+        detail: Vec<DetailField>,
     },
 }
 

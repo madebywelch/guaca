@@ -195,31 +195,28 @@ button {
   gap: 0.45rem;
 }
 
+/* The only part of the header that gives up space. Everything to its right is
+   a fixed-width readout, so the name shrinks to an ellipsis rather than the
+   row overflowing the rail. */
 .rail__group-name {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* Shown only when the group pins a model, because the useful thing to know at
-   a glance is which crews are not on the default. */
-.rail__group-pin {
-  font-size: 0.55rem;
-  letter-spacing: 0.04em;
-  text-transform: none;
-  color: var(--rail-muted);
-  background: var(--rail-raised);
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.3rem;
-  max-width: 6.5rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail__group-count {
+.rail__group-tail {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
   margin-left: auto;
+  flex: none;
 }
+
+/* The group's pinned model is not drawn here at all. A model id is longer than
+   the rail is wide, so it took the group name's space on one line and a whole
+   row of its own on two. It lives behind the gear, with the endpoint. */
 
 .rail__gear {
   background: none;
@@ -262,46 +259,23 @@ button {
   background: var(--flesh-soft);
 }
 
+.meter__count,
 .meter__cost {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--rail-muted);
-  font-variant-numeric: tabular-nums;
-}
-
-.meter[data-busy] .meter__cost {
-  color: var(--flesh-soft);
-}
-
-.run__cost {
-  margin-left: 0.35rem;
-}
-
-.meter__count {
   font-family: var(--font-mono);
   font-size: 0.55rem;
   letter-spacing: 0.04em;
   color: var(--rail-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-.meter[data-busy] .meter__cost {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--rail-muted);
-  font-variant-numeric: tabular-nums;
-}
-
+.meter[data-busy] .meter__count,
 .meter[data-busy] .meter__cost {
   color: var(--flesh-soft);
 }
 
 .run__cost {
   margin-left: 0.35rem;
-}
-
-.meter__count {
-  color: var(--flesh-soft);
 }
 
 .rail__group-head:hover .rail__gear,
@@ -470,6 +444,17 @@ button {
 
 .agent-row__meta[data-state="thinking"] {
   color: var(--flesh);
+}
+
+/* Louder than thinking, because it is the only rail state that is asking for
+   something. A parked agent stays parked until the operator answers, and the
+   request is in a channel they may not have open. */
+.agent-row__meta[data-state="asking"] {
+  color: var(--rail-ground);
+  background: var(--flesh);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  font-weight: 600;
 }
 
 /* The rail reorders itself as agents talk. Sliding rows into place is legible;
@@ -1266,6 +1251,104 @@ button {
   justify-content: center;
 }
 
+/* ==========================================================================
+   Permission requests
+
+   A card in the transcript rather than a dialog. The agent that asked is parked
+   until it is answered, so this has to be findable later and readable next to
+   whatever led to it, which a modal over the top of the window is not. Live it
+   sits up off the page; answered it settles back into the paper, because it is
+   then a record and not a decision.
+   ========================================================================== */
+.ask {
+  margin: 0.6rem 1.5rem 0.6rem 1.15rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--raised);
+  padding: 0.85rem 1rem;
+}
+
+.ask[data-state="pending"] {
+  border-color: color-mix(in oklab, var(--flesh) 45%, var(--edge));
+  box-shadow: 0 0.4rem 1.2rem -0.6rem rgb(24 33 27 / 0.18);
+}
+
+/* Answered, and therefore history. */
+.ask:not([data-state="pending"]) {
+  background: var(--ground);
+  color: var(--muted);
+}
+
+.ask__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.ask__summary {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.92rem;
+  color: var(--text);
+}
+
+.ask:not([data-state="pending"]) .ask__summary {
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.ask__note {
+  margin: 0.15rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.ask__detail {
+  margin: 0.7rem 0 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.ask__detail dt {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* The model wrote these. They are shown whole, wrapped, and never as markdown;
+   a long brief scrolls rather than pushing the buttons off the screen. */
+.ask__detail dd {
+  margin: 0.1rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.ask:not([data-state="pending"]) .ask__detail dd {
+  color: var(--muted);
+  max-height: 5.5rem;
+}
+
+.ask__actions {
+  margin-top: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.ask__scope {
+  flex-basis: 100%;
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+
 .wire-modal__head {
   display: flex;
   align-items: center;
@@ -1295,6 +1378,28 @@ button {
   background: var(--sunken);
   color: var(--muted);
   max-width: 100%;
+}
+
+/* The way out of a failure, on the failure itself. A notice that says only what
+   went wrong leaves the operator to work out what to do about it. */
+.chip__action {
+  margin-left: 0.15rem;
+  padding: 0 0.3rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 0.64rem;
+}
+
+.chip__action:hover:not(:disabled) {
+  background: color-mix(in oklab, currentColor 14%, transparent);
+}
+
+.chip__action:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .chip--guard {

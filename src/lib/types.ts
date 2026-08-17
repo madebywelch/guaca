@@ -31,7 +31,51 @@ export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
   | { type: "notice"; kind: NoticeKind; text: string }
-  | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome };
+  | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
+  /**
+   * An agent asking the operator for permission. Carries its own wording, so an
+   * old channel still says what was asked; what came of it is read from
+   * {@link Approval} state by `id`.
+   */
+  | {
+      type: "approval";
+      id: ApprovalId;
+      action: ProtectedAction;
+      summary: string;
+      detail: DetailField[];
+    };
+
+export type ApprovalId = string;
+
+/** Something an agent may not do without being told it can. */
+export type ProtectedAction = "createAgent";
+
+/** What the operator can answer. Pending and expired are not answers. */
+export type Decision = "allow" | "alwaysAllow" | "deny";
+
+export type ApprovalState = Decision | "pending" | "expired";
+
+/**
+ * One field of a request. `value` is what the model asked for, so it is
+ * rendered as text and never as markdown.
+ */
+export interface DetailField {
+  label: string;
+  value: string;
+}
+
+export interface Approval {
+  id: ApprovalId;
+  agentId: AgentId;
+  groupId: GroupId;
+  runId: RunId;
+  action: ProtectedAction;
+  summary: string;
+  detail: DetailField[];
+  state: ApprovalState;
+  createdAt: number;
+  decidedAt: number | null;
+}
 
 export interface Envelope {
   id: MessageId;
@@ -179,6 +223,8 @@ export type Activity =
   | { state: "idle" }
   | { state: "thinking" }
   | { state: "queued"; depth: number }
+  /** Parked mid-turn on a permission request. Waiting on a person, not a model. */
+  | { state: "awaitingApproval" }
   | { state: "paused" };
 
 export interface GuardLimits {
@@ -242,7 +288,9 @@ export type UiEvent =
       /** Null when the provider does not price calls. Not the same as free. */
       cost: number | null;
     }
-  | { type: "runSettled"; runId: RunId; stepsUsed: number };
+  | { type: "runSettled"; runId: RunId; stepsUsed: number }
+  | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
+  | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

@@ -1,6 +1,17 @@
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import { sendBody, sendRecipients } from "../lib/toolArgs";
-import type { AgentCard, AgentId, Envelope, Part, Participant } from "../lib/types";
+import {
+  type AgentCard,
+  type AgentId,
+  type Envelope,
+  errorMessage,
+  type MessageId,
+  type Part,
+  type Participant,
+} from "../lib/types";
+import { ApprovalRequest } from "./ApprovalRequest";
 import { Markdown } from "./Markdown";
 import { NoticeRow, toPeer, WireRow } from "./WireRow";
 
@@ -40,6 +51,18 @@ function keyed(message: Envelope) {
   return message.parts.map((part, position) => ({ part, key: `${message.id}:${position}` }));
 }
 
+/**
+ * Sends a failed turn's message again.
+ *
+ * Imperative rather than a prop threaded through every message: this is one
+ * button on one kind of notice, and the store is reachable without a hook.
+ */
+function onRetry(agentId: AgentId, messageId: MessageId) {
+  void api.retryTurn(agentId, messageId).catch((error) => {
+    useStore.getState().setBanner({ tone: "error", text: errorMessage(error) });
+  });
+}
+
 function plainBody(message: Envelope): string {
   return message.parts
     .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
@@ -62,6 +85,15 @@ function plainBody(message: Envelope): string {
  */
 export function MessageItem({ message, lookups, continued, feed }: Props) {
   const { from, to } = message;
+
+  // Ahead of everything else: a request for permission is addressed to the
+  // operator whoever the envelope says it is from, and it is the one thing in a
+  // transcript they are expected to act on rather than read.
+  const asking = message.parts.find((part) => part.type === "approval");
+  if (asking) {
+    const askerId = to.kind === "agent" ? to.id : message.channelId;
+    return <ApprovalRequest part={asking} agent={lookups.byId(askerId)} />;
+  }
 
   if (from.kind === "agent" && to.kind === "agent") {
     return (
@@ -111,7 +143,9 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
               ? "checked who is available"
               : part.name === "update_notes"
                 ? "updated its notes"
-                : `used ${part.name}`;
+                : part.name === "create_agent"
+                  ? "asked to add an agent"
+                  : `used ${part.name}`;
           return (
             <div className="wire wire--quiet" key={key}>
               <span className="wire__quiet-text">
@@ -206,7 +240,18 @@ function ChatBubble({
         )}
 
         {notices.map(({ part, key }) => (
-          <NoticeRow key={key} kind={part.kind} text={part.text} />
+          <NoticeRow
+            key={key}
+            kind={part.kind}
+            text={part.text}
+            // Only where there is something to send again: the notice records
+            // which message the turn was answering when the call failed.
+            onRetry={
+              part.kind === "upstreamError" && message.cause
+                ? () => onRetry(message.channelId, message.cause as MessageId)
+                : undefined
+            }
+          />
         ))}
 
         {texts.map(({ part, key }) => (

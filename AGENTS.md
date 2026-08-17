@@ -23,6 +23,16 @@ a batch is a timing artifact: three peers answering at once can be split across
 turns, and deciding from the batch made two of them look like strangers. Ask the
 guard, which counts sends per pair for the whole run.
 
+**A protected action parks the turn that asked for it, and the row is the
+verdict.** `create_agent` stops mid-turn and waits on a person. The operator's
+click and the turn's own timeout can land in the same instant, so the answer is
+read back from the `approvals` row rather than from the channel the wakeup
+arrived on: `settle_approval` only moves a row out of `pending`, and whichever
+of the two loses that race changes nothing. Anything still pending at startup is
+expired, because nothing holds a parked turn across a restart. "Always allow" is
+the decision row itself, scoped to the one agent that asked. See
+`docs/ARCHITECTURE.md`.
+
 **Migrations are forward-only and numbered.** One has already run against a real
 database by the time you think of an improvement, and editing it leaves that
 database at the same `user_version` with a different schema. Add another.
@@ -39,12 +49,17 @@ lands on one side fails the build rather than at runtime.
 **`Store::open` has two SQLite lessons encoded in comments.** Do not reorder the
 pragmas or simplify the migration transaction without reading them.
 
-**There are two Chrome profiles on every machine, and only one of them counts.**
-Chrome ignores `--remote-debugging-port` when it re-attaches to an existing
-profile, so `browse` drives a profile of its own under `~/.guac/chrome`, while
-`open_on_desktop google-chrome` opens the default one. Sign-in detection reads
-the profile `browse` drives, so a session established in the other window is
-invisible to every agent and nothing reports an error.
+**There is one Chrome profile on every machine, and keeping it that way is
+deliberate.** Chrome ignores `--remote-debugging-port` when it re-attaches to an
+existing profile, so `browse` needs a profile it controls. There used to be a
+second, default one behind `open_on_desktop` and the desktop icon, and a
+sign-in performed there was invisible to every agent with nothing reporting an
+error. Now every route is shimmed onto `/home/user/.guac/chrome`: a wrapper
+first on `PATH`, a `.desktop` entry in the user's own XDG directory, the flags
+added again at the call site, and a browser found on any other profile is
+closed when the desktop starts. If you add a way to open a browser, it goes
+through `chrome_flags`, and the port goes with the profile or `browse` loses its
+remote interface.
 
 **Sign-ins are detected, never declared.** The browser is holding the cookies,
 so `domain/signin.rs` asks it rather than asking the operator to keep a list.
@@ -65,6 +80,14 @@ the real cookie names; do not loosen them without a fresh capture.
 only point in the system that sees one, and `CookieMark` has no field it could
 arrive in.
 
+**A failed model call is retried before the operator hears about it, and the
+row the retry reads is the transcript.** `stream_with_retries` re-attempts only
+what `is_transient` admits to, reopens the stream so a second attempt cannot
+append to a first one's half-written text, and never reserves a second step: a
+call is one call however many times the network dropped it. What survives that
+becomes a notice carrying the `cause` of the turn, which is what the operator's
+"Try again" sends again, as a new run at the original hop.
+
 **A credential's secret must never reach the model.** It goes from SQLite into
 the `envs` of one sandbox command and stops there. Not into a prompt, not into
 the transcript, not over IPC, and deliberately not into a dotfile on the sandbox
@@ -78,7 +101,8 @@ physical, not a policy: cookies are on one disk and a token is a string.
 ```
 src/                 React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
-  domain/            AgentCard, Envelope, Routine, Connector, Signin, ids. No I/O.
+  domain/            AgentCard, Envelope, Routine, Connector, Signin, Approval,
+                     ids. No I/O.
   runtime/
     guard.rs         The loop guard. Read this one first.
     mod.rs           Agent actors and the message bus.

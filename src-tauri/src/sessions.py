@@ -20,10 +20,16 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import tempfile
 import urllib.parse
 
-PROFILE = os.path.expanduser("~/.guac/chrome/Default")
+# Passed in rather than spelled here. The launcher already names this directory
+# absolutely, and a second copy of it written as `~` is a copy that resolves
+# against whatever user the command daemon happens to run as: agree with the
+# launcher on every machine, or agree with it only on the ones where those two
+# users match, silently reporting an empty jar everywhere else.
+PROFILE = sys.argv[1]
 
 
 def rows(name, query):

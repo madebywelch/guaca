@@ -15,16 +15,22 @@ import type {
   AgentCard,
   AgentDraft,
   AgentId,
+  Approval,
+  ApprovalId,
+  ApprovalState,
   Computer,
   Connector,
   ConnectorDraft,
   ConnectorId,
+  Decision,
   Envelope,
   Group,
   GroupDraft,
   GroupId,
   GroupReset,
   GroupUsage,
+  MessageId,
+  ProtectedAction,
   Routine,
   RoutineDraft,
   RoutineId,
@@ -68,6 +74,23 @@ export const api = {
    */
   scanAgentSignins: (id: AgentId) => invoke<Signin[]>("scan_agent_signins", { id }),
 
+  /**
+   * What every recent permission request came to, keyed by id. The requests
+   * themselves arrive in the transcript; this is the half that changes.
+   */
+  approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
+
+  /** Refused if it was already answered or has lapsed. */
+  decideApproval: (id: ApprovalId, decision: Decision) =>
+    invoke<Approval>("decide_approval", { id, decision }),
+
+  /** What this agent no longer has to ask about. */
+  agentGrants: (id: AgentId) => invoke<ProtectedAction[]>("agent_grants", { id }),
+
+  /** Takes one back, and returns what is left. */
+  revokeGrant: (id: AgentId, action: ProtectedAction) =>
+    invoke<ProtectedAction[]>("revoke_grant", { id, action }),
+
   listGroups: () => invoke<Group[]>("list_groups"),
 
   createGroup: (draft: GroupDraft) => invoke<Group>("create_group", { draft }),
@@ -108,6 +131,13 @@ export const api = {
   sendMessage: (agentId: AgentId, text: string) => invoke<RunId>("send_message", { agentId, text }),
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
+
+  /**
+   * Sends the message a failed turn was answering again, as a new run. The
+   * runtime already retried the call itself; this is the operator's turn.
+   */
+  retryTurn: (agentId: AgentId, messageId: MessageId) =>
+    invoke<RunId>("retry_turn", { agentId, messageId }),
   /** Resets a whole group: transcripts, routines, notes and spend. */
   clearGroup: (groupId: GroupId) => invoke<GroupReset>("clear_group", { groupId }),
   agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
