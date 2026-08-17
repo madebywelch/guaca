@@ -1,0 +1,141 @@
+# Publishes the desktop image an agent's computer boots.
+#
+# This is the first workflow in the repository, and it cannot run until the
+# maintainer merges it to `main`: it publishes under `ghcr.io/<owner>/`, which
+# is a namespace only they can write to. Until then `computer-image/IMAGE_REF`
+# names an image that does not exist and nothing pulls, which is what
+# `GUAC_COMPUTER_IMAGE` is for — see `computer-image/README.md`.
+#
+# What it does, in one sentence: build both platforms, push them, and open a
+# pull request that points the app at the digest it just pushed. The app pulls a
+# digest and never a tag, so publishing is not finished until that pull request
+# is merged; a tag would let two people running the same release get different
+# machines.
+name: computer image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - computer-image/**
+      - .github/workflows/computer-image.yml
+      # The image ships these two verbatim, so a change to either is a change to
+      # the image even though it is not in `computer-image/`.
+      - src-tauri/src/computer/browser.py
+      - src-tauri/src/computer/sessions.py
+  # A first publish has to be startable by hand: the workflow arrives on `main`
+  # in the same commit as everything else, so there is no push that touches
+  # `computer-image/` afterwards to set it going.
+  workflow_dispatch:
+
+permissions:
+  # The pull request that updates IMAGE_REF is pushed as a branch.
+  contents: write
+  packages: write
+  pull-requests: write
+
+# One publish at a time. Two in flight would each open a pull request naming a
+# different digest, and whichever merged second would silently win.
+concurrency:
+  group: computer-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The checks that do not need a builder: the image's scripts parse, the
+      # Chrome flags still match the ones `desktop.rs` writes, and the pinned
+      # base is named identically in both files that name it.
+      - name: Check the image against the app
+        run: computer-image/build.sh --check
+
+      - name: Read the pinned base
+        id: base
+        run: echo "ref=$(tr -d '[:space:]' < computer-image/BASE_DIGEST)" >> "$GITHUB_OUTPUT"
+
+      # A registry namespace must be lower case, and a GitHub owner need not be.
+      - name: Name the image
+        id: name
+        run: |
+          owner=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "repo=ghcr.io/$owner/guaca-computer" >> "$GITHUB_OUTPUT"
+
+      # arm64 is the platform that matters — Apple Container runs on Apple
+      # silicon — and it is built here under emulation, so it is also the slow
+      # one. amd64 is for the Docker provider on an Intel Mac or a Linux
+      # workstation.
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push both platforms
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          # The repository root, because the image ships two files from
+          # `src-tauri/src/computer/`.
+          context: .
+          file: computer-image/Dockerfile
+          platforms: linux/arm64,linux/amd64
+          push: true
+          # Passed explicitly so the build log names the base rather than
+          # leaving it to the Dockerfile's default. `--check` above has already
+          # established that the two agree.
+          build-args: |
+            BASE_IMAGE=${{ steps.base.outputs.ref }}
+          # A provenance attestation adds manifests with no platform to the
+          # index. Nothing here needs them, and what has to read this index is
+          # `container image pull` on a runtime this project cannot test against
+          # in CI, so the index is left as two platforms and nothing else.
+          provenance: false
+          tags: |
+            ${{ steps.name.outputs.repo }}:${{ github.sha }}
+            ${{ steps.name.outputs.repo }}:0.1.0
+
+      # The digest of the index that was just pushed, which is what the app
+      # pulls. A tag here would mean two people on the same release could boot
+      # different machines.
+      - name: Point the app at what was published
+        run: |
+          printf '%s@%s\n' \
+            "${{ steps.name.outputs.repo }}" "${{ steps.build.outputs.digest }}" \
+            > computer-image/IMAGE_REF
+          cat computer-image/IMAGE_REF
+
+      # Deliberately a pull request rather than a push to `main`. The reference
+      # is compiled into the binary, so this changes what every operator's
+      # agents boot, and that is a review rather than a side effect of a build.
+      #
+      # Needs "Allow GitHub Actions to create and approve pull requests" in the
+      # repository's Actions settings; without it this step fails with a
+      # permissions error and the image is still published.
+      - name: Open the pull request that pins it
+        uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: main
+          branch: computer-image/pin-published-digest
+          delete-branch: true
+          add-paths: computer-image/IMAGE_REF
+          commit-message: "chore: agents boot the image this build published"
+          title: "chore: pin the desktop image to the digest just published"
+          body: |
+            `computer-image/build.sh` published a new desktop image and this
+            points the app at it by digest.
+
+            - image: `${{ steps.name.outputs.repo }}@${{ steps.build.outputs.digest }}`
+            - tags pushed: `${{ github.sha }}`, `0.1.0`
+            - base: `${{ steps.base.outputs.ref }}`
+            - built from: ${{ github.sha }}
+
+            Until this merges, the app still pulls whatever `IMAGE_REF` named
+            before, so an operator running this release is unaffected by the
+            publish alone.

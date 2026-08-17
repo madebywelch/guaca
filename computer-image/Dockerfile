@@ -1,0 +1,201 @@
+# The Linux desktop an agent's computer boots.
+#
+# Built from the repository root, because it ships two files the app also
+# compiles into itself:
+#
+#   docker build -f computer-image/Dockerfile -t guaca-computer:dev .
+#
+# `computer-image/build.sh` is that command plus the checks worth running
+# first. Every command `src-tauri/src/computer/desktop.rs` runs on a machine has
+# to work here — that file is the specification for this one, and
+# `src-tauri/tests/apple.rs` is where the two are checked against each other on
+# a real machine.
+
+# Pinned by digest, never by tag: two people building `debian:bookworm-slim` a
+# week apart get different bases, and a machine an operator cannot reproduce is
+# one nobody can debug. This is the multi-platform index for `bookworm-slim`,
+# read from registry-1.docker.io on 2026-08-18; it carries linux/amd64 and
+# linux/arm64/v8, which are the two platforms the workflow publishes.
+#
+# The same string is in `computer-image/BASE_DIGEST`, which is what `build.sh`
+# and the publishing workflow pass in, and `build.sh --check` fails when the two
+# disagree. `build.sh --digest` moves both forward.
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:abd67ffcfa541b485a3dff59865ab629aa048a6c613e639d36e7456b0b229241
+FROM ${BASE_IMAGE}
+
+LABEL org.opencontainers.image.title="Guaca computer" \
+      org.opencontainers.image.description="The Linux desktop an agent's computer boots." \
+      org.opencontainers.image.source="https://github.com/madebywelch/guaca" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
+# `--no-install-recommends` is a behavioural choice before it is a size one.
+# The XFCE metapackage recommends `xorg`: a real X server and a set of drivers
+# for hardware this machine does not have. The screen here is Xvfb, and a second
+# server for the same display is not something to install by accident. What the
+# recommendations would otherwise have brought and this image does need is named
+# explicitly below.
+#
+# One layer, because an apt cache in an earlier layer is still in the image
+# however thoroughly a later one deletes it.
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      # The screen: a framebuffer, a session, a VNC server, and the bridge that
+      # puts it in a browser. `desktop.rs::start_desktop` starts exactly these.
+      #
+      # `python3-websockify` is named although `novnc` reaches it anyway, and
+      # the reason is worth writing down: Debian's `websockify` package is the C
+      # `rebind` helper and ships no `websockify` binary at all. The proxy the
+      # desktop actually runs is in `python3-websockify`, two dependency edges
+      # away from `novnc`, and a package that stopped depending on it would take
+      # the desktop's only bridge with it.
+      xvfb xfce4 xfce4-terminal x11vnc novnc websockify python3-websockify \
+      # `startxfce4` launches the session through `dbus-launch`, and `xrdb` is
+      # what it loads the session's resources with. Both are recommendations of
+      # the XFCE packages rather than dependencies.
+      dbus-x11 x11-xserver-utils \
+      # The browsers. Chromium is the one Guaca drives; Firefox is there because
+      # an agent asked to check a page in another browser should be able to.
+      chromium firefox-esr \
+      # A file manager and an editor, so the desktop is one a person watching
+      # over an agent's shoulder can also use.
+      thunar mousepad xdg-utils \
+      # `browser.py` speaks the DevTools protocol over a WebSocket. E2B installs
+      # this client on the first browse; a machine on this Mac may have no
+      # network at all, and a browse that pauses to fetch a Python package is a
+      # browse that fails on an aeroplane.
+      python3 python3-websocket \
+      # A screenshot, its conversion to JPEG, and the pointer and keyboard.
+      scrot ffmpeg xdotool \
+      # Text has to have something to be drawn in, or every screenshot of a page
+      # is a picture of empty boxes.
+      fonts-dejavu-core \
+      # What an agent needs to fetch things and what `guaca-init` needs to
+      # prepare a volume it does not own. `util-linux` is named for `setsid`,
+      # which detaches every long-lived process the desktop starts and is in the
+      # base image already — named anyway, because a base that dropped it would
+      # be a desktop that dies with the shell that started it. `iproute2` is for
+      # the spike's network measurements, taken from inside the guest.
+      curl git ca-certificates sudo procps psmisc util-linux iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The account every command runs as. uid 1000 because the home volume is
+# chowned to it on first boot and a uid that moves between image versions would
+# leave an agent locked out of its own disk. Passwordless sudo because agents
+# `apt-get install` and because `guaca-init` may be running as this account when
+# it has root's work to do.
+RUN useradd --uid 1000 --create-home --home-dir /home/user --shell /bin/bash user \
+    && printf '%s\n' 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/guaca-user \
+    && chmod 0440 /etc/sudoers.d/guaca-user
+
+# `/opt/noVNC` is the path `desktop.rs` serves the desktop from, and Debian
+# packages the same files at `/usr/share/novnc`. The launcher is Guaca's own,
+# written over whatever the distribution shipped: Debian's differs between
+# releases, and one command that behaves the same on every image is worth more
+# than the packaged variant.
+COPY computer-image/novnc_proxy /usr/share/novnc/utils/novnc_proxy
+RUN chmod 0755 /usr/share/novnc/utils/novnc_proxy && ln -s /usr/share/novnc /opt/noVNC
+
+# One profile on this machine, reachable by every route to a browser. The
+# wrapper is the one `desktop.rs::install_chrome_shim` writes into the home
+# directory on every desktop start; it is here as well because nothing has
+# written that yet on a machine whose desktop has never started, and a sign-in
+# performed in that window would land in a profile no agent can drive.
+#
+# `/usr/local/bin` comes before `/usr/bin` on PATH, so this shadows a
+# `google-chrome` typed into a shell. The `-stable` link goes here rather than
+# in `/usr/bin`, where the wrapper looks for the real browser: a link there
+# would point the wrapper back at itself.
+COPY computer-image/google-chrome /usr/local/bin/google-chrome
+RUN chmod 0755 /usr/local/bin/google-chrome \
+    && ln -sf /usr/local/bin/google-chrome /usr/local/bin/google-chrome-stable
+
+# The home directory the volume gets on its first boot. It cannot be built at
+# `/home/user`, because the volume mounted there hides everything the image put
+# underneath it; `guaca-init` copies this in without overwriting.
+RUN mkdir -p /opt/guaca/home/.local/bin \
+             /opt/guaca/home/.local/share/applications \
+             /opt/guaca/home/.guac/chrome \
+             /opt/guaca/home/inbox \
+    && cp -a /etc/skel/. /opt/guaca/home/ \
+    && cp /usr/local/bin/google-chrome /opt/guaca/home/.local/bin/google-chrome \
+    && chmod 0755 /opt/guaca/home/.local/bin/google-chrome \
+    # An absolute link to where this will be, not to where it is being built.
+    && ln -sf /home/user/.local/bin/google-chrome \
+              /opt/guaca/home/.local/bin/google-chrome-stable \
+    # The same line `install_chrome_shim` appends, and it looks for this exact
+    # substring before appending its own, so the two never stack up.
+    && (grep -q '.local/bin' /opt/guaca/home/.profile 2>/dev/null \
+        || printf '%s\n' 'PATH="$HOME/.local/bin:$PATH"' >> /opt/guaca/home/.profile)
+
+# The icon and the menu entry read this one: a desktop entry in the user's own
+# XDG directory takes precedence over the packaged browser's.
+COPY computer-image/google-chrome.desktop \
+     /opt/guaca/home/.local/share/applications/google-chrome.desktop
+
+# The driver and the session reader, exactly as the app compiles them in. The
+# runtime writes its own copy of each before it uses them, so these are for
+# whatever runs before that: a person on the desktop, and `sessions.py` asked
+# about a machine that has never browsed.
+COPY src-tauri/src/computer/browser.py /opt/guaca/browser.py
+COPY src-tauri/src/computer/sessions.py /opt/guaca/sessions.py
+
+COPY computer-image/guaca-init /usr/local/bin/guaca-init
+RUN chmod 0755 /usr/local/bin/guaca-init
+
+# Everything above assumed something about where a package put its files. This
+# is where those assumptions fail the build rather than the desktop: a moved
+# `vnc.html` is a black rectangle in the viewer, and a missing `websocket`
+# module is a browse that reports the tool is broken, both of them discovered by
+# an operator rather than by CI.
+RUN set -eu; \
+    test -f /usr/share/novnc/vnc.html; \
+    test -x /opt/noVNC/utils/novnc_proxy; \
+    test -f /opt/noVNC/vnc.html; \
+    test -x /usr/bin/websockify; \
+    test -x /usr/bin/Xvfb; \
+    test -x /usr/bin/x11vnc; \
+    test -x /usr/bin/startxfce4; \
+    test -x /usr/bin/chromium; \
+    test -x /usr/bin/scrot; \
+    test -x /usr/bin/ffmpeg; \
+    test -x /usr/bin/xdotool; \
+    test -x /usr/bin/setsid; \
+    test -x /usr/bin/pgrep; \
+    test -x /usr/bin/pkill; \
+    test -x /usr/bin/base64; \
+    test -x /usr/bin/sudo; \
+    test -x /usr/local/bin/guaca-init; \
+    test -x /usr/local/bin/google-chrome; \
+    test "$(readlink -f /usr/local/bin/google-chrome-stable)" = /usr/local/bin/google-chrome; \
+    python3 -c 'import websocket'; \
+    python3 -c 'import sqlite3'; \
+    sh -n /usr/local/bin/guaca-init; \
+    sh -n /opt/noVNC/utils/novnc_proxy; \
+    grep -q 'user-data-dir=/home/user/.guac/chrome' /usr/local/bin/google-chrome; \
+    grep -q '.local/bin' /opt/guaca/home/.profile
+
+# `HOME` is set rather than inherited: a command session that arrives without
+# one resolves `~` somewhere else, and the browser driver that Guaca writes to
+# `~/.guac` would land in a directory the session reader does not look in. That
+# failure is not an error — it is a machine reporting an empty cookie jar while
+# signed in.
+#
+# `DISPLAY` is the screen every graphical command lands on. `desktop.rs` names
+# it on each command anyway; this is for an agent that types `xdotool` itself
+# and would otherwise be told there is no display.
+#
+# `GUAC_IDLE_SECONDS` is how long a machine nobody is using stays up. The
+# provider overrides it per container with the operator's setting; this is what
+# the image does when somebody runs it by hand.
+ENV HOME=/home/user \
+    LANG=C.UTF-8 \
+    DISPLAY=:0 \
+    GUAC_IDLE_SECONDS=900
+
+# The one mount there is, and where every command runs.
+VOLUME /home/user
+WORKDIR /home/user
+USER user
+
+# Deliberately not wrapped in an init: this process exiting is how the machine
+# stops itself. See the comment at the top of `guaca-init`.
+ENTRYPOINT ["/usr/local/bin/guaca-init"]

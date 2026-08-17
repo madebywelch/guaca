@@ -1,0 +1,161 @@
+#!/bin/sh
+# PID 1 on an agent's machine: prepare the home volume, then watch a file.
+#
+# Why a shell loop rather than an init framework. This process exists to do two
+# things, and an init system would make the second one harder: an agent's
+# machine has to stop itself when nobody is using it, and the way a container
+# stops is that its PID 1 exits. systemd, s6 and tini are all built to keep
+# running; here that is the failure. `container create` is also deliberately
+# called without `--init` for the same reason — a supervisor wrapped around this
+# would outlive it, and the machine would stay up with a watchdog that had
+# already decided it should not.
+#
+# What the watchdog measures is a file's timestamp, not activity in here. Guaca
+# touches `/run/guaca/heartbeat` on every running local machine while it is
+# alive; the machine sleeps when Guaca stops saying so, which covers the case
+# this exists for — the app being force-quit or crashing with machines running.
+# A container nobody can reach is one nobody can stop, and 20 GiB and four
+# vCPUs sit there until someone notices.
+#
+# POSIX sh, and `sh -n`-checked by `computer-image/build.sh --check`: this is
+# the one process whose failure means the machine does not boot at all.
+
+set -u
+
+HOME_DIR=/home/user
+# The image's copy of the home directory. It cannot live at $HOME_DIR, because
+# the volume mounted there hides whatever the image put underneath it.
+SKELETON=/opt/guaca/home
+BEAT_DIR=/run/guaca
+BEAT=$BEAT_DIR/heartbeat
+CHROME_PROFILE=$HOME_DIR/.guac/chrome
+
+# The idle period the operator chose, arriving as `--env GUAC_IDLE_SECONDS` on
+# the container. Anything that is not a number would abort the arithmetic below
+# and take PID 1 with it, which reads to an operator as a computer that refuses
+# to start rather than as a bad setting.
+IDLE=${GUAC_IDLE_SECONDS:-900}
+case "$IDLE" in
+'' | *[!0-9]*)
+  echo "guaca-init: GUAC_IDLE_SECONDS=$IDLE is not a number of seconds; using 900" >&2
+  IDLE=900
+  ;;
+esac
+
+# Both accounts have to work. The image names `user` as the account commands run
+# as, and preparing the volume needs root: a freshly created volume's root
+# directory belongs to root, and an unprivileged process cannot write into it,
+# let alone chown it. Which of the two this process is depends on how the
+# runtime reads the image's `USER`, so it asks rather than assumes, and `user`
+# has passwordless sudo for exactly this.
+as_root() {
+  if [ "$(id -u)" = 0 ]; then
+    "$@"
+  else
+    sudo -n "$@"
+  fi
+}
+
+# Said once, loudly, rather than discovered as a home directory that is somehow
+# read-only. Everything below tolerates its own failure so that a machine still
+# boots and can be looked at; this is the line that explains what went wrong.
+if ! as_root true 2>/dev/null; then
+  echo "guaca-init: running as $(id -un) with no way to become root; the home volume cannot be \
+prepared, and the browser wrapper, PATH and file ownership will be missing" >&2
+fi
+
+wind_down() {
+  # `container stop` sends this and waits ten seconds before killing what is
+  # left. Chrome writes its cookie jar when it is asked to quit and not when it
+  # is killed, and that jar is the whole reason a machine sleeps instead of
+  # being destroyed, so the browser is asked first and given a moment. Exiting
+  # the instant the signal arrives would spend none of those ten seconds.
+  echo "guaca-init: stopping; asking the browser to save its profile" >&2
+  pkill -TERM -f 'chrome|chromium' 2>/dev/null || true
+  sleep 3
+  exit 0
+}
+# Installed before the work below rather than after it. A stop that arrives
+# during a first boot has nothing to save and should still be quick; without a
+# handler the kernel discards it, because a default-action signal to PID 1 is
+# ignored, and the runtime waits out its grace period before killing the VM.
+trap wind_down TERM INT
+
+# Where the machine's own account can write, whichever account touches it. The
+# heartbeat is written by Guaca through `container exec`, and that session may
+# not be the account running this process; a file only root can touch is a
+# machine that goes to sleep with an agent working on it.
+if ! as_root mkdir -p "$BEAT_DIR" || ! as_root touch "$BEAT"; then
+  echo "guaca-init: could not create $BEAT; this machine will not stop itself when idle" >&2
+fi
+as_root chmod 0777 "$BEAT_DIR" 2>/dev/null || true
+as_root chmod 0666 "$BEAT" 2>/dev/null || true
+
+# The volume, on every boot. `-n` never overwrites, so the skeleton is what a
+# new machine starts with and what an old one falls back to for anything it has
+# lost, while an agent's own edits to a dotfile survive every boot after the
+# first. `-p` keeps the mode, which is what makes the copied Chrome wrapper
+# executable; ownership is fixed immediately below.
+as_root chown user:user "$HOME_DIR" \
+  || echo "guaca-init: $HOME_DIR does not belong to the account that works in it" >&2
+as_root cp -Rpn "$SKELETON/." "$HOME_DIR/" 2>/dev/null
+# Judged by what arrived rather than by an exit status: `cp -n` skipping a file
+# an agent already has is the ordinary case on every boot but the first, and
+# whether that counts as a failure differs between implementations of `cp`.
+# What matters is that the wrapper is there and can be run.
+if [ ! -x "$HOME_DIR/.local/bin/google-chrome" ]; then
+  echo "guaca-init: the home skeleton did not arrive in $HOME_DIR; expect no browser wrapper on \
+PATH and a desktop icon that opens a profile no agent can drive" >&2
+fi
+
+# Only the paths the skeleton names, rather than the whole home. On a first boot
+# those are everything there is, so this is the `chown -R` a new volume needs;
+# on every boot after it, a recursive chown would walk a browser profile and
+# gigabytes of an agent's work to fix nothing.
+(cd "$SKELETON" && find . -mindepth 1) | while read -r entry; do
+  as_root chown user:user "$HOME_DIR/${entry#./}" 2>/dev/null || true
+done
+
+# Chrome writes this when it opens a profile and removes it when it closes.
+# A container that was stopped never got to close it, so the next Chrome finds
+# the profile "in use" and refuses it: the browser opens with no session, an
+# agent reports being signed out of everything, and the volume that was supposed
+# to make sleeping safe looks like it lost the sign-in.
+as_root rm -f "$CHROME_PROFILE/SingletonLock" \
+  || echo "guaca-init: $CHROME_PROFILE/SingletonLock is still there; the browser will refuse this \
+profile as in use" >&2
+
+echo "guaca-init: ready; stopping this machine after ${IDLE}s without a heartbeat" >&2
+
+while :; do
+  # Backgrounded and waited on rather than run in the foreground. Two things
+  # follow from it, and both are needed: a signal is acted on when it arrives
+  # instead of up to thirty seconds later, because a foreground command is not
+  # interrupted by a trap; and `wait` reaps whatever else has exited. Every
+  # desktop process is started with `setsid` from a command session that exits
+  # immediately, so all of them are orphans this process inherits, and nothing
+  # else in here would ever collect them.
+  sleep 30 &
+  wait $!
+
+  beat=$(stat -c %Y "$BEAT" 2>/dev/null || echo "")
+  if [ -z "$beat" ]; then
+    # The file Guaca touches is gone. Reading that as "idle forever" would stop
+    # a machine an agent may be working on, so it is put back and this round
+    # counts as a use: a machine that stays up too long costs the operator
+    # nothing they cannot see, and one that stops mid-task loses the work.
+    echo "guaca-init: $BEAT is missing; recreating it" >&2
+    as_root touch "$BEAT" 2>/dev/null || true
+    as_root chmod 0666 "$BEAT" 2>/dev/null || true
+    continue
+  fi
+
+  age=$(($(date +%s) - beat))
+  if [ "$age" -gt "$IDLE" ]; then
+    echo "guaca-init: nothing has used this machine for ${age}s; stopping it" >&2
+    # PID 1 returning is what stops the container. The volume is untouched, so
+    # this is sleep: the next start finds the browser profile, the inbox and
+    # whatever the agent was working on exactly as they were.
+    exit 0
+  fi
+done

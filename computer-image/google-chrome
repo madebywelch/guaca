@@ -1,0 +1,23 @@
+#!/bin/sh
+# Guaca: one profile on this machine, the one agents can use.
+#
+# The same wrapper `desktop.rs::install_chrome_shim` writes into
+# `~/.local/bin/google-chrome` on every desktop start. It is in the image as
+# well because the runtime's copy does not exist until the first desktop starts,
+# and before that there is still a `google-chrome` on `PATH`, a desktop icon and
+# a file association that would otherwise open Chrome on a profile no agent can
+# drive. A sign-in performed in that window is invisible to every agent, with
+# nothing reporting an error, so the flags have to be the same in both places.
+#
+# Change a flag here and change it there, or a machine behaves differently
+# depending on which of the two opened the browser. The two are compared by
+# `computer-image/build.sh --check`.
+#
+# The loop must never name a path this file is installed at: `/usr/local/bin`
+# comes before `/usr/bin` on PATH, so a `/usr/bin/google-chrome-stable` symlink
+# back to this wrapper would be an exec loop rather than a browser.
+for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
+  [ -x "$real" ] && exec "$real" --no-sandbox --no-first-run --password-store=basic --user-data-dir=/home/user/.guac/chrome --remote-debugging-port=9222 "$@"
+done
+echo 'no chrome on this machine' >&2
+exit 127
