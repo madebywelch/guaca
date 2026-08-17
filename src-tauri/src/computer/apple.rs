@@ -83,18 +83,25 @@ pub struct AppleContainer {
     /// is never swept up as this one's orphan.
     installation: String,
     image: String,
+    /// Whether this build can drive the runtime at all: `SUPPORTED_PLATFORM`
+    /// for anything `discover` made. Held rather than read from the constant at
+    /// each site so both answers can be tested wherever the suite runs —
+    /// including the machine this was written on, whose toolchain targets
+    /// x86_64 and where the constant is false.
+    platform: bool,
 }
 
 impl AppleContainer {
     /// `None` when the binary is not on this Mac, which is how the manager
     /// tells "not installed" from "installed and refusing".
     pub fn discover(installation: &str) -> Option<AppleContainer> {
-        Cli::discover("container", WELL_KNOWN)
-            .map(|cli| AppleContainer::with_cli(cli, installation, image::image_ref()))
+        Cli::discover("container", WELL_KNOWN).map(|cli| {
+            AppleContainer::with_cli(cli, installation, image::image_ref(), SUPPORTED_PLATFORM)
+        })
     }
 
-    pub fn with_cli(cli: Cli, installation: &str, image: String) -> AppleContainer {
-        AppleContainer { cli, installation: installation.to_string(), image }
+    pub fn with_cli(cli: Cli, installation: &str, image: String, platform: bool) -> AppleContainer {
+        AppleContainer { cli, installation: installation.to_string(), image, platform }
     }
 
     /// Starts the service if it is not running.
@@ -102,7 +109,13 @@ impl AppleContainer {
     /// Called when somebody asked for a machine, never on a probe: starting a
     /// virtualisation service is a thing an operator should be able to predict
     /// from what they clicked.
+    ///
+    /// The gate is here rather than in `create` alone because this is the door
+    /// every made machine goes through, and a provider that leans on the
+    /// manager having consulted `probe` first is one refusal away from starting
+    /// a service this build cannot then drive.
     pub async fn ensure_running(&self) -> Result<(), ProviderError> {
+        self.require_supported().await?;
         if self.control(&status_argv()).await?.ok() {
             return Ok(());
         }
@@ -127,69 +140,58 @@ impl AppleContainer {
     /// The three-CLI-calls half of `probe`, apart from the platform question so
     /// that it can be asked on any machine.
     async fn probe_runtime(&self) -> ProviderStatus {
+        if let Err(reason) = self.version_or_reason().await {
+            return reason;
+        }
+        // Both of the last two offer to start it, because starting a computer
+        // is what starts the service either way. They are said differently
+        // because "it says it is stopped" and "it did not answer at all" are
+        // different things to walk into.
+        match self.control(&status_argv()).await {
+            Ok(answer) if answer.ok() => {
+                ProviderStatus::ready("Apple Container is installed and running.")
+            }
+            Ok(_) => service_stopped(),
+            Err(_) => service_silent(),
+        }
+    }
+
+    /// The version the runtime reports, or why this build will not drive it.
+    ///
+    /// One answer with two readers: Settings draws it as a status and
+    /// `require_supported` refuses with it, so an operator meets the same
+    /// sentence whichever of the two showed it to them.
+    async fn version_or_reason(&self) -> Result<(u32, u32, u32), ProviderStatus> {
         let spoke = match self.cli.run(&version_argv(), &BTreeMap::new(), CONTROL_TIMEOUT).await {
             Ok(spoke) => spoke,
             // Nothing to run. Every other failure means it is installed and
             // something else is wrong, and saying "not installed" would send
             // the operator to install what they already have.
-            Err(CliError::Spawn(_)) => {
-                return ProviderStatus {
-                    state: ProviderReadiness::NotInstalled,
-                    can_start: false,
-                    detail: INSTALL_HINT.to_string(),
-                }
-            }
-            Err(err) => {
-                return ProviderStatus {
-                    state: ProviderReadiness::Error,
-                    can_start: false,
-                    detail: err.to_string(),
-                }
-            }
+            Err(CliError::Spawn(_)) => return Err(not_installed()),
+            Err(err) => return Err(version_unanswered(&err)),
         };
-
         let Some(found) = parse_version(&format!("{}\n{}", spoke.stdout_str(), spoke.stderr))
         else {
-            return ProviderStatus {
-                state: ProviderReadiness::Error,
-                can_start: false,
-                detail: format!(
-                    "`container --version` did not say which version it is; it printed {:?}. \
-                     Reinstall the signed package from github.com/apple/container/releases.",
-                    detail(&spoke)
-                ),
-            };
+            return Err(version_unreadable(&spoke));
         };
         if !supported(found) {
-            let (major, minor, patch) = found;
-            let (min_major, min_minor, min_patch) = MIN_VERSION;
-            return ProviderStatus {
-                state: ProviderReadiness::Unsupported,
-                can_start: false,
-                detail: format!(
-                    "Apple Container {major}.{minor}.{patch} is installed, and this build drives \
-                     {min_major}.{min_minor}.{min_patch} up to but not including \
-                     {UNSUPPORTED_MAJOR}.0.0. Install a version in that range from \
-                     github.com/apple/container/releases."
-                ),
-            };
+            return Err(version_out_of_range(found));
         }
+        Ok(found)
+    }
 
-        // A service that cannot be asked is treated the same as one that says
-        // it is stopped: both are answered by starting it, and that is exactly
-        // what the offer does.
-        match self.control(&status_argv()).await {
-            Ok(answer) if answer.ok() => {
-                ProviderStatus::ready("Apple Container is installed and running.")
-            }
-            _ => ProviderStatus {
-                state: ProviderReadiness::NotRunning,
-                can_start: true,
-                detail: "Apple Container is installed but stopped. Starting a computer will \
-                         start its service."
-                    .to_string(),
-            },
+    /// Refuses, in the words `probe` would have used, when this build cannot
+    /// drive what is installed.
+    ///
+    /// Asked where a machine is *made*, and deliberately not where an existing
+    /// one is used: an operator who upgraded the runtime past this build's
+    /// range still has machines with a browser signed in and work on the disk,
+    /// and refusing to talk to those would strand them.
+    async fn require_supported(&self) -> Result<(), ProviderError> {
+        if !self.platform {
+            return Err(refusal(unsupported_platform()));
         }
+        self.version_or_reason().await.map(|_| ()).map_err(refusal)
     }
 
     /// Pulls the image if the runtime does not already have it. A machine that
@@ -222,16 +224,22 @@ impl AppleContainer {
     ) -> Result<(), ProviderError> {
         let name = resource_name(request.computer);
 
+        // One left over from a create that failed and could not tidy up after
+        // itself is this computer's own — the name is its id — so it is taken
+        // over rather than treated as an obstacle. Without that, the one
+        // computer whose rollback failed can never be made again, and all the
+        // operator sees is a machine that refuses to appear. Recorded as ours
+        // either way, so a failure later in this call still unmakes it.
         let network =
             self.control(&network_create_argv(&self.installation, request.computer)).await?;
-        if !network.ok() {
+        if !network.ok() && !already_exists(&network) {
             return Err(step_failed("creating the computer's private network", &network));
         }
         made.push(Made::Network);
 
         let volume =
             self.control(&volume_create_argv(&self.installation, request.computer)).await?;
-        if !volume.ok() {
+        if !volume.ok() && !already_exists(&volume) {
             return Err(step_failed("creating the computer's home volume", &volume));
         }
         made.push(Made::Volume);
@@ -303,14 +311,8 @@ impl ComputerProvider for AppleContainer {
         // Asked before anything is spawned, because on a Mac that cannot
         // virtualise arm64 Linux there is nothing to install and nothing worth
         // a process.
-        if !SUPPORTED_PLATFORM {
-            return ProviderStatus {
-                state: ProviderReadiness::Unsupported,
-                can_start: false,
-                detail: "Apple Container needs macOS on Apple silicon. Add an E2B API key in \
-                         settings to give agents a computer instead."
-                    .to_string(),
-            };
+        if !self.platform {
+            return unsupported_platform();
         }
         self.probe_runtime().await
     }
@@ -677,6 +679,14 @@ fn read_address(name: &str, inspect: &serde_json::Value) -> Result<String, Provi
 /// and have to be ours: a container carrying no label at all belongs to
 /// something else, and one carrying another installation's belongs to another
 /// copy of Guac whose agents are still using it.
+///
+/// **`configuration.id` must be the container's name.** The sweep matches what
+/// this returns against `provider_id` on the rows, and `provider_id` is the
+/// name `create` chose. If Apple puts anything else there — a content digest,
+/// a generated identifier — every live machine looks unclaimed and the first
+/// sweep after a restart deletes all of them. It is the one guess in this file
+/// whose failure is silent and destructive, so the spike confirms it before
+/// Task 4 lets the sweep act on it.
 fn read_owned(list: &serde_json::Value, installation: &str) -> Vec<String> {
     list.as_array()
         .map(Vec::as_slice)
@@ -736,9 +746,133 @@ fn step_failed(step: &str, out: &CliOutput) -> ProviderError {
 /// rather than a failure. The wording is a guess from the 1.2.2 sources and
 /// the spike confirms it; reading a real error as an absence is what would
 /// throw away a disk, so both spellings are matched and nothing looser is.
+///
+/// Both streams, because which one a CLI complains on is a habit rather than a
+/// contract, and a "not found" printed to stdout read as a live machine.
 fn missing(out: &CliOutput) -> bool {
-    let said = out.stderr.to_lowercase();
+    let said = spoken(out);
     said.contains("not found") || said.contains("no such")
+}
+
+/// Whether the runtime is refusing because the thing is already there.
+///
+/// Names are derived from the computer's id, so a create that made the network
+/// and then could not unmake it leaves a name that is never free again: without
+/// this, that one computer could never be made, and the operator's only symptom
+/// is a machine that refuses to appear. Deliberately loose, because Apple's
+/// wording is unconfirmed until the spike, and safe to be: the worst a false
+/// positive does is let the next step fail on its own terms.
+fn already_exists(out: &CliOutput) -> bool {
+    let said = spoken(out);
+    said.contains("exists") || said.contains("already in use")
+}
+
+/// Everything the runtime said, lowercased, for the two questions above.
+fn spoken(out: &CliOutput) -> String {
+    format!("{} {}", out.stderr, out.stdout_str()).to_lowercase()
+}
+
+/// This Mac cannot run the thing at all. The one answer that needs no process.
+fn unsupported_platform() -> ProviderStatus {
+    ProviderStatus {
+        state: ProviderReadiness::Unsupported,
+        can_start: false,
+        detail: "Apple Container needs macOS on Apple silicon. Add an E2B API key in settings to \
+                 give agents a computer instead."
+            .to_string(),
+    }
+}
+
+fn not_installed() -> ProviderStatus {
+    ProviderStatus {
+        state: ProviderReadiness::NotInstalled,
+        can_start: false,
+        detail: INSTALL_HINT.to_string(),
+    }
+}
+
+/// It is installed and did not answer the one question every path starts with.
+///
+/// The runtime's own words are deliberately not forwarded here: the CLI helper
+/// ends a timeout with "check the computer provider's status in Settings", and
+/// this *is* that status, so quoting it would send the operator in a circle.
+fn version_unanswered(err: &CliError) -> ProviderStatus {
+    let detail = match err {
+        CliError::Timeout { secs, .. } => format!(
+            "Apple Container did not answer `container --version` within {secs}s; run `container \
+             system status` in Terminal, and restart the service if it hangs."
+        ),
+        _ => format!(
+            "Apple Container could not be asked which version it is ({err}); run `container \
+             system status` in Terminal, and restart the service if it hangs."
+        ),
+    };
+    ProviderStatus { state: ProviderReadiness::Error, can_start: false, detail }
+}
+
+fn version_unreadable(spoke: &CliOutput) -> ProviderStatus {
+    ProviderStatus {
+        state: ProviderReadiness::Error,
+        can_start: false,
+        detail: format!(
+            "`container --version` did not say which version it is; it printed {:?}. Reinstall \
+             the signed package from github.com/apple/container/releases.",
+            detail(spoke)
+        ),
+    }
+}
+
+fn version_out_of_range(found: (u32, u32, u32)) -> ProviderStatus {
+    let (major, minor, patch) = found;
+    let (min_major, min_minor, min_patch) = MIN_VERSION;
+    ProviderStatus {
+        state: ProviderReadiness::Unsupported,
+        can_start: false,
+        detail: format!(
+            "Apple Container {major}.{minor}.{patch} is installed, and this build drives \
+             {min_major}.{min_minor}.{min_patch} up to but not including {UNSUPPORTED_MAJOR}.0.0. \
+             Install a version in that range from github.com/apple/container/releases."
+        ),
+    }
+}
+
+fn service_stopped() -> ProviderStatus {
+    ProviderStatus {
+        state: ProviderReadiness::NotRunning,
+        can_start: true,
+        detail: "Apple Container is installed but stopped. Starting a computer will start its \
+                 service."
+            .to_string(),
+    }
+}
+
+/// Installed, and its service did not answer at all — which is a service that
+/// is wedged rather than one that is down, and worth saying so: starting a
+/// computer still tries, and if it does not take, the operator now knows the
+/// difference before they start looking.
+fn service_silent() -> ProviderStatus {
+    ProviderStatus {
+        state: ProviderReadiness::NotRunning,
+        can_start: true,
+        detail: "Apple Container is installed and its service did not answer. Starting a computer \
+                 will try to start it; if that does not take, run `container system stop` and \
+                 `container system start` in Terminal."
+            .to_string(),
+    }
+}
+
+/// A status this build cannot make a machine under, as the refusal it implies.
+///
+/// The sentence is carried over whole. Only the variant differs, because what
+/// the caller does with it differs: `Unsupported` is never worth retrying,
+/// `Unconfigured` is answered by installing something, and anything else is a
+/// message for a person.
+fn refusal(status: ProviderStatus) -> ProviderError {
+    match status.state {
+        ProviderReadiness::Unsupported => ProviderError::Unsupported(status.detail),
+        ProviderReadiness::NotInstalled => ProviderError::Unconfigured(status.detail),
+        _ => ProviderError::Operation(status.detail),
+    }
 }
 
 /// What the runtime actually said, for a message to a person: whichever stream
@@ -1076,6 +1210,84 @@ mod tests {
         assert!(read_owned(&serde_json::json!({}), "inst-7").is_empty());
     }
 
+    fn said(stderr: &str, stdout: &str) -> CliOutput {
+        CliOutput {
+            status: 1,
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.to_string(),
+            binary: "container".into(),
+        }
+    }
+
+    #[test]
+    fn a_runtime_that_will_not_answer_is_not_told_to_go_and_look_at_itself() {
+        // The CLI helper ends a timeout with "check the computer provider's
+        // status in Settings", and this *is* that status: forwarding its words
+        // sent the operator round in a circle. Named here rather than tested
+        // through a real timeout, which would be a minute of waiting.
+        let status =
+            version_unanswered(&CliError::Timeout { binary: "container".into(), secs: 60 });
+
+        assert_eq!(status.state, ProviderReadiness::Error);
+        assert!(!status.can_start, "there is nothing to press");
+        assert!(status.detail.contains("container system status"), "{}", status.detail);
+        assert!(!status.detail.contains("in Settings"), "not back to here: {}", status.detail);
+        assert!(status.detail.contains("60s"), "{}", status.detail);
+
+        // Anything else it could not be asked still names the same next step.
+        let unread = version_unanswered(&CliError::Io("could not be read".into()));
+        assert!(unread.detail.contains("container system status"), "{}", unread.detail);
+    }
+
+    #[test]
+    fn a_service_that_is_stopped_and_one_that_says_nothing_are_told_apart() {
+        // Both are answered by starting a computer, so both offer it. They read
+        // differently because walking into a service that is down and one that
+        // is wedged are different afternoons.
+        let stopped = service_stopped();
+        let silent = service_silent();
+
+        assert_eq!((stopped.state, stopped.can_start), (ProviderReadiness::NotRunning, true));
+        assert_eq!((silent.state, silent.can_start), (ProviderReadiness::NotRunning, true));
+        assert!(stopped.detail.contains("stopped"), "{}", stopped.detail);
+        assert!(silent.detail.contains("did not answer"), "{}", silent.detail);
+        assert!(silent.detail.contains("container system stop"), "a wedged one: {}", silent.detail);
+        assert_ne!(stopped.detail, silent.detail);
+    }
+
+    #[test]
+    fn what_the_runtime_said_is_read_from_whichever_stream_carried_it() {
+        // Which stream a CLI complains on is a habit, not a contract. Read from
+        // stderr alone, a "not found" printed to stdout is a machine this build
+        // believes is alive, and the row that names it is never cleared.
+        assert!(missing(&said("Error: not found", "")));
+        assert!(missing(&said("", "Error: no such container")));
+        assert!(missing(&said("", "NOT FOUND")), "and case is the runtime's business");
+        assert!(!missing(&said("XPC connection interrupted", "")));
+
+        assert!(already_exists(&said("network guac-x already exists", "")));
+        assert!(already_exists(&said("", "Error: volume exists")));
+        assert!(!already_exists(&said("no space left on device", "")));
+    }
+
+    #[test]
+    fn a_refusal_carries_the_status_sentence_and_the_next_step_it_implies() {
+        // One sentence, whether the operator meets it in Settings or an agent
+        // meets it mid-turn.
+        let out_of_range = version_out_of_range((1, 1, 0));
+        let refused = refusal(out_of_range.clone());
+        assert!(matches!(&refused, ProviderError::Unsupported(m) if *m == out_of_range.detail));
+
+        // Installing something is a different job from an unsupported Mac, and
+        // a caller that retries would be wrong about both.
+        assert!(matches!(refusal(not_installed()), ProviderError::Unconfigured(_)));
+        assert!(matches!(refusal(unsupported_platform()), ProviderError::Unsupported(_)));
+        assert!(matches!(
+            refusal(version_unanswered(&CliError::Io("x".into()))),
+            ProviderError::Operation(_)
+        ));
+    }
+
     #[test]
     fn a_version_outside_the_tested_range_is_refused_by_number() {
         // The exact wording of `container --version` is unconfirmed until the
@@ -1134,12 +1346,27 @@ mod fake_runtime {
         for (pattern, body) in rules {
             script.push_str(&format!("  \"{pattern}\"*) {body} ;;\n"));
         }
+        // Every path that makes a machine asks the version first, so a fixture
+        // that has no opinion about it still has to answer one this build will
+        // drive. Last, so a test that does have an opinion is matched first.
+        if !rules.iter().any(|(pattern, _)| pattern.starts_with("--version")) {
+            script.push_str(&format!("  \"--version\"*) {VERSION_1_2_2} ;;\n"));
+        }
         script.push_str("esac\nexit 0\n");
         Cli::at(write_exec(dir, "container", &script))
     }
 
+    /// On a Mac that can run the thing, which is what every test below is about
+    /// except the two that are about the other case. Asserted rather than read
+    /// from `SUPPORTED_PLATFORM`, so these run identically on a machine whose
+    /// toolchain targets x86_64.
     fn provider(cli: Cli) -> AppleContainer {
-        AppleContainer::with_cli(cli, "inst-7", "img:1".into())
+        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), true)
+    }
+
+    /// On a Mac that cannot.
+    fn provider_off_platform(cli: Cli) -> AppleContainer {
+        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), false)
     }
 
     fn log_lines(log: &Path) -> Vec<String> {
@@ -1254,23 +1481,70 @@ mod fake_runtime {
 
     #[tokio::test]
     async fn a_mac_that_cannot_virtualise_this_is_unsupported_whatever_is_installed() {
+        // Answered without spawning anything: on a Mac that cannot run arm64
+        // Linux there is nothing to install and nothing worth a process.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let cli = fake_container(dir.path(), &log, &[("system status", "exit 0")]);
+
+        let status = provider_off_platform(cli).probe().await;
+
+        assert_eq!(status.state, ProviderReadiness::Unsupported);
+        assert!(status.detail.contains("Apple silicon"), "{}", status.detail);
+        assert!(status.detail.contains("E2B"), "and what would work: {}", status.detail);
+        assert!(log_lines(&log).is_empty(), "nothing is spawned to find out");
+    }
+
+    #[tokio::test]
+    async fn a_mac_that_cannot_virtualise_this_refuses_to_make_a_machine_on_it() {
+        // The provider fails closed on its own rather than trusting that
+        // whoever called it consulted `probe` first.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let cli = fake_container(dir.path(), &log, &[]);
+
+        let err = provider_off_platform(cli)
+            .create(&creation(900))
+            .await
+            .expect_err("this Mac cannot run it");
+
+        assert!(matches!(err, ProviderError::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("Apple silicon"), "{err}");
+        assert!(log_lines(&log).is_empty(), "and nothing was spawned to find out");
+    }
+
+    #[tokio::test]
+    async fn a_version_this_build_cannot_drive_refuses_before_it_makes_anything() {
+        // Same reasoning as the probe, reached as a refusal: an operator who
+        // upgraded past the range must not end up with half a machine made by
+        // flags that changed meaning.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
         let cli = fake_container(
             dir.path(),
             &log,
-            &[("--version", VERSION_1_2_2), ("system status", "exit 0")],
+            &[("--version", "echo 'container CLI version 1.1.0'")],
         );
 
-        let status = provider(cli).probe().await;
+        let err = provider(cli).create(&creation(900)).await.expect_err("1.1.0 is below the floor");
 
-        if SUPPORTED_PLATFORM {
-            assert_eq!(status.state, ProviderReadiness::Ready, "{}", status.detail);
-        } else {
-            assert_eq!(status.state, ProviderReadiness::Unsupported);
-            assert!(status.detail.contains("Apple silicon"), "{}", status.detail);
-            assert!(log_lines(&log).is_empty(), "nothing is spawned to find out");
-        }
+        assert!(matches!(err, ProviderError::Unsupported(_)), "{err:?}");
+        assert!(err.to_string().contains("1.1.0"), "what is installed: {err}");
+        assert!(err.to_string().contains("1.2.2"), "and what is needed: {err}");
+        assert_eq!(log_lines(&log), ["--version"], "nothing else was even asked");
+    }
+
+    #[tokio::test]
+    async fn a_runtime_that_is_not_there_refuses_to_make_a_machine_and_says_where_to_get_it() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let err = provider(Cli::at(dir.path().join("container")))
+            .create(&creation(900))
+            .await
+            .expect_err("there is nothing to run");
+
+        assert!(matches!(err, ProviderError::Unconfigured(_)), "{err:?}");
+        assert!(err.to_string().contains("github.com/apple/container/releases"), "{err}");
     }
 
     #[tokio::test]
@@ -1281,7 +1555,11 @@ mod fake_runtime {
 
         provider(cli).ensure_running().await.unwrap();
 
-        assert_eq!(log_lines(&log), ["system status", "system start --enable-kernel-install"]);
+        assert_eq!(
+            log_lines(&log),
+            ["--version", "system status", "system start --enable-kernel-install"],
+            "the version is the gate, and it is asked before the service is touched"
+        );
     }
 
     #[tokio::test]
@@ -1319,14 +1597,15 @@ mod fake_runtime {
         );
 
         let seen = log_lines(&log);
-        assert_eq!(seen[0], "system status");
-        assert_eq!(seen[1], "image inspect img:1");
-        assert_eq!(seen[2], "image pull img:1");
-        assert!(seen[3].starts_with("network create"), "{seen:?}");
-        assert!(seen[4].starts_with("volume create"), "{seen:?}");
-        assert!(seen[5].starts_with("create --name"), "{seen:?}");
-        assert_eq!(seen[6], format!("start {name}"));
-        assert_eq!(seen.len(), 7);
+        assert_eq!(seen[0], "--version");
+        assert_eq!(seen[1], "system status");
+        assert_eq!(seen[2], "image inspect img:1");
+        assert_eq!(seen[3], "image pull img:1");
+        assert!(seen[4].starts_with("network create"), "{seen:?}");
+        assert!(seen[5].starts_with("volume create"), "{seen:?}");
+        assert!(seen[6].starts_with("create --name"), "{seen:?}");
+        assert_eq!(seen[7], format!("start {name}"));
+        assert_eq!(seen.len(), 8);
     }
 
     #[tokio::test]
@@ -1398,6 +1677,62 @@ mod fake_runtime {
             !seen.iter().any(|line| line.starts_with("delete ")),
             "there was no container to remove: {seen:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_container_that_will_not_start_is_removed_along_with_what_it_was_given() {
+        // The other half of the rollback, and the one that has something to
+        // force: a container exists by this point, and an unforced delete of a
+        // container the runtime thinks is running would refuse and leak it.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let cli =
+            fake_container(dir.path(), &log, &[("start guac", "echo 'no kernel' >&2; exit 1")]);
+        let request = creation(900);
+        let name = resource_name(request.computer);
+
+        let err = provider(cli).create(&request).await.expect_err("it never came up");
+
+        assert!(err.to_string().contains("starting the computer"), "which step: {err}");
+        assert!(err.to_string().contains("no kernel"), "and what it said: {err}");
+
+        let seen = log_lines(&log);
+        assert_eq!(
+            seen[seen.len() - 3..],
+            [
+                format!("delete --force {name}"),
+                format!("volume delete {name}"),
+                format!("network delete {name}"),
+            ],
+            "all three are unmade, newest first: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_left_behind_by_a_failed_rollback_does_not_lock_the_computer_out_forever() {
+        // Names come from the computer's id, so anything already carrying this
+        // one is this computer's own, left by a create that could not tidy up.
+        // Treated as an obstacle, that computer could never be made again and
+        // the operator would only see a machine that refuses to appear.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[("network create", "echo 'network guac-x already exists' >&2; exit 1")],
+        );
+        let request = creation(900);
+        let name = resource_name(request.computer);
+
+        let made = provider(cli).create(&request).await.expect("the leftover is ours to take over");
+
+        assert_eq!(made.provider_id, name);
+        let seen = log_lines(&log);
+        assert!(
+            seen.iter().any(|line| line.starts_with("volume create")),
+            "it carried on: {seen:?}"
+        );
+        assert_eq!(seen.last().unwrap(), &format!("start {name}"));
     }
 
     #[tokio::test]
