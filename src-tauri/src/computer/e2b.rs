@@ -590,7 +590,7 @@ fn collect(body: &[u8]) -> Result<Output, E2bError> {
 
 /// Connect's JSON mapping sends `bytes` as base64.
 fn decode(raw: &str) -> String {
-    String::from_utf8_lossy(&crate::e2b::decode_bytes(raw)).into_owned()
+    String::from_utf8_lossy(&super::desktop::decode_bytes(raw)).into_owned()
 }
 
 #[cfg(test)]

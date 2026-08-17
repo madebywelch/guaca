@@ -44,11 +44,11 @@ const CDP_PORT: u16 = 9222;
 
 /// The driver Guac runs inside the sandbox. Kept as a file so it can be read
 /// and tested as Python rather than as a Rust string.
-const BROWSER_DRIVER: &str = include_str!("browser.py");
+const BROWSER_DRIVER: &str = include_str!("computer/browser.py");
 
 /// Reads what the browser is signed in to, from its own files on disk.
 /// Separate from the driver because it deliberately does not need a browser.
-const SESSION_READER: &str = include_str!("sessions.py");
+const SESSION_READER: &str = include_str!("computer/sessions.py");
 
 /// envd, the agent daemon inside every sandbox.
 const ENVD_PORT: u16 = 49983;
@@ -764,28 +764,11 @@ impl DesktopAction {
     }
 }
 
-/// Base64, so a script can be written into the sandbox through a shell without
-/// any of it being interpreted on the way.
-///
-/// Public because attachments take the same route onto a machine, and a second
-/// encoder would be a second place for the alphabet or the padding to be wrong.
-pub fn encode(raw: &[u8]) -> String {
-    base64_encode(raw)
-}
-
-fn base64_encode(raw: &[u8]) -> String {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for chunk in raw.chunks(3) {
-        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        out.push(TABLE[(n >> 18) as usize & 63] as char);
-        out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
-    }
-    out
-}
+// The base64 pair now lives with the desktop code that writes scripts onto a
+// machine. Taken from there rather than kept here, because two encoders are two
+// places for the alphabet or the padding to be wrong.
+use crate::computer::desktop::encode as base64_encode;
+pub use crate::computer::desktop::{decode_bytes, encode};
 
 /// Single-quotes a string for a POSIX shell, including embedded quotes.
 fn quote(raw: &str) -> String {
@@ -1025,238 +1008,4 @@ fn collect(body: &[u8]) -> Result<Output, E2bError> {
 /// Connect's JSON mapping sends `bytes` as base64.
 fn decode(raw: &str) -> String {
     String::from_utf8_lossy(&decode_bytes(raw)).into_owned()
-}
-
-/// The same, kept as bytes.
-///
-/// Public because a file pulled off a machine comes back this way, and a
-/// document is not text: running it through the lossy conversion above would
-/// replace every byte that is not valid UTF-8 and hand back a corrupt file that
-/// looks fine until somebody opens it.
-pub fn decode_bytes(raw: &str) -> Vec<u8> {
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut bits = 0u32;
-    let mut have = 0u8;
-    let mut out: Vec<u8> = Vec::new();
-    for byte in raw.bytes() {
-        let Some(index) = TABLE.iter().position(|c| *c == byte) else {
-            continue; // padding and whitespace
-        };
-        bits = (bits << 6) | index as u32;
-        have += 6;
-        if have >= 8 {
-            have -= 8;
-            out.push((bits >> have) as u8);
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_window_is_allowed_to_frame_the_viewer() {
-        // The viewer moved from E2B's own host to a loopback proxy and the CSP
-        // was left behind, so the webview blocked the iframe outright. Every
-        // check at the HTTP layer passed, because curl does not enforce CSP,
-        // and the screen stayed black.
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
-        let csp = conf["app"]["security"]["csp"].as_str().unwrap_or_default();
-        let frame_src =
-            csp.split(';').find(|part| part.trim().starts_with("frame-src")).unwrap_or_default();
-        assert!(
-            frame_src.contains(VIEWER_HOST),
-            "the window must be allowed to frame {VIEWER_HOST}, got {frame_src:?}"
-        );
-    }
-
-    #[test]
-    fn every_way_of_opening_chrome_lands_in_the_profile_agents_can_use() {
-        // The bug this closes: an operator signs in on the screen, and the
-        // session goes to a profile no agent drives. Nothing errors, and
-        // detection truthfully reports an empty jar for the browser it reads.
-        for typed in [
-            "google-chrome https://mail.google.com",
-            "google-chrome-stable",
-            "chromium https://example.com",
-        ] {
-            let launched = chrome_flags(typed);
-            assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
-            assert!(
-                launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
-                "a window without the port re-attaches and leaves browse with no interface: \
-                 {launched}"
-            );
-            assert!(launched.contains("--no-sandbox"), "{launched}");
-            // Observed: Chrome opened on the screen, asked to create a system
-            // keyring password, and the agent driving it reported that the
-            // profile was fresh and Gmail unavailable. The flag also fixes how
-            // the cookie jar is encrypted, so a session survives being reopened
-            // by a different route.
-            assert!(
-                launched.contains("--password-store=basic"),
-                "without this Chrome blocks on a keyring prompt: {launched}"
-            );
-        }
-
-        // The shim covers what the call site cannot see: a name typed into a
-        // shell, and the icon on the desktop.
-        let shim = install_chrome_shim();
-        assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
-        assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
-
-        // What actually lands on the machine, rather than what the command
-        // looks like: the wrapper and the desktop entry travel base64'd.
-        let written: String = shim
-            .split_whitespace()
-            .filter(|token| token.len() > 40)
-            .map(decode)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(written.contains("exec"), "the wrapper should have decoded: {written}");
-        // The operator's own click has to land on the same store as an agent's
-        // launch, or one of them writes a cookie jar the other cannot read.
-        assert!(written.contains("--password-store=basic"), "{written}");
-        assert!(written.contains(CHROME_PROFILE), "{written}");
-    }
-
-    #[test]
-    fn a_browser_already_on_the_wrong_profile_is_ended_but_ours_is_left_alone() {
-        // Chrome re-attaches to a running instance, so a window left open on
-        // the old profile would swallow the next sign-in too. The filter has to
-        // be exact: renderers and zygotes are the same binary and do not all
-        // carry the flag, and matching them would close the app's own browser
-        // in the middle of a task.
-        let evict = evict_wrong_profile_browser();
-        assert!(evict.contains(&format!("--user-data-dir={CHROME_PROFILE}")), "{evict}");
-        assert!(evict.contains("--type="), "helper processes must be excluded: {evict}");
-        assert!(evict.contains("pkill"), "{evict}");
-    }
-
-    #[test]
-    fn a_flag_the_caller_already_set_is_not_set_twice() {
-        let once = chrome_flags("google-chrome --no-sandbox --user-data-dir=/tmp/x");
-        assert_eq!(once.matches("--no-sandbox").count(), 1, "{once}");
-        assert_eq!(once.matches("--user-data-dir").count(), 1, "{once}");
-        // And a caller that named its own profile keeps it: only `browse` does
-        // that, and it names this one.
-        assert!(once.contains("--user-data-dir=/tmp/x"), "{once}");
-    }
-
-    #[test]
-    fn a_program_that_is_not_a_browser_is_left_alone() {
-        assert_eq!(
-            chrome_flags("xdg-open /home/user/report.pdf"),
-            "xdg-open /home/user/report.pdf"
-        );
-        assert_eq!(chrome_flags("thunar"), "thunar");
-    }
-
-    #[test]
-    fn the_session_reader_is_pointed_at_the_profile_the_browser_actually_uses() {
-        // These two have to name one directory. When they did not, nothing
-        // failed: the browser wrote its cookies where it was told and the
-        // reader looked somewhere else, so every machine came back signed in to
-        // nothing and no error was raised anywhere. A path is a contract
-        // between two files here, so it is passed in rather than spelled twice.
-        assert!(
-            SESSION_READER.contains("sys.argv[1]"),
-            "the reader must take the profile from its caller, not guess at it"
-        );
-        assert!(
-            !SESSION_READER.contains("expanduser"),
-            "`~` resolves against whoever runs the command, which is not who runs the browser"
-        );
-        assert!(CHROME_PROFILE.starts_with(GUAC_DIR), "the profile lives inside Guaca's directory");
-        assert!(CHROME_PROFILE.starts_with('/'), "an absolute path, for the same reason");
-    }
-
-    #[test]
-    fn base64_round_trips_through_the_decoder_it_is_paired_with() {
-        // The driver script is written into the sandbox this way, so a wrong
-        // encoder is a syntax error in a file nobody looks at.
-        for sample in ["", "a", "ab", "abc", "abcd", "hello world", "{\"x\": 1}\n"] {
-            assert_eq!(decode(&base64_encode(sample.as_bytes())), sample);
-        }
-    }
-
-    #[test]
-    fn the_browser_driver_is_shipped_with_the_binary() {
-        assert!(BROWSER_DRIVER.contains("__guacEls"), "the driver must be the real script");
-    }
-
-    #[test]
-    fn model_supplied_text_cannot_escape_the_shell() {
-        // Everything here is written by a model and handed to bash, so a stray
-        // quote is a command injection rather than a typo.
-        let command = DesktopAction::Type { text: "it's fine; rm -rf /".into() }.command();
-        assert!(command.starts_with("xdotool type --delay 12 -- "), "{command}");
-        // The embedded quote is closed and reopened rather than ending the
-        // argument, so the rest stays text instead of becoming a command.
-        assert!(command.contains("'it'\\''s fine; rm -rf /'"), "{command}");
-        assert_eq!(quote("plain"), "'plain'");
-    }
-
-    #[test]
-    fn a_click_moves_first_so_it_lands_where_the_model_meant() {
-        assert_eq!(
-            DesktopAction::Click { x: 40, y: 12, button: 1, count: 1 }.command(),
-            "xdotool mousemove 40 12 click --repeat 1 1"
-        );
-        assert_eq!(
-            DesktopAction::Click { x: 1, y: 2, button: 3, count: 2 }.command(),
-            "xdotool mousemove 1 2 click --repeat 2 3"
-        );
-    }
-
-    #[test]
-    fn scrolling_down_and_up_are_different_buttons() {
-        assert!(DesktopAction::Scroll { down: true, amount: 3 }.command().ends_with(" 5"));
-        assert!(DesktopAction::Scroll { down: false, amount: 3 }.command().ends_with(" 4"));
-        // A zero repeat is a no-op that reads as a broken tool.
-        assert!(DesktopAction::Scroll { down: true, amount: 0 }.command().contains("--repeat 1"));
-    }
-
-    #[test]
-    fn a_daemon_is_detached_from_the_shell_that_starts_it() {
-        // Without setsid the process dies with its shell, and without the
-        // redirections it holds the RPC open until the call times out. Both
-        // failures look like a desktop that never appears.
-        let command = daemon("pgrep -x Xvfb", "Xvfb", "Xvfb :0");
-        assert!(command.contains("setsid"), "a process that dies with its shell never serves");
-        assert!(command.contains("</dev/null"), "holding stdin hangs the call that started it");
-        assert!(command.contains(">/tmp/"), "holding stdout hangs it too");
-    }
-
-    #[test]
-    fn no_guard_can_match_the_shell_that_is_running_it() {
-        // The desktop silently started nothing at all because of this. Both the
-        // guard pattern and the command being guarded appear in the command line
-        // of the shell doing the matching, so any `pgrep -f` matches itself and
-        // reports the process already up. The bracket trick does not save it
-        // either, because the real path is in that same line.
-        let commands = [
-            daemon("pgrep -x Xvfb", "Xvfb", "Xvfb :0"),
-            daemon(&port_open(6080), "novnc", "/opt/noVNC/utils/novnc_proxy --listen 6080"),
-        ];
-        for command in commands {
-            assert!(
-                !command.contains("pgrep -f"),
-                "pgrep -f matches the checking shell and starts nothing: {command}"
-            );
-        }
-        assert_eq!(port_open(6080), "(exec 3<>/dev/tcp/127.0.0.1/6080)");
-    }
-
-    #[test]
-    fn base64_round_trips_the_output_of_a_command() {
-        // envd sends stdout as base64, so getting this wrong turns every
-        // command's output into noise.
-        assert_eq!(decode("aGVsbG8gd29ybGQ="), "hello world");
-        assert_eq!(decode("eA=="), "x");
-        assert_eq!(decode(""), "");
-    }
 }
