@@ -56,11 +56,11 @@ pub fn human_gap(secs: u32) -> String {
     const HOUR: u32 = 60 * MINUTE;
     const DAY: u32 = 24 * HOUR;
 
-    let (n, unit) = if secs % DAY == 0 && secs >= DAY {
+    let (n, unit) = if secs.is_multiple_of(DAY) && secs >= DAY {
         (secs / DAY, "day")
-    } else if secs % HOUR == 0 && secs >= HOUR {
+    } else if secs.is_multiple_of(HOUR) && secs >= HOUR {
         (secs / HOUR, "hour")
-    } else if secs % MINUTE == 0 && secs >= MINUTE {
+    } else if secs.is_multiple_of(MINUTE) && secs >= MINUTE {
         (secs / MINUTE, "minute")
     } else {
         (secs, "second")
