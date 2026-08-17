@@ -492,6 +492,44 @@ CREATE INDEX messages_pair
     WHERE from_kind = 'agent' AND to_kind = 'agent';
 "#,
     ),
+    (
+        20,
+        r#"
+-- An agent's computer becomes its own row, keyed by a Guaca id, so a machine
+-- can be run by more than one kind of provider and the viewer can name it
+-- without naming the provider's identifier. E2B's sandbox id and its two
+-- tokens move here; a row recorded before the tokens existed cannot be
+-- reached and is dropped, which is what the runtime already did with it.
+CREATE TABLE computers (
+    id             TEXT    PRIMARY KEY,
+    agent_id       TEXT    NOT NULL UNIQUE REFERENCES agents(id),
+    provider       TEXT    NOT NULL,
+    provider_id    TEXT,
+    control_secret TEXT    NOT NULL DEFAULT '',
+    viewer_secret  TEXT    NOT NULL DEFAULT '',
+    image_ref      TEXT    NOT NULL DEFAULT '',
+    record_state   TEXT    NOT NULL,
+    last_used_at   INTEGER NOT NULL,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+
+INSERT INTO computers (id, agent_id, provider, provider_id, control_secret, viewer_secret, image_ref, record_state, last_used_at, created_at, updated_at)
+SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2)
+       || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))),
+       id, 'e2b', sandbox_id, sandbox_envd_token, coalesce(sandbox_traffic_token, ''), '', 'ready',
+       updated_at, updated_at, updated_at
+  FROM agents
+ WHERE sandbox_id IS NOT NULL AND sandbox_envd_token IS NOT NULL;
+
+-- Dropped rather than the table rebuilt: the columns are unindexed and
+-- unreferenced, SQLite has supported this since 3.35, and a rebuild is where
+-- a forward-only migration goes wrong on a real database.
+ALTER TABLE agents DROP COLUMN sandbox_id;
+ALTER TABLE agents DROP COLUMN sandbox_envd_token;
+ALTER TABLE agents DROP COLUMN sandbox_traffic_token;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -828,6 +866,74 @@ mod tests {
         let pinned: i64 =
             conn.query_row("SELECT pinned FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
         assert_eq!(pinned, 0, "an upgrade must not rearrange the rail");
+    }
+
+    #[test]
+    fn e2b_sandboxes_move_off_the_agent_and_partial_ones_are_dropped() {
+        // Three agents at version 19: one with a complete sandbox tuple, one
+        // recorded before tokens existed, one that never had a machine. The
+        // first must come out as a computer row; the second is unreachable
+        // and is treated as absent, which is what the runtime already did.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take(19) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+        conn.execute_batch(&format!(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',3,10,20,'{g}','sbx-a','envd-a','traffic-a'),
+                    ('b','Chef','avocado','#000','m','','[]','active',1,10,20,'{g}','sbx-b',NULL,NULL),
+                    ('c','Scout','avocado','#000','m','','[]','active',1,10,20,'{g}',NULL,NULL,NULL);",
+            g = DEFAULT_GROUP_ID
+        ))
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let rows: Vec<(String, String, String, String, String, String)> = conn
+            .prepare("SELECT agent_id, provider, provider_id, control_secret, viewer_secret, record_state FROM computers ORDER BY agent_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(
+                "a".into(),
+                "e2b".into(),
+                "sbx-a".into(),
+                "envd-a".into(),
+                "traffic-a".into(),
+                "ready".into()
+            )]
+        );
+
+        let id: String = conn.query_row("SELECT id FROM computers", [], |r| r.get(0)).unwrap();
+        assert!(uuid::Uuid::parse_str(&id).is_ok(), "computer ids are uuids: {id}");
+
+        // The agent rows are otherwise exactly what they were.
+        let (version, created, updated): (u32, i64, i64) = conn
+            .query_row("SELECT version, created_at, updated_at FROM agents WHERE id='a'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((version, created, updated), (3, 10, 20));
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM agents ORDER BY rowid")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(names, vec!["Manager", "Chef", "Scout"]);
+
+        // And the columns are gone, so nothing can quietly keep reading them.
+        assert!(conn.prepare("SELECT sandbox_id FROM agents").is_err());
+        assert!(conn.prepare("SELECT sandbox_envd_token FROM agents").is_err());
+        assert!(conn.prepare("SELECT sandbox_traffic_token FROM agents").is_err());
     }
 
     #[test]

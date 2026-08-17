@@ -14,10 +14,13 @@ use rusqlite::{params, OptionalExtension, Row};
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAction};
+use crate::domain::computer::{ComputerRecord, Provider, RecordState, Secret};
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
-use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
+use crate::domain::ids::{
+    AgentId, ApprovalId, ComputerId, ConnectorId, GroupId, MessageId, RoutineId, RunId,
+};
 use crate::domain::now_ms;
 use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
@@ -40,6 +43,8 @@ pub enum StoreError {
     Corrupt(String),
     #[error("no agent with id {0}")]
     AgentNotFound(AgentId),
+    #[error("no computer with id {0}")]
+    ComputerNotFound(ComputerId),
     #[error("an agent named {0:?} already exists")]
     DuplicateName(String),
     #[error("no group with id {0}")]
@@ -173,9 +178,7 @@ impl Store {
             model: draft.model.clone(),
             system_prompt: draft.system_prompt.clone(),
             skills: draft.skills.clone(),
-            sandbox_id: None,
-            sandbox_envd_token: None,
-            sandbox_traffic_token: None,
+            computer_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
             version: 1,
@@ -258,8 +261,10 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
-               FROM agents WHERE id=?1",
+            "SELECT a.id,a.name,a.avatar,a.color,a.model,a.system_prompt,a.skills,a.lifecycle,a.version,a.created_at,a.updated_at,a.group_id,
+                    (SELECT c.id FROM computers c WHERE c.agent_id = a.id AND c.record_state = 'ready') AS computer_id,
+                    a.pinned
+               FROM agents a WHERE a.id=?1",
             params![id.to_string()],
             row_to_card,
         )
@@ -275,8 +280,10 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
-               FROM agents ORDER BY rowid",
+            "SELECT a.id,a.name,a.avatar,a.color,a.model,a.system_prompt,a.skills,a.lifecycle,a.version,a.created_at,a.updated_at,a.group_id,
+                    (SELECT c.id FROM computers c WHERE c.agent_id = a.id AND c.record_state = 'ready') AS computer_id,
+                    a.pinned
+               FROM agents a ORDER BY a.rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
         let mut out = Vec::new();
@@ -303,47 +310,164 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
-    /// Records which sandbox is this agent's computer.
+    // ---- computers -------------------------------------------------------
+    //
+    // A computer is written here before it exists at its provider and cleared
+    // only after it is gone from there, so the table is deliberately allowed to
+    // describe a machine that is halfway in or out of existence. Nothing in
+    // this section is part of `update_agent`: provisioning is not an operator
+    // edit and must not bump the card version, which peers use to notice that
+    // an agent changed under them.
+
+    /// Writes the row that claims a machine, before anything is made.
     ///
-    /// Deliberately not part of `update_agent`: provisioning is not an operator
-    /// edit and must not bump the card version, which peers use to notice that
-    /// an agent changed under them.
-    pub fn set_agent_sandbox(
+    /// One computer per agent is a `UNIQUE` on `agent_id`, so a second caller
+    /// racing the first is refused by the database rather than by a check that
+    /// could be read stale.
+    pub fn insert_computer(&self, record: &ComputerRecord) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO computers (id,agent_id,provider,provider_id,control_secret,viewer_secret,image_ref,record_state,last_used_at,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            params![
+                record.id.to_string(),
+                record.agent_id.to_string(),
+                record.provider.as_str(),
+                record.provider_id,
+                record.control_secret.expose(),
+                record.viewer_secret.expose(),
+                record.image_ref,
+                record.state.as_str(),
+                record.last_used_at,
+                record.created_at,
+                record.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn computer(&self, id: ComputerId) -> Result<Option<ComputerRecord>, StoreError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            &format!("{COMPUTER_COLUMNS} WHERE id=?1"),
+            params![id.to_string()],
+            row_to_computer,
+        )
+        .optional()?
+        .transpose()
+    }
+
+    /// This agent's computer whatever state it is in, because a machine on its
+    /// way out is exactly what the caller has to know about.
+    pub fn computer_for_agent(&self, agent: AgentId) -> Result<Option<ComputerRecord>, StoreError> {
+        let conn = self.conn()?;
+        conn.query_row(
+            &format!("{COMPUTER_COLUMNS} WHERE agent_id=?1"),
+            params![agent.to_string()],
+            row_to_computer,
+        )
+        .optional()?
+        .transpose()
+    }
+
+    pub fn list_computers(&self) -> Result<Vec<ComputerRecord>, StoreError> {
+        let conn = self.conn()?;
+        // Oldest first, so a sweep reports what it found in the order it
+        // happened rather than in whatever order SQLite hands it back.
+        let mut stmt = conn.prepare(&format!("{COMPUTER_COLUMNS} ORDER BY created_at"))?;
+        let rows = stmt.query_map([], row_to_computer)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Records what a provider made and marks the row usable.
+    ///
+    /// The single step from "claimed" to "ready": a row that names a machine
+    /// but is not ready would be offered to an agent before its secrets were
+    /// written, and one that is ready without them names a machine nothing can
+    /// reach.
+    pub fn set_computer_ready(
         &self,
-        id: AgentId,
-        sandbox: Option<(&str, &str, &str)>,
+        id: ComputerId,
+        provider_id: &str,
+        control: &Secret,
+        viewer: &Secret,
     ) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE agents SET sandbox_id=?2, sandbox_envd_token=?3, sandbox_traffic_token=?4
-               WHERE id=?1",
+            "UPDATE computers
+                SET provider_id=?2, control_secret=?3, viewer_secret=?4,
+                    record_state=?5, updated_at=?6
+              WHERE id=?1",
             params![
                 id.to_string(),
-                sandbox.map(|s| s.0),
-                sandbox.map(|s| s.1),
-                sandbox.map(|s| s.2),
+                provider_id,
+                control.expose(),
+                viewer.expose(),
+                RecordState::Ready.as_str(),
+                now_ms(),
             ],
         )?;
         if changed == 0 {
-            return Err(StoreError::AgentNotFound(id));
+            return Err(StoreError::ComputerNotFound(id));
         }
         Ok(())
     }
 
-    /// The traffic token for a sandbox, by sandbox id.
+    /// The tokens a provider reissued on waking.
     ///
-    /// The viewer proxy holds no state of its own: it is handed a sandbox in a
-    /// URL and asks here, so a token never has to travel through the webview.
-    pub fn sandbox_traffic_token(&self, sandbox: &str) -> Result<Option<String>, StoreError> {
+    /// Separate from `set_computer_ready` because waking does not change what
+    /// the row claims, only how to talk to it.
+    pub fn set_computer_secrets(
+        &self,
+        id: ComputerId,
+        control: &Secret,
+        viewer: &Secret,
+    ) -> Result<(), StoreError> {
         let conn = self.conn()?;
-        Ok(conn
-            .query_row(
-                "SELECT sandbox_traffic_token FROM agents WHERE sandbox_id=?1",
-                params![sandbox],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten())
+        let changed = conn.execute(
+            "UPDATE computers SET control_secret=?2, viewer_secret=?3, updated_at=?4 WHERE id=?1",
+            params![id.to_string(), control.expose(), viewer.expose(), now_ms()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::ComputerNotFound(id));
+        }
+        Ok(())
+    }
+
+    pub fn set_computer_state(&self, id: ComputerId, state: RecordState) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE computers SET record_state=?2, updated_at=?3 WHERE id=?1",
+            params![id.to_string(), state.as_str(), now_ms()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::ComputerNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Marks a machine as used just now.
+    ///
+    /// The one write here that does not care whether it landed: this is a
+    /// timestamp, and a row deleted under a turn already in flight is not worth
+    /// failing that turn over.
+    pub fn touch_computer(&self, id: ComputerId, now: i64) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE computers SET last_used_at=?2, updated_at=?2 WHERE id=?1",
+            params![id.to_string(), now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_computer(&self, id: ComputerId) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute("DELETE FROM computers WHERE id=?1", params![id.to_string()])?;
+        Ok(())
     }
 
     // ---- routines --------------------------------------------------------
@@ -1599,10 +1723,15 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
                 raw.parse::<GroupId>()
                     .map_err(|e| StoreError::Corrupt(format!("bad group id {raw:?}: {e}")))?
             },
-            sandbox_id: row.get(12)?,
-            sandbox_envd_token: row.get(13)?,
-            sandbox_traffic_token: row.get(14)?,
-            pinned: row.get::<_, i64>(15)? != 0,
+            computer_id: {
+                let raw: Option<String> = row.get(12)?;
+                raw.map(|raw| {
+                    raw.parse::<ComputerId>()
+                        .map_err(|e| StoreError::Corrupt(format!("bad computer id {raw:?}: {e}")))
+                })
+                .transpose()?
+            },
+            pinned: row.get::<_, i64>(13)? != 0,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -1640,6 +1769,48 @@ fn row_to_file_hit(row: &Row<'_>) -> RowResult<FileHit> {
                 .map_err(|e| StoreError::Corrupt(format!("bad channel id: {e}")))?,
             from: participant_from_columns(&from_kind, from_agent)?,
             created_at,
+        })
+    })())
+}
+
+/// The one column list for `computers`, spelled once. Three queries read this
+/// table into the same struct, and a column added to one of them and not the
+/// others is a row that parses differently depending on how it was asked for.
+const COMPUTER_COLUMNS: &str = "SELECT id,agent_id,provider,provider_id,control_secret,viewer_secret,image_ref,record_state,last_used_at,created_at,updated_at
+                                  FROM computers";
+
+fn row_to_computer(row: &Row<'_>) -> RowResult<ComputerRecord> {
+    let id_raw: String = row.get(0)?;
+    let agent_raw: String = row.get(1)?;
+    let provider_raw: String = row.get(2)?;
+    let state_raw: String = row.get(7)?;
+    let control: String = row.get(4)?;
+    let viewer: String = row.get(5)?;
+
+    Ok((|| {
+        Ok(ComputerRecord {
+            id: id_raw
+                .parse::<ComputerId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad computer id {id_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            // Both of these fail closed rather than defaulting: a row written
+            // by a newer build names a provider this one cannot drive, and
+            // guessing would operate on somebody else's resource.
+            provider: Provider::parse(&provider_raw).ok_or_else(|| {
+                StoreError::Corrupt(format!("unknown computer provider {provider_raw:?}"))
+            })?,
+            provider_id: row.get(3)?,
+            control_secret: Secret::new(control),
+            viewer_secret: Secret::new(viewer),
+            image_ref: row.get(6)?,
+            state: RecordState::parse(&state_raw).ok_or_else(|| {
+                StoreError::Corrupt(format!("unknown computer state {state_raw:?}"))
+            })?,
+            last_used_at: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })())
 }
@@ -2561,6 +2732,108 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(f.store.list_agents().unwrap(), first, "ordering must be deterministic");
         }
+    }
+
+    #[test]
+    fn a_computer_row_belongs_to_one_agent_and_the_card_shows_it_only_when_ready() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let record = ComputerRecord {
+            id: ComputerId::new(),
+            agent_id: card.id,
+            provider: Provider::E2b,
+            provider_id: None,
+            control_secret: Secret::default(),
+            viewer_secret: Secret::default(),
+            image_ref: String::new(),
+            state: RecordState::Provisioning,
+            last_used_at: 1,
+            created_at: 1,
+            updated_at: 1,
+        };
+        f.store.insert_computer(&record).unwrap();
+        assert_eq!(
+            f.store.get_agent(card.id).unwrap().unwrap().computer_id,
+            None,
+            "provisioning is not a computer yet"
+        );
+
+        f.store
+            .set_computer_ready(record.id, "sbx-1", &Secret::new("ctl"), &Secret::new("view"))
+            .unwrap();
+        assert_eq!(f.store.get_agent(card.id).unwrap().unwrap().computer_id, Some(record.id));
+        let found = f.store.computer_for_agent(card.id).unwrap().unwrap();
+        assert_eq!(found.provider_id.as_deref(), Some("sbx-1"));
+        assert_eq!(found.control_secret.expose(), "ctl");
+        assert_eq!(found.state, RecordState::Ready);
+
+        // One computer per agent: a second insert is refused, not silently doubled.
+        let again = ComputerRecord { id: ComputerId::new(), ..record.clone() };
+        assert!(f.store.insert_computer(&again).is_err());
+
+        f.store.set_computer_state(record.id, RecordState::DeletePending).unwrap();
+        assert_eq!(
+            f.store.get_agent(card.id).unwrap().unwrap().computer_id,
+            None,
+            "a machine on its way out is not offered"
+        );
+
+        f.store.delete_computer(record.id).unwrap();
+        assert!(f.store.computer_for_agent(card.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn waking_records_the_reissued_secrets_without_bumping_the_card() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let id = ComputerId::new();
+        f.store
+            .insert_computer(&ComputerRecord {
+                id,
+                agent_id: card.id,
+                provider: Provider::E2b,
+                provider_id: Some("sbx".into()),
+                control_secret: Secret::new("old"),
+                viewer_secret: Secret::new("old"),
+                image_ref: String::new(),
+                state: RecordState::Ready,
+                last_used_at: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+        f.store
+            .set_computer_secrets(id, &Secret::new("new-ctl"), &Secret::new("new-view"))
+            .unwrap();
+        let found = f.store.computer(id).unwrap().unwrap();
+        assert_eq!(found.control_secret.expose(), "new-ctl");
+        assert_eq!(found.viewer_secret.expose(), "new-view");
+        assert_eq!(
+            f.store.get_agent(card.id).unwrap().unwrap().version,
+            1,
+            "provisioning is not an operator edit"
+        );
+    }
+
+    #[test]
+    fn a_computer_that_is_no_longer_there_is_said_so_rather_than_updated_into_nothing() {
+        // The write that has to fail loudly: a row deleted under a create in
+        // flight left the machine running with nothing referring to it, so
+        // "no rows changed" has to reach the caller that can still kill it.
+        let f = fixture();
+        let missing = ComputerId::new();
+        assert!(matches!(
+            f.store.set_computer_ready(missing, "sbx", &Secret::new("c"), &Secret::new("v")),
+            Err(StoreError::ComputerNotFound(id)) if id == missing
+        ));
+        assert!(matches!(
+            f.store.set_computer_secrets(missing, &Secret::new("c"), &Secret::new("v")),
+            Err(StoreError::ComputerNotFound(_))
+        ));
+        assert!(matches!(
+            f.store.set_computer_state(missing, RecordState::DeletePending),
+            Err(StoreError::ComputerNotFound(_))
+        ));
     }
 
     #[test]

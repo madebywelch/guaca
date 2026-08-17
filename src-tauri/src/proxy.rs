@@ -270,22 +270,6 @@ impl Request {
     }
 }
 
-/// Until the computer manager owns every machine, the only viewer target this
-/// app has is an E2B sandbox and the token sits on the agent that holds it.
-#[async_trait::async_trait]
-impl ViewerResolver for crate::db::Store {
-    async fn viewer_target(&self, computer: &str, port: u16) -> Option<ViewerTarget> {
-        let token =
-            self.sandbox_traffic_token(computer).ok().flatten().filter(|t| !t.is_empty())?;
-        Some(ViewerTarget {
-            tls: true,
-            host: format!("{port}-{computer}.e2b.app"),
-            port: 443,
-            headers: vec![("e2b-traffic-access-token".into(), token)],
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::computer::{Computer, ComputerError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
@@ -23,7 +24,6 @@ use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
-use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -55,6 +55,7 @@ impl From<crate::db::StoreError> for CommandError {
         match err {
             StoreError::DuplicateName(_) => CommandError::new("duplicateName", err.to_string()),
             StoreError::AgentNotFound(_)
+            | StoreError::ComputerNotFound(_)
             | StoreError::GroupNotFound(_)
             | StoreError::ApprovalNotFound(_)
             | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
@@ -85,6 +86,7 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
+            RuntimeError::Computer(inner) => inner.into(),
         }
     }
 }
@@ -107,12 +109,14 @@ impl From<crate::domain::connector::ConnectorError> for CommandError {
     }
 }
 
-impl From<E2bError> for CommandError {
-    fn from(err: E2bError) -> Self {
+impl From<ComputerError> for CommandError {
+    fn from(err: ComputerError) -> Self {
         match err {
             // Its own kind so the UI can offer to open settings rather than
             // showing a failure for something that was simply never set up.
-            E2bError::NoKey => CommandError::new("computerUnconfigured", err.to_string()),
+            ComputerError::Unconfigured => {
+                CommandError::new("computerUnconfigured", err.to_string())
+            }
             other => CommandError::new("computer", other.to_string()),
         }
     }
@@ -128,11 +132,6 @@ type Reply<T> = Result<T, CommandError>;
 
 // ---- computers -----------------------------------------------------------
 
-/// The E2B client, or a clear reason there is not one.
-fn computers(state: &State<'_, AppState>) -> Reply<E2bClient> {
-    E2bClient::new(&state.runtime.config().e2b.api_key).ok_or_else(|| E2bError::NoKey.into())
-}
-
 fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
     state
         .runtime
@@ -147,31 +146,21 @@ fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::
 /// rather than as an error.
 #[tauri::command]
 pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
-    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
-        return Ok(None);
-    };
-    let client = computers(&state)?;
-
-    if client.state(&sandbox).await? == crate::e2b::SandboxState::Gone {
-        // A reclaimed sandbox leaves a dangling id. Clearing it turns a dead
-        // end into an offer to make a new one. A sleeping one is left alone:
-        // it still holds the disk, and waking it is the operator's call.
-        state.runtime.store().set_agent_sandbox(id, None)?;
-        return Ok(None);
-    }
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(state.runtime.computers().describe(id).await?)
 }
 
 /// Gives an agent a computer, or brings the desktop up on the one it has.
 #[tauri::command]
 pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
     let card = agent_card(&state, id)?;
-    let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
+    let machine = state.runtime.ensure_computer(&card).await?;
 
-    client.start_desktop(&sandbox.id, &sandbox.envd_token).await?;
-    let computer =
-        client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
+    machine.start_desktop().await.map_err(ComputerError::from)?;
+    // Asked again rather than assumed: what the pane draws is where the desktop
+    // is actually serving, and that is only true once it answers.
+    let computer = state.runtime.computers().describe(id).await?.ok_or_else(|| {
+        CommandError::new("computer", "the computer was started but cannot be found; try again")
+    })?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(computer)
 }
@@ -186,24 +175,15 @@ pub async fn stop_agent_computer(
     state: State<'_, AppState>,
     id: AgentId,
 ) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
-    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
-        return Ok(None);
-    };
-    let client = computers(&state)?;
-    client.pause(&sandbox).await?;
+    let shown = state.runtime.computers().sleep(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(shown)
 }
 
-/// Destroys the sandbox and everything on its disk.
+/// Destroys the machine and everything on its disk.
 #[tauri::command]
 pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
-        return Ok(());
-    };
-    computers(&state)?.kill(&sandbox).await?;
-    state.runtime.store().set_agent_sandbox(id, None)?;
+    state.runtime.computers().destroy(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }
@@ -364,16 +344,14 @@ pub fn update_agent(
 /// that had nothing to do with this agent.
 #[tauri::command]
 pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    // The machine goes first. A deleted agent cannot be asked to tidy up after
-    // itself, and a sandbox nobody holds a reference to keeps billing.
-    let card = agent_card(&state, id)?;
-    // A missing key means no machine was ever made through this build, so there
-    // is nothing to release.
-    if let (Some(sandbox), Ok(client)) = (card.sandbox_id, computers(&state)) {
-        if let Err(err) = client.kill(&sandbox).await {
-            tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
-        }
-    }
+    // Looked up first, so a bad id reads as "no such agent" rather than as a
+    // deletion that quietly did nothing.
+    agent_card(&state, id)?;
+    // The machine goes next. A deleted agent cannot be asked to tidy up after
+    // itself, and a machine nobody holds a reference to keeps billing. A
+    // failure here is written down and retried at startup rather than left to
+    // block the deletion.
+    state.runtime.computers().release(id).await;
 
     state.runtime.store().set_lifecycle(id, Lifecycle::Terminated)?;
     state.runtime.stop_agent(id);

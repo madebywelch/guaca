@@ -9,13 +9,24 @@ pub mod desktop;
 pub mod e2b;
 pub mod provider;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
-use crate::domain::ids::ComputerId;
-use provider::{ComputerProvider, ExecRequest, ProviderError, ProviderHandle};
+use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 
-pub use provider::Output;
+use crate::config::AppConfig;
+use crate::db::Store;
+use crate::domain::agent::AgentCard;
+use crate::domain::computer::{ComputerRecord, Provider, RecordState, Secret};
+use crate::domain::ids::{AgentId, ComputerId};
+use crate::domain::now_ms;
+use e2b::E2bProvider;
+use provider::{
+    ComputerProvider, CreateComputer, ExecRequest, Output, ProviderError, ProviderHandle,
+    ProviderState, ViewerTarget,
+};
 
 /// The host the webview loads an agent's desktop from. Named here because the
 /// window's CSP has to allow exactly this, and the two silently disagreeing is
@@ -113,6 +124,514 @@ impl Machine {
                 },
             )
             .await
+    }
+}
+
+/// An agent's computer as the operator's window sees it: an id of this app's
+/// own, who runs it, what it is doing, and somewhere to watch it.
+///
+/// Deliberately not `ComputerRecord`. That row carries the tokens that reach a
+/// machine, and this is the only shape of it that crosses IPC.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Computer {
+    pub id: ComputerId,
+    pub provider: Provider,
+    /// `running`, or `asleep` with its disk intact.
+    pub state: String,
+    /// Absent until the desktop inside the machine is actually serving.
+    pub vnc_url: Option<String>,
+}
+
+/// Why an agent has no machine to work on. Each variant is a different next
+/// step: set a key, wait and retry, or read the message.
+#[derive(Debug, thiserror::Error)]
+pub enum ComputerError {
+    #[error(
+        "no computer provider is configured; add an E2B API key in app settings to give agents a computer"
+    )]
+    Unconfigured,
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+    #[error(transparent)]
+    Store(#[from] crate::db::StoreError),
+    #[error("the computer could not be recorded and was released ({0}); try again")]
+    Recording(String),
+}
+
+struct Inner {
+    store: Store,
+    config: Arc<RwLock<AppConfig>>,
+    /// One lock per agent, so an operator click and an agent tool call cannot
+    /// make two machines. Held across the whole `ensure`, including the create.
+    locks: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    /// Loopback port of the viewer proxy. Zero until it is listening.
+    viewer_port: AtomicU16,
+    #[cfg(test)]
+    injected: Option<Arc<dyn ComputerProvider>>,
+}
+
+/// Every agent's computer: who runs it, what state it is in, and the row that
+/// remembers it between restarts.
+///
+/// The runtime asks for a `Machine` and gets one; which provider made it, and
+/// whether it had to be created, woken or simply used, is settled here. That is
+/// deliberate: a machine made in one place and recorded in another is how a
+/// resource ends up running with nothing referring to it, and this app has done
+/// that.
+#[derive(Clone)]
+pub struct ComputerManager {
+    inner: Arc<Inner>,
+}
+
+impl ComputerManager {
+    pub fn new(store: Store, config: Arc<RwLock<AppConfig>>) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                store,
+                config,
+                locks: Mutex::new(HashMap::new()),
+                viewer_port: AtomicU16::new(0),
+                #[cfg(test)]
+                injected: None,
+            }),
+        }
+    }
+
+    /// A manager driving a provider the caller supplies, for tests that must
+    /// not reach a network.
+    #[cfg(test)]
+    pub(crate) fn with_provider(
+        store: Store,
+        config: Arc<RwLock<AppConfig>>,
+        provider: Arc<dyn ComputerProvider>,
+    ) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                store,
+                config,
+                locks: Mutex::new(HashMap::new()),
+                viewer_port: AtomicU16::new(0),
+                injected: Some(provider),
+            }),
+        }
+    }
+
+    /// Where the viewer proxy is listening, once it is. Held here because the
+    /// address of a machine's desktop is built from it and nothing above the
+    /// boundary should have to know that.
+    pub fn set_viewer_port(&self, port: u16) {
+        self.inner.viewer_port.store(port, Ordering::SeqCst);
+    }
+
+    pub fn viewer_port(&self) -> u16 {
+        self.inner.viewer_port.load(Ordering::SeqCst)
+    }
+
+    /// This agent's machine, made, woken or reused. `env` is the group's
+    /// credentials, which every command on the returned machine carries.
+    pub async fn ensure(
+        &self,
+        card: &AgentCard,
+        env: BTreeMap<String, String>,
+    ) -> Result<Machine, ComputerError> {
+        let lock = self.lock_for(card.id);
+        let _held = lock.lock().await;
+
+        if let Some(record) = self.inner.store.computer_for_agent(card.id)? {
+            match (record.state, Self::handle_of(&record)) {
+                (RecordState::Ready, Some(handle)) => {
+                    let provider = self.provider(record.provider)?;
+                    // A provider that cannot answer preserves the row and the
+                    // disk: not knowing is not the same as gone.
+                    match provider.inspect(&handle).await? {
+                        ProviderState::Running => {
+                            // Every use pushes the sleep deadline back, which is
+                            // what makes the timeout idle time rather than a
+                            // lifetime.
+                            provider.keep_awake(&handle, self.idle_seconds()).await;
+                            self.inner.store.touch_computer(record.id, now_ms())?;
+                            return Ok(self.machine(provider, handle, env));
+                        }
+                        ProviderState::Asleep => {
+                            // Woken rather than replaced. The disk is the point:
+                            // a browser that was signed in still is.
+                            let woken = provider.start(&handle, self.idle_seconds()).await?;
+                            // Both tokens are reissued on waking, so the stored
+                            // ones are now wrong. Keeping them is a machine that
+                            // is running and unreachable, which looks exactly
+                            // like a broken one.
+                            if let Err(err) = self.inner.store.set_computer_secrets(
+                                record.id,
+                                &woken.control_secret,
+                                &woken.viewer_secret,
+                            ) {
+                                tracing::error!(
+                                    %err,
+                                    computer = %record.id,
+                                    "could not record the woken machine's tokens"
+                                );
+                            }
+                            self.inner.store.touch_computer(record.id, now_ms())?;
+                            return Ok(self.machine(provider, woken, env));
+                        }
+                        ProviderState::Gone => self.inner.store.delete_computer(record.id)?,
+                    }
+                }
+                (RecordState::DeletePending, _) => {
+                    // Making a second machine now would leave the first one
+                    // billing with nothing referring to it. The sweep finishes
+                    // the removal; the agent is told to come back.
+                    return Err(ProviderError::Unavailable(
+                        "this agent's previous computer is still being removed; try again in a \
+                         moment"
+                            .into(),
+                    )
+                    .into());
+                }
+                // Still provisioning, or ready and naming nothing: a crash
+                // between the insert and the create. Whatever it made, if
+                // anything, is unclaimed and the sweep releases it.
+                _ => self.inner.store.delete_computer(record.id)?,
+            }
+        }
+
+        let provider = self.provider_for_new()?;
+        let id = ComputerId::new();
+        let now = now_ms();
+        // Written down before it exists: a resource made with nothing claiming
+        // it is invisible to this app and bills exactly like one in use.
+        self.inner.store.insert_computer(&ComputerRecord {
+            id,
+            agent_id: card.id,
+            provider: provider.kind(),
+            provider_id: None,
+            control_secret: Secret::default(),
+            viewer_secret: Secret::default(),
+            image_ref: String::new(),
+            state: RecordState::Provisioning,
+            last_used_at: now,
+            created_at: now,
+            updated_at: now,
+        })?;
+
+        let handle = match provider
+            .create(&CreateComputer {
+                computer: id,
+                agent: card.id,
+                agent_name: card.name.clone(),
+                idle_seconds: self.idle_seconds(),
+            })
+            .await
+        {
+            Ok(handle) => handle,
+            Err(err) => {
+                // Nothing was made, so the claim is a row the sweep would trip
+                // over on every startup.
+                if let Err(err) = self.inner.store.delete_computer(id) {
+                    tracing::warn!(
+                        %err,
+                        computer = %id,
+                        "could not clear the record of a computer that was never made"
+                    );
+                }
+                return Err(err.into());
+            }
+        };
+
+        // A machine that cannot be written down is a machine nobody can reach
+        // and nobody will stop paying for, so it is killed rather than left.
+        // Failing to read the create reply once already orphaned three of them.
+        if let Err(err) = self.inner.store.set_computer_ready(
+            id,
+            &handle.provider_id,
+            &handle.control_secret,
+            &handle.viewer_secret,
+        ) {
+            tracing::error!(%err, computer = %id, "could not record a computer; releasing it");
+            let _ = provider.delete(&handle).await;
+            let _ = self.inner.store.delete_computer(id);
+            return Err(ComputerError::Recording(err.to_string()));
+        }
+
+        Ok(self.machine(provider, handle, env))
+    }
+
+    /// The machine only if it is already running; never wakes, never creates.
+    ///
+    /// For sign-in scans, which happen because somebody opened a pane. Waking a
+    /// machine to refresh a list would cost money every time anyone looked at
+    /// an agent.
+    pub async fn if_running(&self, agent: AgentId) -> Result<Option<Machine>, ComputerError> {
+        let Some((record, handle)) = self.ready(agent)? else {
+            return Ok(None);
+        };
+        let provider = self.provider(record.provider)?;
+        match provider.inspect(&handle).await {
+            Ok(ProviderState::Running) => Ok(Some(self.machine(provider, handle, BTreeMap::new()))),
+            // Asleep, gone, or a provider that would not answer: a scan is
+            // best-effort and none of those is worth failing whatever asked.
+            _ => Ok(None),
+        }
+    }
+
+    /// What the pane shows. `None` if the agent has no computer or it is gone,
+    /// in which case the row is cleared so the pane offers a new one.
+    pub async fn describe(&self, agent: AgentId) -> Result<Option<Computer>, ComputerError> {
+        let Some((record, handle)) = self.ready(agent)? else {
+            return Ok(None);
+        };
+        let provider = self.provider(record.provider)?;
+        let shown = |state: &str, vnc_url| {
+            Some(Computer {
+                id: record.id,
+                provider: record.provider,
+                state: state.to_string(),
+                vnc_url,
+            })
+        };
+
+        match provider.inspect(&handle).await? {
+            ProviderState::Gone => {
+                // A reclaimed machine leaves a dangling row. Clearing it turns
+                // a dead end into an offer to make a new one.
+                self.inner.store.delete_computer(record.id)?;
+                Ok(None)
+            }
+            // Asked for only when the machine is up: finding out costs a
+            // command, and a command is the one thing that would wake it.
+            ProviderState::Running => {
+                let machine = self.machine(provider, handle, BTreeMap::new());
+                Ok(shown("running", machine.vnc_url().await))
+            }
+            ProviderState::Asleep => Ok(shown("asleep", None)),
+        }
+    }
+
+    /// Puts a machine to sleep, keeping its disk.
+    pub async fn sleep(&self, agent: AgentId) -> Result<Option<Computer>, ComputerError> {
+        let lock = self.lock_for(agent);
+        let held = lock.lock().await;
+
+        let Some((record, handle)) = self.ready(agent)? else {
+            return Ok(None);
+        };
+        self.provider(record.provider)?.stop(&handle).await?;
+        // Released before describing: the answer is a fresh look at the
+        // machine, and holding the lock through it would block a turn behind an
+        // operator's click for no reason.
+        drop(held);
+        self.describe(agent).await
+    }
+
+    /// Explicit destroy: the row is cleared only once the provider says the
+    /// machine is gone, so a failure leaves something to retry rather than an
+    /// agent whose disk is unreachable and unaccounted for.
+    pub async fn destroy(&self, agent: AgentId) -> Result<(), ComputerError> {
+        let lock = self.lock_for(agent);
+        let _held = lock.lock().await;
+
+        let Some(record) = self.inner.store.computer_for_agent(agent)? else {
+            return Ok(());
+        };
+        if let Some(handle) = Self::handle_of(&record) {
+            self.provider(record.provider)?.delete(&handle).await?;
+        }
+        self.inner.store.delete_computer(record.id)?;
+        Ok(())
+    }
+
+    /// Best-effort teardown when the agent itself is going.
+    ///
+    /// A deleted agent cannot be asked to tidy up after itself and its deletion
+    /// must not fail because a provider was unreachable, so a failure here is
+    /// written down as `deletePending` and retried at the next startup.
+    pub async fn release(&self, agent: AgentId) {
+        let lock = self.lock_for(agent);
+        let _held = lock.lock().await;
+
+        let record = match self.inner.store.computer_for_agent(agent) {
+            Ok(Some(record)) => record,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(%err, %agent, "could not look up the agent's computer to release it");
+                return;
+            }
+        };
+
+        if let Some(handle) = Self::handle_of(&record) {
+            let released = match self.provider(record.provider) {
+                Ok(provider) => provider.delete(&handle).await.map_err(ComputerError::from),
+                Err(err) => Err(err),
+            };
+            if let Err(err) = released {
+                tracing::warn!(
+                    %err,
+                    computer = %record.id,
+                    "could not destroy a deleted agent's computer; it will be retried at startup"
+                );
+                if let Err(err) =
+                    self.inner.store.set_computer_state(record.id, RecordState::DeletePending)
+                {
+                    tracing::warn!(%err, computer = %record.id, "could not mark a computer for removal");
+                }
+                return;
+            }
+        }
+
+        if let Err(err) = self.inner.store.delete_computer(record.id) {
+            tracing::warn!(%err, computer = %record.id, "could not clear a released computer");
+        }
+    }
+
+    /// Startup reconciliation, and the answer to how many resources it freed.
+    ///
+    /// Two halves, because a machine can be lost in two directions: a row whose
+    /// removal never finished, and a resource whose row never existed. The
+    /// second is the expensive one — a machine nothing refers to bills exactly
+    /// like one in use and is invisible from inside the app.
+    pub async fn sweep(&self) -> Result<usize, ComputerError> {
+        let mut released = 0;
+        let mut claimed: Vec<String> = Vec::new();
+
+        for record in self.inner.store.list_computers()? {
+            match (record.state, Self::handle_of(&record)) {
+                (RecordState::DeletePending, Some(handle)) => {
+                    let deleted = match self.provider(record.provider) {
+                        Ok(provider) => provider.delete(&handle).await.map_err(ComputerError::from),
+                        Err(err) => Err(err),
+                    };
+                    match deleted {
+                        Ok(()) => {
+                            self.inner.store.delete_computer(record.id)?;
+                            released += 1;
+                        }
+                        // Left exactly as it is, to be tried again next time.
+                        Err(err) => {
+                            tracing::warn!(
+                                %err,
+                                computer = %record.id,
+                                "a computer marked for removal is still there"
+                            );
+                            claimed.push(handle.provider_id);
+                        }
+                    }
+                }
+                // A row that names no machine claims nothing: either the create
+                // never happened, or what it made is unclaimed and is caught
+                // below.
+                (RecordState::Provisioning, None) | (RecordState::DeletePending, None) => {
+                    self.inner.store.delete_computer(record.id)?
+                }
+                (_, Some(handle)) => claimed.push(handle.provider_id),
+                (_, None) => {}
+            }
+        }
+
+        // Only a provider that is configured can be asked, and E2B is the only
+        // one there is. Anything it made that no row above refers to is a leak.
+        if let Ok(provider) = self.provider(Provider::E2b) {
+            for id in provider.list_owned().await? {
+                if claimed.contains(&id) {
+                    continue;
+                }
+                tracing::info!(%id, "releasing a computer no agent refers to");
+                // The handle is an address and nothing more here: an unclaimed
+                // resource has no row, so there are no secrets to delete it
+                // with and none are needed.
+                let handle = ProviderHandle {
+                    computer: ComputerId::new(),
+                    provider_id: id,
+                    control_secret: Secret::default(),
+                    viewer_secret: Secret::default(),
+                };
+                if provider.delete(&handle).await.is_ok() {
+                    released += 1;
+                }
+            }
+        }
+
+        Ok(released)
+    }
+
+    /// This agent's computer if it is ready to be used, with the handle that
+    /// reaches it. A row that is provisioning or on its way out is not one
+    /// anybody can look at or act on.
+    fn ready(
+        &self,
+        agent: AgentId,
+    ) -> Result<Option<(ComputerRecord, ProviderHandle)>, ComputerError> {
+        let Some(record) = self.inner.store.computer_for_agent(agent)? else {
+            return Ok(None);
+        };
+        if record.state != RecordState::Ready {
+            return Ok(None);
+        }
+        Ok(Self::handle_of(&record).map(|handle| (record, handle)))
+    }
+
+    fn machine(
+        &self,
+        provider: Arc<dyn ComputerProvider>,
+        handle: ProviderHandle,
+        env: BTreeMap<String, String>,
+    ) -> Machine {
+        Machine::new(provider, handle, env, self.viewer_port())
+    }
+
+    /// How a provider finds this machine again, or `None` while there is
+    /// nothing yet for it to find.
+    fn handle_of(record: &ComputerRecord) -> Option<ProviderHandle> {
+        Some(ProviderHandle {
+            computer: record.id,
+            provider_id: record.provider_id.clone()?,
+            control_secret: record.control_secret.clone(),
+            viewer_secret: record.viewer_secret.clone(),
+        })
+    }
+
+    /// Whoever runs machines of this kind, if this build can.
+    fn provider(&self, which: Provider) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
+        #[cfg(test)]
+        if let Some(injected) = &self.inner.injected {
+            return Ok(injected.clone());
+        }
+        match which {
+            Provider::E2b => E2bProvider::new(&self.inner.config.read().e2b.api_key)
+                .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>)
+                .ok_or(ComputerError::Unconfigured),
+        }
+    }
+
+    /// Who runs a machine this app is about to make. One provider today; PR B
+    /// turns this into the automatic resolution.
+    fn provider_for_new(&self) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
+        self.provider(Provider::E2b)
+    }
+
+    /// How long a machine may sit unused. Pushed back on every use, so what
+    /// expires is idle time rather than a lifetime.
+    fn idle_seconds(&self) -> u32 {
+        self.inner.config.read().e2b.idle_minutes.max(1) * 60
+    }
+
+    fn lock_for(&self, agent: AgentId) -> Arc<tokio::sync::Mutex<()>> {
+        self.inner.locks.lock().entry(agent).or_default().clone()
+    }
+}
+
+/// The proxy is handed a computer in a URL and asks here, so nothing that
+/// reaches a machine has to travel through the webview.
+#[async_trait::async_trait]
+impl crate::proxy::ViewerResolver for ComputerManager {
+    async fn viewer_target(&self, computer: &str, port: u16) -> Option<ViewerTarget> {
+        let id: ComputerId = computer.parse().ok()?;
+        let record = self.inner.store.computer(id).ok()??;
+        if record.state != RecordState::Ready {
+            return None;
+        }
+        let handle = Self::handle_of(&record)?;
+        self.provider(record.provider).ok()?.viewer_target(&handle, port).await.ok()
     }
 }
 
@@ -239,8 +758,214 @@ pub(crate) mod fake {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use super::provider::ProviderState;
     use super::*;
-    use crate::domain::computer::Secret;
+    use crate::config::AppConfig;
+    use crate::db::Store;
+    use crate::domain::agent::{AgentCard, CleanDraft};
+    use crate::domain::computer::{ComputerRecord, Provider, RecordState, Secret};
+
+    fn draft(name: &str) -> CleanDraft {
+        CleanDraft {
+            group_id: None,
+            name: name.into(),
+            avatar: "avocado".into(),
+            color: "#7fb069".into(),
+            model: "test/model".into(),
+            system_prompt: "You coordinate the kitchen.".into(),
+            skills: vec!["delegation".into()],
+        }
+    }
+
+    fn setup() -> (ComputerManager, Arc<fake::FakeProvider>, Store, AgentCard, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store.create_agent(&draft("Manager")).unwrap();
+        let provider = Arc::new(fake::FakeProvider::default());
+        let config = Arc::new(parking_lot::RwLock::new(AppConfig::default()));
+        let manager = ComputerManager::with_provider(store.clone(), config, provider.clone());
+        (manager, provider, store, card, dir)
+    }
+
+    #[tokio::test]
+    async fn two_callers_at_once_get_one_machine() {
+        // An operator click and an agent tool call land together. Without the
+        // per-agent lock both saw "no computer" and both created one.
+        let (manager, provider, _store, card, _dir) = setup();
+        *provider.create_delay.lock() = Some(Duration::from_millis(50));
+        let (a, b) = tokio::join!(
+            manager.ensure(&card, BTreeMap::new()),
+            manager.ensure(&card, BTreeMap::new())
+        );
+        assert_eq!(a.unwrap().id(), b.unwrap().id());
+        assert_eq!(*provider.creates.lock(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_machine_that_cannot_be_recorded_is_released_rather_than_left() {
+        // Failing to read the create reply once already orphaned three
+        // sandboxes; a row that cannot be written is the same failure.
+        let (manager, provider, store, card, _dir) = setup();
+        *provider.create_delay.lock() = Some(Duration::from_millis(50));
+
+        // The row goes out from under the create while it is in flight, which
+        // is the shape of every way this fails: the machine exists and there
+        // is nowhere left to write it down.
+        let vanish = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                for record in store.list_computers().unwrap() {
+                    store.delete_computer(record.id).unwrap();
+                }
+            })
+        };
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("a machine nothing recorded must not be handed out");
+        };
+        vanish.await.unwrap();
+        assert!(matches!(err, ComputerError::Recording(_)), "{err}");
+        assert_eq!(provider.deletes.lock().len(), 1, "the machine was killed");
+    }
+
+    #[tokio::test]
+    async fn a_sleeping_machine_is_woken_and_its_new_secrets_are_kept() {
+        let (manager, provider, store, card, _dir) = setup();
+        let first = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        manager.sleep(card.id).await.unwrap();
+        let again = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(first.id(), again.id(), "the disk is the point");
+        assert_eq!(*provider.creates.lock(), 1);
+        assert_eq!(store.computer(first.id()).unwrap().unwrap().control_secret.expose(), "ctl-2");
+    }
+
+    #[tokio::test]
+    async fn a_machine_the_provider_reports_gone_is_replaced_and_the_old_row_cleared() {
+        let (manager, provider, store, card, _dir) = setup();
+        let first = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        provider.machines.lock().clear();
+        let second = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_ne!(first.id(), second.id());
+        assert!(store.computer(first.id()).unwrap().is_none());
+        assert_eq!(*provider.creates.lock(), 2);
+    }
+
+    #[tokio::test]
+    async fn describe_never_wakes_and_clears_a_gone_machine() {
+        let (manager, provider, store, card, _dir) = setup();
+        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        manager.sleep(card.id).await.unwrap();
+        let shown = manager.describe(card.id).await.unwrap().unwrap();
+        assert_eq!(shown.state, "asleep");
+        assert_eq!(shown.provider, Provider::E2b);
+        assert_eq!(
+            provider.machines.lock()[&format!("fake-{}", machine.id().short())],
+            ProviderState::Asleep,
+            "describing did not wake it"
+        );
+        provider.machines.lock().clear();
+        assert!(manager.describe(card.id).await.unwrap().is_none());
+        assert!(store.computer(machine.id()).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn if_running_returns_nothing_for_a_sleeping_machine() {
+        let (manager, _provider, _store, card, _dir) = setup();
+        assert!(manager.if_running(card.id).await.unwrap().is_none(), "no computer yet");
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert!(manager.if_running(card.id).await.unwrap().is_some());
+        manager.sleep(card.id).await.unwrap();
+        assert!(
+            manager.if_running(card.id).await.unwrap().is_none(),
+            "a sign-in scan must not wake anything"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_explicit_destroy_keeps_the_row_and_a_failed_release_marks_it_pending() {
+        let (manager, provider, store, card, _dir) = setup();
+        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        *provider.fail_delete.lock() = true;
+        assert!(manager.destroy(card.id).await.is_err());
+        assert_eq!(store.computer(machine.id()).unwrap().unwrap().state, RecordState::Ready);
+        manager.release(card.id).await;
+        assert_eq!(
+            store.computer(machine.id()).unwrap().unwrap().state,
+            RecordState::DeletePending
+        );
+        *provider.fail_delete.lock() = false;
+        assert_eq!(manager.sweep().await.unwrap(), 1, "the retry at startup finishes the job");
+        assert!(store.computer(machine.id()).unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn the_sweep_releases_what_nothing_claims_and_leaves_what_something_does() {
+        let (manager, provider, store, card, _dir) = setup();
+        let kept = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        provider.machines.lock().insert("fake-orphan".into(), ProviderState::Running);
+        // A provisioning row that never got its provider id is a crash mid-create.
+        let stranded = store.create_agent(&draft("Chef")).unwrap();
+        store
+            .insert_computer(&ComputerRecord {
+                id: ComputerId::new(),
+                agent_id: stranded.id,
+                provider: Provider::E2b,
+                provider_id: None,
+                control_secret: Secret::default(),
+                viewer_secret: Secret::default(),
+                image_ref: String::new(),
+                state: RecordState::Provisioning,
+                last_used_at: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+
+        assert_eq!(manager.sweep().await.unwrap(), 1);
+        assert_eq!(*provider.deletes.lock(), vec!["fake-orphan".to_string()]);
+        assert!(store.computer(kept.id()).unwrap().is_some());
+        assert_eq!(store.list_computers().unwrap().len(), 1, "the stale provisioning row is gone");
+    }
+
+    #[tokio::test]
+    async fn without_a_provider_the_answer_is_unconfigured_not_a_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store.create_agent(&draft("Manager")).unwrap();
+        let manager =
+            ComputerManager::new(store, Arc::new(parking_lot::RwLock::new(AppConfig::default())));
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("there is nothing to make a machine with");
+        };
+        assert!(matches!(err, ComputerError::Unconfigured), "{err}");
+        assert!(
+            err.to_string().contains("E2B API key"),
+            "the operator has to be told what to do about it: {err}"
+        );
+        assert!(manager.describe(card.id).await.unwrap().is_none(), "no computer, no error");
+    }
+
+    #[tokio::test]
+    async fn the_viewer_is_told_where_a_computer_is_and_nothing_about_one_it_does_not_know() {
+        use crate::proxy::ViewerResolver;
+
+        let (manager, _provider, _store, card, _dir) = setup();
+        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        let target =
+            manager.viewer_target(&machine.id().to_string(), 6080).await.expect("a target");
+        assert_eq!(target.host, format!("fake-{}.fake", machine.id().short()));
+        assert_eq!(target.port, 6080);
+
+        // An address that is not a computer id, and one that is nobody's, are
+        // both simply not registered: the proxy answers 404 rather than
+        // reaching for a machine somebody guessed at.
+        assert!(manager.viewer_target("not-a-uuid", 6080).await.is_none());
+        assert!(manager.viewer_target(&ComputerId::new().to_string(), 6080).await.is_none());
+    }
 
     #[tokio::test]
     async fn a_command_reaches_the_guest_as_a_login_shell_with_the_groups_credentials() {
