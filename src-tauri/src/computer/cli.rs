@@ -68,8 +68,12 @@ impl std::fmt::Debug for CliOutput {
 pub enum CliError {
     #[error("{0}")]
     Spawn(String),
+    // The next step is deliberately vague about the remedy: this module knows
+    // it spawned something that did not answer, and which of "install it",
+    // "start its service" or "this Mac cannot run it" applies is the provider's
+    // to say, in the status Settings draws for it.
     #[error(
-        "{binary} did not answer within {secs}s; if the runtime is stopped, start it from Settings"
+        "{binary} did not answer within {secs}s; check the computer provider's status in Settings"
     )]
     Timeout { binary: String, secs: u64 },
     #[error("{0}")]
@@ -407,7 +411,12 @@ mod tests {
         assert!(matches!(err, CliError::Timeout { .. }), "{err:?}");
         let message = err.to_string();
         assert!(message.contains("guac-sleeper"), "{message}");
-        assert!(message.contains("start it from Settings"), "a wedged runtime has a next step");
+        // Where to look, not what to press: Settings has no start button, and
+        // which remedy applies is the provider's to say in its own status.
+        assert!(
+            message.contains("provider's status in Settings"),
+            "a wedged runtime has a next step: {message}"
+        );
 
         let pid = std::fs::read_to_string(&pidfile)
             .expect("the child records its pid before it sleeps")
