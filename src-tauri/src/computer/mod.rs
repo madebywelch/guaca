@@ -5,6 +5,7 @@
 //! runtime later — is a `ComputerProvider`, and nothing above this module
 //! knows which one it got.
 
+pub mod e2b;
 pub mod provider;
 
 pub use provider::Output;
