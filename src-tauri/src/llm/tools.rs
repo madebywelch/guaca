@@ -304,7 +304,12 @@ pub fn specs() -> Vec<ToolSpec> {
                           of the operator, and comes back with their decision. Asking is not a \
                           refusal and does not need an apology. Refusing instead, and telling \
                           the operator to repeat themselves somewhere else, gives them back the \
-                          job they gave you."
+                          job they gave you. Ask only about what you will do yourself. Their \
+                          answer authorises you and nobody else, so if the action needs an \
+                          account, a machine or a session another agent has, it is that agent's \
+                          to ask about: send it the work and let it ask. Permission you obtain \
+                          and then pass along arrives as your word rather than theirs, which is \
+                          the claim it was right to refuse in the first place."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1101,6 +1106,23 @@ mod tests {
         assert_eq!(
             parse(&call(SCHEDULE, "{}")),
             Ok(ToolInvocation::Schedule { action: ScheduleAction::List })
+        );
+    }
+
+    #[test]
+    fn the_permission_tool_says_who_should_be_asking() {
+        // Observed: pressed by the operator to get an email sent, a coordinator
+        // asked for permission to send it. It holds no mail account and could
+        // not have sent anything, so the operator was deciding on an action the
+        // asker could not take, and the grant landed on the wrong agent. A
+        // permission obtained and then relayed is a peer's claim again, which
+        // is the thing the agent holding the account was right to refuse.
+        let spec = specs().into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
+        assert!(spec.description.contains("what you will do yourself"), "{}", spec.description);
+        assert!(
+            spec.description.contains("send it the work and let it ask"),
+            "the rule is useless without the alternative: {}",
+            spec.description
         );
     }
 
