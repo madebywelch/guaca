@@ -36,7 +36,6 @@ pub struct Cli {
 
 /// What one run produced. `stdout` stays bytes because a CLI is also how a
 /// screenshot comes back; `stderr` is a message for a person either way.
-#[derive(Debug)]
 pub struct CliOutput {
     pub status: i32,
     pub stdout: Vec<u8>,
@@ -47,13 +46,31 @@ pub struct CliOutput {
     pub binary: String,
 }
 
+// What a runtime says back is an agent's command output: an inspect payload
+// with a token in it, a file the agent asked to see, a megabyte of screenshot.
+// A derived Debug is what would make the first `tracing::warn!(?output)` print
+// all of it, so the size stands in for the bytes and the impl exists before the
+// caller does.
+impl std::fmt::Debug for CliOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CliOutput")
+            .field("binary", &self.binary)
+            .field("status", &self.status)
+            .field("stdout", &format_args!("{} bytes", self.stdout.len()))
+            .field("stderr", &format_args!("{} bytes", self.stderr.len()))
+            .finish()
+    }
+}
+
 /// Why a local CLI produced nothing usable. Each variant is a different next
 /// step: install it, look at what is wedged, or read the message.
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error("{0}")]
     Spawn(String),
-    #[error("{binary} did not answer within {secs}s")]
+    #[error(
+        "{binary} did not answer within {secs}s; if the runtime is stopped, start it from Settings"
+    )]
     Timeout { binary: String, secs: u64 },
     #[error("{0}")]
     Io(String),
@@ -119,6 +136,9 @@ impl Cli {
                 command.env(name, value);
             }
         }
+        // Last, so that a credential named like an allow-listed variable is the
+        // one the child gets: the secrets were chosen for this command and the
+        // host's copy is only whatever this Mac happens to hold.
         command.envs(secrets);
         // Nothing here has a terminal to answer a prompt with, and a child
         // reading a closed stdin gets EOF instead of waiting out the timeout.
@@ -159,7 +179,10 @@ impl Cli {
                 stderr: String::from_utf8_lossy(&stderr).into_owned(),
                 binary,
             }),
-            Ok(Err(err)) => Err(CliError::Io(format!("{binary} could not be read: {err}"))),
+            Ok(Err(err)) => Err(CliError::Io(format!(
+                "{binary} could not be read: {err}; try again, and if it persists restart the \
+                 runtime"
+            ))),
             Err(_) => {
                 // `kill_on_drop` covers the drop at the end of this scope; the
                 // signal is asked for here so the child is already on its way
@@ -208,7 +231,7 @@ impl CliOutput {
         serde_json::from_slice(&self.stdout).map_err(|err| {
             CliError::Io(format!(
                 "{} could not be read: it answered with something other than JSON ({err}); \
-                 the message it printed was: {}",
+                 try again, and if it persists restart the runtime. It printed: {}",
                 self.binary,
                 first_line(&self.stdout_str(), &self.stderr)
             ))
@@ -318,6 +341,28 @@ mod tests {
         assert!(env.iter().any(|line| line.starts_with("HOME=")), "{env:?}");
     }
 
+    #[tokio::test]
+    async fn a_secret_beats_the_host_variable_it_shares_a_name_with() {
+        // The order in `run` is clear, then the allow-list, then the secrets,
+        // and only the last of those is a decision somebody made about this
+        // command. Reversed, this Mac's value would quietly overwrite a
+        // credential the group holds, and the guest would act with the wrong
+        // one — visible only as a command that behaves oddly much later.
+        let dir = tempfile::tempdir().unwrap();
+        let cli = Cli::at(fake(dir.path(), "guac-reporter", REPORTER));
+
+        let secrets = BTreeMap::from([("TMPDIR".to_string(), "/guac-sentinel-tmpdir".to_string())]);
+        let out = cli.run(&[], &secrets, Duration::from_secs(10)).await.unwrap();
+
+        let (_, env) = halves(&out);
+        let carried: Vec<&String> = env.iter().filter(|l| l.starts_with("TMPDIR=")).collect();
+        assert_eq!(
+            carried,
+            [&"TMPDIR=/guac-sentinel-tmpdir".to_string()],
+            "the host's TMPDIR displaced the one this command was given"
+        );
+    }
+
     #[test]
     fn the_allow_list_admits_locale_and_desktop_variables_and_no_agent_socket() {
         assert!(allowed("PATH") && allowed("HOME") && allowed("TMPDIR"));
@@ -348,7 +393,9 @@ mod tests {
 
         assert!(started.elapsed() < Duration::from_secs(10), "it waited for the child anyway");
         assert!(matches!(err, CliError::Timeout { .. }), "{err:?}");
-        assert!(err.to_string().contains("guac-sleeper"), "{err}");
+        let message = err.to_string();
+        assert!(message.contains("guac-sleeper"), "{message}");
+        assert!(message.contains("start it from Settings"), "a wedged runtime has a next step");
 
         let pid = std::fs::read_to_string(&pidfile)
             .expect("the child records its pid before it sleeps")
@@ -428,8 +475,29 @@ mod tests {
             .run(&argv(&["Warning: kernel not installed"]), &no_secrets(), Duration::from_secs(10))
             .await
             .unwrap();
-        let err = bad.json().expect_err("a warning is not JSON");
-        assert!(err.to_string().contains("guac-speaker"), "{err}");
+        let err = bad.json().expect_err("a warning is not JSON").to_string();
+        assert!(err.contains("guac-speaker"), "{err}");
+        assert!(err.contains("Warning: kernel not installed"), "quote what it did say: {err}");
+        assert!(err.contains("restart the runtime"), "and say what to do about it: {err}");
+    }
+
+    #[test]
+    fn an_output_prints_how_much_it_holds_but_never_what() {
+        // Nothing prints one today. A derived Debug is what would put an
+        // agent's file, or a token from an inspect payload, into whoever
+        // writes the first `tracing::warn!(?output)`.
+        let out = CliOutput {
+            status: 0,
+            stdout: br#"{"auth":"tok_sentinel"}"#.to_vec(),
+            stderr: "warning: tok_sentinel is stale".into(),
+            binary: "container".into(),
+        };
+
+        let printed = format!("{out:?}");
+        assert!(!printed.contains("tok_sentinel"), "{printed}");
+        assert!(printed.contains("container"), "{printed}");
+        assert!(printed.contains(&format!("{} bytes", out.stdout.len())), "{printed}");
+        assert!(printed.contains(&format!("{} bytes", out.stderr.len())), "{printed}");
     }
 
     #[test]
