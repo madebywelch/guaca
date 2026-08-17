@@ -358,14 +358,11 @@ function LiveStreams({
 
         // A message bound for a peer will settle into a collapsed row, so it is
         // announced rather than streamed. Only text meant for the operator is
-        // worth watching arrive.
+        // worth watching arrive. The writer is the peer: this stream is filed
+        // in the recipient's channel, which is the one being looked at.
         if (buffer.to.kind === "agent") {
           return (
-            <WritingRow
-              key={id}
-              from={toPeer(lookups.byId(buffer.agentId), buffer.agentId)}
-              to={toPeer(lookups.byId(buffer.to.id), buffer.to.id)}
-            />
+            <WritingRow key={id} peer={toPeer(lookups.byId(buffer.agentId), buffer.agentId)} />
           );
         }
         return buffer.text.length > 0 ? (
