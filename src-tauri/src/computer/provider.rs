@@ -136,20 +136,105 @@ pub struct CreateComputer {
 }
 
 /// Why a provider could not. Each variant is a different next step for whoever
-/// reads it: configure, wait or restart, or look at the message.
+/// reads it: install or configure something, wait or restart, make a new
+/// machine, or look at the message.
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
     #[error("{0}")]
     Unconfigured(String),
+    /// This Mac cannot run machines of this kind at all, and no amount of
+    /// configuration changes that.
+    #[error("{0}")]
+    Unsupported(String),
     #[error("{0}")]
     Unavailable(String),
+    /// The image a machine boots could not be fetched. Separate from
+    /// `Unavailable` because the way out is a network or a different image
+    /// reference, not waiting.
+    #[error("{0}")]
+    Image(String),
+    /// A command outran its deadline. Deliberately not `Unavailable`: the
+    /// machine is fine and the work may still be running on it, so this is
+    /// never permission to replace anything.
+    #[error("{0}")]
+    Timeout(String),
+    /// The provider positively reports the resource is not there. The only
+    /// failure that means "make a new one" rather than "try again".
+    #[error("{0}")]
+    ResourceGone(String),
     #[error("{0}")]
     Operation(String),
+}
+
+/// A command that outran its deadline, said to the model that ran it.
+///
+/// The way forward is in the message because the model is the only one who can
+/// take it: the process is still running on its machine, and a rerun of the
+/// same command gets the same deadline. A refusal that only names the limit is
+/// reworded and tried again.
+///
+/// Shared, because a command that hangs is the same thing to an agent whether
+/// the machine is in a cloud or in a VM on this Mac, and two providers wording
+/// it differently is two things for a model to learn.
+pub fn timed_out(timeout: Duration) -> ProviderError {
+    ProviderError::Timeout(format!(
+        "the command did not finish within {}s; run long work in the background with nohup or \
+         setsid and poll for its output",
+        timeout.as_secs()
+    ))
+}
+
+/// Whether a provider could make a machine right now, and if not, what the
+/// operator would have to do about it. The one shape Settings draws for every
+/// provider, so the answer is a state and a sentence rather than an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderStatus {
+    pub state: ProviderReadiness,
+    /// Whether starting a computer would start whatever is stopped. False when
+    /// there is nothing to start, and false when starting it is not this app's
+    /// to do.
+    pub can_start: bool,
+    /// What to tell the operator: what is true now, and the next step when
+    /// there is one. Read by a person in Settings.
+    pub detail: String,
+}
+
+impl ProviderStatus {
+    /// The one state with no next step, and the only one built by more than one
+    /// provider.
+    pub fn ready(detail: impl Into<String>) -> Self {
+        Self { state: ProviderReadiness::Ready, can_start: false, detail: detail.into() }
+    }
+}
+
+/// Deliberately not `Option<ProviderStatus>`: "not installed", "installed but
+/// stopped" and "this Mac cannot run it" are three different sentences and
+/// three different things to offer, and they used to be one absent provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProviderReadiness {
+    Ready,
+    NotInstalled,
+    /// Installed, and its service is not running. Startable.
+    NotRunning,
+    /// This machine or this build cannot drive it, whatever is installed.
+    Unsupported,
+    /// It answered, and what it said was not something this build can read.
+    Error,
 }
 
 #[async_trait::async_trait]
 pub trait ComputerProvider: Send + Sync {
     fn kind(&self) -> Provider;
+
+    /// Whether this provider could make a machine, asked without making one.
+    ///
+    /// Answered for Settings and for whether an agent is told it has a
+    /// computer at all, so it runs on paths that have nothing to do with an
+    /// agent's turn. Never fails: not being able to find out is one of the
+    /// states.
+    async fn probe(&self) -> ProviderStatus;
 
     async fn create(&self, request: &CreateComputer) -> Result<ProviderHandle, ProviderError>;
 
@@ -226,6 +311,19 @@ mod tests {
         let printed = format!("{target:?}");
         assert!(printed.contains("e2b-traffic-access-token"), "{printed}");
         assert!(!printed.contains("tok_sentinel"), "{printed}");
+    }
+
+    #[test]
+    fn a_command_that_outran_its_deadline_is_told_how_to_outlive_one() {
+        // Read mid-turn by the model that ran the command, and it is the only
+        // one who can act on it: the same command run again gets the same
+        // deadline, so the message has to name the way past it.
+        let err = timed_out(Duration::from_secs(120));
+        let ProviderError::Timeout(message) = err else {
+            panic!("a deadline is its own outcome: the machine is fine and the work may go on");
+        };
+        assert!(message.contains("120s"), "{message}");
+        assert!(message.contains("nohup"), "a refusal with no way forward is reworded and retried");
     }
 
     #[test]

@@ -28,8 +28,8 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use crate::computer::provider::{
-    ComputerProvider, CreateComputer, ExecRequest, Output, ProviderError, ProviderHandle,
-    ProviderState, ViewerTarget,
+    timed_out, ComputerProvider, CreateComputer, ExecRequest, Output, ProviderError,
+    ProviderHandle, ProviderState, ProviderStatus, ViewerTarget,
 };
 use crate::domain::computer::{Provider, Secret};
 use crate::domain::ids::ComputerId;
@@ -160,6 +160,14 @@ impl E2bProvider {
 impl ComputerProvider for E2bProvider {
     fn kind(&self) -> Provider {
         Provider::E2b
+    }
+
+    /// Always ready, because this type is only ever built from a key: there is
+    /// nothing on this Mac to install or start, and whether the key works is a
+    /// question only a request can answer. `new` returning `None` is what "not
+    /// configured" looks like.
+    async fn probe(&self) -> ProviderStatus {
+        ProviderStatus::ready("E2B key is set. Agents get a sandbox in E2B's cloud.")
     }
 
     /// Creates a sandbox for one agent.
@@ -490,20 +498,6 @@ fn classify(id: &str, body: &str) -> Result<ProviderState, ProviderError> {
     }
 }
 
-/// A command that outran its deadline, said to the model that ran it.
-///
-/// The way forward is in the message because the model is the only one who can
-/// take it: the process is still running on its machine, and a rerun of the
-/// same command gets the same deadline. A refusal that only names the limit is
-/// reworded and tried again.
-fn timed_out(timeout: Duration) -> ProviderError {
-    ProviderError::Unavailable(format!(
-        "the command did not finish within {}s; run long work in the background with nohup or \
-         setsid and poll for its output",
-        timeout.as_secs()
-    ))
-}
-
 /// Where the viewer proxy should connect for one of a sandbox's ports.
 ///
 /// Always TLS on 443: E2B publishes every port of every sandbox as a subdomain,
@@ -796,19 +790,6 @@ mod tests {
             ProviderError::from(E2bError::Protocol("a frame ran past the end".into())),
             ProviderError::Operation(m) if m.contains("a frame ran past the end")
         ));
-    }
-
-    #[test]
-    fn a_command_that_outran_its_deadline_is_told_how_to_outlive_one() {
-        // Read mid-turn by the model that ran the command, and it is the only
-        // one who can act on it: the same command run again gets the same
-        // deadline, so the message has to name the way past it.
-        let err = timed_out(Duration::from_secs(120));
-        let ProviderError::Unavailable(message) = err else {
-            panic!("a deadline is worth retrying differently, not a permanent failure");
-        };
-        assert!(message.contains("120s"), "{message}");
-        assert!(message.contains("nohup"), "a refusal with no way forward is reworded and retried");
     }
 
     #[test]

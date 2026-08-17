@@ -5,9 +5,11 @@
 //! runtime later — is a `ComputerProvider`, and nothing above this module
 //! knows which one it got.
 
+pub mod apple;
 pub mod cli;
 pub mod desktop;
 pub mod e2b;
+pub mod image;
 pub mod provider;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -745,12 +747,20 @@ pub(crate) mod fake {
         pub create_delay: Mutex<Option<std::time::Duration>>,
         /// What every exec answers with, in order; the last one repeats.
         pub replies: Mutex<Vec<Output>>,
+        /// What `probe` answers. `None` is ready: a fake that had to be told it
+        /// works before it would work is one every existing test would have to
+        /// set up.
+        pub probe: Mutex<Option<ProviderStatus>>,
     }
 
     #[async_trait::async_trait]
     impl ComputerProvider for FakeProvider {
         fn kind(&self) -> Provider {
             Provider::E2b
+        }
+
+        async fn probe(&self) -> ProviderStatus {
+            self.probe.lock().clone().unwrap_or_else(|| ProviderStatus::ready("fake: ready"))
         }
 
         async fn create(&self, request: &CreateComputer) -> Result<ProviderHandle, ProviderError> {

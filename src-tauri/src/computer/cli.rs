@@ -378,16 +378,28 @@ mod tests {
         // would otherwise leave ten of these behind.
         let dir = tempfile::tempdir().unwrap();
         let pidfile = dir.path().join("pid");
-        let script = format!("#!/bin/sh\necho $$ > {}\nsleep 20\n", pidfile.display());
+        let script = format!(
+            "#!/bin/sh\ncase \"$1\" in warmup) exit 0 ;; esac\necho $$ > {}\nsleep 20\n",
+            pidfile.display()
+        );
         let cli = Cli::at(fake(dir.path(), "guac-sleeper", &script));
 
+        // macOS evaluates an executable it has never seen before the first time
+        // it runs, and the providers' fixtures put twenty more never-seen files
+        // in this one test binary: run together, that queue was deep enough that
+        // the sleeper had not reached its first line when the deadline below
+        // fired, and the kill was asserted against a process that never ran.
+        // Paid here, off the clock, so what the deadline measures is a wedged
+        // command rather than this Mac thinking about a new file.
+        cli.run(&argv(&["warmup"]), &no_secrets(), Duration::from_secs(60))
+            .await
+            .expect("the fixture runs at all");
+
         let started = Instant::now();
-        // Two seconds against a twenty-second sleep: macOS takes its time over
-        // the first execution of a file it has never seen, and this has to be
-        // long enough that the child is certainly past the line recording its
-        // pid, or the kill below is asserted against a process that never ran.
+        // Three seconds against a twenty-second sleep, which is now only about
+        // how long a process takes to start on a busy machine.
         let err = cli
-            .run(&argv(&["wait"]), &no_secrets(), Duration::from_secs(2))
+            .run(&argv(&["wait"]), &no_secrets(), Duration::from_secs(3))
             .await
             .expect_err("a command that outlives its timeout is not a result");
 
