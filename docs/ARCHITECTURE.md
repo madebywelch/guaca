@@ -268,15 +268,16 @@ the same pipe: `dragDropEnabled` hands Rust the dropped paths, so the bytes are
 read on the Rust side and never enter the webview.
 
 Two limits worth knowing: 25 MB in, and 8 MB onto a machine, because bytes reach
-a sandbox as base64 inside a shell command. A real upload endpoint is the fix
-for the second.
+it as base64 inside a shell command. A real upload endpoint is the fix for the
+second.
 
 ## Storage
 
-SQLite, plain SQL, forward-only numbered migrations. Eight tables: agents,
-groups, messages, usage, approvals, routines, signins and connectors. No ORM:
-every query is a few lines of SQL, and hiding them behind a builder would add a
-dependency and remove the ability to read what hits the disk.
+SQLite, plain SQL, forward-only numbered migrations. Nine tables: agents,
+groups, messages, usage, approvals, routines, signins, connectors and
+computers. No ORM: every query is a few lines of SQL, and hiding them behind a
+builder would add a dependency and remove the ability to read what hits the
+disk.
 
 Two lessons are encoded in `Store::open`:
 

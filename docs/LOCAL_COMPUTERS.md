@@ -1,6 +1,7 @@
 # Local agent computers
 
-Status: reviewed against the code on 2026-08-17; Apple spike pending
+Status: reviewed against the code on 2026-08-17; PR A (provider extraction)
+open; Apple spike pending
 
 Date: 2026-08-17
 

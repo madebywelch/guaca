@@ -250,7 +250,13 @@ src-tauri/src/
     events.rs        Events pushed to the UI.
   llm/               OpenAI-compatible client, SSE decoding, tool definitions.
   db/                SQLite. Plain SQL, numbered migrations.
-  e2b.rs             Sandboxes: the machines agents work on.
+  computer/
+    mod.rs           ComputerManager: one machine per agent, made through a
+                     provider.
+    provider.rs      The provider boundary. exec is the only primitive.
+    desktop.rs       Desktop, browser, screenshots, sign-in reading: all
+                     commands.
+    e2b.rs           The E2B provider.
   proxy.rs           Loopback viewer for those machines.
   eval.rs            Reads a run and says whether it communicated sensibly.
   trajectory.rs      Reads a run's events and says whether the machinery did.
