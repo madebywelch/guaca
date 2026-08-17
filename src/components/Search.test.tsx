@@ -44,6 +44,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     systemPrompt: "",
     skills: [],
     lifecycle: "active",
+    pinned: false,
     version: 1,
     createdAt: 1,
     updatedAt: 1,

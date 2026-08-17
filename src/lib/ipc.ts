@@ -34,6 +34,7 @@ import type {
   Routine,
   RoutineDraft,
   RoutineId,
+  RoutineRun,
   RunId,
   RunUsage,
   SearchHits,
@@ -109,8 +110,19 @@ export const api = {
 
   deleteAgent: (id: AgentId) => invoke<void>("delete_agent", { id }),
 
+  /**
+   * A second agent from the same card: the look, model, skills and
+   * instructions. Not the computer, memory, schedule, accounts or transcript,
+   * which are what one agent went and did rather than what was written down.
+   */
+  duplicateAgent: (id: AgentId) => invoke<AgentCard>("duplicate_agent", { id }),
+
   setAgentPaused: (id: AgentId, paused: boolean) =>
     invoke<AgentCard>("set_agent_paused", { id, paused }),
+
+  /** Keeps an agent at the top of the rail. Nothing else about it changes. */
+  setAgentPinned: (id: AgentId, pinned: boolean) =>
+    invoke<AgentCard>("set_agent_pinned", { id, pinned }),
 
   agentActivity: () => invoke<Record<AgentId, Activity>>("agent_activity"),
 
@@ -163,6 +175,17 @@ export const api = {
     invoke<Routine>("create_routine", { agentId, draft }),
   updateRoutine: (id: RoutineId, draft: RoutineDraft) =>
     invoke<Routine>("update_routine", { id, draft }),
+
+  /** Stops or restarts a routine. Its wording, slot and history all stay. */
+  setRoutineActive: (id: RoutineId, active: boolean) =>
+    invoke<Routine>("set_routine_active", { id, active }),
+
+  /** Fires it now, exactly as the clock would, without moving the schedule. */
+  testRoutine: (id: RoutineId) => invoke<RunId>("test_routine", { id }),
+
+  /** What it has done lately, newest first. */
+  routineRuns: (id: RoutineId) => invoke<RoutineRun[]>("routine_runs", { id }),
+
   deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),

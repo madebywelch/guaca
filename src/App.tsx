@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
+import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { ChannelView } from "./components/ChannelView";
 import { GroupEditor } from "./components/GroupEditor";
+import { Inspector } from "./components/Inspector";
 import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -67,6 +69,7 @@ export default function App() {
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
+  const [menu, setMenu] = useState<MenuTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
@@ -137,7 +140,26 @@ export default function App() {
     }
   };
 
+  /**
+   * Runs something on one agent and re-reads the roster.
+   *
+   * Both menu actions change a card the rail is drawing, and the runtime emits
+   * `agentsChanged` for each, but waiting for the round trip means the row does
+   * not move until the event lands. Refreshing here as well makes the click
+   * feel like it did something.
+   */
+  const onAgent = async (run: () => Promise<unknown>) => {
+    try {
+      await run();
+      await refreshAgents();
+    } catch (error) {
+      setBanner({ tone: "error", text: errorMessage(error) });
+    }
+  };
+
   const needsKey = ready && settings !== null && !settings.apiKeySet;
+  const openAgent =
+    selected && selected !== ACTIVITY_CHANNEL ? agents.find((a) => a.id === selected) : undefined;
 
   return (
     <div className="app">
@@ -148,6 +170,7 @@ export default function App() {
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenSearch={() => setSearching(true)}
+        onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
       />
 
       <main>
@@ -204,6 +227,26 @@ export default function App() {
           />
         )}
       </main>
+
+      {ready && agents.length > 0 && (
+        <Inspector agent={openAgent} onEditProfile={(agent) => setEditing(agent)} />
+      )}
+
+      {menu && (
+        <AgentMenu
+          target={menu}
+          onClose={() => setMenu(null)}
+          onEditProfile={(agent) => setEditing(agent)}
+          onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
+          onDuplicate={(agent) =>
+            void onAgent(async () => {
+              const copy = await api.duplicateAgent(agent.id);
+              await refreshAgents();
+              await select(copy.id);
+            })
+          }
+        />
+      )}
 
       {editing && (
         <AgentEditor

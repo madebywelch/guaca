@@ -14,6 +14,8 @@ interface Props {
   onEditGroup: (group: Group) => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
+  /** Where the operator right-clicked, and on whom. */
+  onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
 
 function prefersReducedMotion(): boolean {
@@ -35,6 +37,7 @@ export function Sidebar({
   onEditGroup,
   onOpenSettings,
   onOpenSearch,
+  onOpenMenu,
 }: Props) {
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
@@ -161,10 +164,9 @@ export function Sidebar({
         style={{ "--accent": agent.color } as React.CSSProperties}
         onClick={() => void select(agent.id)}
         onDoubleClick={() => onEditAgent(agent)}
-        // Right-clicking an agent is only ever on the way to editing it.
         onContextMenu={(event) => {
           event.preventDefault();
-          onEditAgent(agent);
+          onOpenMenu(agent, { x: event.clientX, y: event.clientY });
         }}
       >
         <AgentAvatar
@@ -184,6 +186,15 @@ export function Sidebar({
       </button>
     );
   };
+
+  // Pinned agents are lifted out of their group rather than drawn twice. Two
+  // rows for one agent would be two nodes in `rowRefs`, and the wire would
+  // have to pick one of them to throw a message at.
+  //
+  // Ordered by when they were made, which is the one order that does not move.
+  // The rest of the rail floats whoever just spoke to the top, and a row
+  // pinned so it could be found in one glance must not do that.
+  const pinned = agents.filter((a) => a.pinned).sort((a, b) => a.createdAt - b.createdAt);
 
   return (
     <nav className="rail" aria-label="Agents">
@@ -240,10 +251,27 @@ export function Sidebar({
             );
           })}
 
+          {/* Whoever the operator wants to hand, above the groups and in the
+              same place every time. Unlike the rest of the rail this does not
+              reorder itself as agents talk: a row you pinned so you could find
+              it must be where you left it. */}
+          {pinned.length > 0 && (
+            <div className="rail__group">
+              <div className="rail__group-head">
+                <span className="rail__group-name">Pinned</span>
+              </div>
+              {pinned.map(row)}
+            </div>
+          )}
+
           {/* Every group gets a header, including the only one, because the
               gear on it is where that group's model and endpoint live. */}
           {groups.map((group) => {
             const members = agents.filter((a) => a.groupId === group.id);
+            // Drawn here minus whoever is pinned above, but counted in full: a
+            // pinned agent is still in this group, still costs it money and is
+            // still someone its peers can message.
+            const here = members.filter((a) => !a.pinned);
             return (
               <div key={group.id} className="rail__group">
                 <div className="rail__group-head">
@@ -262,7 +290,7 @@ export function Sidebar({
                     </button>
                   </span>
                 </div>
-                {members.map(row)}
+                {here.map(row)}
                 {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
               </div>
             );
@@ -271,7 +299,7 @@ export function Sidebar({
           {/* Anything whose group did not come back still gets drawn. The rail
               hiding an agent is worse than the rail looking untidy, and an
               empty group list used to hide every agent at once. */}
-          {agents.filter((a) => !groups.some((g) => g.id === a.groupId)).map(row)}
+          {agents.filter((a) => !a.pinned && !groups.some((g) => g.id === a.groupId)).map(row)}
 
           {agents.length === 0 && <p className="rail__empty">No agents yet.</p>}
         </div>

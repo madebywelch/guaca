@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
-use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
+use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
-use crate::domain::routine::{self, Routine};
+use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
@@ -409,6 +409,54 @@ pub fn set_agent_paused(state: State<'_, AppState>, id: AgentId, paused: bool) -
     Ok(card)
 }
 
+/// Keeps an agent at the top of the rail.
+///
+/// Nothing about the agent changes: it is discoverable, addressable and billed
+/// exactly as before, and no peer is told. The card version deliberately does
+/// not move, because nothing a peer reads has.
+#[tauri::command]
+pub fn set_agent_pinned(state: State<'_, AppState>, id: AgentId, pinned: bool) -> Reply<AgentCard> {
+    let card = state.runtime.store().set_agent_pinned(id, pinned)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(card)
+}
+
+/// Makes a second agent from the same card.
+///
+/// The card and nothing else: a copy starts with the look, the model, the
+/// skills and the instructions, and with no computer, no memory, no schedule,
+/// no accounts and no transcript. Those are not part of what the operator
+/// wrote, they are what one agent went and did, and a second agent that
+/// inherited a sandbox would be two agents holding one machine.
+#[tauri::command]
+pub fn duplicate_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCard> {
+    let original = agent_card(&state, id)?;
+    // Only the group it is being copied into, and only agents that still hold
+    // their name: a terminated agent frees it.
+    let taken: Vec<String> = state
+        .runtime
+        .store()
+        .list_agents()?
+        .into_iter()
+        .filter(|c| c.group_id == original.group_id && c.lifecycle != Lifecycle::Terminated)
+        .map(|c| c.name)
+        .collect();
+
+    let draft = AgentDraft {
+        group_id: Some(original.group_id),
+        name: copy_name(&original.name, &taken),
+        avatar: original.avatar,
+        color: original.color,
+        model: original.model,
+        system_prompt: original.system_prompt,
+        skills: original.skills,
+    };
+    let card = state.runtime.store().create_agent(&draft.validate()?)?;
+    state.runtime.start_agent(card.id);
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(card)
+}
+
 #[tauri::command]
 pub fn agent_activity(state: State<'_, AppState>) -> Reply<HashMap<AgentId, Activity>> {
     Ok(state.runtime.activity_snapshot())
@@ -558,9 +606,26 @@ pub fn agent_routines(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Rout
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineDraft {
+    #[serde(default)]
+    pub name: String,
     pub what: String,
-    pub every_secs: Option<u32>,
+    /// The stored trigger form: `daily`, `weekdays`, `every:3600`, `once`.
+    pub trigger: String,
     pub in_secs: Option<u32>,
+}
+
+impl RoutineDraft {
+    /// Refuses a trigger this build does not understand rather than storing it
+    /// and finding out at the next tick. A row nothing can parse is a schedule
+    /// that silently never fires.
+    fn checked(&self) -> Result<Trigger, CommandError> {
+        let trigger = Trigger::parse(&self.trigger).ok_or_else(|| {
+            CommandError::new("validation", format!("no trigger called {:?}", self.trigger))
+        })?;
+        routine::validate(&self.name, &self.what, trigger, self.in_secs)
+            .map_err(|e| CommandError::new("validation", e.to_string()))?;
+        Ok(trigger)
+    }
 }
 
 #[tauri::command]
@@ -569,13 +634,10 @@ pub fn create_routine(
     agent_id: AgentId,
     draft: RoutineDraft,
 ) -> Reply<Routine> {
-    routine::validate(&draft.what, draft.every_secs, draft.in_secs)
-        .map_err(|e| CommandError::new("validation", e.to_string()))?;
-
-    // Without a delay it is due now, which is what "start doing this" means.
-    let first = now_ms() + i64::from(draft.in_secs.unwrap_or(0)) * 1000;
+    let trigger = draft.checked()?;
+    let first = trigger.first_run(now_ms(), draft.in_secs);
     let routine =
-        state.runtime.store().create_routine(agent_id, &draft.what, draft.every_secs, first)?;
+        state.runtime.store().create_routine(agent_id, &draft.name, &draft.what, trigger, first)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(routine)
 }
@@ -586,8 +648,7 @@ pub fn update_routine(
     id: RoutineId,
     draft: RoutineDraft,
 ) -> Reply<Routine> {
-    routine::validate(&draft.what, draft.every_secs, draft.in_secs)
-        .map_err(|e| CommandError::new("validation", e.to_string()))?;
+    let trigger = draft.checked()?;
 
     let existing = state
         .runtime
@@ -595,13 +656,57 @@ pub fn update_routine(
         .get_routine(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
     let next = match draft.in_secs {
-        Some(delay) => now_ms() + i64::from(delay) * 1000,
-        None => existing.next_run_at,
+        Some(_) => trigger.first_run(now_ms(), draft.in_secs),
+        // The slot only stays put while the trigger does. "Every hour" turned
+        // into "every weekday" keeps its hour but has to move off a Saturday,
+        // or the label and the firing disagree from the moment it is saved.
+        None if trigger.accepts(existing.next_run_at) => existing.next_run_at,
+        None => trigger.next_after(existing.next_run_at, now_ms()).unwrap_or(existing.next_run_at),
     };
 
-    let routine = state.runtime.store().update_routine(id, &draft.what, draft.every_secs, next)?;
+    let routine =
+        state.runtime.store().update_routine(id, &draft.name, &draft.what, trigger, next)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(routine)
+}
+
+/// Turns a routine off, or back on.
+///
+/// Not an edit to what it says, so it goes through its own command and leaves
+/// the next firing where it was. A routine switched back on after its slot has
+/// passed is overdue, and the scheduler fires an overdue slot once.
+#[tauri::command]
+pub fn set_routine_active(
+    state: State<'_, AppState>,
+    id: RoutineId,
+    active: bool,
+) -> Reply<Routine> {
+    let routine = state.runtime.store().set_routine_active(id, active)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(routine)
+}
+
+/// Fires a routine now, leaving its schedule alone.
+///
+/// The same delivery the scheduler makes, so what comes back from the button
+/// is what will happen on Tuesday. Works on a routine that is switched off:
+/// trying one out before turning it on is the point.
+#[tauri::command]
+pub fn test_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<RunId> {
+    let routine = state
+        .runtime
+        .store()
+        .get_routine(id)?
+        .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
+    Ok(state.runtime.test_routine(&routine)?)
+}
+
+/// What a routine has done lately, newest first.
+#[tauri::command]
+pub fn routine_runs(state: State<'_, AppState>, id: RoutineId) -> Reply<Vec<RoutineRun>> {
+    // Enough to answer "is this thing working" without turning the panel into
+    // a log viewer. The transcript is where a firing is actually read.
+    Ok(state.runtime.store().routine_runs(id, 20)?)
 }
 
 #[tauri::command]

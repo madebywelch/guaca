@@ -46,6 +46,7 @@ function draw(g: Group) {
       onEditGroup={vi.fn()}
       onOpenSettings={vi.fn()}
       onOpenSearch={vi.fn()}
+      onOpenMenu={vi.fn()}
     />,
   );
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { describeTrigger } from "./routine";
 import { inScope, type SearchInput, score, searchResults, shortUrl } from "./search";
 import type { AgentCard, Group, SearchHits } from "./types";
 
@@ -18,6 +19,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     systemPrompt: "",
     skills: [],
     lifecycle: "active",
+    pinned: false,
     version: 1,
     createdAt: 1,
     updatedAt: 1,
@@ -115,8 +117,10 @@ describe("searchResults", () => {
         {
           id: "r1",
           agentId: "id-Chef",
+          name: "",
           what: "post the budget summary",
-          everySecs: 3600,
+          trigger: "every:3600",
+          active: true,
           nextRunAt: NOW + 1000,
           lastRunAt: null,
           createdAt: 1,
@@ -249,15 +253,17 @@ describe("searchResults", () => {
     expect(inScope(results, "messages")).toHaveLength(1);
   });
 
-  it("says how often a routine fires and who owns it", () => {
+  it("titles and describes a routine the way the schedule panel does", () => {
     const hits: SearchHits = {
       ...NOTHING,
       routines: [
         {
           id: "r1",
           agentId: "id-Chef",
+          name: "Watering",
           what: "water the plants",
-          everySecs: 7200,
+          trigger: "every:7200",
+          active: true,
           nextRunAt: NOW,
           lastRunAt: null,
           createdAt: 1,
@@ -265,8 +271,10 @@ describe("searchResults", () => {
         {
           id: "r2",
           agentId: "id-Chef",
+          name: "",
           what: "one off",
-          everySecs: null,
+          trigger: "once",
+          active: true,
           nextRunAt: NOW,
           lastRunAt: null,
           createdAt: 1,
@@ -274,9 +282,22 @@ describe("searchResults", () => {
       ],
     };
     const rows = inScope(searchResults(input({ agents: [agent("Chef")], hits })), "routines");
-    expect(rows.find((r) => r.title === "water the plants")?.meta).toBe("every 2 hours");
-    expect(rows.find((r) => r.title === "one off")?.meta).toBe("once");
+
+    // A routine the operator named is titled by the name; one an agent set for
+    // itself falls back to its instruction. Which field becomes the title is
+    // this module's decision, so it is asserted literally.
+    expect(rows.map((r) => r.title).sort()).toEqual(["Watering", "one off"]);
+
+    // The wording is not: it comes from the same helpers the schedule panel
+    // uses, and a palette that phrased a cadence its own way would be a second
+    // place to fix when that phrasing changes.
+    expect(rows.find((r) => r.title === "Watering")?.meta).toBe(describeTrigger("every:7200", NOW));
+    expect(rows.find((r) => r.title === "one off")?.meta).toBe(describeTrigger("once", NOW));
     expect(rows[0]?.detail).toBe("Chef");
+
+    // The schedule lives in the panel beside the conversation now, so a hit
+    // opens the channel rather than the profile dialog it used to be in.
+    expect(rows[0]?.action).toEqual({ do: "openChannel", agentId: "id-Chef" });
   });
 
   it("gives every result a key of its own", () => {

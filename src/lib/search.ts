@@ -10,7 +10,8 @@
  * everything is scored by the same function.
  */
 
-import { cadence, relativeTime } from "./time";
+import { describeTrigger, routineTitle } from "./routine";
+import { relativeTime } from "./time";
 import type {
   AgentCard,
   AgentId,
@@ -273,12 +274,17 @@ export function searchResults(input: SearchInput): SearchResult[] {
     results.push({
       key: `routine:${routine.id}`,
       kind: "routines",
-      title: routine.what,
+      // Titled and described by the same functions the schedule panel uses, so
+      // a routine reads the same here as it does where it is edited.
+      title: routineTitle(routine),
       detail: cardOf(routine.agentId)?.name ?? "Deleted agent",
-      meta: cadence(routine.everySecs),
-      score: score(routine.what, query),
+      meta: describeTrigger(routine.trigger, routine.nextRunAt),
+      // Either column is what somebody would type, and the store matches both.
+      score: Math.max(score(routine.name, query), score(routine.what, query)),
       at: routine.nextRunAt,
-      action: { do: "editAgent", agentId: routine.agentId },
+      // The channel, not the profile: a schedule sits in the panel beside the
+      // conversation, and the profile dialog no longer has it.
+      action: { do: "openChannel", agentId: routine.agentId },
     });
   }
 
