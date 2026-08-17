@@ -328,6 +328,7 @@ pub fn harness_in_groups(
             ..Default::default()
         },
         limits,
+        computer: Default::default(),
         e2b: Default::default(),
     };
 

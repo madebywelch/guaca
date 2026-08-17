@@ -15,6 +15,7 @@ use crate::computer::{Computer, ComputerError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
+use crate::domain::computer::ProviderChoice;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
@@ -793,6 +794,7 @@ pub struct SettingsPatch {
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
+    pub computer_provider: Option<ProviderChoice>,
     pub computer_idle_minutes: Option<u32>,
 }
 
@@ -813,10 +815,15 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
     if let Some(key) = patch.e2b_api_key {
         config.e2b.api_key = key.trim().to_string();
     }
+    if let Some(provider) = patch.computer_provider {
+        // Only what a new computer is made with: the ones that exist keep
+        // whoever made them until they are destroyed.
+        config.computer.provider = provider;
+    }
     if let Some(minutes) = patch.computer_idle_minutes {
         // A machine that sleeps after zero minutes can never be used, and one
         // that never sleeps is a bill nobody chose.
-        config.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
+        config.computer.idle_minutes = minutes.clamp(1, 24 * 60);
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();
@@ -871,6 +878,7 @@ pub async fn test_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::computer::Provider;
 
     #[test]
     fn a_duplicate_name_is_distinguishable_from_a_disk_failure() {
@@ -927,6 +935,24 @@ mod tests {
 
         assert_eq!(config.inference.api_key, "sk-typed", "whitespace is trimmed");
         assert!(config.inference.is_ready(), "the typed key must be usable without saving");
+    }
+
+    #[test]
+    fn a_patch_writes_the_computer_settings_where_the_runtime_reads_them() {
+        let mut config = AppConfig::default();
+
+        apply_patch(
+            &mut config,
+            serde_json::from_str(
+                r#"{"computerProvider":"appleContainer","computerIdleMinutes":0}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(config.computer.provider, ProviderChoice::Provider(Provider::AppleContainer));
+        assert_eq!(config.computer.idle_minutes, 1, "a machine that never wakes is unusable");
+        assert_eq!(config.e2b.idle_minutes, None, "the superseded field is never written");
     }
 
     #[test]

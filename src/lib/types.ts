@@ -255,11 +255,18 @@ export interface GuardLimits {
   maxToolRounds: number;
 }
 
+/**
+ * Who to ask for a new computer. `automatic` is resolved once, when the
+ * computer is made; the ones that exist keep whoever made them.
+ */
+export type ComputerProvider = "automatic" | "appleContainer" | "e2b";
+
 export interface Settings {
   /** What agents call you. Empty means they say "the operator". */
   operatorName: string;
   e2bKeySet: boolean;
   e2bKeyHint: string;
+  computerProvider: ComputerProvider;
   computerIdleMinutes: number;
   baseUrl: string;
   defaultModel: string;
@@ -273,6 +280,7 @@ export interface Settings {
 export interface SettingsPatch {
   operatorName?: string;
   e2bApiKey?: string;
+  computerProvider?: ComputerProvider;
   computerIdleMinutes?: number;
   baseUrl?: string;
   apiKey?: string;

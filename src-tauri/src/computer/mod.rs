@@ -672,6 +672,10 @@ impl ComputerManager {
                 *self.inner.e2b_provider.write() = Some((key, provider.clone()));
                 Ok(provider)
             }
+            // Nothing in this build makes one, so only a row written by a newer
+            // one can name it, and there is nothing here that could drive it.
+            // The Apple Container provider is the next task.
+            Provider::AppleContainer => Err(ComputerError::Unconfigured),
         }
     }
 
@@ -684,7 +688,7 @@ impl ComputerManager {
     /// How long a machine may sit unused. Pushed back on every use, so what
     /// expires is idle time rather than a lifetime.
     fn idle_seconds(&self) -> u32 {
-        self.inner.config.read().e2b.idle_minutes.max(1) * 60
+        self.inner.config.read().computer.idle_minutes.max(1) * 60
     }
 
     fn lock_for(&self, agent: AgentId) -> Arc<tokio::sync::Mutex<()>> {

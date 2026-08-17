@@ -50,6 +50,7 @@ describe("ComputerScreen", () => {
         operatorName: "",
         e2bKeySet: true,
         e2bKeyHint: "",
+        computerProvider: "automatic",
         computerIdleMinutes: 15,
         baseUrl: "",
         defaultModel: "",

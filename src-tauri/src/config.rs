@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::computer::{Provider, ProviderChoice};
 use crate::runtime::guard::GuardLimits;
 
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -73,7 +74,7 @@ impl InferenceConfig {
 }
 
 /// Bumped whenever stored settings need adjusting on load.
-pub const CURRENT_VERSION: u32 = 1;
+pub const CURRENT_VERSION: u32 = 2;
 
 /// The limits Guac shipped with before they were retuned against real use.
 ///
@@ -104,35 +105,64 @@ pub struct AppConfig {
     pub operator_name: String,
     pub inference: InferenceConfig,
     pub limits: GuardLimits,
+    pub computer: ComputerConfig,
     #[serde(default)]
     pub e2b: E2bConfig,
+}
+
+/// How agents get a machine, independent of who ends up running it.
+///
+/// Provider-neutral because the setting outlives the provider: an operator who
+/// moves from a hosted sandbox to a local one keeps the same idle time and the
+/// same install, and a setting that lived under `e2b` would have quietly meant
+/// nothing the moment they moved.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ComputerConfig {
+    /// Who to ask for a new machine. `Automatic` is resolved once per computer
+    /// and written to its row; existing computers keep whoever made them.
+    pub provider: ProviderChoice,
+    /// Minutes of inactivity before a machine puts itself to sleep.
+    ///
+    /// Sleeping keeps the disk, so a browser stays signed in; it is the bill
+    /// that stops, not the work. Refreshed on every use, so this is idle time
+    /// rather than a lifetime.
+    pub idle_minutes: u32,
+    /// Labels the resources this install makes, so a machine belonging to
+    /// another copy of Guac on the same Mac is never swept up as an orphan.
+    /// Generated once and then never changed.
+    pub installation_id: String,
+}
+
+impl Default for ComputerConfig {
+    fn default() -> Self {
+        Self {
+            provider: ProviderChoice::Automatic,
+            idle_minutes: default_idle_minutes(),
+            // Empty until `migrate` mints one, which is also how a fresh
+            // install gets one: there is exactly one place that generates it.
+            installation_id: String::new(),
+        }
+    }
 }
 
 /// Credentials for the sandboxes agents run their computers in.
 ///
 /// App-wide rather than per group: it is one E2B account, and a sandbox is
 /// billed to it no matter which crew asked for one.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct E2bConfig {
     pub api_key: String,
-    /// Minutes of inactivity before a machine puts itself to sleep.
-    ///
-    /// Sleeping keeps the disk, so a browser stays signed in; it is the bill
-    /// that stops, not the work. Refreshed on every use, so this is idle time
-    /// rather than a lifetime.
-    #[serde(default = "default_idle_minutes")]
-    pub idle_minutes: u32,
+    /// Where the idle setting used to live, kept only so `migrate` can move a
+    /// stored one into `computer`. Read there and nowhere else, and never
+    /// written back: two places to read one setting is how they drift.
+    #[serde(default, skip_serializing)]
+    pub idle_minutes: Option<u32>,
 }
 
 pub fn default_idle_minutes() -> u32 {
     15
-}
-
-impl Default for E2bConfig {
-    fn default() -> Self {
-        Self { api_key: String::new(), idle_minutes: default_idle_minutes() }
-    }
 }
 
 /// Brings stored settings up to date, returning true if anything changed.
@@ -142,30 +172,55 @@ impl Default for E2bConfig {
 /// how a retuned limit failed to reach the person who needed it. Only values
 /// that still match a superseded default are touched, so a number someone
 /// actually chose is left alone.
+///
+/// Each step is gated on the version it was written for, so a config two
+/// versions behind gets both in order and one a single version behind is not
+/// put through a step that already ran against it.
 pub fn migrate(config: &mut AppConfig) -> bool {
     if config.version >= CURRENT_VERSION {
         return false;
     }
 
-    let current = GuardLimits::default();
+    if config.version < 1 {
+        let current = GuardLimits::default();
 
-    if config.limits.max_hops == V0_LIMITS.max_hops {
-        config.limits.max_hops = current.max_hops;
-    }
-    if config.limits.max_steps_per_run == V0_LIMITS.max_steps_per_run {
-        config.limits.max_steps_per_run = current.max_steps_per_run;
-    }
-    if config.limits.max_sends_per_pair == V0_LIMITS.max_sends_per_pair {
-        config.limits.max_sends_per_pair = current.max_sends_per_pair;
-    }
-    // Four was the hardcoded value before this was settable, and it is far too
-    // few for an agent working a browser.
-    if config.limits.max_tool_rounds == V0_LIMITS.max_tool_rounds {
-        config.limits.max_tool_rounds = current.max_tool_rounds;
+        if config.limits.max_hops == V0_LIMITS.max_hops {
+            config.limits.max_hops = current.max_hops;
+        }
+        if config.limits.max_steps_per_run == V0_LIMITS.max_steps_per_run {
+            config.limits.max_steps_per_run = current.max_steps_per_run;
+        }
+        if config.limits.max_sends_per_pair == V0_LIMITS.max_sends_per_pair {
+            config.limits.max_sends_per_pair = current.max_sends_per_pair;
+        }
+        // Four was the hardcoded value before this was settable, and it is far
+        // too few for an agent working a browser.
+        if config.limits.max_tool_rounds == V0_LIMITS.max_tool_rounds {
+            config.limits.max_tool_rounds = current.max_tool_rounds;
+        }
     }
 
-    // Always worth persisting even when no limit moved: recording the version
-    // is what stops this running again on every launch.
+    if config.version < 2 {
+        if config.computer.installation_id.is_empty() {
+            config.computer.installation_id = uuid::Uuid::new_v4().to_string();
+        }
+        // An install that has an E2B key is pinned to E2B rather than left to
+        // choose: automatic would pick a local provider on a Mac that supports
+        // one, and an operator who paid for a hosted sandbox did not ask to
+        // move. Only when nothing has been chosen, so this can never overwrite
+        // a decision made later.
+        if config.computer.provider == ProviderChoice::Automatic
+            && !config.e2b.api_key.trim().is_empty()
+        {
+            config.computer.provider = ProviderChoice::Provider(Provider::E2b);
+        }
+        if let Some(minutes) = config.e2b.idle_minutes.take() {
+            config.computer.idle_minutes = minutes;
+        }
+    }
+
+    // Always worth persisting even when nothing else moved: recording the
+    // version is what stops this running again on every launch.
     config.version = CURRENT_VERSION;
     true
 }
@@ -179,6 +234,7 @@ pub struct RedactedConfig {
     pub operator_name: String,
     pub e2b_key_set: bool,
     pub e2b_key_hint: String,
+    pub computer_provider: ProviderChoice,
     pub computer_idle_minutes: u32,
     pub base_url: String,
     pub default_model: String,
@@ -194,7 +250,8 @@ impl AppConfig {
             operator_name: self.operator_name.clone(),
             e2b_key_set: !self.e2b.api_key.trim().is_empty(),
             e2b_key_hint: hint_for(&self.e2b.api_key),
-            computer_idle_minutes: self.e2b.idle_minutes,
+            computer_provider: self.computer.provider,
+            computer_idle_minutes: self.computer.idle_minutes,
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
             api_key_set: !self.inference.api_key.trim().is_empty(),
@@ -256,10 +313,11 @@ pub fn load(path: &Path) -> Result<AppConfig, ConfigError> {
     let mut config = match fs::read_to_string(path) {
         Ok(raw) => serde_json::from_str::<AppConfig>(&raw)
             .map_err(|source| ConfigError::Parse { path: path.to_path_buf(), source })?,
-        // A missing config is the first-run case, not an error.
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return Ok(AppConfig { version: CURRENT_VERSION, ..Default::default() });
-        }
+        // A missing config is the first-run case, not an error. Migrated from
+        // version 0 like any other, and then written: a fresh install needs an
+        // installation id as much as an old one, and one minted per launch
+        // would orphan every resource the launch before it made.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => AppConfig::default(),
         Err(source) => return Err(ConfigError::Io { path: path.to_path_buf(), source }),
     };
 
@@ -432,6 +490,119 @@ mod tests {
         // And the fix is durable, not re-applied on every launch.
         let reread: AppConfig = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(reread.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn a_v1_install_with_an_e2b_key_keeps_using_e2b_explicitly() {
+        // Automatic would pick a local provider on a supported Mac, and an
+        // operator who paid for E2B did not ask to move.
+        let mut config = AppConfig { version: 1, ..Default::default() };
+        config.e2b.api_key = "e2b_key".into();
+        config.e2b.idle_minutes = Some(42);
+
+        assert!(migrate(&mut config));
+
+        assert_eq!(config.computer.provider, ProviderChoice::Provider(Provider::E2b));
+        assert_eq!(config.computer.idle_minutes, 42, "the idle setting moved with its meaning");
+        assert_eq!(config.e2b.idle_minutes, None, "and left nothing behind to drift from");
+        assert!(uuid::Uuid::parse_str(&config.computer.installation_id).is_ok());
+        assert_eq!(config.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn a_v1_install_without_a_key_becomes_automatic_and_a_fresh_one_starts_there() {
+        let mut config = AppConfig { version: 1, ..Default::default() };
+        migrate(&mut config);
+        assert_eq!(config.computer.provider, ProviderChoice::Automatic);
+        assert_eq!(config.computer.idle_minutes, default_idle_minutes());
+
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = load(&dir.path().join("config.json")).unwrap();
+        assert_eq!(fresh.computer.provider, ProviderChoice::Automatic);
+        assert!(
+            !fresh.computer.installation_id.is_empty(),
+            "a fresh install labels its resources from day one"
+        );
+    }
+
+    #[test]
+    fn a_fresh_install_keeps_the_same_installation_id_on_the_next_launch() {
+        // The label on every resource this app makes. A new one each launch
+        // would orphan everything the last one created.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let first = load(&path).unwrap();
+        assert_eq!(load(&path).unwrap().computer.installation_id, first.computer.installation_id);
+    }
+
+    #[test]
+    fn migration_v1_to_v2_runs_once_and_keeps_the_installation_id() {
+        let mut config = AppConfig { version: 1, ..Default::default() };
+        migrate(&mut config);
+        let id = config.computer.installation_id.clone();
+        assert!(!migrate(&mut config));
+        assert_eq!(config.computer.installation_id, id);
+    }
+
+    #[test]
+    fn a_v2_file_naming_a_provider_is_never_re_migrated_to_e2b() {
+        // The operator moved a keyed install to a local provider on purpose.
+        let mut config = AppConfig {
+            version: CURRENT_VERSION,
+            computer: ComputerConfig {
+                provider: ProviderChoice::Provider(Provider::AppleContainer),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        config.e2b.api_key = "e2b_key".into();
+
+        assert!(!migrate(&mut config));
+        assert_eq!(config.computer.provider, ProviderChoice::Provider(Provider::AppleContainer));
+    }
+
+    #[test]
+    fn a_v1_file_on_disk_round_trips_through_v2() {
+        // What is actually in ~/Library/Application Support: e2b.idleMinutes.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, r#"{"version":1,"e2b":{"apiKey":"k","idleMinutes":7}}"#).unwrap();
+
+        let cfg = load(&path).unwrap();
+        assert_eq!(cfg.computer.idle_minutes, 7);
+        assert_eq!(cfg.computer.provider, ProviderChoice::Provider(Provider::E2b));
+
+        // load() rewrites a migrated config in place, and the legacy field is
+        // not written back: two places to read one setting is how they drift.
+        let raw: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(raw["computer"]["idleMinutes"], 7);
+        assert_eq!(raw["computer"]["provider"], "e2b");
+        assert!(raw["e2b"]["idleMinutes"].is_null(), "{raw}");
+        assert_eq!(raw["e2b"]["apiKey"], "k", "the key it was migrated for is still there");
+        assert_eq!(load(&path).unwrap(), cfg, "and the rewrite reloads unchanged");
+    }
+
+    #[test]
+    fn a_computer_section_that_only_names_a_provider_keeps_the_default_idle_time() {
+        // Zero would be a machine that falls asleep between two commands.
+        let cfg: AppConfig =
+            serde_json::from_str(r#"{"version":2,"computer":{"provider":"e2b"}}"#).unwrap();
+        assert_eq!(cfg.computer.idle_minutes, default_idle_minutes());
+        assert_eq!(cfg.computer.provider, ProviderChoice::Provider(Provider::E2b));
+    }
+
+    #[test]
+    fn a_config_naming_a_provider_this_build_cannot_drive_is_refused() {
+        // Silently reading it as automatic would run an agent's machine
+        // somewhere the operator did not choose.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        fs::write(&path, r#"{"version":2,"computer":{"provider":"docker"}}"#).unwrap();
+
+        let err = load(&path).unwrap_err();
+        assert!(matches!(err, ConfigError::Parse { .. }), "{err}");
+        assert!(err.to_string().contains("docker"), "{err}");
     }
 
     #[test]

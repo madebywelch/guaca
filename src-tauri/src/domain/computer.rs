@@ -4,7 +4,7 @@
 //! find the machine again. The provider's own identifier and tokens are here
 //! as data; driving the machine is `crate::computer`.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::ids::{AgentId, ComputerId};
 
@@ -14,6 +14,7 @@ use super::ids::{AgentId, ComputerId};
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     E2b,
+    AppleContainer,
 }
 
 impl Provider {
@@ -22,14 +23,65 @@ impl Provider {
     pub fn as_str(self) -> &'static str {
         match self {
             Provider::E2b => "e2b",
+            Provider::AppleContainer => "appleContainer",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "e2b" => Some(Provider::E2b),
+            "appleContainer" => Some(Provider::AppleContainer),
             _ => None,
         }
+    }
+}
+
+/// What the operator picked in settings, which is a choice rather than an
+/// answer: `Automatic` is resolved to a `Provider` once, when a computer is
+/// made, and it is the computer's row that records who actually runs it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderChoice {
+    #[default]
+    Automatic,
+    Provider(Provider),
+}
+
+impl ProviderChoice {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ProviderChoice::Automatic => "automatic",
+            ProviderChoice::Provider(provider) => provider.as_str(),
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "automatic" => Some(ProviderChoice::Automatic),
+            other => Provider::parse(other).map(ProviderChoice::Provider),
+        }
+    }
+}
+
+// Written by hand rather than derived, because the derived form of a newtype
+// variant is an object and this has to be the one flat token `as_str` returns:
+// the same string is in the config file, in the UI, and in a `computers` row.
+impl Serialize for ProviderChoice {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderChoice {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        // Refused rather than read as `Automatic`. A settings file written by a
+        // newer build names a provider on purpose, and quietly choosing another
+        // one would run an agent's machine somewhere nobody asked for.
+        Self::parse(&raw).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "unknown computer provider {raw:?}; expected automatic, appleContainer or e2b"
+            ))
+        })
     }
 }
 
@@ -121,13 +173,45 @@ mod tests {
         // drive. Guessing would let it operate on somebody else's resource.
         assert_eq!(Provider::parse("e2b"), Some(Provider::E2b));
         assert_eq!(Provider::parse("E2B"), None);
-        assert_eq!(Provider::parse("appleContainer"), None, "not in this PR");
+        assert_eq!(Provider::parse("appleContainer"), Some(Provider::AppleContainer));
+        assert_eq!(Provider::parse("apple-container"), None);
+        assert_eq!(Provider::parse("docker"), None, "not in this PR");
         assert_eq!(Provider::E2b.as_str(), "e2b");
+        assert_eq!(Provider::AppleContainer.as_str(), "appleContainer");
 
         // One spelling, so a row written by the runtime and a provider read by
         // the UI can never mean different things.
-        let provider = Provider::E2b;
-        assert_eq!(serde_json::to_value(provider).unwrap().as_str(), Some(provider.as_str()));
+        for provider in [Provider::E2b, Provider::AppleContainer] {
+            assert_eq!(serde_json::to_value(provider).unwrap().as_str(), Some(provider.as_str()));
+        }
+    }
+
+    #[test]
+    fn a_provider_choice_round_trips_and_an_unknown_one_is_refused() {
+        let choices = [
+            ProviderChoice::Automatic,
+            ProviderChoice::Provider(Provider::AppleContainer),
+            ProviderChoice::Provider(Provider::E2b),
+        ];
+        for choice in choices {
+            assert_eq!(ProviderChoice::parse(choice.as_str()), Some(choice));
+            // The same pinning as `Provider`: a choice stored in the config
+            // file and one read by the UI are the same token or neither works.
+            assert_eq!(serde_json::to_value(choice).unwrap().as_str(), Some(choice.as_str()));
+            assert_eq!(
+                serde_json::from_value::<ProviderChoice>(serde_json::json!(choice.as_str()))
+                    .unwrap(),
+                choice
+            );
+        }
+        assert_eq!(ProviderChoice::Automatic.as_str(), "automatic");
+        assert_eq!(ProviderChoice::parse("docker"), None, "PR C, not this one");
+        assert_eq!(ProviderChoice::parse("Automatic"), None);
+
+        // Refused rather than quietly read as automatic: a config naming a
+        // provider this build cannot drive is worth saying out loud.
+        let err = serde_json::from_str::<ProviderChoice>(r#""docker""#).unwrap_err().to_string();
+        assert!(err.contains("docker"), "the message must name the value it refused: {err}");
     }
 
     #[test]
