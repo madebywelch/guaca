@@ -244,10 +244,15 @@ impl Completion {
 /// "it didn't work" take an hour to diagnose.
 #[derive(Debug, thiserror::Error)]
 pub enum LlmError {
-    #[error("no API key is configured. Open Settings and paste an OpenRouter key.")]
+    #[error("no inference endpoint is configured. Open Settings and set one.")]
     NotConfigured,
     #[error("the inference endpoint rejected the API key (HTTP {status}): {message}")]
     Auth { status: u16, message: String },
+    #[error(
+        "the inference endpoint wants an API key and none is set (HTTP {status}): {message}. \
+         Open Settings and paste one."
+    )]
+    KeyRequired { status: u16, message: String },
     #[error("rate limited by the inference endpoint: {message}")]
     RateLimited { message: String, retry_after_secs: Option<u64> },
     #[error("model {model:?} was rejected: {message}")]
@@ -282,8 +287,9 @@ impl LlmError {
     /// Short form for the transcript chip.
     pub fn headline(&self) -> String {
         match self {
-            LlmError::NotConfigured => "no API key configured".into(),
+            LlmError::NotConfigured => "no endpoint configured".into(),
             LlmError::Auth { .. } => "API key rejected".into(),
+            LlmError::KeyRequired { .. } => "API key needed".into(),
             LlmError::RateLimited { .. } => "rate limited".into(),
             LlmError::ModelRejected { model, .. } => format!("model {model} unavailable"),
             LlmError::Upstream { status, .. } => format!("upstream HTTP {status}"),
@@ -328,9 +334,19 @@ fn extract_message(body: &str) -> String {
     }
 }
 
-fn classify_status(status: u16, body: &str, model: &str, retry_after: Option<u64>) -> LlmError {
+fn classify_status(
+    status: u16,
+    body: &str,
+    model: &str,
+    key_set: bool,
+    retry_after: Option<u64>,
+) -> LlmError {
     let message = extract_message(body);
     match status {
+        // A server that wants a key answers a keyless request the same way it
+        // answers a wrong one. The operator who never entered a key needs to
+        // be told to, not that theirs was refused.
+        401 | 403 if !key_set => LlmError::KeyRequired { status, message },
         401 | 403 => LlmError::Auth { status, message },
         429 => LlmError::RateLimited { message, retry_after_secs: retry_after },
         // OpenRouter reports an unknown or unavailable model as a 400 or 404.
@@ -489,10 +505,15 @@ impl LlmClient {
             temperature: request.temperature,
         };
 
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(cfg.api_key.trim())
+        // A blank key sends no header at all rather than `Bearer ` with
+        // nothing after it, which a strict server rejects. That is the local
+        // server case: llama.cpp and LM Studio want nothing here.
+        let key = cfg.api_key.trim();
+        let mut builder = self.http.post(&url);
+        if !key.is_empty() {
+            builder = builder.bearer_auth(key);
+        }
+        let response = builder
             // OpenRouter uses these for attribution and leaderboard ranking.
             // Other OpenAI-compatible servers ignore them.
             .header("HTTP-Referer", &cfg.referer)
@@ -518,7 +539,13 @@ impl LlmClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
             let text = response.text().await.unwrap_or_default();
-            return Err(classify_status(status.as_u16(), &text, &request.model, retry_after));
+            return Err(classify_status(
+                status.as_u16(),
+                &text,
+                &request.model,
+                !key.is_empty(),
+                retry_after,
+            ));
         }
 
         self.consume_stream(response, &url, timeout, &mut on_token).await
@@ -897,13 +924,78 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_missing_key_fails_before_any_network_call() {
+    async fn a_missing_endpoint_fails_before_any_network_call() {
         let client = LlmClient::new().unwrap();
-        let mut config = cfg("http://127.0.0.1:1/v1".into());
-        config.api_key = "   ".into();
+        let config = cfg("   ".into());
         let err = client.stream_chat(&config, &request(), |_| {}).await.unwrap_err();
         assert!(matches!(err, LlmError::NotConfigured));
-        assert!(!err.is_transient(), "a missing key will not fix itself on retry");
+        assert!(!err.is_transient(), "a missing endpoint will not fix itself on retry");
+        assert!(
+            err.to_string().contains("endpoint"),
+            "the operator is told what is missing, got {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_blank_key_reaches_a_local_server_and_sends_no_authorization_header() {
+        // The README says to leave the key blank for a llama.cpp or LM Studio
+        // server that does not want one. Refusing before the network made that
+        // path a lie, and `Bearer ` with nothing after it is a header a strict
+        // server rejects, so a blank key has to mean no header at all.
+        let saw_auth = Arc::new(Mutex::new(None));
+        let recorder = saw_auth.clone();
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(move |headers: axum::http::HeaderMap| {
+                let recorder = recorder.clone();
+                async move {
+                    *recorder.lock().unwrap() =
+                        Some(headers.get("authorization").map(|v| v.to_str().unwrap().to_string()));
+                    sse(&[&text_frame("ok"), "[DONE]"])
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = LlmClient::new().unwrap();
+        let mut config = cfg(format!("http://{addr}/v1"));
+        config.api_key = "   ".into();
+        let completion = client.stream_chat(&config, &request(), |_| {}).await.unwrap();
+
+        assert_eq!(completion.content, "ok");
+        assert_eq!(
+            *saw_auth.lock().unwrap(),
+            Some(None),
+            "the request went out, and carried no Authorization header"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_401_with_no_key_set_says_to_add_one_rather_than_that_it_was_rejected() {
+        // A server that wants a key answers a keyless request the same way it
+        // answers a wrong one. "Rejected the API key" is the wrong story for an
+        // operator who never entered one; what they need is to be told to.
+        let (base, _) = stub(|_| {
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                axum::Json(serde_json::json!({"error": {"message": "No auth credentials found"}})),
+            )
+                .into_response()
+        })
+        .await;
+
+        let client = LlmClient::new().unwrap();
+        let mut config = cfg(base);
+        config.api_key = String::new();
+        let err = client.stream_chat(&config, &request(), |_| {}).await.unwrap_err();
+        assert!(matches!(err, LlmError::KeyRequired { status: 401, .. }), "got {err:?}");
+        assert!(!err.is_transient(), "asking again without a key gets the same answer");
+        let text = err.to_string();
+        assert!(text.contains("none is set"), "says what happened, got {text}");
+        assert!(text.contains("Settings"), "says what to do about it, got {text}");
+        assert!(text.contains("No auth credentials"), "and keeps the server's own words");
     }
 
     #[tokio::test]

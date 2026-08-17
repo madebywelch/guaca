@@ -175,6 +175,34 @@ describe("App", () => {
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
   });
 
+  it("does not ask for a key when the endpoint is a local server", async () => {
+    // The README says to leave the key blank for a llama.cpp or LM Studio
+    // server. A banner insisting on one is the app contradicting its own
+    // instructions on the operator's first run.
+    getSettings.mockResolvedValue({
+      operatorName: "",
+      baseUrl: "http://localhost:1234/v1",
+      defaultModel: "local/model",
+      apiKeySet: false,
+      e2bKeySet: false,
+      e2bKeyHint: "",
+      computerIdleMinutes: 15,
+      apiKeyHint: "",
+      requestTimeoutSecs: 120,
+      limits: {
+        maxHops: 4,
+        maxStepsPerRun: 40,
+        maxFanoutPerCall: 8,
+        maxSendsPerPair: 3,
+        maxToolRounds: 24,
+      },
+    });
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    expect(screen.queryByText(/Add an API key/i)).toBeNull();
+  });
+
   it("still renders the rail when startup fails", async () => {
     // A failed bootstrap must degrade to a usable window with an error, not to
     // a blank one.
