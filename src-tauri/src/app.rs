@@ -100,8 +100,9 @@ pub fn run() {
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.
-            let viewer_port = tauri::async_runtime::block_on(proxy::start(runtime.store().clone()))
-                .map_err(|e| format!("could not start the computer viewer: {e}"))?;
+            let viewer_port =
+                tauri::async_runtime::block_on(proxy::start(Arc::new(runtime.store().clone())))
+                    .map_err(|e| format!("could not start the computer viewer: {e}"))?;
             runtime.set_viewer_port(viewer_port);
 
             // Anything this app left running that no agent still refers to is
