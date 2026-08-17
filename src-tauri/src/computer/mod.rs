@@ -679,7 +679,20 @@ impl crate::proxy::ViewerResolver for ComputerManager {
             return None;
         }
         let handle = Self::handle_of(&record)?;
-        self.provider(record.provider).ok()?.viewer_target(&handle, port).await.ok()
+        match self.provider(record.provider).ok()?.viewer_target(&handle, port).await {
+            Ok(target) => Some(target),
+            Err(err) => {
+                // The proxy can only answer 404, which reads as "no such
+                // machine". The reason it could not be reached is only ever
+                // said here.
+                tracing::warn!(
+                    %err,
+                    computer = %id,
+                    "the viewer has nowhere to send this computer's desktop"
+                );
+                None
+            }
+        }
     }
 }
 

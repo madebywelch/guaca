@@ -215,9 +215,10 @@ impl ComputerProvider for E2bProvider {
 
     /// Wakes it, and hands back the handle it now answers to.
     ///
-    /// Both tokens are reissued on waking. Keeping the old ones is a machine
-    /// that is running and unreachable, which looks exactly like one that is
-    /// broken.
+    /// The whole handle is rebuilt from the resume reply, id included: a woken
+    /// machine answers to a new name as well as to new tokens, and the manager
+    /// persists all of it. Keeping any of the old handle is a machine that is
+    /// running and unreachable, which looks exactly like one that is broken.
     async fn start(
         &self,
         handle: &ProviderHandle,

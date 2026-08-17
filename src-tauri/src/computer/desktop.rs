@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
+use super::provider::{Output, ProviderError};
 use super::Machine;
-use crate::computer::provider::{Output, ProviderError};
 
 /// Where noVNC serves the desktop, once it has been started.
 pub(super) const VNC_PORT: u16 = 6080;

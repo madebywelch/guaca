@@ -5,6 +5,7 @@
  */
 
 export type AgentId = string;
+export type ComputerId = string;
 export type GroupId = string;
 export type MessageId = string;
 export type RunId = string;
@@ -192,7 +193,7 @@ export interface Signin {
 
 /** An agent's computer: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
-  id: string;
+  id: ComputerId;
   provider: "e2b";
   /** `running` or `asleep` (disk kept, wakes on use). */
   state: string;
@@ -211,7 +212,7 @@ export interface AgentCard {
   id: AgentId;
   groupId: GroupId;
   /** Set once the agent has been given a computer. */
-  computerId: string | null;
+  computerId: ComputerId | null;
   name: string;
   avatar: string;
   color: string;
