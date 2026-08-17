@@ -25,6 +25,16 @@ defined, is a courtesy: the permissive half of the parser must not be the half
 that opens the door. `runtime/prompt.rs` says the same thing to the model in the
 mode where it matters, and the two have to agree.
 
+**`expects_reply` and `intent` answer different questions, and conflating them
+stopped an agent mid-task.** The first is whether anybody is waiting on your
+words, which is what terminates a cascade. The second is whether you were given
+something to do. An instruction to a peer that has already answered carries work
+and expects no reply, and reading the first as the second put that turn in the
+mode that says nothing is being asked of it and silence is usually right. A real
+send to the operator's own address died there: the agent spent a call, said
+nothing, and looked like it had stopped. `ReplyMode::Assigned` is that
+combination, and its output is still a note.
+
 **Whether a send is "answering" is a question about the run, not the batch.**
 Replies land milliseconds apart and an actor drains whatever is in its inbox, so
 a batch is a timing artifact: three peers answering at once can be split across

@@ -29,6 +29,15 @@ pub enum ReplyMode {
     ToPeer,
     /// Recorded in this agent's own channel as a note. Nothing is delivered.
     NoteOnly,
+    /// The same, except that something in the batch gave this agent work.
+    ///
+    /// Nobody is waiting on its words, so its output is still a note. But it
+    /// has been told to do something, and `NoteOnly` tells an agent that
+    /// nothing is being asked of it and silence is usually right. A real
+    /// instruction to send an email arrived in that mode and the agent
+    /// correctly said nothing, which is what an operator saw as an agent that
+    /// stopped.
+    Assigned,
 }
 
 pub fn system_prompt(
@@ -348,6 +357,18 @@ pub fn system_prompt(
              own channel. One or two sentences, and only if it tells the operator something your \
              last note did not.\n"
         }
+        ReplyMode::Assigned => {
+            "You have been given something to do, and nobody is waiting on a reply.\n\n\
+             Do it now, with the tools you have. This is work, not an update: the message that \
+             woke you asked for an action, and reading it is not doing it. If part of it is \
+             beyond you or a check fails, do the part you can and say exactly what stopped the \
+             rest.\n\n\
+             Do not answer the agent that asked. Your reply is filed as a short note in your own \
+             channel, where the operator reads it, so write what you did and what came of it: \
+             what you sent, to whom, and what the result was. Saying nothing here is the one \
+             wrong answer, because it leaves the operator watching an agent that appears to have \
+             stopped.\n"
+        }
     });
 
     out
@@ -506,6 +527,7 @@ mod tests {
     use super::*;
     use crate::domain::agent::Lifecycle;
     use crate::domain::attachment::Attachment;
+    use crate::domain::envelope::Intent;
     use crate::domain::envelope::{Part, Trust};
     use crate::domain::ids::{GroupId, MessageId, RunId};
 
@@ -577,6 +599,7 @@ mod tests {
             trust: Trust::Peer,
             hop: 0,
             expects_reply: true,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: 0,
         }
@@ -1029,6 +1052,36 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_given_work_is_told_to_do_it_rather_than_that_nothing_is_asked_of_it() {
+        // The live failure: an explicit instruction to send an email arrived
+        // with no reply expected, so the turn ran in the mode that says nothing
+        // needs doing and silence is usually right. The agent complied and an
+        // operator watched it stop.
+        let told = prompt_for(&card("Outreach"), &[entry("Manager", &[])], "", ReplyMode::Assigned);
+        assert!(told.contains("given something to do"), "the work has to be named: {told}");
+        assert!(told.contains("Do it now"), "and demanded: {told}");
+        assert!(
+            !told.contains("Saying nothing is allowed"),
+            "the silence permission belongs to the mode where nothing was asked: {told}"
+        );
+        assert!(
+            told.contains("Saying nothing here is the one wrong answer"),
+            "and has to be reversed here, or the model falls back on it: {told}"
+        );
+        // Its output is still a note, because nobody is waiting on a reply.
+        assert!(told.contains("own channel"), "{told}");
+    }
+
+    #[test]
+    fn an_agent_that_was_only_acknowledged_is_still_allowed_to_say_nothing() {
+        // The other half. Work is the exception, not the new default: an agent
+        // reading thanks must still be free to write nothing at all.
+        let quiet = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", ReplyMode::NoteOnly);
+        assert!(quiet.contains("Saying nothing is allowed"), "{quiet}");
+        assert!(!quiet.contains("Do it now"), "{quiet}");
+    }
+
+    #[test]
     fn a_file_in_the_history_is_still_there_next_turn() {
         // History is filtered by whether a message has anything in it. Judging
         // that by text alone dropped a document sent with no covering note, so
@@ -1063,7 +1116,9 @@ mod tests {
 
     #[test]
     fn every_reply_mode_repeats_the_non_blocking_rule() {
-        for mode in [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly] {
+        for mode in
+            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
+        {
             let prompt = prompt_for(&card("Manager"), &[entry("Chef", &[])], "", mode);
             assert!(prompt.contains("Never wait for a reply"), "missing for {mode:?}");
         }

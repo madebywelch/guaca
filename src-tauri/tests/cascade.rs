@@ -937,6 +937,94 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
 }
 
 #[tokio::test]
+async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_quiet() {
+    // Found in a real session, and the exact shape of it. The operator asked
+    // for an email, the coordinator relayed it, the peer opened the document
+    // and reported back, and the coordinator then issued the actual send
+    // instruction. That instruction was delivered, and the peer said nothing.
+    //
+    // Nothing was waiting on a reply, so the turn ran in the mode that tells an
+    // agent nobody is asking it for anything and silence is usually right. It
+    // spent a model call and complied. From the operator's side an agent had
+    // simply stopped.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if who == "Chef" {
+            if !text.contains("go ahead and send it") {
+                Script::Say("I have the file open, confirm before I send.".into())
+            } else if text.contains("Nothing here needs an answer") {
+                // A model that reads its prompt. Told nothing is being asked of
+                // it and that silence is usually right, it stays silent, which
+                // is exactly what the live agent did with a real instruction to
+                // send an email in front of it.
+                Script::Say(String::new())
+            } else {
+                Script::Say("Sent it.".into())
+            }
+        } else if text.contains("confirm before I send") {
+            Script::Instruct {
+                recipients: vec!["Chef".into()],
+                text: "Confirmed by the operator: go ahead and send it.".into(),
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef has been told.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "prepare the mailing".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Have Chef send the mailing.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Chef").iter().any(|t| t.contains("Sent it.")),
+        "the instruction landed and the agent went quiet:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn work_and_a_reply_are_different_questions_on_the_wire() {
+    // The two used to be the same field. An instruction carries work and wants
+    // no reply, which is the combination that had nowhere to live.
+    let stub = serve(|body| {
+        if speaker(body) == "Chef" {
+            Script::Say("Done.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Told.".into())
+        } else {
+            Script::Instruct { recipients: vec!["Chef".into()], text: "send it".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Tell Chef to send it.").unwrap();
+    h.settle(run).await;
+
+    let instruction = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Chef"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.plain_text() == "send it")
+        .expect("the instruction reached Chef");
+    assert!(instruction.intent.is_work(), "what the sender declared has to survive the wire");
+    assert!(
+        instruction.expects_reply,
+        "the first message of an exchange still expects an answer; only a settled pair does not"
+    );
+}
+
+#[tokio::test]
 async fn a_courtesy_to_a_peer_that_already_answered_is_still_refused() {
     // The other half. Declaring intent is not a way around the guard: the
     // thank-you that used to run a crew in circles is turned away exactly as

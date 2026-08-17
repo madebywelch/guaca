@@ -655,7 +655,7 @@ fn verdict(outcome: &ToolOutcome) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::envelope::{Envelope, Trust};
+    use crate::domain::envelope::{Envelope, Intent, Trust};
     use crate::domain::ids::GroupId;
 
     fn named(ids: &[(AgentId, &'static str)]) -> impl Fn(AgentId) -> String {
@@ -677,6 +677,7 @@ mod tests {
                 trust: Trust::Peer,
                 hop: 0,
                 expects_reply: false,
+                intent: Intent::Courtesy,
                 cause: None,
                 created_at: 0,
             }),

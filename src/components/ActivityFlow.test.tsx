@@ -53,6 +53,7 @@ function msg(
     trust: "peer",
     hop,
     expectsReply: true,
+    intent: "courtesy",
     cause: null,
     createdAt: clock,
   };

@@ -48,6 +48,7 @@ function envelope(overrides: Partial<Envelope>): Envelope {
     trust: "operator",
     hop: 0,
     expectsReply: true,
+    intent: "courtesy",
     cause: null,
     createdAt: 1_700_000_000_000,
     ...overrides,

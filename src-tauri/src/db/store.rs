@@ -15,7 +15,7 @@ use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAction};
 use crate::domain::connector::{CleanConnector, Connector};
-use crate::domain::envelope::{Envelope, Part, Participant, Trust};
+use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
@@ -962,8 +962,8 @@ impl Store {
             .map_err(|e| StoreError::Corrupt(format!("parts are not serializable: {e}")))?;
 
         conn.execute(
-            "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 envelope.id.to_string(),
                 envelope.run_id.to_string(),
@@ -976,6 +976,7 @@ impl Store {
                 envelope.trust.as_str(),
                 envelope.hop,
                 envelope.expects_reply,
+                envelope.intent.as_str(),
                 envelope.cause.map(|c| c.to_string()),
                 envelope.created_at,
             ],
@@ -990,7 +991,7 @@ impl Store {
     pub fn get_message(&self, id: MessageId) -> Result<Option<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
                FROM messages WHERE id=?1",
         )?;
         match stmt.query_row(params![id.to_string()], row_to_envelope).optional()? {
@@ -1006,7 +1007,7 @@ impl Store {
     ) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
                FROM messages WHERE channel_id=?1
               ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
@@ -1029,7 +1030,7 @@ impl Store {
     pub fn conversation_flow(&self, limit: u32) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
                FROM messages WHERE to_kind <> 'system'
               ORDER BY created_at DESC, id DESC LIMIT ?1",
         )?;
@@ -1454,8 +1455,9 @@ fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
     let trust_raw: String = row.get(8)?;
     let hop: u16 = row.get(9)?;
     let expects_reply: bool = row.get(10)?;
-    let cause_raw: Option<String> = row.get(11)?;
-    let created_at: i64 = row.get(12)?;
+    let intent_raw: String = row.get(11)?;
+    let cause_raw: Option<String> = row.get(12)?;
+    let created_at: i64 = row.get(13)?;
 
     Ok((|| {
         let parts: Vec<Part> = serde_json::from_str(&parts_raw)
@@ -1475,6 +1477,10 @@ fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
             trust,
             hop,
             expects_reply,
+            // Anything unrecognised reads as a courtesy, which is the same
+            // conservative default the parser uses: a stored word nobody
+            // defined must not be the one that wakes an agent to act.
+            intent: Intent::parse(&intent_raw),
             cause: match cause_raw {
                 Some(raw) => Some(
                     raw.parse::<MessageId>()
@@ -1527,6 +1533,7 @@ mod tests {
             trust: Trust::Peer,
             hop: 1,
             expects_reply: true,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: now_ms(),
         }
@@ -2217,8 +2224,8 @@ mod tests {
         {
             let conn = f.store.conn().unwrap();
             conn.execute(
-                "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at)
-                 VALUES (?1,?2,?3,'agent',NULL,'human',NULL,'[]','peer',0,1,NULL,1)",
+                "INSERT INTO messages (id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at)
+                 VALUES (?1,?2,?3,'agent',NULL,'human',NULL,'[]','peer',0,1,'courtesy',NULL,1)",
                 params![MessageId::new().to_string(), RunId::new().to_string(), card.id.to_string()],
             )
             .unwrap();

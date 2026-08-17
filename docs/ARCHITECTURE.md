@@ -77,6 +77,18 @@ coordinator relayed the authorisation, read the answer, and was refused when it
 tried to instruct again, because by then nobody was waiting on it. Every
 delegation that takes two rounds died at exactly that point.
 
+**Being asked for an answer and being given work are different questions.**
+`expects_reply` is the first and `intent` is the second, and they came apart the
+moment an agent could instruct a peer that had already answered: such a message
+carries work and expects no reply. The runtime had only `expects_reply` to go
+on, so that turn ran in the mode whose prompt says nothing is being asked of it
+and that silence is usually right. The agent read an explicit instruction to
+send an email, spent a model call, said nothing, and to the operator had simply
+stopped. `intent` is now on the envelope and `ReplyMode::Assigned` is the
+combination of work with nobody waiting: do it, then file what you did as a note
+in your own channel. The asymmetry that terminates cascades is untouched, because
+what changed is what the recipient is told, not where its answer goes.
+
 The field is trusted, and that is deliberate. A model can label a courtesy as
 work, and then the run pays for one extra turn and hits the same per-pair,
 hop and budget limits as before. The alternative was to keep guessing, and the

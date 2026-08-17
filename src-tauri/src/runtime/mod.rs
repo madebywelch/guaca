@@ -169,14 +169,15 @@ use crate::domain::approval::{Approval, ApprovalState, Decision, DetailField, Pr
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{
-    channel_for, Envelope, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome, Trust,
+    channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
+    Trust,
 };
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::signin::Signin;
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
-use crate::llm::tools::{self, Delivery, Intent, ToolInvocation};
+use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
@@ -852,6 +853,8 @@ impl Runtime {
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
+            // A schedule firing is the agent being asked to do something.
+            intent: Intent::Work,
             cause: None,
             created_at: now_ms(),
         };
@@ -932,6 +935,8 @@ impl Runtime {
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
+            // The operator typing is the definition of work.
+            intent: Intent::Work,
             cause: None,
             created_at: now_ms(),
         };
@@ -1032,6 +1037,7 @@ impl Runtime {
             trust: Trust::System,
             hop: 0,
             expects_reply: false,
+            intent: Intent::Courtesy,
             cause,
             created_at: now_ms(),
         };
@@ -1177,9 +1183,15 @@ impl Runtime {
         // something. When nothing did, an exchange it writes into has already
         // finished: see `send_to_peers`.
         let settled = reply_target.is_none();
+        // Being asked for an answer and being given work are different
+        // questions, and reading the first as the second is what stopped an
+        // agent mid-task: an explicit instruction to send an email arrives with
+        // no reply expected, so the turn was told nothing needed doing.
+        let assigned = batch.iter().any(|e| e.intent.is_work());
         let mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
+            None if assigned => ReplyMode::Assigned,
             _ => ReplyMode::NoteOnly,
         };
 
@@ -1569,6 +1581,7 @@ impl Runtime {
                 trust: Trust::System,
                 hop: inbound_hop,
                 expects_reply: false,
+                intent: Intent::Courtesy,
                 cause,
                 created_at: now_ms(),
             };
@@ -1597,6 +1610,8 @@ impl Runtime {
             // An agent's answer never itself demands an answer. This is the
             // single asymmetry that makes cascades terminate.
             expects_reply: false,
+            // An answer is not an assignment either, whatever it contains.
+            intent: Intent::Courtesy,
             cause,
             created_at: now_ms(),
         };
@@ -2344,6 +2359,7 @@ impl Runtime {
                         trust: Trust::Peer,
                         hop,
                         expects_reply: !answering,
+                        intent,
                         cause,
                         created_at: now_ms(),
                     };

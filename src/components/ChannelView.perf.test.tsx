@@ -73,6 +73,7 @@ function message(index: number): Envelope {
     trust: "peer",
     hop: 0,
     expectsReply: false,
+    intent: "courtesy",
     cause: null,
     createdAt: index,
   };

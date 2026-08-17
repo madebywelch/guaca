@@ -13,6 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::envelope::Intent;
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
 pub const DIRECTORY: &str = "directory";
@@ -349,46 +350,6 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
     ]
-}
-
-/// What a message is for, as its sender declares it.
-///
-/// The loop guard needs one thing from a message it cannot read: whether the
-/// recipient has anything to do because of it. It cannot be inferred from the
-/// wire, where a second instruction and a thank-you are the same shape, and
-/// guessing from the shape refused real work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Intent {
-    /// The recipient has something to do or answer because of this.
-    Work,
-    /// Thanks, an acknowledgement, a closing note.
-    ///
-    /// The default on purpose. A model that does not say gets today's
-    /// behaviour, so a field nobody fills in cannot quietly open the door the
-    /// guard is holding shut.
-    #[default]
-    Courtesy,
-}
-
-impl Intent {
-    pub fn is_work(self) -> bool {
-        self == Intent::Work
-    }
-
-    /// Read from whatever the model actually sent.
-    ///
-    /// Only the declared word counts. A synonym table would be the same guess
-    /// this field exists to replace, and a model that improvises a value gets
-    /// one refusal naming the word to use, which it can act on in the same
-    /// turn. Deserialized as a string rather than an enum for the same reason:
-    /// an invented value must not fail the whole call.
-    fn parse(value: &str) -> Self {
-        if value.trim().eq_ignore_ascii_case("work") {
-            Intent::Work
-        } else {
-            Intent::Courtesy
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

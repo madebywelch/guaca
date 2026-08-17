@@ -391,6 +391,23 @@ CREATE INDEX approvals_granted
     WHERE state = 'alwaysAllow';
 "#,
     ),
+    (
+        15,
+        r#"
+-- What the sender said this message was for.
+--
+-- `expects_reply` answers "is anybody waiting on your words", which is what
+-- makes cascades terminate. It was also being read as "is anybody asking you
+-- for anything", and those came apart the moment an agent could instruct a
+-- peer that had already answered: the instruction arrived with no reply
+-- expected, so the recipient was told nothing needed doing and said nothing. A
+-- real send to the operator's own address died exactly there.
+--
+-- Existing rows are courtesies by default, which is what they were: before
+-- this column no message could carry declared work.
+ALTER TABLE messages ADD COLUMN intent TEXT NOT NULL DEFAULT 'courtesy';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

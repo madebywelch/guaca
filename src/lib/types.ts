@@ -27,6 +27,9 @@ export type ToolOutcome =
   | { status: "refused"; reason: string }
   | { status: "failed"; error: string };
 
+/** Whether a message carries work or is a courtesy. */
+export type Intent = "work" | "courtesy";
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
@@ -93,6 +96,12 @@ export interface Envelope {
   trust: Trust;
   hop: number;
   expectsReply: boolean;
+  /**
+   * What the sender said this message was for. Distinct from
+   * {@link Envelope.expectsReply}: that says whether anybody is waiting on your
+   * words, this says whether you were given something to do.
+   */
+  intent: Intent;
   cause: MessageId | null;
   createdAt: number;
 }

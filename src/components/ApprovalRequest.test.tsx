@@ -54,6 +54,7 @@ function asking(): Envelope {
     trust: "system",
     hop: 0,
     expectsReply: false,
+    intent: "courtesy",
     cause: null,
     createdAt: 0,
   };
