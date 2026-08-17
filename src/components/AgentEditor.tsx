@@ -55,10 +55,10 @@ export function AgentEditor({ agent, onClose }: Props) {
     nameRef.current?.focus();
   }, []);
 
-  // Notes live on disk rather than on the card, so they are fetched separately
-  // and only written back when the operator actually edited them. Saving them
-  // unconditionally would clobber anything the agent wrote while this dialog
-  // was open.
+  // An agent's memory lives on disk rather than on the card, so it is fetched
+  // separately and only written back when the operator actually edited it.
+  // Saving it unconditionally would clobber anything the agent wrote while this
+  // dialog was open.
   useEffect(() => {
     if (!agent) return;
     let cancelled = false;
@@ -263,7 +263,7 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         {agent && (
           <label className="field">
-            <span className="field__label">Notes</span>
+            <span className="field__label">Memory</span>
             <textarea
               className="textarea input--mono"
               value={notesLoaded ? notes : "Loading…"}
@@ -277,7 +277,8 @@ export function AgentEditor({ agent, onClose }: Props) {
             />
             <span className="field__hint">
               The agent's own memory, shown to it every turn and rewritten by it with{" "}
-              <code>update_notes</code>. Seed a persona here if you like. Stored as markdown in the
+              <code>update_notes</code>: ask it to remember something, or to update its memory, and
+              this is the file it writes. Seed a persona here if you like. Stored as markdown in the
               workspace folder beside the database.
             </span>
           </label>

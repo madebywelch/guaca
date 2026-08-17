@@ -87,9 +87,14 @@ crew that is stuck.
 
 ## Memory and routines
 
-Each agent has a notes file it maintains itself with `update_notes`, shown to it
-at the start of every turn. It is the only thing that survives between
+Each agent has a memory file it maintains itself with `update_notes`, shown to
+it at the start of every turn. It is the only thing that survives between
 conversations. You can read and edit it in the agent editor.
+
+Memory and notes are one file under two names: memory is what an agent is told
+it has, notes is what the tool and the files are called. Ask an agent to update
+its memory, to remember something, or to make a note of it, and all three land
+in the same place.
 
 An agent can also keep its own schedule: "check the listings every five hours"
 is a routine, stored as a next-due time rather than a timer, so it survives a
@@ -177,7 +182,7 @@ Everything lives in one directory:
 ~/Library/Application Support/com.madebywelch.guac/
   guac.db        agents, groups, messages, routines, usage
   config.json    settings, written 0600
-  workspace/     one markdown file per agent: its notes
+  workspace/     one markdown file per agent: its memory
 ```
 
 The API key is stored in `config.json` in plaintext. Guaca is a local app with
@@ -186,10 +191,10 @@ honest answer is the OS keychain, and that is a deliberate follow-up rather than
 something faked here.
 
 Deleting an agent is a soft delete: it leaves the rail and can never be messaged
-again, its computer is destroyed and its notes go, but what it already said
+again, its computer is destroyed and its memory goes, but what it already said
 stays readable and its name becomes free to reuse. **Start fresh** on a group
-resets its whole crew (transcripts, routines, notes and spend) while keeping the
-agents themselves.
+resets its whole crew (transcripts, routines, memories and spend) while keeping
+the agents themselves.
 
 ## Working on it
 

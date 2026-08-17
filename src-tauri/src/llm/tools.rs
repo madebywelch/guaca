@@ -49,15 +49,17 @@ pub fn specs() -> Vec<ToolSpec> {
             // The description is the whole design. It has to make selective
             // writing and consolidation the obvious reading, because the model
             // has no other signal about what belongs in a durable file.
-            description: "Replace your notes. Your notes are a short markdown file shown to you \
-                          at the start of every turn, so anything kept there you will always \
-                          know. Record only what will still matter in a week: who you are and \
-                          how you work, the operator's standing preferences, decisions that hold \
-                          across conversations, and durable facts. Do not record the \
-                          conversation itself, task-by-task progress, or anything already in the \
-                          messages above. This REPLACES the file entirely, so write out \
-                          everything you want to keep and leave behind what no longer holds; if \
-                          something you believed turned out to be wrong, correct it here rather \
+            description: "Replace your memory. Your memory is a short markdown file, also called \
+                          your notes, shown to you at the start of every turn, so anything kept \
+                          there you will always know. This is the tool for anything asked of your \
+                          memory, in whatever words: remember this, update your memory, make a \
+                          note of that, forget that. Record only what will still matter in a week: \
+                          who you are and how you work, the operator's standing preferences, \
+                          decisions that hold across conversations, and durable facts. Do not \
+                          record the conversation itself, task-by-task progress, or anything \
+                          already in the messages above. This REPLACES the file entirely, so write \
+                          out everything you want to keep and leave behind what no longer holds; \
+                          if something you believed turned out to be wrong, correct it here rather \
                           than adding a contradiction. Space is limited, so choose."
                 .to_string(),
             parameters: serde_json::json!({
@@ -65,7 +67,7 @@ pub fn specs() -> Vec<ToolSpec> {
                 "properties": {
                     "content": {
                         "type": "string",
-                        "description": "The complete new contents of your notes, in markdown."
+                        "description": "The complete new contents of your memory, in markdown."
                     }
                 },
                 "required": ["content"],
@@ -275,9 +277,9 @@ pub fn specs() -> Vec<ToolSpec> {
                     },
                     "notes": {
                         "type": "string",
-                        "description": "Optional. Seeds its memory file: facts it should start \
-                                        out knowing, in markdown. It maintains this itself \
-                                        afterwards."
+                        "description": "Optional. Seeds its memory, the file it is shown every \
+                                        turn: facts it should start out knowing, in markdown. It \
+                                        maintains this itself afterwards."
                     }
                 },
                 "required": ["name", "instructions"],
@@ -414,7 +416,7 @@ impl ToolParseError {
             ToolParseError::UnknownTool { name } => {
                 format!(
                     "Error: no tool named {name:?}. You can call `directory`, `send_message`, \
-                     `update_notes`, or `run_command`."
+                     `update_notes` (your memory), or `run_command`."
                 )
             }
             ToolParseError::BadJson { name, detail } => format!(
@@ -469,8 +471,9 @@ impl ToolParseError {
                  \"prioritisation\"]}}."
             ),
             ToolParseError::MissingContent => {
-                "Error: `content` must be a string holding the complete new notes. To clear your \
-                 notes, pass an empty string."
+                "Error: `content` must be a string holding the complete new contents of your \
+                 memory: everything you want to keep, not only the part you just learned. To \
+                 clear it, pass an empty string."
                     .to_string()
             }
         }
@@ -640,13 +643,21 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 _ => Err(ToolParseError::MissingCommand),
             }
         }
-        UPDATE_NOTES => {
+        // Memory is what this file is called everywhere a person reads about
+        // it, and notes is what the tool is called. An agent told to update its
+        // memory reaches for the word it was given, and the name it lands on is
+        // the same file either way, so refusing one spends a turn on spelling.
+        UPDATE_NOTES | "update_memory" | "save_memory" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: UPDATE_NOTES.to_string(),
                 detail: e.to_string(),
             })?;
-            // An empty string is a legitimate instruction: clear the notes.
-            match value.get("content").or_else(|| value.get("notes")) {
+            // An empty string is a legitimate instruction: clear the memory.
+            match value
+                .get("content")
+                .or_else(|| value.get("notes"))
+                .or_else(|| value.get("memory"))
+            {
                 Some(serde_json::Value::String(content)) => {
                     Ok(ToolInvocation::UpdateNotes { content: content.clone() })
                 }
@@ -687,7 +698,7 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                     name,
                     instructions,
                     skills: normalize_list(value.get("skills")),
-                    notes: field(&["notes"]).unwrap_or_default(),
+                    notes: field(&["notes", "memory"]).unwrap_or_default(),
                 },
             })
         }
@@ -1138,11 +1149,41 @@ mod tests {
     }
 
     #[test]
-    fn update_notes_accepts_the_notes_alias() {
-        assert_eq!(
-            parse(&call(UPDATE_NOTES, r#"{"notes":"kept"}"#)).unwrap(),
-            ToolInvocation::UpdateNotes { content: "kept".into() }
-        );
+    fn the_memory_file_answers_to_both_of_its_names() {
+        // The operator's word for this file is memory; the tool is called
+        // `update_notes`. An agent told to update its memory writes the same
+        // file whichever word it reaches for, so a rejection here would cost a
+        // whole turn to say only that the two words mean one thing.
+        for name in [UPDATE_NOTES, "update_memory", "save_memory"] {
+            assert_eq!(
+                parse(&call(name, r#"{"content":"kept"}"#)).unwrap(),
+                ToolInvocation::UpdateNotes { content: "kept".into() },
+                "{name} did not reach the memory file"
+            );
+        }
+        for field in ["content", "notes", "memory"] {
+            assert_eq!(
+                parse(&call(UPDATE_NOTES, &format!("{{\"{field}\":\"kept\"}}"))).unwrap(),
+                ToolInvocation::UpdateNotes { content: "kept".into() },
+                "{field} was not read"
+            );
+        }
+    }
+
+    #[test]
+    fn a_seeded_memory_is_accepted_under_either_word() {
+        for field in ["notes", "memory"] {
+            let parsed = parse(&call(
+                CREATE_AGENT,
+                &format!(
+                    "{{\"name\":\"Scout\",\"instructions\":\"You look.\",\"{field}\":\"B2B.\"}}"
+                ),
+            ));
+            match parsed {
+                Ok(ToolInvocation::CreateAgent { draft }) => assert_eq!(draft.notes, "B2B."),
+                other => panic!("{field} gave {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -1153,11 +1194,16 @@ mod tests {
     }
 
     #[test]
-    fn the_notes_tool_asks_for_durable_things_and_forbids_a_transcript_dump() {
+    fn the_memory_tool_asks_for_durable_things_and_forbids_a_transcript_dump() {
         // The description is the only control over what an agent writes, so the
         // selective-write instruction has to survive edits.
         let spec = specs().into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
         let text = spec.description.to_lowercase();
+        // Both words, because the tool is named for one of them and asked for
+        // in the other: an agent reading only "notes" here has to guess that
+        // the operator's "update your memory" landed on this tool.
+        assert!(text.contains("memory"), "{text}");
+        assert!(text.contains("notes"), "{text}");
         assert!(text.contains("still matter in a week"));
         assert!(text.contains("do not record the conversation"));
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
@@ -1265,6 +1311,11 @@ mod tests {
         assert!(err.guidance().contains("directory"));
         assert!(err.guidance().contains("send_message"));
         assert!(err.guidance().contains("update_notes"));
+        assert!(
+            err.guidance().contains("memory"),
+            "a model that invented a name for its memory has to recognise the real tool in the \
+             list, and the tool is not named for the word it used"
+        );
     }
 
     #[test]

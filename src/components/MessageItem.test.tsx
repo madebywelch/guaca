@@ -229,19 +229,19 @@ describe("an agent's own record of what it did", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
-  it("does not draw a note update as a message to nobody", () => {
+  it("does not draw a memory update as a message to nobody", () => {
     // update_notes has no recipients, so falling through to the send renderer
-    // drew it as "Sent to no one" with the note body as the message.
+    // drew it as "Sent to no one" with the memory body as the message.
     show(
       record({
         type: "toolCall",
         name: "update_notes",
         arguments: { content: "Smith handles verification." },
-        outcome: { status: "ok", summary: "Notes saved (28 characters)." },
+        outcome: { status: "ok", summary: "Memory saved (28 characters)." },
       }),
     );
     expect(screen.queryByText(/no one/)).toBeNull();
-    expect(screen.getByText(/updated its notes/)).toBeTruthy();
+    expect(screen.getByText(/updated its memory/)).toBeTruthy();
   });
 
   it("names an unrecognised tool rather than guessing it was a send", () => {

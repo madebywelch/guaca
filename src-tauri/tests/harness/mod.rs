@@ -45,6 +45,9 @@ pub enum Script {
     Directory,
     /// Emit an `update_notes` tool call.
     Notes(String),
+    /// The same call under the name a model reaches for when it is asked to
+    /// update its memory rather than its notes.
+    Memory(String),
     /// Emit a `create_agent` tool call.
     Hire { name: String, instructions: String, notes: String },
     /// Answer with a 503.
@@ -93,11 +96,13 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Notes(content) => {
+        Script::Notes(content) | Script::Memory(content) => {
+            let tool =
+                if matches!(script, Script::Memory(_)) { "update_memory" } else { "update_notes" };
             let args = serde_json::json!({ "content": content }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_notes","type":"function",
-                 "function":{"name":"update_notes","arguments": args}}
+                 "function":{"name": tool,"arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

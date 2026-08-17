@@ -520,7 +520,7 @@ async fn an_upstream_failure_is_reported_in_the_channel_rather_than_swallowed() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_agent_can_write_notes_and_reads_them_back_next_turn() {
+async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
     // The write-manage-read loop, end to end: an agent records something on one
     // turn and finds it in its own prompt on the next.
     let stub = serve(|body| {
@@ -553,7 +553,35 @@ async fn an_agent_can_write_notes_and_reads_them_back_next_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn deleting_an_agent_takes_its_notes_with_it() {
+async fn an_agent_asked_for_its_memory_writes_the_same_file_as_its_notes() {
+    // What the operator calls this file is memory; the tool is `update_notes`.
+    // An agent that takes the operator at their word and calls `update_memory`
+    // has written the right thing to the right place, and refusing it would
+    // spend a turn on the difference between two words for one file.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Remembered.".into())
+        } else {
+            Script::Memory("Operator prefers terse replies.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "update your memory: be terse").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.runtime.workspace().read(h.id("Manager")),
+        "Operator prefers terse replies.",
+        "a memory written under the operator's word for it went nowhere"
+    );
+    let said = h.channel_texts("Manager").join("\n");
+    assert!(said.contains("Remembered."), "the turn should have carried on, got {said}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deleting_an_agent_takes_its_memory_with_it() {
     let stub = serve(|_| Script::Notes("private".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
     let run = h.runtime.send_from_human(h.id("Manager"), "remember something").unwrap();
