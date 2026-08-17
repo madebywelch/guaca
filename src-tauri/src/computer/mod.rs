@@ -5,6 +5,7 @@
 //! runtime later — is a `ComputerProvider`, and nothing above this module
 //! knows which one it got.
 
+pub mod cli;
 pub mod desktop;
 pub mod e2b;
 pub mod provider;
