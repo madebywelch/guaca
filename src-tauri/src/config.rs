@@ -155,10 +155,11 @@ impl Default for ComputerConfig {
 pub struct E2bConfig {
     pub api_key: String,
     /// Where the idle setting used to live, kept only so `migrate` can move a
-    /// stored one into `computer`. Read there and nowhere else, and never
-    /// written back: two places to read one setting is how they drift.
+    /// stored one into `computer`. Private, so "read there and nowhere else" is
+    /// the compiler's rule rather than a convention, and never written back:
+    /// two places to read one setting is how they drift.
     #[serde(default, skip_serializing)]
-    pub idle_minutes: Option<u32>,
+    idle_minutes: Option<u32>,
 }
 
 pub fn default_idle_minutes() -> u32 {
@@ -506,6 +507,22 @@ mod tests {
         assert_eq!(config.computer.idle_minutes, 42, "the idle setting moved with its meaning");
         assert_eq!(config.e2b.idle_minutes, None, "and left nothing behind to drift from");
         assert!(uuid::Uuid::parse_str(&config.computer.installation_id).is_ok());
+        assert_eq!(config.version, CURRENT_VERSION);
+    }
+
+    #[test]
+    fn a_v1_limit_someone_chose_survives_the_v2_migration() {
+        // Four was a superseded default, but this config has already been
+        // through the step that replaces those, so a four here is a number
+        // somebody typed. A migration about computers must not retune it.
+        let mut config = AppConfig {
+            version: 1,
+            limits: GuardLimits { max_hops: V0_LIMITS.max_hops, ..GuardLimits::default() },
+            ..Default::default()
+        };
+        assert!(migrate(&mut config));
+
+        assert_eq!(config.limits.max_hops, V0_LIMITS.max_hops, "a chosen value must survive");
         assert_eq!(config.version, CURRENT_VERSION);
     }
 

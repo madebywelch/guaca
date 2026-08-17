@@ -952,7 +952,6 @@ mod tests {
 
         assert_eq!(config.computer.provider, ProviderChoice::Provider(Provider::AppleContainer));
         assert_eq!(config.computer.idle_minutes, 1, "a machine that never wakes is unusable");
-        assert_eq!(config.e2b.idle_minutes, None, "the superseded field is never written");
     }
 
     #[test]
