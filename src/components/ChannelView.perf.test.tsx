@@ -58,7 +58,7 @@ function agent(id: string, name: string): AgentCard {
     pinned: false,
     createdAt: 0,
     updatedAt: 0,
-    sandboxId: null,
+    computerId: null,
     version: 1,
   };
 }

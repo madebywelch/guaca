@@ -215,7 +215,7 @@ export function ComputerScreen({ agent }: Props) {
             // once when the connection opens, so switching it would mean
             // reconnecting. The veil below does that job instead, without
             // touching the connection.
-            key={computer.sandboxId}
+            key={computer.id}
             title={`${agent.name}'s computer`}
             src={computer.vncUrl ?? ""}
           />

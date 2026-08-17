@@ -83,7 +83,7 @@ function agent(name: string): AgentCard {
   return {
     id: `id-${name}`,
     groupId: "00000000-0000-4000-8000-000000000001",
-    sandboxId: null,
+    computerId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

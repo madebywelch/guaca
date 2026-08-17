@@ -190,12 +190,13 @@ export interface Signin {
   lastSeenAt: number;
 }
 
-/** An agent's sandbox: a Linux machine with a shell, a network and a desktop. */
+/** An agent's computer: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
-  sandboxId: string;
-  /** `running`, `asleep` (disk kept, wakes on use) or `gone`. */
+  id: string;
+  provider: "e2b";
+  /** `running` or `asleep` (disk kept, wakes on use). */
   state: string;
-  /** Absent until the desktop processes are up inside the sandbox. */
+  /** Absent until the desktop processes are up inside the machine. */
   vncUrl: string | null;
 }
 
@@ -210,7 +211,7 @@ export interface AgentCard {
   id: AgentId;
   groupId: GroupId;
   /** Set once the agent has been given a computer. */
-  sandboxId: string | null;
+  computerId: string | null;
   name: string;
   avatar: string;
   color: string;

@@ -8,7 +8,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
   return {
     id: "a1",
     groupId: "g1",
-    sandboxId: null,
+    computerId: null,
     name: "Manager",
     avatar: "avocado",
     color: "#c7d96b",
