@@ -197,8 +197,22 @@ impl Drop for Spike {
         // that is exactly the run that would otherwise leave a machine behind.
         tokio::task::block_in_place(move || {
             tokio::runtime::Handle::current().block_on(async move {
-                if let Err(err) = provider.delete(&handle).await {
-                    eprintln!("could not release {name}: {err}; remove it by hand");
+                // Twice, a second apart. A test that failed mid-command leaves
+                // an `exec` session the runtime is still winding down, and
+                // `delete --force` refuses one of those with `clientIsStopped
+                // … failed to delete process`. Every leftover from a failed run
+                // was one of these: a 20 GiB volume and a network that the next
+                // run then meets as its own debris.
+                let Err(first) = provider.delete(&handle).await else {
+                    return;
+                };
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if let Err(again) = provider.delete(&handle).await {
+                    eprintln!(
+                        "could not release {name} ({first}), and again a second later ({again}); \
+                         remove it with `container delete --force {name}` and \
+                         `container volume delete {name}` and `container network delete {name}`"
+                    );
                 }
             });
         });

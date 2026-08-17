@@ -131,6 +131,19 @@ RUN mkdir -p /opt/guaca/home/.local/bin \
 COPY computer-image/google-chrome.desktop \
      /opt/guaca/home/.local/share/applications/google-chrome.desktop
 
+# The skeleton belongs to the account it is copied for, and this must be the
+# last thing that writes into it.
+#
+# `guaca-init` copies it with `cp -Rpn`, which preserves what it finds — and,
+# because the source is `.../home/.`, applies the *source directory's* own
+# attributes to the destination directory as well. A root-owned skeleton
+# therefore hands the volume's mount point back to root every boot, which on a
+# live machine left /home/user unwritable while every command reported success.
+# `guaca-init` chowns the mount point after the copy for the same reason. Both,
+# because the failure is silent and shows up much later as an agent that cannot
+# write its own home.
+RUN chown -R 1000:1000 /opt/guaca/home
+
 # The driver and the session reader, exactly as the app compiles them in. The
 # runtime writes its own copy of each before it uses them, so these are for
 # whatever runs before that: a person on the desktop, and `sessions.py` asked
@@ -170,6 +183,8 @@ RUN set -eu; \
     python3 -c 'import sqlite3'; \
     sh -n /usr/local/bin/guaca-init; \
     sh -n /opt/noVNC/utils/novnc_proxy; \
+    test "$(stat -c %u /opt/guaca/home)" = 1000; \
+    test "$(stat -c %u /opt/guaca/home/.local/bin/google-chrome)" = 1000; \
     grep -q 'user-data-dir=/home/user/.guac/chrome' /usr/local/bin/google-chrome; \
     grep -q '.local/bin' /opt/guaca/home/.profile
 

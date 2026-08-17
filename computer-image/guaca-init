@@ -92,23 +92,11 @@ fi
 chmod 0777 "$BEAT_DIR" 2>/dev/null || true
 chmod 0666 "$BEAT" 2>/dev/null || true
 
-# The mount point itself, which is where an unprivileged process gets stopped:
-# a volume the runtime has just created is an empty filesystem owned by root,
-# and every write an agent makes lands directly in it. Asked before it is
-# changed, because on every boot after the first it is already right and a
-# needless chown of a mount root is a needless write.
-if [ "$(stat -c %u "$HOME_DIR" 2>/dev/null || echo -)" != "$GUEST_UID" ]; then
-  chown "$GUEST_UID:$GUEST_GID" "$HOME_DIR" \
-    || echo "guaca-init: $HOME_DIR could not be given to uid $GUEST_UID, so nothing an agent runs \
-can write its own home" >&2
-fi
-
 # The skeleton, on every boot. `-n` never overwrites, so it is what a new
 # machine starts with and what an old one falls back to for anything it has
 # lost, while an agent's own edits to a dotfile survive every boot after the
 # first. `-p` keeps the mode, which is what makes the copied Chrome wrapper
-# executable; ownership is fixed immediately below, since a root process copying
-# root's files makes more of root's files.
+# executable.
 cp -Rpn "$SKELETON/." "$HOME_DIR/" 2>/dev/null
 # Judged by what arrived rather than by an exit status: `cp -n` skipping a file
 # an agent already has is the ordinary case on every boot but the first, and
@@ -117,6 +105,27 @@ cp -Rpn "$SKELETON/." "$HOME_DIR/" 2>/dev/null
 if [ ! -x "$HOME_DIR/.local/bin/google-chrome" ]; then
   echo "guaca-init: the home skeleton did not arrive in $HOME_DIR; expect no browser wrapper on \
 PATH and a desktop icon that opens a profile no agent can drive" >&2
+fi
+
+# The mount point itself, and this has to come after the copy.
+#
+# `cp -Rpn src/. dst/` copies the source *directory's* own attributes onto the
+# destination directory, so the line above hands the mount root back to whoever
+# owns the skeleton. Doing this first — which is the obvious order, and the
+# order this file had — left /home/user owned by root on a live machine while
+# every command in the boot said it had succeeded. The image chowns the
+# skeleton to the same uid for the same reason: two ways of being right about
+# one directory, because the failure is silent and the symptom arrives much
+# later as an agent that cannot write its own home.
+#
+# Asked before it is changed only to keep a needless write off a mount root, and
+# asked about both halves of what the chown sets: a guard on the uid alone
+# leaves a home with the right owner and the wrong group uncorrected forever,
+# which is the same class of silent wrongness as the one above.
+if [ "$(stat -c %u:%g "$HOME_DIR" 2>/dev/null || echo -)" != "$GUEST_UID:$GUEST_GID" ]; then
+  chown "$GUEST_UID:$GUEST_GID" "$HOME_DIR" \
+    || echo "guaca-init: $HOME_DIR could not be given to uid $GUEST_UID, so nothing an agent runs \
+can write its own home" >&2
 fi
 
 # Every path the skeleton names, and only those. On a first boot that is

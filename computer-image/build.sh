@@ -105,6 +105,90 @@ check_novnc_launcher() {
   esac
 }
 
+# One field of one file, spelled for whichever `stat` this machine has. The
+# guest is Debian and `guaca-init` is written for GNU stat; a Mac has BSD's,
+# which takes the same letters after a different flag.
+stat_field() {
+  stat -c "%$1" "$2" 2>/dev/null || stat -f "%$1" "$2"
+}
+
+# `guaca-init` actually run, against a scratch home, with the one thing that
+# broke a live machine asserted at the end.
+#
+# The bug: `cp -Rpn "$SKELETON/." "$HOME_DIR/"` applies the *source directory's*
+# own attributes to the destination directory, so a skeleton owned by root hands
+# the volume's mount point back to root — undoing a chown made before the copy,
+# with every command in the boot reporting success. /home/user stayed root's on
+# a real machine and three conformance tests failed on `Permission denied`, none
+# of them anywhere near the cause.
+#
+# Ownership needs root to demonstrate, and this rarely runs as root, so the
+# check uses the *group* instead: the same `-p` copies it by the same rule, and
+# an account can change a file's group to any group it belongs to. A machine
+# whose account has only one group cannot show it either, and says so rather
+# than passing quietly.
+check_home_handover() {
+  local work home skel script other group
+
+  other=""
+  for group in $(id -G); do
+    if [ "$group" != "$(id -g)" ]; then
+      other="$group"
+      break
+    fi
+  done
+
+  work="$(mktemp -d "${TMPDIR:-/tmp}/guaca-boot.XXXXXX")"
+  home="$work/home"
+  skel="$work/skeleton"
+  mkdir -p "$skel/.local/bin" "$skel/.guac/chrome" "$home/.guac/chrome" "$work/run"
+  printf '%s\n' 'PATH="$HOME/.local/bin:$PATH"' > "$skel/.profile"
+  printf '#!/bin/sh\nexit 0\n' > "$skel/.local/bin/google-chrome"
+  chmod 0755 "$skel/.local/bin/google-chrome"
+  # What an agent edited on an earlier boot, and what a stopped container left.
+  printf '%s\n' 'edited by the agent' > "$home/.profile"
+  touch "$home/.guac/chrome/SingletonLock"
+  [ -n "$other" ] && chgrp "$other" "$skel" 2>/dev/null
+
+  # The real file, with the guest's absolute paths pointed at the scratch
+  # directory and this account's ids standing in for the guest's. The loop's
+  # sleep is shortened so the boot ends in about a second instead of thirty.
+  script="$work/guaca-init"
+  sed -e "s#^HOME_DIR=/home/user#HOME_DIR=$home#" \
+    -e "s#^SKELETON=/opt/guaca/home#SKELETON=$skel#" \
+    -e "s#^BEAT_DIR=/run/guaca#BEAT_DIR=$work/run#" \
+    -e "s#^GUEST_UID=1000#GUEST_UID=$(id -u)#" \
+    -e "s#^GUEST_GID=1000#GUEST_GID=$(id -g)#" \
+    -e 's#sleep 30 &#sleep 1 \&#' \
+    "$IMAGE_DIR/guaca-init" > "$script"
+  # BSD's `stat` takes the same format letters after a different flag, except
+  # for the modification time, which GNU spells `%Y` and BSD spells `%m`.
+  if ! stat -c %u . >/dev/null 2>&1; then
+    sed -i.bak -e 's#stat -c %Y#stat -f %m#' -e 's#stat -c #stat -f #' "$script"
+  fi
+
+  GUAC_IDLE_SECONDS=1 sh "$script" >/dev/null 2>&1
+
+  [ -x "$home/.local/bin/google-chrome" ] \
+    || fail "the boot did not put an executable Chrome wrapper in the home"
+  grep -q 'edited by the agent' "$home/.profile" \
+    || fail "the boot overwrote a file the agent had already edited"
+  [ ! -e "$home/.guac/chrome/SingletonLock" ] \
+    || fail "the boot left Chrome's SingletonLock behind; the next browser refuses the profile"
+
+  if [ -n "$other" ] && [ "$(stat_field g "$skel")" = "$other" ]; then
+    group="$(stat_field g "$home")"
+    [ "$group" = "$(id -g)" ] || fail "the boot left the home belonging to the skeleton's group \
+($group) rather than the account it hands the home to: the copy applied the skeleton directory's \
+attributes to the mount point, which is what the chown after it exists to undo"
+  else
+    echo "  (this account has one group, so the mount-point handover was not exercised;" \
+      "src-tauri/tests/apple.rs asserts it on a real machine)"
+  fi
+
+  rm -rf "$work"
+}
+
 # The strings this image and the running app both hold. Each of these was a real
 # failure once: two Chrome profiles on one machine, and a desktop entry pointing
 # at a wrapper that was not there.
@@ -215,6 +299,7 @@ checks() {
   echo "==> checking the image's scripts"
   check_shell
   check_novnc_launcher
+  check_home_handover
   echo "==> checking what the image and desktop.rs both claim"
   check_chrome_agreement
   check_desktop_paths
