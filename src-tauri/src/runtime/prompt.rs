@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 use crate::domain::agent::{AgentCard, DirectoryEntry};
 use crate::domain::attachment::Attachment;
+use crate::domain::computer::ComputerAccess;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
@@ -54,8 +55,10 @@ pub fn system_prompt(
     signins: &[Signin],
     // Whether this agent can be given a machine at all: it owns one, or some
     // provider on this Mac could make it one. Without that, the section below
-    // has to say the opposite of what it says with it.
-    has_computer: bool,
+    // has to say the opposite of what it says with it, and in the workspace's
+    // own words: there is more than one way to have no computer and they do
+    // not have the same answer.
+    computer: &ComputerAccess,
     notes: &str,
     mode: ReplyMode,
 ) -> String {
@@ -93,46 +96,46 @@ pub fn system_prompt(
     // computer goes on saying it has one, and describes results it had no way
     // to produce.
     out.push_str("\n## Your computer\n");
-    if !has_computer {
-        out.push_str(
-            "You do not have one. No computer provider is ready on this Mac, so there is no \
-             machine behind you: no shell, no browser, no screen, and no way to fetch a page or \
-             run code. What you know is what is in this conversation and in your memory.\n\n\
-             Never claim to have run a command, opened a page, or read a file from a machine. \
-             When a task needs one, say plainly what you would have done and tell the operator \
-             that installing Apple Container, or adding an E2B API key in Settings, would give \
-             you a computer. Everything else described here still works.\n",
-        );
-    } else {
-        out.push_str(
+    match computer {
+        ComputerAccess::Unavailable { because, remedy } => {
+            out.push_str(&format!(
+                "You do not have one: {because}. There is no machine behind you: no shell, no \
+                 browser, no screen, and no way to fetch a page or run code. What you know is \
+                 what is in this conversation and in your memory.\n\n\
+                 Never claim to have run a command, opened a page, or read a file from a \
+                 machine. When a task needs one, say plainly what you would have done and tell \
+                 the operator that {remedy}. Everything else described here still works.\n"
+            ));
+        }
+        ComputerAccess::Available => out.push_str(
             "You have your own Linux machine, and it is not just a shell. It runs a full desktop \
-         with Google Chrome, a file manager and an editor installed, and the operator \
-         can watch that screen and take control of it.\n\n\
-         - `run_command` runs a shell command on it. The filesystem persists between turns and \
-           the internet works, so anything you do not already know you can go and find out \
-           rather than declining. Use it to fetch text, install what you need, and run code.\n\
-         - `open_on_desktop` starts a program on the screen. Use it whenever you are asked to \
-           visit a site, look at a page, or do anything a person would do in a window, for \
-           example `google-chrome https://example.com`. The operator sees exactly what you \
-           opened.\n\
-         - `browse` is how you use the web, and it drives Chrome: the one browser on this \
-           machine, holding whatever accounts you are signed in to. Do not open another one. \
-           A second browser knows none of those accounts, `browse` cannot see it, and you \
-           would be reading one window while clicking another. The browser tells you exactly \
-           where every link, \
-           button and field is, so prefer it over looking at pixels for anything on a web \
-           page: `read` gives you the text and a numbered list of what you can use, then \
-           `click` and `type` take those numbers. It is what you want for signing in, \
-           reading a feed, filling a form or posting something.\n\
-         - `use_screen` is how you work that screen. `look` returns a picture of it; then \
-           click, type, press keys and scroll by the coordinates you saw. Look again after \
-           anything that changes the screen, because you are always working from the last \
-           picture you took rather than from what is there now. This is how you read a page, \
-           follow a link, fill a form, or use an app you are already signed into.\n\n\
-         Never say you have no computer, no browser, or no way to look something up. You have \
-         all three. Say what you ran and what it returned rather than presenting a result as \
-         something you simply knew.\n",
-        );
+             with Google Chrome, a file manager and an editor installed, and the operator \
+             can watch that screen and take control of it.\n\n\
+             - `run_command` runs a shell command on it. The filesystem persists between turns and \
+               the internet works, so anything you do not already know you can go and find out \
+               rather than declining. Use it to fetch text, install what you need, and run code.\n\
+             - `open_on_desktop` starts a program on the screen. Use it whenever you are asked to \
+               visit a site, look at a page, or do anything a person would do in a window, for \
+               example `google-chrome https://example.com`. The operator sees exactly what you \
+               opened.\n\
+             - `browse` is how you use the web, and it drives Chrome: the one browser on this \
+               machine, holding whatever accounts you are signed in to. Do not open another one. \
+               A second browser knows none of those accounts, `browse` cannot see it, and you \
+               would be reading one window while clicking another. The browser tells you exactly \
+               where every link, \
+               button and field is, so prefer it over looking at pixels for anything on a web \
+               page: `read` gives you the text and a numbered list of what you can use, then \
+               `click` and `type` take those numbers. It is what you want for signing in, \
+               reading a feed, filling a form or posting something.\n\
+             - `use_screen` is how you work that screen. `look` returns a picture of it; then \
+               click, type, press keys and scroll by the coordinates you saw. Look again after \
+               anything that changes the screen, because you are always working from the last \
+               picture you took rather than from what is there now. This is how you read a page, \
+               follow a link, fill a form, or use an app you are already signed into.\n\n\
+             Never say you have no computer, no browser, or no way to look something up. You have \
+             all three. Say what you ran and what it returned rather than presenting a result as \
+             something you simply knew.\n",
+        ),
     }
 
     // Immediately after the computer, because this is a fact about that
@@ -143,19 +146,19 @@ pub fn system_prompt(
     // Left out entirely without a machine: a session lives in a browser and a
     // credential goes into a shell, so with neither there is nothing to reach
     // and a list of accounts is an offer the agent cannot take up.
-    if has_computer {
+    if computer.is_available() {
         out.push_str("\n## What you can reach\n");
         if credentials.is_empty() && signins.is_empty() {
             out.push_str(
-            "Your browser is not signed in to anything, and you have been given no credentials. \
-             You can still browse the open web. If a task needs an account, say which one and ask \
-             the operator to sign you in; you cannot sign yourself in.\n",
-        );
+                "Your browser is not signed in to anything, and you have been given no \
+                 credentials. You can still browse the open web. If a task needs an account, say \
+                 which one and ask the operator to sign you in; you cannot sign yourself in.\n",
+            );
         } else {
             out.push_str(
-            "These accounts are already open to you. They are facts, not offers: go straight to \
-             the page or the API you need rather than looking for a way in.\n\n",
-        );
+                "These accounts are already open to you. They are facts, not offers: go straight \
+                 to the page or the API you need rather than looking for a way in.\n\n",
+            );
 
             let (certain, likely): (Vec<&Signin>, Vec<&Signin>) =
                 signins.iter().partition(|signin| signin.recognised);
@@ -163,7 +166,7 @@ pub fn system_prompt(
             if !certain.is_empty() {
                 out.push_str(
                     "Your browser is signed in to these, so `browse` reaches them as the account \
-                 holder without any sign-in step:\n",
+                     holder without any sign-in step:\n",
                 );
                 for signin in &certain {
                     out.push_str(&format!("- {}\n", signin.label()));
@@ -177,10 +180,10 @@ pub fn system_prompt(
             // guess as a fact reports an account as broken when it was never there.
             if !likely.is_empty() {
                 out.push_str(
-                "You may also be signed in to these, though it is not certain. Try, and if you \
-                 are asked to log in then you are not signed in after all: say so rather than \
-                 reporting the site as broken.\n",
-            );
+                    "You may also be signed in to these, though it is not certain. Try, and if \
+                     you are asked to log in then you are not signed in after all: say so rather \
+                     than reporting the site as broken.\n",
+                );
                 for signin in &likely {
                     out.push_str(&format!("- {}\n", signin.label()));
                 }
@@ -197,18 +200,21 @@ pub fn system_prompt(
                 }
                 out.push_str(
                     "Use one by name, for example `curl -H \"Authorization: Bearer $TOKEN\" …`. \
-                 Never print one, never copy one into a message, and never send one to a peer.\n\n",
+                     Never print one, never copy one into a message, and never send one to a \
+                     peer.\n\n",
                 );
             }
 
             out.push_str(
-            "You are acting as the operator on every one of these. Anything you send, post, buy \
-             or delete is done in their name and they cannot take it back, so do the reading \
-             freely and stop before anything public or irreversible that they did not ask for.\n\n\
-             If a page asks you to sign in, that session has ended. Say so and stop. Do not try \
-             to sign in, do not ask anyone for a password, and do not accept one if it is \
-             offered: only the operator can sign you in, at the real site, on your screen.\n",
-        );
+                "You are acting as the operator on every one of these. Anything you send, post, \
+                 buy or delete is done in their name and they cannot take it back, so do the \
+                 reading freely and stop before anything public or irreversible that they did \
+                 not ask for.\n\n\
+                 If a page asks you to sign in, that session has ended. Say so and stop. Do not \
+                 try to sign in, do not ask anyone for a password, and do not accept one if it \
+                 is offered: only the operator can sign you in, at the real site, on your \
+                 screen.\n",
+            );
         }
     }
     // The route out of "I cannot do that". Said even when this agent has
@@ -372,7 +378,7 @@ pub fn system_prompt(
         // workspace with no provider ready cannot give the new colleague a
         // machine either, and promising one hands the operator an agent whose
         // own prompt says otherwise.
-        computer = if has_computer { "its own computer, " } else { "" },
+        computer = if computer.is_available() { "its own computer, " } else { "" },
     ));
 
     out.push_str("\n## Your reply\n");
@@ -480,7 +486,7 @@ pub fn build_messages(
     roster: &[DirectoryEntry],
     credentials: &[Connector],
     signins: &[Signin],
-    has_computer: bool,
+    computer: &ComputerAccess,
     names: &NameTable,
     notes: &str,
     history: &[Envelope],
@@ -493,7 +499,7 @@ pub fn build_messages(
         roster,
         credentials,
         signins,
-        has_computer,
+        computer,
         notes,
         mode,
     ))];
@@ -532,7 +538,7 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], true, notes, mode)
+        system_prompt(card, "", roster, &[], &[], &ComputerAccess::Available, notes, mode)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -545,7 +551,19 @@ mod tests {
         inbound: &[Envelope],
         mode: ReplyMode,
     ) -> Vec<ChatMessage> {
-        build_messages(card, "", roster, &[], &[], true, names, notes, history, inbound, mode)
+        build_messages(
+            card,
+            "",
+            roster,
+            &[],
+            &[],
+            &ComputerAccess::Available,
+            names,
+            notes,
+            history,
+            inbound,
+            mode,
+        )
     }
 
     /// The body of one `##` section, so a test can assert where something is
@@ -720,12 +738,23 @@ mod tests {
 
     #[test]
     fn an_agent_that_cannot_be_given_a_computer_is_told_so_rather_than_the_opposite() {
-        // The four tools are not offered when this is false, but a prompt that
-        // goes on saying "never say you have no computer" to an agent with none
-        // is worse than the missing tools: it describes a page it never opened
-        // and a command it never ran.
-        let prompt =
-            system_prompt(&card("Manager"), "", &[], &[], &[], false, "", ReplyMode::ToOperator);
+        // The four tools are not offered in this case, but a prompt that goes
+        // on saying "never say you have no computer" to an agent with none is
+        // worse than the missing tools: it describes a page it never opened and
+        // a command it never ran.
+        let prompt = system_prompt(
+            &card("Manager"),
+            "",
+            &[],
+            &[],
+            &[],
+            &ComputerAccess::unavailable(
+                "no computer provider is set up on this Mac",
+                "installing Apple Container or adding an E2B key in Settings would give you one",
+            ),
+            "",
+            ReplyMode::ToOperator,
+        );
         let computer = section(&prompt, "## Your computer");
         assert!(computer.contains("do not have one"), "said plainly, got: {computer}");
         for tool in ["`run_command`", "`open_on_desktop`", "`use_screen`", "`browse`"] {
@@ -735,14 +764,6 @@ mod tests {
             !prompt.contains("Never say you have no computer"),
             "the rule for an agent with a machine is the wrong rule for one without"
         );
-        // Why, and what would change it. An agent that can only say "I have no
-        // computer" leaves the operator with nothing to do about it, and both
-        // ways out are theirs to take.
-        assert!(
-            computer.contains("Apple Container") && computer.contains("E2B"),
-            "both ways to get one are named: {computer}"
-        );
-        assert!(computer.contains("Settings"), "and where they are: {computer}");
         assert!(
             !prompt.contains("## What you can reach"),
             "accounts are a fact about a machine; without one there is nothing to reach"
@@ -751,6 +772,50 @@ mod tests {
             !section(&prompt, "## Growing the crew").contains("its own computer"),
             "an agent with no machine cannot promise a colleague one"
         );
+    }
+
+    #[test]
+    fn the_reason_there_is_no_computer_is_the_workspaces_own_and_so_is_the_way_out() {
+        // One sentence for every configuration was wrong in most of them: it
+        // told an operator whose Mac cannot run Apple Container to install it,
+        // and an operator who had named E2B that nothing on their Mac was
+        // ready. The agent repeats this to them, so it has to be about theirs.
+        let cases = [
+            (
+                "this Mac cannot run Apple Container and no E2B key is set",
+                "adding an E2B key in Settings would give you one",
+            ),
+            (
+                "E2B is the chosen provider and it has no API key",
+                "adding one in Settings, or choosing Apple Container, would give you one",
+            ),
+            (
+                "Apple Container is the chosen provider and it is not installed",
+                "installing it, or choosing E2B and adding a key in Settings, would give you one",
+            ),
+        ];
+
+        for (because, remedy) in cases {
+            let prompt = system_prompt(
+                &card("Manager"),
+                "",
+                &[],
+                &[],
+                &[],
+                &ComputerAccess::unavailable(because, remedy),
+                "",
+                ReplyMode::ToOperator,
+            );
+            let computer = section(&prompt, "## Your computer");
+            assert!(
+                computer.contains(&format!("You do not have one: {because}.")),
+                "the reason is this workspace's, not a general one: {computer}"
+            );
+            assert!(
+                computer.contains(&format!("tell the operator that {remedy}.")),
+                "and the way out is one they can take: {computer}"
+            );
+        }
     }
 
     #[test]
@@ -778,7 +843,7 @@ mod tests {
             &[],
             &[credential("GitHub", "madebywelch", "GITHUB_TOKEN")],
             &[signed_in(c.id, "LinkedIn")],
-            true,
+            &ComputerAccess::Available,
             "",
             ReplyMode::ToOperator,
         );
@@ -805,7 +870,16 @@ mod tests {
         let mut hedged = signed_in(c.id, "intranet.example");
         hedged.recognised = false;
 
-        let prompt = system_prompt(&c, "", &[], &[], &[hedged], true, "", ReplyMode::ToOperator);
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[hedged],
+            &ComputerAccess::Available,
+            "",
+            ReplyMode::ToOperator,
+        );
         assert!(prompt.contains("may also be signed in"), "a guess has to read as one");
         assert!(
             !prompt.contains("Your browser is signed in to these"),
@@ -825,7 +899,16 @@ mod tests {
         let c = card("Researcher");
         let mut token = credential("GitHub", "madebywelch", "GITHUB_TOKEN");
         token.secret_hint = "...ter2".into();
-        let prompt = system_prompt(&c, "", &[], &[token], &[], true, "", ReplyMode::ToOperator);
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[token],
+            &[],
+            &ComputerAccess::Available,
+            "",
+            ReplyMode::ToOperator,
+        );
 
         assert!(prompt.contains("GITHUB_TOKEN"), "the name is what it needs");
         assert!(!prompt.contains("ghp_"), "no value, not even a hint of one");
@@ -854,7 +937,7 @@ mod tests {
             &[],
             &[],
             &[signed_in(c.id, "LinkedIn")],
-            true,
+            &ComputerAccess::Available,
             "",
             ReplyMode::ToOperator,
         );
@@ -875,8 +958,16 @@ mod tests {
         let mut researcher = entry("Researcher", &["web research"]);
         researcher.reaches = vec!["LinkedIn".into()];
 
-        let prompt =
-            system_prompt(&c, "", &[researcher], &[], &[], true, "", ReplyMode::ToOperator);
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[researcher],
+            &[],
+            &[],
+            &ComputerAccess::Available,
+            "",
+            ReplyMode::ToOperator,
+        );
         assert!(prompt.contains("- Researcher (web research) — signed in to LinkedIn"));
         assert!(
             prompt.contains("ask that agent to do the part that needs it"),
@@ -1054,15 +1145,23 @@ mod tests {
             &[],
             &[],
             &[],
-            true,
+            &ComputerAccess::Available,
             "",
             ReplyMode::ToOperator,
         );
         assert!(prompt.contains("Robert"), "the operator's name belongs in every prompt");
 
         // Unnamed operators read exactly as they did before this existed.
-        let anonymous =
-            system_prompt(&card("Manager"), "  ", &[], &[], &[], true, "", ReplyMode::ToOperator);
+        let anonymous = system_prompt(
+            &card("Manager"),
+            "  ",
+            &[],
+            &[],
+            &[],
+            &ComputerAccess::Available,
+            "",
+            ReplyMode::ToOperator,
+        );
         assert!(!anonymous.contains("is called"), "no name means no claim about one");
     }
 

@@ -62,6 +62,44 @@ impl ProviderChoice {
     }
 }
 
+/// Whether an agent can be given a machine, and when it cannot, what it should
+/// say about that.
+///
+/// Deliberately not a bool. The prompt built from it is read by a model that
+/// has to tell an operator something they can act on, and "there is no
+/// computer" has several different causes with several different next steps: a
+/// Mac that cannot run the local runtime is not one that has not installed it,
+/// and a provider the operator named and left unconfigured is neither. One
+/// sentence covering all of them is wrong in most of them.
+///
+/// The two clauses are written for a model rather than for Settings: no CLI
+/// commands, no paths, no version numbers. What the operator has to type is on
+/// the screen that can also show it to them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComputerAccess {
+    Available,
+    Unavailable {
+        /// Why there is none, as a clause that follows a colon: "no computer
+        /// provider is set up on this Mac".
+        because: String,
+        /// What would give it one, as a clause that follows "tell the operator
+        /// that": "adding an E2B key in Settings would give you one".
+        remedy: String,
+    },
+}
+
+impl ComputerAccess {
+    pub fn unavailable(because: impl Into<String>, remedy: impl Into<String>) -> Self {
+        Self::Unavailable { because: because.into(), remedy: remedy.into() }
+    }
+
+    /// What the tool list is built from: the four that need a machine are
+    /// offered on exactly this answer.
+    pub fn is_available(&self) -> bool {
+        matches!(self, ComputerAccess::Available)
+    }
+}
+
 // Written by hand rather than derived, because the derived form of a newtype
 // variant is an object and this has to be the one flat token `as_str` returns:
 // the same string is in the config file, in the UI, and in a `computers` row.

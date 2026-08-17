@@ -1357,6 +1357,13 @@ async fn an_agent_no_provider_can_serve_is_not_offered_a_computer_and_is_told_it
     assert!(offered.contains(&"send_message".to_string()), "the rest are still there: {offered:?}");
     let prompt = without["messages"][0]["content"].as_str().unwrap_or_default();
     assert!(prompt.contains("do not have one"), "the prompt says so too: {prompt}");
+    // And in this workspace's own terms. A prompt that told this operator
+    // nothing on their Mac was ready would be describing somebody else's
+    // machine: they named a provider, and it is the key that is missing.
+    assert!(
+        prompt.contains("E2B is the chosen provider and it has no API key"),
+        "the reason is the one the operator can act on: {prompt}"
+    );
 
     // The operator adds a key in Settings. The next turn has a machine, and
     // nothing has to restart for the agent to be told so.

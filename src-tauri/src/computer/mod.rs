@@ -22,7 +22,9 @@ use serde::{Deserialize, Serialize};
 use crate::config::AppConfig;
 use crate::db::Store;
 use crate::domain::agent::AgentCard;
-use crate::domain::computer::{ComputerRecord, Provider, ProviderChoice, RecordState, Secret};
+use crate::domain::computer::{
+    ComputerAccess, ComputerRecord, Provider, ProviderChoice, RecordState, Secret,
+};
 use crate::domain::ids::{AgentId, ComputerId};
 use crate::domain::now_ms;
 use apple::AppleContainer;
@@ -479,8 +481,62 @@ impl ComputerManager {
     /// setting that moved does not take away a disk, and telling a model
     /// mid-crew that its machine is gone is how a working computer disappears
     /// from under a turn.
-    pub async fn availability(&self, card: &AgentCard) -> bool {
-        card.computer_id.is_some() || self.default_provider().await.is_ok()
+    ///
+    /// The refusal carries its own words because there is more than one way to
+    /// have no computer, and the prompt built from this tells an operator what
+    /// to do about theirs.
+    pub async fn availability(&self, card: &AgentCard) -> ComputerAccess {
+        if card.computer_id.is_some() || self.default_provider().await.is_ok() {
+            return ComputerAccess::Available;
+        }
+        self.refusal().await
+    }
+
+    /// Why nothing here can make a machine, in the two clauses an agent repeats
+    /// to its operator.
+    ///
+    /// Derived from what the providers actually say rather than written once:
+    /// "installing Apple Container would give you one" is false on a Mac that
+    /// cannot run it and beside the point when the operator has named E2B, and
+    /// an agent that reports the wrong remedy sends them somewhere that does
+    /// not help. What it must not repeat is the *detail* Settings draws: a
+    /// terminal command and an install path are for the person at the window,
+    /// not for a model quoting it into a chat.
+    async fn refusal(&self) -> ComputerAccess {
+        let choice = self.inner.config.read().computer.provider;
+        match choice {
+            // Reached only when `E2bProvider::new` refused the key, and it
+            // refuses exactly one thing: an empty one.
+            ProviderChoice::Provider(Provider::E2b) => ComputerAccess::unavailable(
+                "E2B is the chosen provider and it has no API key",
+                "adding one in Settings, or choosing Apple Container, would give you one",
+            ),
+            // And here only when `discover` found no binary, which is the one
+            // thing a probe cannot be asked about afterwards.
+            ProviderChoice::Provider(Provider::AppleContainer) => ComputerAccess::unavailable(
+                "Apple Container is the chosen provider and it is not installed",
+                "installing it, or choosing E2B and adding a key in Settings, would give you one",
+            ),
+            // Nothing was usable, which for the hosted half means there is no
+            // key: a provider built from one answers `ready` without being
+            // asked anything else. So the local half is what varies.
+            ProviderChoice::Automatic => match self.status(Provider::AppleContainer).await.state {
+                ProviderReadiness::Unsupported => ComputerAccess::unavailable(
+                    "this Mac cannot run Apple Container and no E2B key is set",
+                    "adding an E2B key in Settings would give you one",
+                ),
+                ProviderReadiness::Error => ComputerAccess::unavailable(
+                    "Apple Container is installed and not answering, and no E2B key is set",
+                    "getting Apple Container answering again, or adding an E2B key in Settings, \
+                     would give you one",
+                ),
+                _ => ComputerAccess::unavailable(
+                    "no computer provider is set up on this Mac",
+                    "installing Apple Container or adding an E2B key in Settings would give you \
+                     one",
+                ),
+            },
+        }
     }
 
     /// Keeps local machines alive while they are being used, and stops them
@@ -1542,7 +1598,10 @@ mod tests {
         // a machine must keep being told so when the default provider is
         // unusable, or a working computer disappears from under a turn.
         let (manager, store, card, _config, _dir) = setup_with(vec![]);
-        assert!(!manager.availability(&card).await, "nothing configured, nothing owned");
+        assert!(
+            !manager.availability(&card).await.is_available(),
+            "nothing configured, nothing owned"
+        );
 
         store
             .insert_computer(&ComputerRecord {
@@ -1562,7 +1621,57 @@ mod tests {
         let owner = store.list_agents().unwrap().into_iter().find(|a| a.id == card.id).unwrap();
 
         assert!(owner.computer_id.is_some());
-        assert!(manager.availability(&owner).await);
+        assert!(manager.availability(&owner).await.is_available());
+    }
+
+    #[tokio::test]
+    async fn a_refusal_names_the_configuration_the_operator_actually_has() {
+        // The prompt built from this is read out to the operator, so one
+        // sentence for every configuration is wrong in most of them: it told an
+        // operator whose Mac cannot run the local runtime to install it, and an
+        // operator who had named E2B that nothing on their Mac was ready.
+        let reason = |access: ComputerAccess| match access {
+            ComputerAccess::Unavailable { because, remedy } => (because, remedy),
+            ComputerAccess::Available => panic!("nothing here can make a machine"),
+        };
+
+        // Nothing installed and no key, which is what a fresh install is.
+        let (manager, _store, card, config, _dir) = setup_with(vec![]);
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(because, "no computer provider is set up on this Mac");
+        assert!(remedy.contains("installing Apple Container"), "{remedy}");
+        assert!(remedy.contains("adding an E2B key in Settings"), "{remedy}");
+
+        // A provider the operator named, and did not finish setting up. What
+        // the other one could do is beside the point: they chose this one.
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+        manager.invalidate();
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(because, "E2B is the chosen provider and it has no API key");
+        assert!(
+            remedy.contains("choosing Apple Container"),
+            "the other way out is theirs too: {remedy}"
+        );
+
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+        manager.invalidate();
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(because, "Apple Container is the chosen provider and it is not installed");
+        assert!(remedy.contains("choosing E2B"), "{remedy}");
+
+        // A Mac the local runtime cannot run on at all. Telling this operator
+        // to install it is the one answer that cannot work.
+        let unsupported = Arc::new(fake::FakeProvider::local());
+        *unsupported.probe.lock() = Some(ProviderStatus {
+            state: ProviderReadiness::Unsupported,
+            can_start: false,
+            detail: "fake: not on this Mac".into(),
+        });
+        let (manager, _store, card, _config, _dir) = setup_with(vec![unsupported]);
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(because, "this Mac cannot run Apple Container and no E2B key is set");
+        assert!(!remedy.contains("installing Apple Container"), "it cannot be: {remedy}");
+        assert_eq!(remedy, "adding an E2B key in Settings would give you one");
     }
 
     #[tokio::test]
