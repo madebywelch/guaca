@@ -6,7 +6,6 @@ import { toPeer, transcriptRows } from "../lib/transcript";
 import { type Activity, type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
-import { ComputerPane } from "./ComputerPane";
 import { MessageItem, StreamingMessage } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
@@ -200,10 +199,6 @@ export function ChannelView({ channel, onEditAgent }: Props) {
         <ActivityFlow messages={messages ?? []} byId={lookups.byId} />
       ) : (
         <div className="pane__scroll" ref={scrollRef}>
-          {/* The agent's computer sits over the transcript rather than beside
-              it: the reading column keeps its measure, and a desktop is
-              something you glance at while reading, not a second column. */}
-          {agent && <ComputerPane agent={agent} />}
           {messages === undefined ? (
             <p className="hint" style={{ padding: "1rem 1.15rem" }}>
               Loading…

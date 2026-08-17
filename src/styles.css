@@ -120,7 +120,9 @@ button {
 .pane__scroll,
 .rail,
 .rail__body,
-.rail__list {
+.rail__list,
+.inspector,
+.inspector__body {
   min-height: 0;
 }
 
@@ -676,6 +678,12 @@ button {
 .pane__scroll {
   flex: 1;
   overflow-y: auto;
+  /* Stated rather than left to compute. Setting `overflow-y` alone makes the
+     other axis `auto` too, so anything a fraction of a rem too wide gives the
+     reading column a horizontal scrollbar. Nothing here is meant to be scrolled
+     sideways: what genuinely cannot wrap, code and tables, carries its own
+     scroller. */
+  overflow-x: hidden;
   padding: 1.1rem 0 0.6rem;
 }
 
@@ -1166,12 +1174,19 @@ button {
   background: linear-gradient(to right, transparent, var(--edge), transparent);
 }
 
+/* Shrinks rather than overflows. Two of these sit on one row with an arrow
+   between them, so `flex: none` and a 70% cap meant a pair of long agent names
+   added up to more than the row: the line pushed past the reading column, and
+   `.pane__scroll` computes its `overflow-x` to `auto` because `overflow-y` is
+   set, so the whole transcript earned a horizontal scrollbar. It showed up the
+   day the column got narrower for the panel beside it. */
 .wire__chip {
   display: inline-flex;
   align-items: center;
   gap: 0.42rem;
-  flex: none;
-  max-width: 70%;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   padding: 0.24rem 0.6rem;
   border-radius: 99px;
   border: 1px solid var(--edge);
@@ -1820,48 +1835,6 @@ button {
   margin-bottom: 0.95rem;
 }
 
-/* An agent's schedule, in the editor beside its notes. */
-.routines {
-  margin-bottom: 0.95rem;
-}
-
-.routines__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.5rem;
-  margin-bottom: 0.32rem;
-}
-
-.routines__head .field__label {
-  margin-bottom: 0;
-}
-
-.routine {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.5rem;
-  margin-bottom: 0.4rem;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
-}
-
-.routine__row {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-
-.routine__when {
-  font-family: var(--font-mono);
-  font-size: 0.58rem;
-  color: var(--faint);
-  flex: 1;
-  min-width: 6rem;
-}
-
 .connectors {
   margin-bottom: 1.15rem;
 }
@@ -2235,287 +2208,532 @@ button {
 }
 
 /* ==========================================================================
-   Agent computers
+   The inspector
 
-   A sandbox desktop, parked in the corner of the agent's channel. Minimised it
-   is a live picture with a veil over it, because a pointer landing in an
-   agent's desktop by accident is worse than one extra click to take control.
+   What an agent has, beside what it says. A third column rather than a panel
+   floating over the transcript: a desktop and a schedule are things you watch
+   while reading, and the reading column keeps its measure either way.
    ========================================================================== */
 
-/* The gutter the transcript wraps around. Its width never changes, which is
-   the point: expanding used to widen this box, so the reading column reflowed
-   to a third of its measure and every line of the conversation moved. */
-.computer {
-  position: sticky;
-  top: 0.6rem;
-  float: right;
-  width: 19rem;
-  /* Reserved rather than measured: the gutter holds the same room whatever the
-     panel is doing, so opening the desktop never moves a line of the
-     conversation. The screen's own 16/10 plus the bar above it. */
-  height: calc(19rem * 10 / 16 + 1.6rem);
-  margin: 0 0 0.8rem 1rem;
-  z-index: 4;
-  /* Belt to the listener's braces: stops a gesture that starts here from
-     continuing into the transcript underneath. */
-  overscroll-behavior: contain;
+.inspector {
+  width: 20rem;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--edge);
+  background: var(--ground);
 }
 
-/* Stowed: a chip, and nothing else. An agent that will never have a computer
-   should not spend a third of the reading column saying so.
-   Pulled up into the column's top padding and out to the right edge, so it
-   reads as a tab attached to the side of the window rather than as a control
-   floating in the text. */
-.computer--stowed {
-  height: auto;
-  width: auto;
-  top: 0;
-  /* Flush to the right edge, never past it. `.pane__scroll` sets `overflow-y`,
-     which computes `overflow-x` to `auto` rather than leaving it visible, so a
-     float bleeding even a fraction of a rem beyond the content box earns the
-     whole column a horizontal scrollbar. The column has no horizontal padding,
-     so zero here is already touching the edge, and the missing right border
-     plus the left-only radius are what make it read as attached to the side. */
-  margin: -0.75rem 0 0.15rem 0.6rem;
+/* Closed it is the tab and nothing else, still holding its own sliver of the
+   window so the transcript does not reflow twice on every toggle. */
+.inspector--closed {
+  width: 2.1rem;
 }
 
-.computer__chip {
+.inspector__head {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding: 0.3rem 0.75rem 0.3rem 0.6rem;
-  background: var(--rail-ground);
-  border: 1px solid var(--rail-edge);
-  /* A bubble on the left, flush on the right: the side it is attached to. */
-  border-right: 0;
-  border-radius: 999px 0 0 999px;
-  font-family: var(--font-mono);
-  font-size: 0.57rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--rail-muted);
-  opacity: 0.8;
-  box-shadow: -0.15rem 0.15rem 0.6rem -0.25rem rgb(24 33 27 / 0.35);
-  transition:
-    opacity 120ms ease,
-    padding 120ms ease;
+  gap: 0.2rem;
+  padding: 0.55rem 0.5rem 0.35rem;
 }
 
-.computer__chip:hover {
-  opacity: 1;
-  /* Leans out of the edge a little when reached for. */
-  padding-right: 1rem;
+/* Centred between the two controls rather than after the back arrow, so it
+   stays put as the arrow appears and disappears. */
+.inspector__title {
+  flex: 1;
+  margin: 0;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
 }
 
-.computer__chip-dot {
-  width: 0.32rem;
-  height: 0.32rem;
-  border-radius: 50%;
-  background: var(--rail-edge);
+.inspector--closed .inspector__tab {
+  margin: 0.55rem auto 0;
 }
 
-.computer__chip-dot[data-state="running"] {
-  background: var(--flesh-soft);
-}
-
-.computer__chip-dot[data-state="asleep"] {
-  background: var(--rail-muted);
-}
-
-/* The panel itself, anchored to the gutter's right edge. Growing it leftwards
-   covers the transcript instead of pushing it. */
-.computer__panel {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 19rem;
-  background: var(--rail-ground);
-  border: 1px solid var(--rail-edge);
-  border-radius: var(--radius);
-  overflow: hidden;
-  box-shadow: 0 0.6rem 1.4rem -0.8rem rgb(24 33 27 / 0.4);
-  transition: width 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-
-/* Taking control is worth the room: at preview size a desktop is legible as a
-   picture but not usable as one. The width is animated and the frame inside is
-   never remounted, so the desktop scales rather than reconnecting. */
-.computer[data-open="true"] .computer__panel {
-  width: min(52rem, 76vw);
-  box-shadow: 0 1rem 2.4rem -0.9rem rgb(24 33 27 / 0.55);
-}
-
-.computer__bar {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.4rem 0.5rem;
-  border-bottom: 1px solid var(--rail-edge);
-}
-
-.computer__title {
-  font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--rail-muted);
-}
-
-.computer__state {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--rail-muted);
-  border: 1px solid var(--rail-edge);
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.28rem;
-  margin-right: auto;
-}
-
-.computer__state[data-state="started"] {
-  color: var(--flesh-soft);
-  border-color: color-mix(in oklab, var(--flesh-soft) 35%, transparent);
-}
-
-.computer__tab {
-  background: none;
+.inspector__tab,
+.inspector__gear {
   border: 0;
-  font-family: var(--font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  color: var(--rail-muted);
-  padding: 0.15rem 0.3rem;
-  border-radius: 0.3rem;
+  background: none;
+  cursor: pointer;
+  color: var(--faint);
+  padding: 0.25rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: color 120ms ease, background 120ms ease;
 }
 
-.computer__tab:hover,
-.computer__tab[aria-pressed="true"] {
-  color: var(--rail-text);
-  background: var(--rail-raised);
+.inspector__tab:hover,
+.inspector__gear:hover,
+.inspector__tab:focus-visible,
+.inspector__gear:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
 }
 
-.computer__screen {
+.inspector__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0.75rem 1rem;
+}
+
+/* --- the screen ----------------------------------------------------------
+
+   One connection, two sizes. Going full screen promotes this same element to
+   fill the window rather than mounting a second one, so the desktop is never
+   dropped and reconnected just because the operator wanted a better look. */
+
+.screen {
+  margin-bottom: 1.1rem;
+}
+
+.screen__frame {
   position: relative;
+  width: 100%;
   aspect-ratio: 16 / 10;
-  background: #000;
+  overflow: hidden;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
 }
 
-.computer__screen iframe {
+.screen__frame iframe {
   width: 100%;
   height: 100%;
   border: 0;
   display: block;
 }
 
-/* Transparent on purpose: the point is to block the pointer, not to hide the
-   desktop it is covering. */
-.computer__veil {
+.screen__frame--empty {
+  aspect-ratio: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.8rem;
+}
+
+/* Transparent on purpose. The picture underneath is the whole point; this only
+   exists so a click lands here instead of in the agent's desktop. */
+.screen__veil {
   position: absolute;
   inset: 0;
-  background: transparent;
   border: 0;
+  background: transparent;
   cursor: zoom-in;
 }
 
-.computer__empty {
-  padding: 0.9rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.6rem;
+.screen__veil:hover,
+.screen__veil:focus-visible {
+  background: color-mix(in oklab, var(--flesh) 8%, transparent);
+  outline: none;
 }
 
-.computer__note {
-  margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.5;
-  color: var(--rail-muted);
-}
-
-.computer__actions {
-  display: flex;
-  gap: 0.4rem;
-}
-
-/* The terminal. Not an embedded shell: each line is one call to the same
-   command runner the agent's own tool uses. */
-.computer__term {
-  display: flex;
-  flex-direction: column;
-  height: 15rem;
-}
-
-.computer[data-open="true"] .computer__term {
-  height: 24rem;
-}
-
-.computer__log {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 0.6rem 0.7rem;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  line-height: 1.5;
-}
-
-.computer__cmd {
-  color: var(--rail-text);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.computer__cmd span {
-  color: var(--flesh-soft);
-  opacity: 0.7;
-}
-
-.computer__out {
-  margin: 0.1rem 0 0.5rem;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--rail-muted);
-  font: inherit;
-}
-
-.computer__out[data-failed="true"] {
-  color: #e2a08a;
-}
-
-.computer__prompt {
+.screen__caption {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  border-top: 1px solid var(--rail-edge);
-  padding: 0.4rem 0.7rem;
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  color: var(--flesh-soft);
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  color: var(--faint);
 }
 
-.computer__prompt input {
+.screen__note {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.screen__state {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.screen__state[data-state="running"] {
+  color: var(--mint);
+}
+
+/* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
+   above mounted and the VNC session alive across the change. */
+.screen[data-full="true"] {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--rail-ground);
+}
+
+.screen[data-full="true"] .screen__frame {
   flex: 1;
-  min-width: 0;
-  background: none;
+  aspect-ratio: auto;
   border: 0;
-  outline: none;
-  font: inherit;
+  border-radius: 0;
+  background: #000;
+}
+
+.screen__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--rail-ground);
+  border-bottom: 1px solid var(--rail-edge);
   color: var(--rail-text);
 }
 
-.computer__prompt input::placeholder {
+.screen__bar .screen__state {
   color: var(--rail-muted);
-  opacity: 0.7;
 }
 
-/* A command that has been sent but not answered. The first one on a cold agent
-   builds a sandbox first, which takes seconds. */
-.computer__out--pending {
-  opacity: 0.55;
-  font-style: italic;
+.screen__title {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
 }
 
-/* A confirmation, not a warning: the button says what it will do and looks like
-   it means it. */
-.computer__tab--danger {
-  color: #e2a08a;
-  background: color-mix(in oklab, #e2a08a 14%, transparent);
+/* --- routines ------------------------------------------------------------
+
+   A standing commitment, as a row you can read in one glance. The name and the
+   cadence are what the list is for; the instruction it delivers is behind the
+   row, because that is what you come back to change rather than what you check.
+   */
+
+.routines {
+  margin: 0;
+}
+
+.routines__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.routines__title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.routines__add {
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--faint);
+  font-size: 1.1rem;
+  line-height: 1;
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.routines__add:hover:not(:disabled),
+.routines__add:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+}
+
+.routines__add:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.routines__note {
+  margin: 0.2rem 0 0;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.routine {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.35rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+
+.routine:hover,
+.routine:focus-visible {
+  background: var(--sunken);
+  outline: none;
+}
+
+/* A clock face, drawn rather than set in a font: this is the only glyph in the
+   list and a missing one leaves the rows misaligned. */
+.routine__mark {
+  flex: none;
+  width: 0.85rem;
+  height: 0.85rem;
+  margin-top: 0.15rem;
+  border: 1.5px solid var(--mint);
+  border-radius: 50%;
+  position: relative;
+}
+
+.routine__mark::before,
+.routine__mark::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 50%;
+  width: 1.5px;
+  background: var(--mint);
+  transform-origin: bottom center;
+}
+
+.routine__mark::before {
+  height: 0.24rem;
+  transform: translateX(-50%);
+}
+
+.routine__mark::after {
+  height: 0.18rem;
+  transform: translateX(-50%) rotate(95deg);
+}
+
+.routine__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+/* One line, always. A routine nobody named is titled by its instruction, and
+   an instruction is written to be acted on with no other context: several
+   sentences, which drew a list one routine tall. */
+.routine__name,
+.routine__when {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine__name {
+  font-size: 0.85rem;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.routine__when {
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+
+/* Switched off. Still drawn, because it is still something the operator set
+   up and will want to find again. */
+.routine[data-off] .routine__name {
+  color: var(--faint);
+}
+
+.routine[data-off] .routine__mark {
+  border-color: var(--faint);
+}
+
+.routine[data-off] .routine__mark::before,
+.routine[data-off] .routine__mark::after {
+  background: var(--faint);
+}
+
+/* The countdown is true but restless, and it is not what the row is about. */
+.routine__next {
+  opacity: 0.75;
+}
+
+/* --- one routine, with the panel given over to it -------------------------
+
+   Everything about a routine is here rather than in a row that has to stay one
+   line. Deciding whether to keep a standing commitment means reading the
+   instruction that will actually be delivered, not a summary of it. */
+
+.detail__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  min-height: 1.6rem;
+}
+
+.detail__save {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+/* A switch, not a checkbox: this is a thing that is on or off right now, and
+   it acts on the click rather than waiting for a Save. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 0;
+  padding: 0;
+  background: none;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.toggle__track {
+  position: relative;
+  width: 2rem;
+  height: 1.1rem;
+  flex: none;
+  border-radius: 999px;
+  background: var(--edge);
+  transition: background 140ms ease;
+}
+
+.toggle__track::after {
+  content: "";
+  position: absolute;
+  top: 0.15rem;
+  left: 0.15rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: var(--raised);
+  box-shadow: 0 1px 2px rgb(24 33 27 / 0.3);
+  transition: transform 140ms ease;
+}
+
+.toggle[aria-checked="true"] .toggle__track {
+  background: var(--flesh);
+}
+
+.toggle[aria-checked="true"] .toggle__track::after {
+  transform: translateX(0.9rem);
+}
+
+.toggle:disabled {
+  opacity: 0.5;
+}
+
+/* The trigger, in a box of its own so "when to run" reads as one fact rather
+   than as two controls that happen to be adjacent. */
+.when {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+.history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.history__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  font-size: 0.78rem;
+  color: var(--text);
+  border-bottom: 1px solid var(--edge);
+}
+
+.history__row:last-child {
+  border-bottom: 0;
+}
+
+.history__kind {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pit);
+  background: var(--pit-soft);
+  border-radius: 999px;
+  padding: 0.05rem 0.4rem;
+}
+
+.history__ago {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+
+/* ==========================================================================
+   The agent menu
+   ========================================================================== */
+
+/* Covers the window so the next click anywhere dismisses the menu, including
+   the right-click that would otherwise open a second one. */
+.menu__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.menu {
+  position: fixed;
+  z-index: 51;
+  min-width: 10rem;
+  padding: 0.25rem;
+  background: var(--raised);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-pop);
+}
+
+.menu__head {
+  margin: 0;
+  padding: 0.3rem 0.55rem 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.36rem 0.55rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+
+.menu__item:hover,
+.menu__item:focus-visible {
+  background: var(--sunken);
+  outline: none;
 }
