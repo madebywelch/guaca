@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::computer::provider::ProviderError;
 use crate::computer::{Computer, ComputerError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
@@ -113,9 +114,14 @@ impl From<crate::domain::connector::ConnectorError> for CommandError {
 impl From<ComputerError> for CommandError {
     fn from(err: ComputerError) -> Self {
         // Its own kind so the UI can offer to open settings rather than
-        // showing a failure for something that was simply never set up.
+        // showing a failure for something that was simply never set up. Both
+        // shapes count: the manager having no provider to build, and a provider
+        // that exists refusing because there is nothing on this Mac to drive.
+        // The second arrives from inside a provider and used to read as a
+        // machine that broke.
         let code = match err {
-            ComputerError::Unconfigured(_) => "computerUnconfigured",
+            ComputerError::Unconfigured(_)
+            | ComputerError::Provider(ProviderError::Unconfigured(_)) => "computerUnconfigured",
             _ => "computer",
         };
         CommandError::new(code, err.to_string())
@@ -886,6 +892,28 @@ mod tests {
 
         let corrupt: CommandError = crate::db::StoreError::Corrupt("bad row".into()).into();
         assert_eq!(corrupt.kind, "storage");
+    }
+
+    #[test]
+    fn a_provider_that_is_not_installed_is_a_settings_problem_however_it_says_so() {
+        // Two paths reach the window with the same meaning: the manager has no
+        // provider to build, and a provider that exists refuses because there
+        // is nothing on this Mac to drive. Both are "open Settings", and only
+        // the first used to be told apart from a machine that broke.
+        let none: CommandError = ComputerError::Unconfigured("no E2B API key is set".into()).into();
+        assert_eq!(none.kind, "computerUnconfigured");
+
+        let refused: CommandError =
+            ComputerError::Provider(ProviderError::Unconfigured("install the package".into()))
+                .into();
+        assert_eq!(refused.kind, "computerUnconfigured");
+        assert_eq!(refused.message, "install the package", "in the provider's own words");
+
+        // A machine that would not answer is not one of those: offering to open
+        // Settings for it sends the operator to change something that is right.
+        let broken: CommandError =
+            ComputerError::Provider(ProviderError::Unavailable("the runtime hung".into())).into();
+        assert_eq!(broken.kind, "computer");
     }
 
     #[test]

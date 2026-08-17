@@ -199,9 +199,9 @@ const PROVIDERS: [Provider; 2] = [Provider::AppleContainer, Provider::E2b];
 /// an operator who starts the runtime in Terminal sees it within one look.
 const PROBE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// How often local machines are looked at: often enough that a minute of idle
+/// The slowest the idle ticker ever runs: often enough that a minute of idle
 /// is a minute, cheap enough that it is one command per running machine.
-const IDLE_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+const IDLE_TICK_MAX: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The file the guest's PID 1 watches. It exits when this goes stale, so a
 /// machine outlives a force-quit of this app by one idle period and no more.
@@ -223,12 +223,38 @@ const HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
 /// the sweep only reports.
 const APPLE_SWEEP_ENABLED: bool = false;
 
+/// How often a running local machine's heartbeat is touched: twice per idle
+/// period, and never slower than a minute.
+///
+/// The guest's PID 1 exits when `/run/guaca/heartbeat` is older than
+/// `GUAC_IDLE_SECONDS`, which is this same setting, and this ticker is the only
+/// thing that writes that file. At the shortest setting the app allows — one
+/// minute — a fixed minute tick has no margin at all: the guest stops itself
+/// about as often as it survives, on a machine an agent may be working on.
+fn idle_tick_period(idle_seconds: u32) -> std::time::Duration {
+    // Never zero. A tick of no length is a loop with nothing to wait on, and a
+    // setting that arrives here as zero should cost a wasted tick, not a core.
+    std::time::Duration::from_secs((u64::from(idle_seconds) / 2).clamp(1, IDLE_TICK_MAX.as_secs()))
+}
+
+/// Whether a machine of this kind runs on this Mac.
+///
+/// Exhaustive on purpose, and asked rather than inferred from "not E2B": what
+/// hangs on it is who stops a machine nobody is using. A kind added to the enum
+/// and defaulted to the hosted side is a VM that nothing ever stops, and that
+/// failure is silent until somebody notices the fans.
+fn is_local(which: Provider) -> bool {
+    match which {
+        Provider::E2b => false,
+        Provider::AppleContainer => true,
+    }
+}
+
 /// Whether an unclaimed resource of this kind is this build's to delete.
 fn releasable(which: Provider) -> bool {
-    match which {
-        Provider::E2b => true,
-        Provider::AppleContainer => APPLE_SWEEP_ENABLED,
-    }
+    // A hosted provider lists exact ids and always has. The gate is on the
+    // local half, whose list this build has not yet seen a real answer from.
+    !is_local(which) || APPLE_SWEEP_ENABLED
 }
 
 /// One touch of the heartbeat: no credentials, nothing to interpret, and a
@@ -432,6 +458,20 @@ impl ComputerManager {
         self.inner.probes.lock().clear();
     }
 
+    /// The provider, asked to make itself usable before a machine is made or
+    /// woken on it: a local runtime may have a service that is installed and
+    /// stopped, and a hosted one has nothing to prepare.
+    ///
+    /// The two halves travel together on purpose. Whatever `prepare` started,
+    /// every answer given about that provider before it is now wrong, and a
+    /// cache that says "installed but stopped" about a service this app has
+    /// just started is one Settings draws for the next half minute.
+    async fn prepared(&self, provider: &Arc<dyn ComputerProvider>) -> Result<(), ComputerError> {
+        provider.prepare().await?;
+        self.forget_probes();
+        Ok(())
+    }
+
     /// Whether this agent can be given a computer at all, which is what its
     /// prompt and its tool list are built from.
     ///
@@ -451,9 +491,11 @@ impl ComputerManager {
     pub fn start_idle_ticker(&self, handle: tokio::runtime::Handle) {
         let manager = self.clone();
         handle.spawn(async move {
-            let mut ticker = tokio::time::interval(IDLE_TICK);
             loop {
-                ticker.tick().await;
+                // Read every time round rather than once: an operator who
+                // shortens the idle setting should not have to wait out the old
+                // period, or restart the app, for the change to take.
+                tokio::time::sleep(idle_tick_period(manager.idle_seconds())).await;
                 manager.idle_tick(now_ms()).await;
             }
         });
@@ -471,7 +513,7 @@ impl ComputerManager {
         };
         let idle_ms = i64::from(self.idle_seconds()) * 1000;
 
-        for listed in listed.into_iter().filter(|record| record.provider != Provider::E2b) {
+        for listed in listed.into_iter().filter(|record| is_local(record.provider)) {
             let lock = self.lock_for(listed.agent_id);
             let _held = lock.lock().await;
             let Some((record, provider, handle)) = self.running_local(listed.id).await else {
@@ -520,19 +562,30 @@ impl ComputerManager {
             }
         };
 
-        for listed in listed.into_iter().filter(|record| record.provider != Provider::E2b) {
-            let lock = self.lock_for(listed.agent_id);
-            let _held = lock.lock().await;
-            let Some((record, provider, handle)) = self.running_local(listed.id).await else {
-                continue;
-            };
-            match provider.stop(&handle).await {
-                Ok(()) => {
-                    tracing::info!(computer = %record.id, "stopped a computer on the way out")
-                }
-                Err(err) => {
-                    tracing::warn!(%err, computer = %record.id, "could not stop a computer on the way out")
-                }
+        // Side by side, because the whole shutdown is on one deadline and each
+        // stop is a command to a runtime. One after another, a crew of four
+        // spends four deadlines out of the one budget and the last machine is
+        // never asked at all. Each waits on its own agent's lock, and an agent
+        // has at most one computer, so no two of these want the same lock.
+        let stops = listed
+            .into_iter()
+            .filter(|record| is_local(record.provider))
+            .map(|record| self.stop_on_the_way_out(record.agent_id, record.id));
+        futures_util::future::join_all(stops).await;
+    }
+
+    /// One machine, stopped under its agent's lock, with nothing to report
+    /// upwards: a shutdown carries on whatever any one machine says.
+    async fn stop_on_the_way_out(&self, agent: AgentId, id: ComputerId) {
+        let lock = self.lock_for(agent);
+        let _held = lock.lock().await;
+        let Some((record, provider, handle)) = self.running_local(id).await else {
+            return;
+        };
+        match provider.stop(&handle).await {
+            Ok(()) => tracing::info!(computer = %record.id, "stopped a computer on the way out"),
+            Err(err) => {
+                tracing::warn!(%err, computer = %record.id, "could not stop a computer on the way out")
             }
         }
     }
@@ -596,6 +649,13 @@ impl ComputerManager {
                             return Ok((self.machine(provider, handle, env), Provisioned::Reused));
                         }
                         ProviderState::Asleep => {
+                            // A local runtime's service can have stopped since
+                            // this disk was last used — a restart of the Mac is
+                            // the ordinary way — and asking it to wake anything
+                            // then fails. Somebody asking for their computer
+                            // back is the same permission to start it as
+                            // somebody asking for a new one.
+                            self.prepared(&provider).await?;
                             // Woken rather than replaced. The disk is the point:
                             // a browser that was signed in still is.
                             let woken = provider.start(&handle, self.idle_seconds()).await?;
@@ -642,13 +702,9 @@ impl ComputerManager {
         }
 
         let provider = self.default_provider().await?;
-        // A local runtime may have a service that is installed and stopped, and
-        // an operator asking for a computer is the permission to start it; a
-        // hosted one has nothing to prepare. Before the row, because a failure
-        // here has made nothing and should leave nothing behind.
-        provider.prepare().await?;
-        // Whatever that started, an answer given before it is now wrong.
-        self.forget_probes();
+        // Before the row: a failure here has made nothing and should leave
+        // nothing behind.
+        self.prepared(&provider).await?;
 
         let id = ComputerId::new();
         let now = now_ms();
@@ -1136,6 +1192,11 @@ pub(crate) mod fake {
         pub fail_list: Mutex<bool>,
         pub fail_prepare: Mutex<bool>,
         pub create_delay: Mutex<Option<std::time::Duration>>,
+        pub stop_delay: Mutex<Option<std::time::Duration>>,
+        /// How many stops were ever in flight at the same moment, which is the
+        /// deterministic half of "these ran side by side".
+        pub stops_at_once: Mutex<u32>,
+        stopping: Mutex<u32>,
         /// What every exec answers with, in order; the last one repeats.
         pub replies: Mutex<Vec<Output>>,
         /// What `probe` answers. `None` is ready: a fake that had to be told it
@@ -1227,6 +1288,20 @@ pub(crate) mod fake {
         async fn keep_awake(&self, _handle: &ProviderHandle, _idle_seconds: u32) {}
 
         async fn stop(&self, handle: &ProviderHandle) -> Result<(), ProviderError> {
+            // Counted before the wait and released after it, so what a test
+            // reads is how many were genuinely overlapping rather than how
+            // many happened.
+            let delay = {
+                let mut stopping = self.stopping.lock();
+                *stopping += 1;
+                let mut most = self.stops_at_once.lock();
+                *most = (*most).max(*stopping);
+                *self.stop_delay.lock()
+            };
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
+            }
+            *self.stopping.lock() -= 1;
             self.machines.lock().insert(handle.provider_id.clone(), ProviderState::Asleep);
             Ok(())
         }
@@ -1515,6 +1590,61 @@ mod tests {
         assert_eq!(execs.len(), 1, "only the machine still in use is touched");
         assert_eq!(execs[0].argv, vec!["touch", "/run/guaca/heartbeat"]);
         assert!(execs[0].env.is_empty(), "a heartbeat carries no credentials");
+    }
+
+    #[test]
+    fn the_tick_beats_twice_per_idle_period_and_never_slower_than_a_minute() {
+        // The guest's watchdog exits when the heartbeat is older than
+        // `GUAC_IDLE_SECONDS`, which is this same setting. A fixed minute tick
+        // against a one-minute setting is a race the guest wins about half the
+        // time: the machine stops itself while an agent is working on it.
+        assert_eq!(idle_tick_period(60), Duration::from_secs(30));
+        assert_eq!(idle_tick_period(120), Duration::from_secs(60));
+        assert_eq!(idle_tick_period(900), Duration::from_secs(60), "and no slower than that");
+    }
+
+    #[tokio::test]
+    async fn waking_a_machine_starts_the_service_it_needs_and_reusing_one_does_not() {
+        // A local runtime's service can be stopped between one use and the
+        // next — a restart of this Mac is the ordinary way. Waking a disk on a
+        // service that is not running fails, and the operator asking for their
+        // computer back is the same permission to start it as asking for a new
+        // one. Reusing a machine that is already running asks nothing: that
+        // path runs on every command an agent types.
+        let local = Arc::new(fake::FakeProvider::local());
+        let (manager, _store, card, _config, _dir) = setup_with(vec![local.clone()]);
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(*local.prepares.lock(), 1, "the create asked");
+
+        manager.sleep(card.id).await.unwrap();
+        let (_, woken) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(woken, Provisioned::Woken);
+        assert_eq!(*local.prepares.lock(), 2, "and so did the wake");
+
+        let (_, reused) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(reused, Provisioned::Reused);
+        assert_eq!(*local.prepares.lock(), 2, "a machine already running asks nothing");
+    }
+
+    #[tokio::test]
+    async fn machines_are_stopped_side_by_side_on_the_way_out() {
+        // The whole shutdown is bounded, and a stop is a CLI call per machine.
+        // One after another, a crew of four spends four deadlines of the one
+        // budget and the last of them is never asked at all.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.stop_delay.lock() = Some(Duration::from_millis(50));
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone()]);
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let second = store.create_agent(&draft("Chef")).unwrap();
+        manager.ensure(&second, BTreeMap::new()).await.unwrap();
+
+        manager.stop_local_machines().await;
+
+        assert_eq!(
+            local.machines.lock().values().filter(|s| **s == ProviderState::Asleep).count(),
+            2
+        );
+        assert_eq!(*local.stops_at_once.lock(), 2, "both were in flight together");
     }
 
     #[tokio::test]
