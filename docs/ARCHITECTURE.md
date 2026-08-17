@@ -119,7 +119,7 @@ another's instructions by listing peers. There is a test for that too.
 ## A protected action parks the turn that asked for it
 
 Agents can add agents. Every other tool acts on the asking agent's own machine,
-notes or peers; this one changes the workspace and adds something the operator
+memory or peers; this one changes the workspace and adds something the operator
 pays to run, so it stops and asks.
 
 The turn does not return and retry later. It parks: `create_agent` writes a

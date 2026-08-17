@@ -130,9 +130,9 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
 
         // Everything that is not a send is a quiet one-liner. This used to fall
         // through to the send renderer, so `update_notes` — which has no
-        // recipients — was drawn as "Sent to no one" with the note body as the
-        // message. Naming the tools that are not sends is what stops the next
-        // one from doing the same.
+        // recipients — was drawn as "Sent to no one" with the memory body as
+        // the message. Naming the tools that are not sends is what stops the
+        // next one from doing the same.
         if (part.name !== "send_message") {
           const summary =
             part.outcome.status === "ok" || part.outcome.status === "partial"
@@ -142,7 +142,7 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
             part.name === "directory"
               ? "checked who is available"
               : part.name === "update_notes"
-                ? "updated its notes"
+                ? "updated its memory"
                 : part.name === "create_agent"
                   ? "asked to add an agent"
                   : `used ${part.name}`;

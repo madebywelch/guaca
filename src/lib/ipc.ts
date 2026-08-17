@@ -115,10 +115,10 @@ export const api = {
 
   agentLastActive: () => invoke<Record<AgentId, number>>("agent_last_active"),
 
-  /** An agent's notes: a small markdown file it maintains for itself. */
+  /** An agent's memory: a small markdown file it maintains for itself. */
   agentNotes: (id: AgentId) => invoke<string>("agent_notes", { id }),
 
-  /** Lets the operator seed or correct an agent's notes by hand. */
+  /** Lets the operator seed or correct an agent's memory by hand. */
   setAgentNotes: (id: AgentId, content: string) =>
     invoke<string>("set_agent_notes", { id, content }),
 
@@ -138,7 +138,7 @@ export const api = {
    */
   retryTurn: (agentId: AgentId, messageId: MessageId) =>
     invoke<RunId>("retry_turn", { agentId, messageId }),
-  /** Resets a whole group: transcripts, routines, notes and spend. */
+  /** Resets a whole group: transcripts, routines, memories and spend. */
   clearGroup: (groupId: GroupId) => invoke<GroupReset>("clear_group", { groupId }),
   agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
   createRoutine: (agentId: AgentId, draft: RoutineDraft) =>

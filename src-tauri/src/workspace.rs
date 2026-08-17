@@ -1,8 +1,15 @@
-//! Per-agent notes on disk.
+//! Per-agent memory on disk.
 //!
 //! Each agent owns one small markdown file that it can rewrite, and that is
 //! shown to it at the start of every turn. This is the smallest thing that
 //! deserves the name memory, and the shape is deliberate.
+//!
+//! It is called memory everywhere a person or a model reads about it, and
+//! `notes` everywhere the code names it: the tool is `update_notes`, the
+//! commands are `agent_notes` and `set_agent_notes`, and the files are these.
+//! Renaming the internals would rewrite the IPC contract to no effect, so
+//! instead both words reach the same file at the model boundary, and the
+//! operator's word is the one an agent is told.
 //!
 //! The 2026 survey of agent memory (arXiv 2603.07670) frames memory as a
 //! write-manage-read loop and names the engineering realities that decide

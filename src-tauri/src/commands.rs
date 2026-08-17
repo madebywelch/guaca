@@ -376,8 +376,8 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
 
     state.runtime.store().set_lifecycle(id, Lifecycle::Terminated)?;
     state.runtime.stop_agent(id);
-    // The transcript survives a deletion, but the agent's private notes are
-    // its own and go with it.
+    // The transcript survives a deletion, but the agent's private memory is
+    // its own and goes with it.
     state.runtime.workspace().remove(id);
     // Its schedule goes too, or it would keep coming due for an agent that can
     // no longer act on it.
@@ -415,13 +415,13 @@ pub fn agent_activity(state: State<'_, AppState>) -> Reply<HashMap<AgentId, Acti
 
 /// Newest message timestamp per agent, used to order the sidebar by who spoke
 /// most recently. Live updates come from message events; this seeds them.
-/// An agent's notes: a small markdown file it maintains for itself.
+/// An agent's memory: a small markdown file it maintains for itself.
 #[tauri::command]
 pub fn agent_notes(state: State<'_, AppState>, id: AgentId) -> Reply<String> {
     Ok(state.runtime.workspace().read(id))
 }
 
-/// Lets the operator seed or correct an agent's notes by hand.
+/// Lets the operator seed or correct an agent's memory by hand.
 #[tauri::command]
 pub fn set_agent_notes(state: State<'_, AppState>, id: AgentId, content: String) -> Reply<String> {
     let card = state
@@ -598,8 +598,8 @@ pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<Group
         messages: store.delete_group_messages(group_id)?,
         routines: store.delete_group_routines(group_id)?,
         calls: store.delete_group_usage(group_id)?,
-        // Notes are files, not rows. An agent whose transcript, schedule and
-        // spend are gone but which still opens tomorrow believing what it
+        // A memory is a file, not a row. An agent whose transcript, schedule
+        // and spend are gone but which still opens tomorrow believing what it
         // wrote last week has not started fresh.
         notes: agents
             .iter()

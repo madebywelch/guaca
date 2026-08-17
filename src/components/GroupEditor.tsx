@@ -61,8 +61,8 @@ export function GroupEditor({ group, onClose }: Props) {
   /**
    * Start fresh: the crew stays, everything it has accumulated goes.
    *
-   * Transcripts, schedules, notes and spend together, because clearing only
-   * the transcript left agents acting on notes about a conversation that no
+   * Transcripts, schedules, memories and spend together, because clearing only
+   * the transcript left agents acting on a memory of a conversation that no
    * longer existed and keeping appointments nobody could see the reason for.
    */
   const clear = async () => {
@@ -177,8 +177,8 @@ export function GroupEditor({ group, onClose }: Props) {
           <div className="banner" style={{ margin: "0.2rem 0 0.9rem" }}>
             <span>
               Reset: {cleared.messages} message{cleared.messages === 1 ? "" : "s"},{" "}
-              {cleared.routines} routine{cleared.routines === 1 ? "" : "s"}, {cleared.notes} set
-              {cleared.notes === 1 ? "" : "s"} of notes, and {cleared.calls} recorded call
+              {cleared.routines} routine{cleared.routines === 1 ? "" : "s"}, {cleared.notes} memor
+              {cleared.notes === 1 ? "y" : "ies"}, and {cleared.calls} recorded call
               {cleared.calls === 1 ? "" : "s"}.
             </span>
           </div>
@@ -245,7 +245,7 @@ export function GroupEditor({ group, onClose }: Props) {
                 className="btn btn--ghost"
                 disabled={busy}
                 onClick={() => setConfirmClear(true)}
-                title="Resets every agent in this group: transcripts, routines and notes, and the spend counter. The agents and their computers stay."
+                title="Resets every agent in this group: transcripts, routines and memories, and the spend counter. The agents and their computers stay."
               >
                 {cleared === null ? "Start fresh" : "Reset"}
               </button>

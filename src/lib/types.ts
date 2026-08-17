@@ -314,6 +314,7 @@ export interface RunUsage extends Tokens {
 export interface GroupReset {
   messages: number;
   routines: number;
+  /** Memories wiped. Named for the file on disk, which is `notes`. */
   notes: number;
   calls: number;
 }

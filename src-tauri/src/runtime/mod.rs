@@ -1405,15 +1405,15 @@ impl Runtime {
                     Ok(stored) => {
                         let summary = if stored.truncated {
                             format!(
-                                "Notes saved, but they were too long and the end was cut. {} \
-                                 characters kept. Rewrite them shorter, keeping only what will \
+                                "Memory saved, but it was too long and the end was cut. {} \
+                                 characters kept. Write it again shorter, keeping only what will \
                                  still matter next week.",
                                 stored.characters
                             )
                         } else if stored.characters == 0 {
-                            "Notes cleared.".to_string()
+                            "Memory cleared.".to_string()
                         } else {
-                            format!("Notes saved ({} characters).", stored.characters)
+                            format!("Memory saved ({} characters).", stored.characters)
                         };
                         (
                             summary.clone(),
@@ -1425,7 +1425,7 @@ impl Runtime {
                         )
                     }
                     Err(err) => (
-                        format!("Error: your notes could not be saved ({err})."),
+                        format!("Error: your memory could not be saved ({err})."),
                         Part::ToolCall {
                             name: tools::UPDATE_NOTES.to_string(),
                             arguments,
@@ -1666,7 +1666,7 @@ impl Runtime {
             DetailField::new("Instructions", &clean.system_prompt),
         ];
         if !notes.is_empty() {
-            detail.push(DetailField::new("Starting notes", &notes));
+            detail.push(DetailField::new("Starting memory", &notes));
         }
 
         let permission = self
@@ -1745,10 +1745,10 @@ impl Runtime {
         };
 
         // Seeded before the agent is running, so its first turn already has
-        // them. A failure here costs the notes, not the agent.
+        // them. A failure here costs the memory, not the agent.
         if !notes.is_empty() {
             if let Err(err) = self.inner.workspace.write(card.id, &card.name, notes) {
-                tracing::warn!(%err, agent = %card.name, "could not seed the new agent's notes");
+                tracing::warn!(%err, agent = %card.name, "could not seed the new agent's memory");
             }
         }
 

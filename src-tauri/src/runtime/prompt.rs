@@ -197,20 +197,21 @@ pub fn system_prompt(
 
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should colour how it reads everything after.
-    out.push_str("\n## Your notes\n");
+    out.push_str("\n## Your memory\n");
     out.push_str(
-        "This is your memory. It is a file of your own, it is shown to you at the start of every \
-         turn, and it is the only thing you carry between conversations: everything else you are \
-         reading now is this conversation, and it goes. Keeping it is your job, and nobody else \
-         does it for you.\n\n\
-         `update_notes` replaces the whole file, so send back everything you want to keep, not \
-         just the new part. Write what will still matter next week: how you work, standing \
-         preferences you have been given, decisions that hold across conversations, what you \
-         have learned about the people and agents you work with. Leave out what this \
-         conversation already says.\n\n\
+        "This is your memory, and your notes are the same thing: one file of your own, shown to \
+         you at the start of every turn, and the only thing you carry between conversations. \
+         Everything else you are reading now is this conversation, and it goes. Keeping it is your \
+         job, and nobody else does it for you.\n\n\
+         `update_notes` is how you write it, whichever way you were asked: remember this, update \
+         your memory, make a note of that, forget that. It replaces the whole file, so send back \
+         everything you want to keep, not just the new part. Write what will still matter next \
+         week: how you work, standing preferences you have been given, decisions that hold across \
+         conversations, what you have learned about the people and agents you work with. Leave out \
+         what this conversation already says.\n\n\
          Keep it current. Correct what turns out to be wrong and delete what has gone stale, \
-         because you will act on this as though it were true: a note you have outgrown does more \
-         damage than one you never wrote.\n\n",
+         because you will act on this as though it were true: something you have outgrown does \
+         more damage than something you never wrote down.\n\n",
     );
     if notes.trim().is_empty() {
         out.push_str("It is empty. Nothing has been worth keeping yet.\n");
@@ -842,8 +843,24 @@ mod tests {
     }
 
     #[test]
+    fn memory_and_notes_are_named_as_one_file() {
+        // The operator asks an agent to update its memory; the tool it has is
+        // called `update_notes`. If the prompt only ever uses one of the two
+        // words, the other one arrives as a request the agent has to guess at,
+        // and the guess it makes is a tool that does not exist.
+        let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        let memory = section(&prompt, "## Your memory");
+        assert!(memory.contains("your notes are the same thing"), "{memory}");
+        assert!(memory.contains("`update_notes`"), "the tool has to be named here: {memory}");
+        assert!(
+            memory.contains("update your memory"),
+            "the operator's own wording has to appear as one of the ways this gets asked: {memory}"
+        );
+    }
+
+    #[test]
     fn every_agent_is_told_its_memory_is_its_own_to_keep() {
-        // An agent that treats its notes as a scratch pad writes one fact and
+        // An agent that treats its memory as a scratch pad writes one fact and
         // never revisits it, so the file rots into something it still acts on.
         let empty = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
         let held =
@@ -883,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_are_always_in_the_prompt() {
+    fn memory_is_always_in_the_prompt() {
         // Always resident means there is no retrieval step that can fail to
         // surface something the agent chose to remember.
         let prompt = prompt_for(
@@ -897,7 +914,7 @@ mod tests {
     }
 
     #[test]
-    fn an_agent_with_no_notes_is_told_what_belongs_there() {
+    fn an_agent_with_an_empty_memory_is_told_what_belongs_there() {
         let prompt = prompt_for(&card("Manager"), &[], "   ", ReplyMode::ToOperator);
         assert!(prompt.contains("It is empty."));
         assert!(prompt.contains("still matter next week"));

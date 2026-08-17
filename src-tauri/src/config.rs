@@ -96,7 +96,7 @@ pub struct AppConfig {
     /// What agents call the person using this app.
     ///
     /// Ambient rather than something each agent discovers and writes into its
-    /// own notes: an operator had to tell one agent their name, that agent
+    /// own memory: an operator had to tell one agent their name, that agent
     /// stored it privately, and every other agent still had no idea who it was
     /// working for. Empty falls back to "the operator", which is what agents
     /// said before this existed.
