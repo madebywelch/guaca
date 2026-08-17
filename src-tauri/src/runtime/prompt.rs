@@ -85,7 +85,7 @@ pub fn system_prompt(
     out.push_str("\n## Your computer\n");
     out.push_str(
         "You have your own Linux machine, and it is not just a shell. It runs a full desktop \
-         with Google Chrome, Firefox, a file manager and an editor installed, and the operator \
+         with Google Chrome, a file manager and an editor installed, and the operator \
          can watch that screen and take control of it.\n\n\
          - `run_command` runs a shell command on it. The filesystem persists between turns and \
            the internet works, so anything you do not already know you can go and find out \
@@ -94,7 +94,11 @@ pub fn system_prompt(
            visit a site, look at a page, or do anything a person would do in a window, for \
            example `google-chrome https://example.com`. The operator sees exactly what you \
            opened.\n\
-         - `browse` is how you use the web. The browser tells you exactly where every link, \
+         - `browse` is how you use the web, and it drives Chrome: the one browser on this \
+           machine, holding whatever accounts you are signed in to. Do not open another one. \
+           A second browser knows none of those accounts, `browse` cannot see it, and you \
+           would be reading one window while clicking another. The browser tells you exactly \
+           where every link, \
            button and field is, so prefer it over looking at pixels for anything on a web \
            page: `read` gives you the text and a numbered list of what you can use, then \
            `click` and `type` take those numbers. It is what you want for signing in, \
@@ -1060,6 +1064,23 @@ mod tests {
         assert!(
             note.contains("Nothing means nothing"),
             "an agent will narrate its own silence unless told not to"
+        );
+    }
+
+    #[test]
+    fn only_one_browser_is_offered_because_only_one_holds_the_accounts() {
+        // Observed: told to send mail, an agent opened firefox, drove it by
+        // coordinates, and read the page with `browse`, which was on Chrome the
+        // whole time. It then reported the account missing. The accounts live
+        // on Chrome's profile and `browse` drives only Chrome, so a second
+        // browser is a window that knows nothing and that half its tools cannot
+        // see.
+        let prompt = prompt_for(&card("Outreach"), &[], "", ReplyMode::ToOperator);
+        assert!(!prompt.contains("Firefox"), "{prompt}");
+        assert!(prompt.contains("Do not open another one"), "{prompt}");
+        assert!(
+            prompt.contains("reading one window while clicking another"),
+            "the reason has to be there, or it reads as an arbitrary rule: {prompt}"
         );
     }
 
