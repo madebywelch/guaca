@@ -13,6 +13,9 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
 }
 
+/** How long a message arrived at from search stays marked. */
+const FLASH_MS = 1800;
+
 /** True when consecutive messages should merge under one header. */
 function isContinuation(previous: Envelope | undefined, current: Envelope): boolean {
   if (!previous) return false;
@@ -26,6 +29,8 @@ export function ChannelView({ channel, onEditAgent }: Props) {
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
   const setBanner = useStore((s) => s.setBanner);
+  const focused = useStore((s) => s.focused);
+  const clearFocus = useStore((s) => s.clearFocus);
 
   const loadChannel = useStore((s) => s.loadChannel);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -76,6 +81,23 @@ export function ChannelView({ channel, onEditAgent }: Props) {
     const node = scrollRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [channel]);
+
+  // A message somebody arrived at from search. Run after the transcript is on
+  // screen, because the row cannot be scrolled to before it exists, and the
+  // read that widens the window to reach it lands a render later than the
+  // channel switch does. The mark is cleared once it has been shown, so
+  // reopening the channel later does not jump again.
+  useEffect(() => {
+    if (!focused || messages === undefined) return;
+    const row = scrollRef.current?.querySelector<HTMLElement>(`[data-message="${focused}"]`);
+    if (!row) return;
+    // Not the newest message any more, so following the bottom would undo this
+    // the moment anything else arrives.
+    pinnedToBottom.current = false;
+    row.scrollIntoView({ block: "center" });
+    const timer = window.setTimeout(clearFocus, FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [focused, messages, clearFocus]);
 
   const paused = agent?.lifecycle === "paused";
 
@@ -186,13 +208,21 @@ export function ChannelView({ channel, onEditAgent }: Props) {
             </div>
           ) : (
             messages.map((message, index) => (
-              <MessageItem
+              // Wrapped rather than marked on the entry itself: a message
+              // renders as four different shapes depending on who sent it to
+              // whom, and one of them is several rows.
+              <div
                 key={message.id}
-                message={message}
-                lookups={lookups}
-                continued={isContinuation(messages[index - 1], message)}
-                feed={false}
-              />
+                data-message={message.id}
+                data-found={message.id === focused ? "true" : undefined}
+              >
+                <MessageItem
+                  message={message}
+                  lookups={lookups}
+                  continued={isContinuation(messages[index - 1], message)}
+                  feed={false}
+                />
+              </div>
             ))
           )}
 

@@ -6,6 +6,7 @@ import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { ChannelView } from "./components/ChannelView";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
+import { Search } from "./components/Search";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { api, onRuntimeEvent } from "./lib/ipc";
@@ -70,8 +71,23 @@ export default function App() {
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
   const [seeding, setSeeding] = useState(false);
+
+  // Both modifiers, on every platform. The app is one window with one find
+  // shortcut, and an operator who learned it on a laptop should not have to
+  // learn it again on a desktop.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        setSearching(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -153,6 +169,7 @@ export default function App() {
         onNewGroup={() => setEditingGroup("new")}
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
+        onOpenSearch={() => setSearching(true)}
         onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
       />
 
@@ -244,6 +261,16 @@ export default function App() {
         />
       )}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {searching && (
+        <Search
+          onClose={() => setSearching(false)}
+          onEditAgent={(agent) => setEditing(agent)}
+          onEditGroup={(group) => setEditingGroup(group)}
+          onNewAgent={() => setEditing("new")}
+          onNewGroup={() => setEditingGroup("new")}
+          onOpenSettings={() => setShowSettings(true)}
+        />
+      )}
     </div>
   );
 }

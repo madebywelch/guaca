@@ -80,6 +80,13 @@ interface State {
   streams: Record<MessageId, StreamBuffer | undefined>;
   pulses: Pulse[];
 
+  /**
+   * The message a search result asked for, until the transcript has scrolled
+   * to it. Held here rather than passed as a prop because the channel it is in
+   * has to be opened first, and the two happen in different renders.
+   */
+  focused: MessageId | null;
+
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
 
@@ -88,7 +95,10 @@ interface State {
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
-  loadChannel: (key: ChannelKey) => Promise<void>;
+  loadChannel: (key: ChannelKey, through?: MessageId) => Promise<void>;
+  /** Opens a message's channel with the message itself in the window. */
+  openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
+  clearFocus: () => void;
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
@@ -136,6 +146,7 @@ export const useStore = create<State>((set, get) => ({
   messages: {},
   streams: {},
   pulses: [],
+  focused: null,
   banner: null,
 
   async bootstrap() {
@@ -177,16 +188,34 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async select(key) {
-    set({ selected: key });
+    set({ selected: key, focused: null });
     await get().loadChannel(key);
   },
 
-  async loadChannel(key) {
+  async loadChannel(key, through) {
     const messages =
       key === ACTIVITY_CHANNEL
         ? await api.conversationFlow(400)
-        : await api.channelMessages(key, 300);
+        : await api.channelMessages(key, 300, through);
     set((state) => ({ messages: { ...state.messages, [key]: messages } }));
+  },
+
+  /**
+   * A search result, opened.
+   *
+   * The channel is read again even when it is already the open one: the window
+   * on screen is the newest three hundred, and the message being asked for may
+   * be older than that. `focused` is set before the read so the transcript can
+   * mark the row the moment it arrives, and the channel is switched first so
+   * the operator sees where they are going rather than a pause.
+   */
+  async openMessage(channel, message) {
+    set({ selected: channel, focused: message });
+    await get().loadChannel(channel, message);
+  },
+
+  clearFocus() {
+    set({ focused: null });
   },
 
   async refreshUsage() {

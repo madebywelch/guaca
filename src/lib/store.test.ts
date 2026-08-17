@@ -326,6 +326,46 @@ describe("channelsCleared", () => {
     const { channelMessages } = (await import("./ipc")).api as unknown as {
       channelMessages: ReturnType<typeof vi.fn>;
     };
-    expect(channelMessages).toHaveBeenCalledWith("chef", 300);
+    // No third argument: a reload after a clear is not a jump to a message,
+    // and asking to reach one that was just deleted would widen the window
+    // for nothing.
+    expect(channelMessages).toHaveBeenCalledWith("chef", 300, undefined);
+  });
+});
+
+describe("openMessage", () => {
+  it("asks for a window wide enough to hold the message", async () => {
+    // The transcript is normally read as "the newest three hundred", and a
+    // search hit from last month is not in it. Opening the channel without
+    // saying which message would land the operator at the wrong end of it.
+    reset({ chef: [] });
+    await useStore.getState().openMessage("chef", "m-old");
+
+    const { channelMessages } = (await import("./ipc")).api as unknown as {
+      channelMessages: ReturnType<typeof vi.fn>;
+    };
+    expect(channelMessages).toHaveBeenCalledWith("chef", 300, "m-old");
+  });
+
+  it("marks the message before the read comes back", async () => {
+    // The channel switches first so the operator sees where they are going,
+    // and the mark has to be in place by the time the rows arrive or the
+    // transcript has nothing to scroll to.
+    reset({ chef: [] });
+    const pending = useStore.getState().openMessage("chef", "m-old");
+
+    expect(useStore.getState().selected).toBe("chef");
+    expect(useStore.getState().focused).toBe("m-old");
+    await pending;
+  });
+
+  it("drops the mark when the operator moves on by hand", async () => {
+    // Otherwise clicking an agent in the rail re-runs the jump the next time
+    // that channel draws.
+    reset({ chef: [] });
+    await useStore.getState().openMessage("chef", "m-old");
+    await useStore.getState().select("manager");
+
+    expect(useStore.getState().focused).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ pub mod envelope;
 pub mod group;
 pub mod ids;
 pub mod routine;
+pub mod search;
 pub mod signin;
 pub mod usage;
 

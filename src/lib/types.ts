@@ -386,6 +386,48 @@ export interface RoutineDraft {
   inSecs: number | null;
 }
 
+/**
+ * What the transcript has to say about a query.
+ *
+ * Agents and groups are absent on purpose: this side is already holding both to
+ * draw the rail, so they are matched here without a round trip. See
+ * `lib/search.ts`, which puts the two halves in one list.
+ */
+export interface SearchHits {
+  messages: MessageHit[];
+  files: FileHit[];
+  links: LinkHit[];
+  routines: Routine[];
+}
+
+/** A matching message, with a window of its text rather than all of it. */
+export interface MessageHit {
+  id: MessageId;
+  /** The channel to open to read it in context. */
+  channelId: AgentId;
+  from: Participant;
+  to: Participant;
+  excerpt: string;
+  createdAt: number;
+}
+
+/** One attachment, and the message that carried it. Unique by digest. */
+export interface FileHit {
+  file: { digest: string; name: string; mime: string; bytes: number };
+  messageId: MessageId;
+  channelId: AgentId;
+  from: Participant;
+  createdAt: number;
+}
+
+/** A URL somebody wrote, and where they wrote it. */
+export interface LinkHit {
+  url: string;
+  messageId: MessageId;
+  channelId: AgentId;
+  createdAt: number;
+}
+
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {
   kind:
