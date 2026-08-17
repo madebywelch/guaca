@@ -101,10 +101,19 @@ struct SandboxRow {
 /// No environment on it. Credentials arrive on each `ExecRequest`, because
 /// which agent a command acts for is a property of the command and a provider
 /// held per session was one that eight call sites could each forget to rebuild.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct E2bProvider {
     http: reqwest::Client,
     api_key: String,
+}
+
+impl std::fmt::Debug for E2bProvider {
+    /// The operator's account key is the one thing on here, and a derived
+    /// `Debug` prints it in the first log line that names the provider. Same
+    /// reason `Secret` says nothing about itself.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("E2bProvider")
+    }
 }
 
 impl E2bProvider {
@@ -683,6 +692,16 @@ mod tests {
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
         assert!(E2bProvider::new("   ").is_none());
         assert!(E2bProvider::new("e2b_x").is_some());
+    }
+
+    #[test]
+    fn a_provider_does_not_print_the_account_key_it_holds() {
+        // The only credential on this struct is the operator's E2B key, and a
+        // derived Debug puts it in the first log line that names the provider.
+        // That is one of the two ways a secret has left this process before.
+        let provider = E2bProvider::new("e2b_sentinel").expect("a key makes a provider");
+        let printed = format!("{provider:?}");
+        assert!(!printed.contains("e2b_sentinel"), "{printed}");
     }
 
     #[test]
