@@ -492,6 +492,12 @@ impl Runtime {
         ))
     }
 
+    /// The configured provider's model catalogue. Kept beside [`Self::probe`]
+    /// so credentials stay on the runtime side of the IPC boundary.
+    pub async fn available_models(&self, config: &AppConfig) -> Result<Vec<String>, LlmError> {
+        self.inner.llm.list_models(&config.inference).await
+    }
+
     /// Messages queued for an agent that it has not yet picked up.
     ///
     /// Observable because "persisted" and "queued" are two different moments:

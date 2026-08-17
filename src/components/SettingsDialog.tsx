@@ -61,6 +61,9 @@ export function SettingsDialog({ onClose }: Props) {
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
+  const [modelOptions, setModelOptions] = useState<string[] | null>(null);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [modelFetchError, setModelFetchError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [e2bKey, setE2bKey] = useState("");
   const [idleMinutes, setIdleMinutes] = useState("");
@@ -131,6 +134,37 @@ export function SettingsDialog({ onClose }: Props) {
     }
   };
 
+  const fetchModelOptions = async () => {
+    setFetchingModels(true);
+    setModelOptions(null);
+    setModelFetchError(null);
+    try {
+      const models = await api.fetchModels({
+        baseUrl,
+        // A blank field means "use the stored key". A typed replacement is
+        // sent for this request without being persisted.
+        ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+      });
+      if (models.length === 0) {
+        setModelFetchError(
+          "The inference endpoint returned no models. Check the endpoint and try again.",
+        );
+        return;
+      }
+      setModelOptions(models);
+      setModel((current) => (models.includes(current) ? current : models[0]!));
+    } catch (error) {
+      setModelFetchError(errorMessage(error));
+    } finally {
+      setFetchingModels(false);
+    }
+  };
+
+  const invalidateModelOptions = () => {
+    setModelOptions(null);
+    setModelFetchError(null);
+  };
+
   return (
     <div className="scrim">
       {/* A real button, so dismissing by clicking away is reachable from the
@@ -163,7 +197,10 @@ export function SettingsDialog({ onClose }: Props) {
             className="input input--mono"
             value={baseUrl}
             placeholder="https://openrouter.ai/api/v1"
-            onChange={(event) => setBaseUrl(event.target.value)}
+            onChange={(event) => {
+              setBaseUrl(event.target.value);
+              invalidateModelOptions();
+            }}
           />
           <span className="field__hint">
             Any OpenAI-compatible base URL. Point it at a local server to run without a network.
@@ -178,7 +215,10 @@ export function SettingsDialog({ onClose }: Props) {
             value={apiKey}
             placeholder={settings?.apiKeySet ? `Stored ${settings.apiKeyHint}` : "sk-or-v1-…"}
             autoComplete="off"
-            onChange={(event) => setApiKey(event.target.value)}
+            onChange={(event) => {
+              setApiKey(event.target.value);
+              invalidateModelOptions();
+            }}
           />
           <span className="field__hint">
             Stored on this machine in a file only your user account can read. Leave blank to keep
@@ -217,16 +257,56 @@ export function SettingsDialog({ onClose }: Props) {
           </span>
         </label>
 
-        <label className="field">
-          <span className="field__label">Default model</span>
-          <input
-            className="input input--mono"
-            value={model}
-            placeholder="anthropic/claude-sonnet-4.5"
-            onChange={(event) => setModel(event.target.value)}
-          />
+        <div className="field">
+          <div className="field__head">
+            <label className="field__label" htmlFor="default-model">
+              Default model
+            </label>
+            <button
+              type="button"
+              className="field__action"
+              aria-label="Fetch models"
+              aria-busy={fetchingModels}
+              disabled={fetchingModels}
+              onClick={() => void fetchModelOptions()}
+            >
+              {fetchingModels ? "Fetching…" : "Fetch"}
+            </button>
+          </div>
+          {modelOptions ? (
+            <select
+              id="default-model"
+              className="select input--mono"
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+            >
+              {!model && (
+                <option value="" disabled>
+                  Choose a model
+                </option>
+              )}
+              {modelOptions.map((option) => (
+                <option value={option} key={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              id="default-model"
+              className="input input--mono"
+              value={model}
+              placeholder="anthropic/claude-sonnet-4.5"
+              onChange={(event) => setModel(event.target.value)}
+            />
+          )}
           <span className="field__hint">Used for new agents. Each agent can override it.</span>
-        </label>
+          {modelFetchError && (
+            <span className="field__hint field__hint--error" role="alert">
+              {modelFetchError}
+            </span>
+          )}
+        </div>
 
         <hr className="divider" />
 

@@ -1893,11 +1893,45 @@ button {
   margin-bottom: 0.32rem;
 }
 
+.field__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.32rem;
+}
+
+.field__head .field__label {
+  margin-bottom: 0;
+}
+
+.field__action {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--flesh);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.field__action:disabled {
+  color: var(--faint);
+  cursor: default;
+}
+
 .field__hint {
   font-size: 0.76rem;
   color: var(--faint);
   margin-top: 0.28rem;
   line-height: 1.45;
+}
+
+.field__hint--error {
+  display: block;
+  color: var(--alarm);
 }
 
 .input,
