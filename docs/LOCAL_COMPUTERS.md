@@ -435,10 +435,17 @@ outside that range.
   Never attach agent containers to the shared default network.
 - Address resources by deterministic ID and Guaca ownership labels, not by the
   agent's editable name.
-- The viewer proxy connects to the guest IP on port 6080, read from
-  `inspect`'s `networks[0].address`. The host routes to that address directly
-  on macOS 26 (Apple's own how-to shows the gateway `192.168.64.1` reaching a
-  container), so noVNC is not published.
+- The viewer proxy connects to the guest IP on port 6080, read from `inspect`'s
+  `status.networks[0].ipv4Address` (measured on 1.2.2, 2026-08-18; an earlier
+  draft of this document said `networks[0].address`, which no release prints).
+  The host routes to that address directly on macOS 26, so noVNC is not
+  published. The address is not stable: a container stopped on `192.168.65.2`
+  came back on `.3`, so it is read when a target is resolved and never cached
+  across a sleep.
+- Run commands as the unprivileged account by number, `exec --uid 1000 --gid
+  1000`. `exec` on 1.2.2 runs as root whatever the image's `USER` says, and the
+  `--user user` form fails with `noPasswdEntries` on an image without that
+  account.
 - Pass secret values in the child process environment and invoke
   `container exec --env VARIABLE ...`, where the argument contains only the
   variable name. Confirmed in the 1.2.2 source: `exec` and `run` share

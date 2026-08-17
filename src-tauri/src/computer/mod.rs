@@ -216,14 +216,17 @@ const HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10
 /// Whether the sweep may delete what a local runtime lists, rather than only
 /// saying what it would delete.
 ///
-/// Off until the spike confirms that `container ls --format json` reports the
-/// container's *name* at `configuration.id`. The rows hold the name `create`
-/// chose; if Apple puts anything else there — a digest, a generated id — every
-/// live machine looks unclaimed and the first sweep after a restart deletes all
-/// of them. It is the one guess in this feature whose failure is silent and
-/// destructive, so until it is checked against a real runtime the local half of
-/// the sweep only reports.
-const APPLE_SWEEP_ENABLED: bool = false;
+/// On since 2026-08-18, when a live Apple Container 1.2.2 confirmed what this
+/// was waiting for: `container ls --all --format json` reports the container's
+/// *name* at `configuration.id` (a container made as `guac-probe` listed as
+/// `configuration.id == "guac-probe"`), and the ownership labels are at
+/// `configuration.labels`. The rows hold the name `create` chose, so had Apple
+/// put anything else there — a digest, a generated id — every live machine
+/// would have looked unclaimed and the first sweep after a restart would have
+/// deleted all of them. That was the one guess in this feature whose failure
+/// was silent and destructive, which is why it was measured before this was
+/// turned on rather than after.
+const APPLE_SWEEP_ENABLED: bool = true;
 
 /// How often a running local machine's heartbeat is touched: twice per idle
 /// period, and never slower than a minute.
@@ -1800,7 +1803,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_sweep_reaps_within_a_kind_and_only_reports_what_a_local_runtime_would_lose() {
+    async fn the_sweep_reaps_within_a_kind_and_now_reaps_the_local_one_too() {
         // Two claims that look alike across two providers are not the same
         // machine: a name on this Mac and a sandbox id in a cloud share a
         // namespace with nothing.
@@ -1841,11 +1844,15 @@ mod tests {
 
         let released = manager.sweep().await.unwrap();
 
-        assert_eq!(released, 1);
+        // Both halves delete now: a live 1.2.2 confirmed that what a local
+        // runtime lists is the name the rows hold, which is what the local half
+        // was waiting on before it was allowed to act on its own list.
+        assert_eq!(released, 2);
         assert_eq!(*hosted.deletes.lock(), vec!["shared-name".to_string()]);
-        assert!(
-            local.deletes.lock().is_empty(),
-            "the local half only says what it would release until the spike confirms the list"
+        assert_eq!(
+            *local.deletes.lock(),
+            vec!["guac-orphan".to_string()],
+            "the unclaimed local machine is released, and the claimed one is not"
         );
     }
 

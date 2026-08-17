@@ -51,9 +51,23 @@ const SUPPORTED_PLATFORM: bool = cfg!(target_os = "macos");
 /// image puts the unprivileged account here and the desktop code assumes it.
 const GUEST_HOME: &str = "/home/user";
 
+/// Who a command runs as inside the machine. The account the image makes, by
+/// number: see `exec_argv` for why not by name.
+const GUEST_UID: &str = "1000";
+const GUEST_GID: &str = "1000";
+
 /// Long enough for a runtime that is busy with another container, short enough
 /// that an operator's click is not held indefinitely.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What a probe will wait, which is much less. A probe is asked while an
+/// operator watches Settings and on the way to deciding whether an agent has a
+/// computer at all, so it is on the path of a turn that has nothing to do with
+/// it: a wedged binary must cost that turn seconds, not the full minute a
+/// lifecycle command is allowed. The cost of being wrong is small in the other
+/// direction — a slow answer reads as "did not answer", which offers to start
+/// the service, and starting a service that is already up is harmless.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A first pull is a desktop image over whatever connection the Mac has.
 const PULL_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -150,6 +164,13 @@ impl AppleContainer {
         Ok(self.cli.run(argv, &BTreeMap::new(), CONTROL_TIMEOUT).await?)
     }
 
+    /// One question, on a probe's much shorter clock. Nobody asked for a
+    /// machine on this path, so nobody should wait a lifecycle command's worth
+    /// of time to be told there is not one.
+    async fn ask(&self, argv: &[String]) -> Result<CliOutput, ProviderError> {
+        Ok(self.cli.run(argv, &BTreeMap::new(), PROBE_TIMEOUT).await?)
+    }
+
     /// The three-CLI-calls half of `probe`, apart from the platform question so
     /// that it can be asked on any machine.
     async fn probe_runtime(&self) -> ProviderStatus {
@@ -160,7 +181,7 @@ impl AppleContainer {
         // is what starts the service either way. They are said differently
         // because "it says it is stopped" and "it did not answer at all" are
         // different things to walk into.
-        match self.control(&status_argv()).await {
+        match self.ask(&status_argv()).await {
             Ok(answer) if answer.ok() => {
                 ProviderStatus::ready("Apple Container is installed and running.")
             }
@@ -174,8 +195,11 @@ impl AppleContainer {
     /// One answer with two readers: Settings draws it as a status and
     /// `require_supported` refuses with it, so an operator meets the same
     /// sentence whichever of the two showed it to them.
+    /// On the probe's clock wherever it is asked from, including the create
+    /// path: printing a version is the cheapest thing this binary does, so ten
+    /// seconds of silence is already a runtime that is not going to answer.
     async fn version_or_reason(&self) -> Result<(u32, u32, u32), ProviderStatus> {
-        let spoke = match self.cli.run(&version_argv(), &BTreeMap::new(), CONTROL_TIMEOUT).await {
+        let spoke = match self.cli.run(&version_argv(), &BTreeMap::new(), PROBE_TIMEOUT).await {
             Ok(spoke) => spoke,
             // Nothing to run. Every other failure means it is installed and
             // something else is wrong, and saying "not installed" would send
@@ -251,11 +275,21 @@ impl AppleContainer {
         let Ok(described) = described.json() else {
             return Ok(Refusal::SomebodyElses);
         };
-        Ok(if left_by(&described, computer) {
+        Ok(if left_by(&described, &self.installation, computer) {
             Refusal::OurLeftover
         } else {
             Refusal::SomebodyElses
         })
+    }
+
+    /// Whether the thing a delete would not remove is simply not there.
+    ///
+    /// Asked of `volume inspect` / `network inspect`, whose not-found wording
+    /// is the ordinary one. Anything else — it exists, the runtime would not
+    /// say, the answer is unreadable — is not a reason to call a teardown done.
+    async fn gone_already(&self, inspect: &[String]) -> Result<bool, ProviderError> {
+        let described = self.control(inspect).await?;
+        Ok(!described.ok() && missing(&described))
     }
 
     /// Makes the network, the volume and the container, recording each as it
@@ -308,9 +342,18 @@ impl AppleContainer {
         }
         made.push(Made::Volume);
 
+        // A container is never adopted, whoever left it. A network and a volume
+        // are empty vessels this call is about to fill, but a container carries
+        // an image, limits, capabilities and labels chosen when it was made,
+        // and taking one over means running an agent on a machine built to
+        // somebody else's description. The operator is told which name is in
+        // the way and given the command that clears it.
         let created =
             self.control(&container_create_argv(request, &self.installation, &self.image)).await?;
         if !created.ok() {
+            if already_exists(&created) {
+                return Err(name_taken("machine", &name, "container delete --force"));
+            }
             return Err(step_failed("creating the computer", &created));
         }
         made.push(Made::Container);
@@ -480,17 +523,38 @@ impl ComputerProvider for AppleContainer {
     /// gone: this is retried after a failure, and the second attempt finds most
     /// of it missing. A real failure stops the sequence and is reported, so the
     /// row stays and the retry happens rather than the rest leaking silently.
+    ///
+    /// Whether something was already gone cannot be read from the delete alone
+    /// for two of the three. `container delete --force` says `not found`, but
+    /// `volume delete` and `network delete` on 1.2.2 both answer a missing name
+    /// with `Error: failed to delete one or more volumes: ["X"]` and exit 1 —
+    /// the same words they would use for a volume that is still attached. So
+    /// the resource is looked up, and only a lookup that says it is not there
+    /// turns the failure into success. Guessing the other way would report a
+    /// teardown as finished while a 20 GiB volume stayed on the disk.
     async fn delete(&self, handle: &ProviderHandle) -> Result<(), ProviderError> {
         let name = &handle.provider_id;
         let removals = [
-            ("removing the computer", delete_argv(name)),
-            ("removing the computer's home volume", volume_delete_argv(name)),
-            ("removing the computer's private network", network_delete_argv(name)),
+            ("removing the computer", delete_argv(name), None),
+            (
+                "removing the computer's home volume",
+                volume_delete_argv(name),
+                Some(volume_inspect_argv(name)),
+            ),
+            (
+                "removing the computer's private network",
+                network_delete_argv(name),
+                Some(network_inspect_argv(name)),
+            ),
         ];
-        for (step, argv) in removals {
+        for (step, argv, confirm) in removals {
             let removed = self.control(&argv).await?;
-            if !removed.ok() && !missing(&removed) {
-                return Err(step_failed(step, &removed));
+            if removed.ok() || missing(&removed) {
+                continue;
+            }
+            match confirm {
+                Some(confirm) if self.gone_already(&confirm).await? => continue,
+                _ => return Err(step_failed(step, &removed)),
             }
         }
         Ok(())
@@ -685,14 +749,23 @@ fn list_argv() -> Vec<String> {
     argv(&["ls", "--all", "--format", "json"])
 }
 
-/// One command inside a machine.
+/// One command inside a machine, as the unprivileged account.
 ///
 /// The variables are named and never given: `container exec --env NAME` reads
 /// the value from its own environment, which `Cli::run` fills from the map
 /// that never becomes an argument. Sorted because the map is, so the vector a
 /// test pins is the vector every run produces.
+///
+/// The uid and gid are numbers rather than `--user user`, which was measured
+/// rather than chosen: `exec` on 1.2.2 ran as uid 0 whatever the image's own
+/// `USER` said, and the name form fails outright with `noPasswdEntries` on any
+/// image whose passwd file has no such account. Numbers work either way, and
+/// every command an agent runs should be the same unprivileged account that
+/// owns the home volume — root would write files its own desktop cannot then
+/// open.
 fn exec_argv(name: &str, request: &ExecRequest) -> Vec<String> {
-    let mut parts = argv(&["exec", "--workdir", &request.cwd]);
+    let mut parts =
+        argv(&["exec", "--uid", GUEST_UID, "--gid", GUEST_GID, "--workdir", &request.cwd]);
     for variable in request.env.keys() {
         parts.extend(argv(&["--env", variable]));
     }
@@ -719,25 +792,34 @@ fn owner_labels(installation: &str, computer: ComputerId) -> Vec<String> {
 
 /// What one container is doing, from the array `container inspect` prints.
 ///
+/// `status` is an *object*, confirmed against 1.2.2 on 2026-08-18:
+/// `{"state":"running","networks":[…],"startedDate":…}`, and
+/// `{"state":"stopped","networks":[]}` once it is down. This file first assumed
+/// the whole of `status` was the word, which read every live container as a
+/// state nobody recognised.
+///
 /// Anything outside the known words is an error rather than `Gone`, because
 /// `Gone` is permission to throw a disk away: an unfamiliar word is far more
 /// likely a machine that is fine and a build that is old. A reply that is not
-/// an array at all is the same kind of unknown, and must not read as an empty
-/// one.
+/// an array, and a `status` that is a bare string rather than an object, are
+/// the same kind of unknown — neither may read as an empty array.
 fn read_state(name: &str, inspect: &serde_json::Value) -> Result<ProviderState, ProviderError> {
     let Some(described) = inspect.as_array() else {
-        return Err(ProviderError::Operation(format!(
-            "Apple Container described {name} in a form this build does not understand; try \
-             again, and if it persists destroy the computer from its pane"
-        )));
+        return Err(unreadable_description(name));
     };
     // Nothing in the array is the runtime positively saying there is no such
     // container, which is the one answer that permits replacing a disk.
     let Some(container) = described.first() else {
         return Ok(ProviderState::Gone);
     };
+    // A string here is what this build used to expect. Reaching it now means
+    // the shape moved again, and guessing which half of it is the state is how
+    // a running machine gets replaced.
+    let Some(state) = container["status"]["state"].as_str() else {
+        return Err(unreadable_description(name));
+    };
 
-    match container["status"].as_str().unwrap_or_default() {
+    match state {
         "running" => Ok(ProviderState::Running),
         // All three keep the volume, which is what sleeping is for. `created`
         // is one that was made and never started; the manager wakes it exactly
@@ -750,7 +832,22 @@ fn read_state(name: &str, inspect: &serde_json::Value) -> Result<ProviderState, 
     }
 }
 
+/// A description this build cannot read at all, which is never `Gone`.
+fn unreadable_description(name: &str) -> ProviderError {
+    ProviderError::Operation(format!(
+        "Apple Container described {name} in a form this build does not understand; try again, \
+         and if it persists destroy the computer from its pane"
+    ))
+}
+
 /// Where the viewer proxy connects, from the same array.
+///
+/// `status.networks[0].ipv4Address`, confirmed against 1.2.2: `"192.168.65.2/24"`.
+///
+/// The address is read afresh every time the proxy resolves a target, and it
+/// has to be: the probe watched a container come back on `.3` after being
+/// stopped on `.2`. Anything that cached this across a sleep would send the
+/// viewer to whatever machine took the address over.
 fn read_address(name: &str, inspect: &serde_json::Value) -> Result<String, ProviderError> {
     let Some(container) = inspect.as_array().and_then(|described| described.first()) else {
         return Err(ProviderError::ResourceGone(format!(
@@ -758,13 +855,13 @@ fn read_address(name: &str, inspect: &serde_json::Value) -> Result<String, Provi
              the computer from its pane and make a new one"
         )));
     };
-    let Some(address) = container["networks"][0]["address"].as_str() else {
+    let Some(address) = container["status"]["networks"][0]["ipv4Address"].as_str() else {
         return Err(ProviderError::Operation(format!(
             "{name} has no address on its private network yet; wait a moment and open the pane \
              again, and if it persists stop and start the computer"
         )));
     };
-    // `192.168.64.3/24`: the prefix length describes the network, and what the
+    // `192.168.65.2/24`: the prefix length describes the network, and what the
     // proxy needs is the host.
     Ok(address.split('/').next().unwrap_or(address).to_string())
 }
@@ -776,13 +873,15 @@ fn read_address(name: &str, inspect: &serde_json::Value) -> Result<String, Provi
 /// something else, and one carrying another installation's belongs to another
 /// copy of Guac whose agents are still using it.
 ///
-/// **`configuration.id` must be the container's name.** The sweep matches what
-/// this returns against `provider_id` on the rows, and `provider_id` is the
-/// name `create` chose. If Apple puts anything else there — a content digest,
-/// a generated identifier — every live machine looks unclaimed and the first
-/// sweep after a restart deletes all of them. It is the one guess in this file
-/// whose failure is silent and destructive, so the spike confirms it before
-/// Task 4 lets the sweep act on it.
+/// **`configuration.id` is the container's name**, confirmed against 1.2.2 on
+/// 2026-08-18: a container created as `guac-probe` listed with
+/// `configuration.id == "guac-probe"`. The sweep matches what this returns
+/// against `provider_id` on the rows, and `provider_id` is the name `create`
+/// chose, so anything else there — a content digest, a generated identifier —
+/// would make every live machine look unclaimed and the first sweep after a
+/// restart would delete all of them. It was the one guess in this file whose
+/// failure was silent and destructive; it is now measured, which is what let
+/// the local sweep be turned on.
 fn read_owned(list: &serde_json::Value, installation: &str) -> Vec<String> {
     list.as_array()
         .map(Vec::as_slice)
@@ -798,19 +897,29 @@ fn read_owned(list: &serde_json::Value, installation: &str) -> Vec<String> {
 /// The name is not evidence: it carries eight hex characters of a random id,
 /// so another installation holding the same one is unlikely rather than
 /// impossible, and what would be adopted on the strength of a name alone is a
-/// stranger's home volume. The label is the evidence, read down the same path
-/// as `read_owned` uses and just as defensively — absent, unreadable, or
-/// anyone else's all mean not ours.
+/// stranger's home volume. The labels are the evidence — both of them, because
+/// the installation is what tells two copies of Guac apart and the computer id
+/// is what tells this machine from its neighbour.
 ///
-/// The array is unwrapped if there is one, because whether `network inspect`
-/// answers with an array or a bare object is unconfirmed until the spike.
-/// Being relaxed about that shape is safe while being strict about the label:
-/// the worst a misread shape does is refuse an adoption that would have been
-/// allowed.
-fn left_by(described: &serde_json::Value, computer: ComputerId) -> bool {
+/// The array is unwrapped if there is one: `network inspect` and `volume
+/// inspect` both answer with one on 1.2.2, and being relaxed about that shape
+/// is safe while the labels stay strict.
+fn left_by(described: &serde_json::Value, installation: &str, computer: ComputerId) -> bool {
     let described = described.as_array().and_then(|items| items.first()).unwrap_or(described);
+    let labels = labels(described);
     let owner = computer.to_string();
-    described["configuration"]["labels"]["guac.computer"].as_str() == Some(owner.as_str())
+    labels["guac.installation"].as_str() == Some(installation)
+        && labels["guac.computer"].as_str() == Some(owner.as_str())
+}
+
+/// Where every kind of resource carries its labels: `configuration.labels`,
+/// confirmed against 1.2.2 for containers, networks and volumes alike.
+///
+/// One reader for both questions below, because "is this ours to sweep" and
+/// "is this ours to adopt" reading different paths is how one of them silently
+/// stops finding anything.
+fn labels(described: &serde_json::Value) -> &serde_json::Value {
+    &described["configuration"]["labels"]
 }
 
 /// A name held by something this computer cannot show it owns.
@@ -828,11 +937,10 @@ fn name_taken(kind: &str, name: &str, delete_command: &str) -> ProviderError {
 
 /// Whether one listed container carries this installation's ownership labels.
 ///
-/// The path to them is a guess from Apple's 1.2.2 how-to and the spike
-/// confirms it; until then a shape this cannot read owns nothing, which loses
-/// an orphan rather than deleting a stranger.
+/// The path is confirmed against 1.2.2. A shape this cannot read still owns
+/// nothing, which loses an orphan rather than deleting a stranger.
 fn ours(listed: &serde_json::Value, installation: &str) -> bool {
-    let labels = &listed["configuration"]["labels"];
+    let labels = labels(listed);
     labels["guac"].as_str() == Some("true")
         && labels["guac.installation"].as_str() == Some(installation)
 }
@@ -1138,32 +1246,51 @@ mod tests {
         // and adopting on the strength of it would mount a stranger's home
         // volume into an agent's machine and delete it on the way out.
         let computer = ComputerId::new();
-        let labelled = |owner: &str| {
+        // The shape a live `network inspect` prints, trimmed to what is read.
+        let labelled = |installation: &str, owner: &str| {
             serde_json::json!([{
+                "id": "guac-x",
                 "configuration": {
-                    "id": "guac-x",
-                    "labels": {"guac": "true", "guac.installation": "inst-7", "guac.computer": owner},
+                    "name": "guac-x",
+                    "labels": {"guac": "true", "guac.installation": installation, "guac.computer": owner},
                 },
+                "status": {"ipv4Subnet": "192.168.65.0/24"},
             }])
         };
 
-        assert!(left_by(&labelled(&computer.to_string()), computer));
+        assert!(left_by(&labelled("inst-7", &computer.to_string()), "inst-7", computer));
         assert!(
-            !left_by(&labelled(&ComputerId::new().to_string()), computer),
+            !left_by(&labelled("inst-7", &ComputerId::new().to_string()), "inst-7", computer),
             "another computer's, even in this same installation"
+        );
+        // Both labels are required. One id can only be another installation's
+        // through a collision in the eight hex characters of the name, which is
+        // exactly the case this guards, so the installation has to be checked
+        // where the collision would be.
+        assert!(
+            !left_by(&labelled("inst-other", &computer.to_string()), "inst-7", computer),
+            "the same computer id under another installation is another Mac's copy of Guac"
         );
 
         // Everything unreadable is somebody else's: absent labels, an empty
         // description, a shape this build does not know.
-        assert!(!left_by(&serde_json::json!([{"configuration": {"id": "guac-x"}}]), computer));
-        assert!(!left_by(&serde_json::json!([]), computer));
-        assert!(!left_by(&serde_json::json!({}), computer));
-        assert!(!left_by(&serde_json::json!("guac-x"), computer));
+        assert!(!left_by(
+            &serde_json::json!([{"configuration": {"id": "guac-x"}}]),
+            "inst-7",
+            computer
+        ));
+        assert!(!left_by(&serde_json::json!([]), "inst-7", computer));
+        assert!(!left_by(&serde_json::json!({}), "inst-7", computer));
+        assert!(!left_by(&serde_json::json!("guac-x"), "inst-7", computer));
 
-        // Whether inspect answers with an array or a bare object is unconfirmed
-        // until the spike, so a correctly labelled object is ours either way.
+        // Both inspects answer with an array on 1.2.2; a bare object is still
+        // read, because relaxing the shape can only ever refuse an adoption.
         assert!(left_by(
-            &serde_json::json!({"configuration": {"labels": {"guac.computer": computer.to_string()}}}),
+            &serde_json::json!({"configuration": {"labels": {
+                "guac.installation": "inst-7",
+                "guac.computer": computer.to_string(),
+            }}}),
+            "inst-7",
             computer
         ));
     }
@@ -1284,6 +1411,14 @@ mod tests {
             ran,
             [
                 "exec",
+                // Measured, not chosen: 1.2.2 ran `exec` as uid 0 whatever the
+                // image's `USER` said. By number rather than `--user user`,
+                // which fails with `noPasswdEntries` when the account is not in
+                // the image's passwd file.
+                "--uid",
+                "1000",
+                "--gid",
+                "1000",
                 "--workdir",
                 "/home/user",
                 "--env",
@@ -1319,14 +1454,42 @@ mod tests {
         assert_eq!(list_argv(), ["ls", "--all", "--format", "json"]);
     }
 
+    /// What a live `container inspect` printed for a running container on
+    /// 1.2.2, trimmed to the fields this file reads. `status` is an object —
+    /// the shape this build originally guessed wrong.
+    fn inspected_running() -> serde_json::Value {
+        serde_json::json!([{
+            "configuration": {"id": "guac-x", "labels": {"guac": "true"}},
+            "status": {
+                "state": "running",
+                "networks": [{
+                    "ipv4Address": "192.168.65.2/24",
+                    "network": "guac-x",
+                }],
+                "startedDate": "2026-08-18T09:14:22Z",
+            },
+        }])
+    }
+
+    /// And the same container once it is down: the address list empties.
+    fn inspected_stopped() -> serde_json::Value {
+        serde_json::json!([{
+            "configuration": {"id": "guac-x", "labels": {"guac": "true"}},
+            "status": {"state": "stopped", "networks": []},
+        }])
+    }
+
     #[test]
     fn a_state_this_build_does_not_know_is_an_error_rather_than_a_dead_machine() {
-        let running = serde_json::json!([{"status": "running"}]);
-        assert_eq!(read_state("guac-x", &running).unwrap(), ProviderState::Running);
+        // `status` is an object with the word inside it. This file first read
+        // the whole of `status` as the word, which made every live container a
+        // state nobody recognised and every pane an error.
+        assert_eq!(read_state("guac-x", &inspected_running()).unwrap(), ProviderState::Running);
+        assert_eq!(read_state("guac-x", &inspected_stopped()).unwrap(), ProviderState::Asleep);
 
         // All three keep the volume, which is the whole point of sleeping.
         for asleep in ["stopped", "created", "exited"] {
-            let listed = serde_json::json!([{"status": asleep}]);
+            let listed = serde_json::json!([{"status": {"state": asleep}}]);
             assert_eq!(read_state("guac-x", &listed).unwrap(), ProviderState::Asleep, "{asleep}");
         }
 
@@ -1336,7 +1499,7 @@ mod tests {
         assert_eq!(read_state("guac-x", &serde_json::json!([])).unwrap(), ProviderState::Gone);
 
         let Err(ProviderError::Operation(message)) =
-            read_state("guac-x", &serde_json::json!([{"status": "restarting"}]))
+            read_state("guac-x", &serde_json::json!([{"status": {"state": "restarting"}}]))
         else {
             panic!("an unfamiliar state must not be read as permission to throw a disk away");
         };
@@ -1347,23 +1510,34 @@ mod tests {
         // A reply that is not the array this expects is the same kind of
         // unknown, and must not read as an empty one.
         assert!(matches!(
-            read_state("guac-x", &serde_json::json!({"status": "running"})),
+            read_state("guac-x", &serde_json::json!({"status": {"state": "running"}})),
             Err(ProviderError::Operation(_))
         ));
+
+        // And a bare string `status` is this build's own old assumption coming
+        // back. If the shape moves again, guessing which half of it is the
+        // state is how a running machine gets replaced.
+        assert!(
+            matches!(
+                read_state("guac-x", &serde_json::json!([{"status": "running"}])),
+                Err(ProviderError::Operation(_))
+            ),
+            "the shape this file used to expect must fail closed, not read as running"
+        );
     }
 
     #[test]
     fn the_viewer_is_pointed_at_the_guests_address_without_its_prefix_length() {
-        let inspect = serde_json::json!([{
-            "status": "running",
-            "networks": [{"address": "192.168.64.3/24", "gateway": "192.168.64.1"}],
-        }]);
-        assert_eq!(read_address("guac-x", &inspect).unwrap(), "192.168.64.3");
+        // `status.networks[0].ipv4Address`, as a live 1.2.2 prints it. The
+        // address moves: the probe watched a container stopped on .2 come back
+        // on .3, which is why nothing caches this and `viewer_target` inspects
+        // afresh every time the proxy resolves a target.
+        assert_eq!(read_address("guac-x", &inspected_running()).unwrap(), "192.168.65.2");
 
         // A container that is up but has not been given an address yet is worth
-        // waiting for, not destroying.
-        let addressless = serde_json::json!([{"status": "running", "networks": []}]);
-        let Err(ProviderError::Operation(message)) = read_address("guac-x", &addressless) else {
+        // waiting for, not destroying — and a stopped one has an empty list.
+        let Err(ProviderError::Operation(message)) = read_address("guac-x", &inspected_stopped())
+        else {
             panic!("no address yet is not the same as no machine");
         };
         assert!(message.contains("wait"), "{message}");
@@ -1384,17 +1558,21 @@ mod tests {
         // same Mac has containers with the same `guac=true` and names of the
         // same shape, and claiming one would destroy somebody else's agent's
         // work.
+        // `ls --all --format json` entries carry the same object-shaped
+        // `status` as `inspect`, and `configuration.id` is the name the
+        // container was created with — both confirmed against a live 1.2.2,
+        // which is what let the local half of the sweep start deleting.
         let listed = serde_json::json!([
-            {"status": "running", "configuration": {
+            {"status": {"state": "running", "networks": []}, "configuration": {
                 "id": "guac-aaaa1111",
                 "labels": {"guac": "true", "guac.installation": "inst-7", "guac.computer": "c1"},
             }},
-            {"status": "stopped", "configuration": {
+            {"status": {"state": "stopped", "networks": []}, "configuration": {
                 "id": "guac-bbbb2222",
                 "labels": {"guac": "true", "guac.installation": "inst-other", "guac.computer": "c2"},
             }},
-            {"status": "running", "configuration": {"id": "someone-elses-container"}},
-            {"status": "running", "configuration": {
+            {"status": {"state": "running"}, "configuration": {"id": "someone-elses-container"}},
+            {"status": {"state": "running"}, "configuration": {
                 "id": "guac-cccc3333",
                 "labels": {"guac.installation": "inst-7"},
             }},
@@ -1462,9 +1640,32 @@ mod tests {
         assert!(missing(&said("", "NOT FOUND")), "and case is the runtime's business");
         assert!(!missing(&said("XPC connection interrupted", "")));
 
-        assert!(already_exists(&said("network guac-x already exists", "")));
+        // The real wordings, from a live 1.2.2. The container's delete says
+        // "not found" and both of the others do not, which is why a volume or
+        // network delete is confirmed with an inspect rather than read here.
+        assert!(missing(&said("Error: container not found: guac-x", "")));
+        assert!(missing(&said(r#"Error: notFound: "container with ID guac-x not found""#, "")));
+        assert!(missing(&said("Error: get failed: container guac-x not found", "")));
+        assert!(
+            !missing(&said(r#"Error: failed to delete one or more volumes: ["guac-x"]"#, "")),
+            "a volume delete says nothing about whether the volume was there"
+        );
+
+        assert!(already_exists(&said("Error: network guac-x already exists", "")));
         assert!(already_exists(&said("", "Error: volume exists")));
         assert!(!already_exists(&said("no space left on device", "")));
+    }
+
+    #[test]
+    fn a_probe_waits_a_fraction_of_what_a_lifecycle_command_may() {
+        // Not a timing test: it pins the intent. A probe is asked while an
+        // operator watches Settings and on the way to deciding whether an agent
+        // has a computer, so a wedged binary must cost that turn seconds rather
+        // than the full minute a create is allowed to spend.
+        assert_eq!(PROBE_TIMEOUT, Duration::from_secs(10));
+        assert!(PROBE_TIMEOUT < CONTROL_TIMEOUT);
+        assert!(CONTROL_TIMEOUT < SERVICE_TIMEOUT, "installing a kernel is slower than any of it");
+        assert!(SERVICE_TIMEOUT < PULL_TIMEOUT, "and a first pull is slower still");
     }
 
     #[test]
@@ -1487,10 +1688,12 @@ mod tests {
 
     #[test]
     fn a_version_outside_the_tested_range_is_refused_by_number() {
-        // The exact wording of `container --version` is unconfirmed until the
-        // spike, so this reads any line with three dotted numbers in it.
+        // What a live 1.2.2 actually printed, character for character. This
+        // reads any line with three dotted numbers in it, so the wording may
+        // move without breaking — but an unreadable version now refuses a
+        // create as well as the Settings badge, so the real one is pinned.
         assert_eq!(
-            parse_version("container CLI version 1.2.2 (build: release, commit: 0e2d8bc)"),
+            parse_version("container CLI version 1.2.2 (build: release, commit: 0190097)"),
             Some((1, 2, 2))
         );
         assert_eq!(parse_version("1.2.2"), Some((1, 2, 2)));
@@ -1525,7 +1728,9 @@ mod fake_runtime {
     const REPORTER: &str =
         "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\necho ---ENV---\nenv | sort\n";
 
-    const VERSION_1_2_2: &str = "echo 'container CLI version 1.2.2 (build: release)'";
+    /// Character for character what a live 1.2.2 prints.
+    const VERSION_1_2_2: &str =
+        "echo 'container CLI version 1.2.2 (build: release, commit: 0190097)'";
 
     fn write_exec(dir: &Path, name: &str, script: &str) -> PathBuf {
         let path = dir.join(name);
@@ -1959,14 +2164,17 @@ mod fake_runtime {
         assert_eq!(seen.last().unwrap(), &format!("start {name}"));
     }
 
-    /// What `network inspect` / `volume inspect` prints for a resource whose
-    /// `guac.computer` label is `owner`.
+    /// What a live `network inspect` prints for a resource whose
+    /// `guac.computer` label is `owner`. `volume inspect` differs only in the
+    /// `configuration.options` this file never reads.
     fn described_as(owner: &str) -> String {
         serde_json::json!([{
+            "id": "guac-x",
             "configuration": {
-                "id": "guac-x",
+                "name": "guac-x",
                 "labels": {"guac": "true", "guac.installation": "inst-7", "guac.computer": owner},
             },
+            "status": {"ipv4Subnet": "192.168.65.0/24"},
         }])
         .to_string()
     }
@@ -1997,6 +2205,39 @@ mod fake_runtime {
         assert!(
             !seen.iter().any(|line| line.starts_with("network inspect")),
             "the network was made, so nothing was asked about it: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_container_of_that_name_is_never_taken_over_whoever_left_it() {
+        // A network and a volume are empty vessels this call is about to fill.
+        // A container carries an image, limits, capabilities and labels chosen
+        // when it was made, so adopting one runs an agent on a machine built to
+        // somebody else's description — including, at worst, one with none of
+        // the capabilities dropped.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let request = creation(900);
+        let name = resource_name(request.computer);
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[("create --name", "echo 'Error: container already exists' >&2; exit 1")],
+        );
+
+        let err = provider(cli).create(&request).await.expect_err("that name is taken");
+
+        assert!(err.to_string().contains(&name), "which name: {err}");
+        assert!(
+            err.to_string().contains(&format!("container delete --force {name}")),
+            "and how to clear it: {err}"
+        );
+        let seen = log_lines(&log);
+        assert!(!seen.iter().any(|line| line.starts_with("inspect")), "nothing asked: {seen:?}");
+        assert_eq!(
+            seen[seen.len() - 2..],
+            [format!("volume delete {name}"), format!("network delete {name}")],
+            "and what this call made is still unmade: {seen:?}"
         );
     }
 
@@ -2169,13 +2410,16 @@ mod fake_runtime {
 
     #[tokio::test]
     async fn deleting_removes_the_container_its_volume_and_its_network_in_that_order() {
-        // And tolerates whatever is already gone: a delete that failed halfway
-        // is retried at the next startup, and the second attempt finds most of
-        // it missing.
+        // The container's own delete says "not found" and is believed. A
+        // delete that failed halfway is retried at the next startup, and the
+        // second attempt finds most of it missing.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
-        let cli =
-            fake_container(dir.path(), &log, &[("volume delete", "echo 'not found' >&2; exit 1")]);
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[("delete --force", r#"echo 'Error: container not found: guac-x' >&2; exit 1"#)],
+        );
 
         provider(cli).delete(&handle("guac-x")).await.unwrap();
 
@@ -2186,13 +2430,82 @@ mod fake_runtime {
     }
 
     #[tokio::test]
-    async fn a_delete_that_actually_failed_is_reported_so_it_can_be_retried() {
+    async fn a_volume_that_is_already_gone_is_confirmed_rather_than_assumed() {
+        // A live 1.2.2 answers a missing volume with `failed to delete one or
+        // more volumes: ["X"]` and exit 1 — the same words it uses for a volume
+        // that is still attached to something. Read as "already gone" it would
+        // report a teardown finished with 20 GiB still on the disk, so the
+        // volume is looked up and only a lookup that says it is not there
+        // settles it.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
         let cli = fake_container(
             dir.path(),
             &log,
-            &[("network delete", "echo 'network is in use' >&2; exit 1")],
+            &[
+                (
+                    "volume delete",
+                    r#"echo 'Error: failed to delete one or more volumes: ["guac-x"]' >&2; exit 1"#,
+                ),
+                ("volume inspect", "echo 'Error: volume not found: guac-x' >&2; exit 1"),
+            ],
+        );
+
+        provider(cli).delete(&handle("guac-x")).await.expect("it was not there to remove");
+
+        assert_eq!(
+            log_lines(&log),
+            [
+                "delete --force guac-x",
+                "volume delete guac-x",
+                "volume inspect guac-x",
+                "network delete guac-x",
+            ],
+            "it asked before it decided"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_volume_that_is_still_there_after_a_failed_delete_is_reported() {
+        // The same words from the delete, and a volume that answers an inspect:
+        // still there, so the row stays and the retry happens.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let still_here = format!("printf '%s' '{}'", described_as("c1"));
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[
+                (
+                    "volume delete",
+                    r#"echo 'Error: failed to delete one or more volumes: ["guac-x"]' >&2; exit 1"#,
+                ),
+                ("volume inspect", &still_here),
+            ],
+        );
+
+        let err = provider(cli).delete(&handle("guac-x")).await.expect_err("it is still there");
+
+        assert!(err.to_string().contains("home volume"), "which step: {err}");
+        assert!(err.to_string().contains("failed to delete"), "and what it said: {err}");
+        assert!(
+            !log_lines(&log).iter().any(|line| line.starts_with("network delete")),
+            "and it stopped rather than leaving the volume behind quietly"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delete_that_actually_failed_is_reported_so_it_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let network = format!("printf '%s' '{}'", described_as("c1"));
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[
+                ("network delete", "echo 'network is in use' >&2; exit 1"),
+                ("network inspect", &network),
+            ],
         );
 
         let err = provider(cli).delete(&handle("guac-x")).await.expect_err("it is still there");
@@ -2223,9 +2536,14 @@ mod fake_runtime {
         // no token to hold and no TLS to terminate.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
+        // The address as a live 1.2.2 reports it, and read at resolve time
+        // rather than kept: a container stopped on .2 came back on .3.
         let inspect = serde_json::json!([{
-            "status": "running",
-            "networks": [{"address": "192.168.64.3/24"}],
+            "configuration": {"id": "guac-x"},
+            "status": {
+                "state": "running",
+                "networks": [{"ipv4Address": "192.168.65.2/24", "network": "guac-x"}],
+            },
         }])
         .to_string();
         let body = format!("printf '%s' '{inspect}'");
@@ -2234,9 +2552,10 @@ mod fake_runtime {
         let target = provider(cli).viewer_target(&handle("guac-x"), 6080).await.unwrap();
 
         assert!(!target.tls);
-        assert_eq!(target.host, "192.168.64.3");
+        assert_eq!(target.host, "192.168.65.2");
         assert_eq!(target.port, 6080);
         assert!(target.headers.is_empty());
+        assert_eq!(log_lines(&log), ["inspect guac-x"], "asked now, not remembered");
     }
 
     #[tokio::test]
