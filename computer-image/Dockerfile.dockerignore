@@ -1,27 +1,58 @@
-# What the desktop image's build context is allowed to contain.
+# What the desktop image's build context leaves behind.
 #
 # The context is the repository root, because the image ships two files the app
 # compiles into itself. Without this, that context is the whole checkout:
-# `src-tauri/target` alone is several gigabytes, plus `node_modules`, `dist` and
-# `.git`, all of it read, hashed and handed to the builder before the first
-# instruction runs. On Apple Container the builder is a VM, so every byte of it
-# crosses a virtio mount.
+# `src-tauri/target` alone is 6.5 GB, `node_modules` another 204 MB, all of it
+# read, hashed and handed to the builder before the first instruction runs. On
+# Apple Container the builder is a VM, so every byte crosses a virtio mount.
 #
 # This is BuildKit's per-Dockerfile ignore file — `<dockerfile>.dockerignore`,
 # consulted ahead of any `.dockerignore` at the context root. It is used rather
 # than a root one on purpose: `Dockerfile.ci` at the repository root does
 # `COPY . .` and needs the whole checkout, and a root ignore file would starve
-# it. If a builder consulted neither, the build would be slow rather than wrong.
+# it. Apple Container 1.2.2 does read this file — a spike measured the transfer
+# drop to 45 B — so the choice is confirmed rather than assumed.
 #
-# Exclude everything, then name the files the image actually copies. Anything
-# added to a `COPY` in the Dockerfile has to be re-included here or the build
-# fails on a missing file; `build.sh --check` compares the two lists so that
-# failure happens before a build rather than during one.
-*
+# **It must stay an exclude list. No `*`, no `!`.** The first version of this
+# file excluded everything and named the six copied files back in with `!`,
+# which is the idiom Docker's own documentation uses. Apple Container 1.2.2
+# refuses it: the build fails during context transfer with
+#
+#     #4 ERROR: changes out of order: "computer-image/google-chrome" ""
+#
+# which names a file that was allowed back in, not the pattern that did it, and
+# happens before any instruction runs. `build.sh --check` fails on a `*` or a
+# `!` here for that reason.
+#
+# So: name what stays out, and let everything else through. The cost of that
+# form is that a new large directory at the root is in the context until
+# somebody adds it here. The cost of the other form was a build that does not
+# run at all.
 
-!computer-image/guaca-init
-!computer-image/google-chrome
-!computer-image/google-chrome.desktop
-!computer-image/novnc_proxy
-!src-tauri/src/computer/browser.py
-!src-tauri/src/computer/sessions.py
+# The repository's own history. Small in a worktree, not in a checkout.
+.git
+.github
+
+# Session and tooling directories, which in a checkout contain whole worktrees.
+.superpowers
+.claude
+
+# The frontend: 204 MB of dependencies and the bundle built from them. The
+# desktop image is a Linux desktop and has no part of this app in it.
+node_modules
+dist
+
+# 6.5 GB of build artefacts, and the generated and packaging directories beside
+# them. `src-tauri/src` is deliberately absent from this list: the image copies
+# `browser.py` and `sessions.py` out of it.
+src-tauri/target
+src-tauri/gen
+src-tauri/icons
+src-tauri/capabilities
+src-tauri/tests
+
+# Prose, the app's own source, and the scripts that build and spike it. None of
+# it is in the image; `build.sh` and `spike-apple.sh` run on the Mac.
+docs
+src
+scripts

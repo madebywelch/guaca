@@ -145,30 +145,48 @@ check_desktop_paths() {
   [ -f "$ROOT/src-tauri/src/computer/sessions.py" ] || fail "sessions.py is not where the Dockerfile copies it from"
 }
 
-# Everything the Dockerfile copies has to be let through the ignore file, and
-# nothing else should be. A `COPY` added without its exception fails the build
-# on a missing file, which is a slow way to learn it; and a context that quietly
-# grows back to the whole checkout is minutes per build, on Apple Container
-# across a virtio mount.
+# Nothing the Dockerfile copies may be under an excluded path, the heavy
+# directories must stay excluded, and the file must remain an exclude list.
+#
+# All three have cost a build. A `COPY` of something excluded fails on a missing
+# file, minutes into a transfer. A context that quietly grows back to the whole
+# checkout is 6.5 GB across a virtio mount. And the pattern style is not a
+# preference: Apple Container 1.2.2 refuses `*` plus `!` re-inclusions during
+# context transfer, naming a file rather than the pattern, before any
+# instruction runs.
 check_context() {
-  local ignore copied allowed path
+  local ignore copied excluded path rule
   ignore="$IMAGE_DIR/Dockerfile.dockerignore"
   [ -f "$ignore" ] || fail "the image has no $ignore, so its context is the whole repository"
-  grep -qx '\*' "$ignore" || fail "$ignore must start from excluding everything"
 
+  if grep -qE '^[[:space:]]*[!*]' "$ignore"; then
+    fail "$ignore must be a plain exclude list: Apple Container 1.2.2 refuses \`*\` and \`!\` here \
+with \"changes out of order\" during context transfer"
+  fi
+
+  # Comments and blank lines out; what is left is what the builder will skip.
+  excluded="$(grep -vE '^[[:space:]]*(#|$)' "$ignore")"
   # The source of each COPY, which for this Dockerfile is always its first
   # argument and always a path in the repository.
   copied="$(awk '/^COPY /{ print $2 }' "$IMAGE_DIR/Dockerfile")"
+
   for path in $copied; do
-    grep -qx -- "!$path" "$ignore" \
-      || fail "the Dockerfile copies $path and $ignore does not let it through"
+    for rule in $excluded; do
+      case "$path" in
+        "$rule" | "$rule"/*)
+          fail "the Dockerfile copies $path and $ignore excludes $rule, so the build would fail \
+on a file the context never carried"
+          ;;
+      esac
+    done
   done
-  # And the other way: an exception for a file nothing copies is a context
-  # carrying something for no reason, and usually a leftover.
-  allowed="$(sed -n 's/^!//p' "$ignore")"
-  for path in $allowed; do
-    printf '%s\n' "$copied" | grep -qx -- "$path" \
-      || fail "$ignore lets $path through and no COPY in the Dockerfile wants it"
+
+  # The two that matter by size. Named individually because losing either is
+  # not a failure — it is a build that still works and takes minutes longer,
+  # which is exactly the kind of regression nobody reports.
+  for rule in src-tauri/target node_modules; do
+    printf '%s\n' "$excluded" | grep -qx -- "$rule" \
+      || fail "$ignore no longer keeps $rule out of the build context"
   done
 }
 

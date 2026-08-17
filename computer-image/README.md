@@ -36,7 +36,7 @@ image the release was tested with.
 | `google-chrome.desktop` | the entry the desktop icon and the menu read |
 | `novnc_proxy` | the launcher `desktop.rs` calls, installed over Debian's |
 | `build.sh` | build, and the checks that need no builder |
-| `Dockerfile.dockerignore` | the six files the build context needs, and nothing else |
+| `Dockerfile.dockerignore` | what the build context leaves out. An exclude list, never `*` plus `!`: Apple's builder refuses that outright |
 | `BASE_DIGEST` | the Debian base, pinned |
 | `IMAGE_REF` | what the app pulls. One line, no comment: `image.rs` includes it verbatim |
 
@@ -113,13 +113,33 @@ Until then `IMAGE_REF` names `0.1.0-unpublished`, nothing pulls, and
 
 ## Proving it works
 
-The image was written on a Mac with no Apple Container and no running Docker,
-so nothing in it has been built or booted. What replaces having tried it is:
+Everything here was written on a Mac with no Apple Container and no running
+Docker, from Debian's package lists and from `desktop.rs`. It has since been
+built: Apple Container 1.2.2 builds this Dockerfile, and every assertion in its
+final `RUN` passes. That settles the half about where packages put their files —
+`vnc.html`, `websockify`, `Xvfb`, `startxfce4`, the `websocket` module — which
+is the half that would otherwise have been discovered by an operator looking at
+a black rectangle.
+
+Two things that build taught, both now enforced rather than remembered:
+
+- Apple's builder **does** read `Dockerfile.dockerignore`. The context transfer
+  drops to 45 B, so the per-Dockerfile form was the right choice over a root
+  one that would have starved `Dockerfile.ci`.
+- It **does not** accept the `*`-then-`!` idiom Docker's own documentation
+  uses. The build fails during context transfer with `changes out of order:
+  "computer-image/google-chrome" ""` — a message naming a file that was let
+  back in rather than the pattern that let it, before any instruction runs.
+  Hence the plain exclude list, and the check in `build.sh` that keeps it one.
+
+What the image does once it boots is still the spike's question, and the
+answers to it are:
 
 - the Dockerfile's own assertions, which fail the build if a path the app uses
   is not where this file thinks it is;
 - `build.sh --check`, which is `sh -n` on every script, a dry run of the noVNC
-  launcher's argument handling, and the drift checks against `desktop.rs`;
+  launcher's argument handling, the drift checks against `desktop.rs`, and the
+  build context;
 - `src-tauri/tests/apple.rs`, ten `#[ignore]`d tests that are the ten smoke
   items in `docs/LOCAL_COMPUTERS.md`, run against a real machine by
   `scripts/spike-apple.sh`.
