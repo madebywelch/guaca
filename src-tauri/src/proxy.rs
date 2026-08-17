@@ -1,14 +1,13 @@
 //! The local viewer for an agent's computer.
 //!
-//! Sandboxes are created with `allow_public_traffic: false`, so every request
-//! to their public URLs must carry an `e2b-traffic-access-token` header. That
-//! is exactly what an embedded viewer cannot do: an iframe cannot set a header,
-//! and neither can a browser WebSocket. Leaving the traffic open instead would
-//! put an agent's desktop, logged-in sessions and all, behind nothing but an
-//! unguessable id.
-//!
-//! So the webview points at `http://127.0.0.1:{port}/{sandbox}/{sandboxPort}/…`
-//! and this relays it, attaching the token on the way out.
+//! The webview points at `http://127.0.0.1:{port}/{computerId}/{guestPort}/…`
+//! and this relays it, asking a resolver where that port actually is and what
+//! has to be added on the way out. An E2B sandbox is a TLS host that refuses
+//! traffic without an `e2b-traffic-access-token` header; a local guest is plain
+//! TCP to an address on this machine. The header is exactly what an embedded
+//! viewer cannot supply for itself: an iframe cannot set one, and neither can a
+//! browser WebSocket. Leaving the traffic open instead would put an agent's
+//! desktop, logged-in sessions and all, behind nothing but an unguessable id.
 //!
 //! The relay is byte-level rather than a request parser. Only the head is read
 //! and rewritten; after that both directions are spliced until one side closes.
@@ -16,22 +15,29 @@
 //! RFB socket, which is a WebSocket upgrade and cannot be handled by an ordinary
 //! HTTP client.
 //!
-//! Paths keep the `/{sandbox}/{port}` prefix because noVNC references its own
-//! files relatively: from `/{sandbox}/6080/vnc.html`, `app/ui.js` resolves back
+//! Paths keep the `/{computer}/{port}` prefix because noVNC references its own
+//! files relatively: from `/{computer}/6080/vnc.html`, `app/ui.js` resolves back
 //! through the same prefix without anything having to rewrite the HTML.
 
 use std::sync::Arc;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 
-use crate::db::Store;
+use crate::computer::provider::ViewerTarget;
 
-/// Where a sandbox's public ports live.
-const UPSTREAM_SUFFIX: &str = "e2b.app";
+/// Where an address in the URL leads. The proxy holds no state of its own: it
+/// is handed a computer and a port and asks here, so nothing a provider needs
+/// to reach a machine has to travel through the webview.
+#[async_trait::async_trait]
+pub trait ViewerResolver: Send + Sync + 'static {
+    /// The upstream for `/{computer}/{port}/…`, or `None` if no computer is
+    /// registered there.
+    async fn viewer_target(&self, computer: &str, port: u16) -> Option<ViewerTarget>;
+}
 
 /// Head must arrive within this. A connection that opens and says nothing is
 /// either a probe or a mistake, and it should not hold a task forever.
@@ -39,9 +45,10 @@ const HEAD_LIMIT: usize = 32 * 1024;
 
 /// Starts the viewer on a loopback port chosen by the OS.
 ///
-/// Bound to 127.0.0.1 deliberately: this holds tokens that reach an agent's
-/// machine, and nothing outside this computer has any business reaching it.
-pub async fn start(store: Store) -> std::io::Result<u16> {
+/// Bound to 127.0.0.1 deliberately: this carries the secrets that reach an
+/// agent's machine, and nothing outside this computer has any business
+/// reaching it.
+pub async fn start(resolver: Arc<dyn ViewerResolver>) -> std::io::Result<u16> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
 
@@ -52,10 +59,10 @@ pub async fn start(store: Store) -> std::io::Result<u16> {
             let Ok((client, _)) = listener.accept().await else {
                 continue;
             };
-            let store = store.clone();
+            let resolver = resolver.clone();
             let tls = tls.clone();
             tokio::spawn(async move {
-                if let Err(err) = serve(client, store, tls).await {
+                if let Err(err) = serve(client, resolver, tls).await {
                     tracing::debug!(%err, "computer viewer connection ended");
                 }
             });
@@ -74,7 +81,7 @@ fn connector() -> TlsConnector {
 
 async fn serve(
     mut client: TcpStream,
-    store: Store,
+    resolver: Arc<dyn ViewerResolver>,
     tls: Arc<TlsConnector>,
 ) -> Result<(), std::io::Error> {
     let head = read_head(&mut client).await?;
@@ -82,33 +89,46 @@ async fn serve(
         return refuse(&mut client, "400 Bad Request", "Not a computer address.").await;
     };
 
-    // The token is looked up here rather than travelling in the URL, so it
-    // never reaches the webview and never appears in a page's address.
-    let token = match store.sandbox_traffic_token(&request.sandbox) {
-        Ok(Some(token)) if !token.is_empty() => token,
-        _ => {
-            return refuse(
-                &mut client,
-                "404 Not Found",
-                "No computer is registered at that address.",
-            )
-            .await
-        }
+    // Asked here rather than carried in the URL, so whatever reaches the
+    // machine never reaches the webview and never appears in a page's address.
+    let Some(target) = resolver.viewer_target(&request.computer, request.port).await else {
+        return refuse(&mut client, "404 Not Found", "No computer is registered at that address.")
+            .await;
     };
 
-    let host = format!("{}-{}.{UPSTREAM_SUFFIX}", request.port, request.sandbox);
-    let upstream = TcpStream::connect((host.as_str(), 443)).await?;
-    let name = ServerName::try_from(host.clone())
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad sandbox host"))?;
-    let mut upstream = tls.connect(name, upstream).await?;
+    let mut upstream = TcpStream::connect((target.host.as_str(), target.port)).await?;
+    let head = request.rewritten(&target);
 
-    upstream.write_all(request.rewritten(&host, &token).as_bytes()).await?;
-    upstream.write_all(&request.body).await?;
+    // The two upstreams are spliced by the same generic code rather than
+    // through a boxed trait object: a relay is the one place where an extra
+    // virtual call sits on every byte in both directions.
+    if target.tls {
+        let name = ServerName::try_from(target.host.clone()).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad upstream host")
+        })?;
+        let mut upstream = tls.connect(name, upstream).await?;
+        relay(&mut client, &mut upstream, &head, &request.body).await
+    } else {
+        relay(&mut client, &mut upstream, &head, &request.body).await
+    }
+}
+
+/// Sends the rewritten head and then stops interpreting anything. An upgraded
+/// connection carries VNC frames, and an ordinary one carries a response body;
+/// both are just bytes.
+async fn relay<U>(
+    client: &mut TcpStream,
+    upstream: &mut U,
+    head: &str,
+    body: &[u8],
+) -> Result<(), std::io::Error>
+where
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    upstream.write_all(head.as_bytes()).await?;
+    upstream.write_all(body).await?;
     upstream.flush().await?;
-
-    // From here neither side is interpreted. An upgraded connection carries VNC
-    // frames, and an ordinary one carries a response body; both are just bytes.
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await.map(|_| ())
+    tokio::io::copy_bidirectional(client, upstream).await.map(|_| ())
 }
 
 async fn read_head(client: &mut TcpStream) -> Result<Vec<u8>, std::io::Error> {
@@ -140,13 +160,13 @@ async fn refuse(client: &mut TcpStream, status: &str, message: &str) -> Result<(
     client.write_all(body.as_bytes()).await
 }
 
-/// The part of a request this needs to understand: which sandbox, which port,
-/// and the head to pass on with two lines changed.
+/// The part of a request this needs to understand: which computer, which port,
+/// and the head to pass on with its first lines replaced.
 #[derive(Debug, PartialEq)]
 struct Request {
-    sandbox: String,
+    computer: String,
     port: u16,
-    /// Everything after `/{sandbox}/{port}`, including the query.
+    /// Everything after `/{computer}/{port}`, including the query.
     path: String,
     method: String,
     /// Header lines, minus the ones this rewrites.
@@ -168,7 +188,7 @@ impl Request {
         let target = start.next()?;
 
         let mut parts = target.trim_start_matches('/').splitn(3, '/');
-        let sandbox = parts.next().filter(|s| !s.is_empty())?.to_string();
+        let computer = parts.next().filter(|s| !s.is_empty())?.to_string();
         let port: u16 = parts.next()?.parse().ok()?;
         let rest = parts.next().unwrap_or("");
 
@@ -179,9 +199,12 @@ impl Request {
             if lower.starts_with("upgrade:") {
                 upgrade = true;
             }
-            // Host is replaced and the token is added, so anything already
-            // claiming to be either is dropped rather than forwarded. The
-            // connection headers are decided below, not by the caller.
+            // Host is replaced, so anything already claiming to be one is
+            // dropped rather than forwarded, and the connection headers are
+            // decided below rather than by the caller. The traffic token is in
+            // this fixed list too, because it is the one header known to be
+            // sensitive before any target has been resolved; the rest of what a
+            // target supplies is dropped in `rewritten`.
             let rewritten = lower.starts_with("host:")
                 || lower.starts_with("e2b-traffic-access-token:")
                 || lower.starts_with("connection:")
@@ -193,7 +216,7 @@ impl Request {
         }
 
         Some(Request {
-            sandbox,
+            computer,
             port,
             path: format!("/{rest}"),
             method,
@@ -203,10 +226,19 @@ impl Request {
         })
     }
 
-    fn rewritten(&self, host: &str, token: &str) -> String {
+    fn rewritten(&self, target: &ViewerTarget) -> String {
         let mut out = format!("{} {} HTTP/1.1\r\n", self.method, self.path);
-        out.push_str(&format!("host: {host}\r\n"));
-        out.push_str(&format!("e2b-traffic-access-token: {token}\r\n"));
+        // A default port is left off the host line: an upstream that routes by
+        // name sees the name it was issued under, not `name:443`.
+        let default_port = target.port == if target.tls { 443 } else { 80 };
+        if default_port {
+            out.push_str(&format!("host: {}\r\n", target.host));
+        } else {
+            out.push_str(&format!("host: {}:{}\r\n", target.host, target.port));
+        }
+        for (name, value) in &target.headers {
+            out.push_str(&format!("{name}: {value}\r\n"));
+        }
 
         // One request per connection, because only the first one on a
         // connection is ever read and rewritten here: everything after the head
@@ -221,6 +253,13 @@ impl Request {
         }
         for header in &self.headers {
             if header.is_empty() {
+                continue;
+            }
+            // Whatever the target supplies has already been written, and the
+            // page cannot be trusted with a second copy: a header a provider
+            // uses to admit traffic is one a frame would like to forge.
+            let name = header.split_once(':').map_or(header.as_str(), |(name, _)| name).trim();
+            if target.headers.iter().any(|(supplied, _)| supplied.eq_ignore_ascii_case(name)) {
                 continue;
             }
             out.push_str(header);
@@ -239,6 +278,19 @@ mod tests {
         format!("GET {target} HTTP/1.1\r\nhost: 127.0.0.1:9\r\n{extra}\r\n").into_bytes()
     }
 
+    fn e2b(host: &str, token: &str) -> ViewerTarget {
+        ViewerTarget {
+            tls: true,
+            host: host.into(),
+            port: 443,
+            headers: vec![("e2b-traffic-access-token".into(), token.into())],
+        }
+    }
+
+    fn local(host: &str) -> ViewerTarget {
+        ViewerTarget { tls: false, host: host.into(), port: 6080, headers: vec![] }
+    }
+
     #[test]
     fn an_ordinary_request_is_answered_one_per_connection() {
         // Only the first request on a connection is read and rewritten; the
@@ -249,7 +301,7 @@ mod tests {
         let req =
             Request::parse(&head("/sbx/6080/app/ui.js", "connection: keep-alive\r\n")).unwrap();
         assert!(!req.upgrade);
-        let out = req.rewritten("6080-sbx.e2b.app", "tok");
+        let out = req.rewritten(&e2b("6080-sbx.e2b.app", "tok"));
         assert!(out.contains("connection: close\r\n"), "{out}");
         assert!(!out.to_lowercase().contains("keep-alive"), "the caller's wish is not forwarded");
     }
@@ -262,15 +314,15 @@ mod tests {
         ))
         .unwrap();
         assert!(req.upgrade);
-        let out = req.rewritten("6080-sbx.e2b.app", "tok");
+        let out = req.rewritten(&e2b("6080-sbx.e2b.app", "tok"));
         assert!(out.contains("connection: Upgrade\r\n"), "{out}");
         assert!(!out.contains("connection: close"), "closing it kills the desktop's socket");
     }
 
     #[test]
-    fn a_request_names_the_sandbox_the_port_and_the_file() {
+    fn a_request_names_the_computer_the_port_and_the_file() {
         let req = Request::parse(&head("/sbx123/6080/app/ui.js", "\r\n")).unwrap();
-        assert_eq!(req.sandbox, "sbx123");
+        assert_eq!(req.computer, "sbx123");
         assert_eq!(req.port, 6080);
         assert_eq!(req.path, "/app/ui.js", "the prefix is stripped, the rest is kept");
     }
@@ -291,11 +343,11 @@ mod tests {
     }
 
     #[test]
-    fn the_rewritten_head_points_at_the_sandbox_and_carries_the_token() {
+    fn the_rewritten_head_points_at_the_target_and_carries_what_it_supplies() {
         let req = Request::parse(&head("/sbx/6080/vnc.html", "upgrade: websocket\r\n")).unwrap();
-        let out = req.rewritten("6080-sbx.e2b.app", "tok123");
+        let out = req.rewritten(&e2b("6080-sbx.e2b.app", "tok123"));
         assert!(out.starts_with("GET /vnc.html HTTP/1.1\r\n"));
-        assert!(out.contains("host: 6080-sbx.e2b.app\r\n"));
+        assert!(out.contains("host: 6080-sbx.e2b.app\r\n"), "no port suffix on the default one");
         assert!(out.contains("e2b-traffic-access-token: tok123\r\n"));
         assert!(
             out.contains("upgrade: websocket"),
@@ -310,9 +362,34 @@ mod tests {
         // one came from inside the frame and is not trusted.
         let req =
             Request::parse(&head("/sbx/6080/x", "e2b-traffic-access-token: forged\r\n")).unwrap();
-        let out = req.rewritten("6080-sbx.e2b.app", "real");
+        let out = req.rewritten(&e2b("6080-sbx.e2b.app", "real"));
         assert!(!out.contains("forged"));
         assert!(out.contains("real"));
+    }
+
+    #[test]
+    fn a_target_with_no_headers_adds_none_and_a_forged_one_is_still_dropped() {
+        // A local guest wants nothing added; the page still cannot smuggle a
+        // provider header upstream by naming one.
+        let req =
+            Request::parse(&head("/c1/6080/x", "e2b-traffic-access-token: forged\r\n")).unwrap();
+        let out = req.rewritten(&local("192.168.64.3"));
+        assert!(out.contains("host: 192.168.64.3:6080\r\n"), "{out}");
+        assert!(!out.contains("forged"));
+        assert!(!out.contains("e2b-traffic-access-token"));
+    }
+
+    #[test]
+    fn a_header_the_target_supplies_replaces_one_the_page_sent() {
+        let req = Request::parse(&head("/c1/6080/x", "x-guac-viewer: forged\r\n")).unwrap();
+        let out = req.rewritten(&ViewerTarget {
+            tls: false,
+            host: "h".into(),
+            port: 1,
+            headers: vec![("x-guac-viewer".into(), "real".into())],
+        });
+        assert_eq!(out.matches("x-guac-viewer:").count(), 1, "{out}");
+        assert!(out.contains("x-guac-viewer: real"));
     }
 
     #[test]

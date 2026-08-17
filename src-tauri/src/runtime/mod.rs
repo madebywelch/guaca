@@ -14,13 +14,15 @@ pub mod guard;
 pub mod prompt;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, Notify};
 
+use crate::computer::desktop::DesktopAction;
+use crate::computer::{ComputerError, ComputerManager, Machine, Provisioned};
 use crate::config::{AppConfig, InferenceConfig};
 
 /// What a page is labelled as when it reaches the model.
@@ -235,6 +237,8 @@ pub enum RuntimeError {
         "the message that failed is no longer in the transcript, so there is nothing to send again"
     )]
     NothingToRetry,
+    #[error(transparent)]
+    Computer(#[from] ComputerError),
 }
 
 struct Inbox {
@@ -252,7 +256,10 @@ struct Inner {
     handle: tokio::runtime::Handle,
     store: Store,
     llm: LlmClient,
-    config: RwLock<AppConfig>,
+    /// Shared with the computer manager, which has to see a key the operator
+    /// pastes into settings without being rebuilt.
+    config: Arc<RwLock<AppConfig>>,
+    computers: ComputerManager,
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
@@ -269,8 +276,6 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
-    /// Loopback port of the computer viewer. Zero until it is listening.
-    viewer_port: AtomicU16,
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
@@ -313,12 +318,14 @@ impl Runtime {
         events: Arc<dyn EventSink>,
     ) -> Self {
         let limits = config.limits;
+        let config = Arc::new(RwLock::new(config));
         Self {
             inner: Arc::new(Inner {
                 handle,
+                computers: ComputerManager::new(store.clone(), config.clone()),
                 store,
                 llm,
-                config: RwLock::new(config),
+                config,
                 guard: Mutex::new(GuardRegistry::new(limits)),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
@@ -327,27 +334,21 @@ impl Runtime {
                 workspace,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
-                viewer_port: AtomicU16::new(0),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 events,
             }),
         }
     }
 
-    /// The loopback port the computer viewer is listening on, once it is up.
-    ///
-    /// Stored here because the UI has to build viewer URLs and the runtime is
-    /// what the commands already hold.
-    pub fn set_viewer_port(&self, port: u16) {
-        self.inner.viewer_port.store(port, Ordering::SeqCst);
-    }
-
-    pub fn viewer_port(&self) -> u16 {
-        self.inner.viewer_port.load(Ordering::SeqCst)
-    }
-
     pub fn store(&self) -> &Store {
         &self.inner.store
+    }
+
+    /// Every agent's computer. The runtime holds it because the runtime is what
+    /// the commands already have, and because provisioning has to happen in one
+    /// place or an agent ends up with two machines.
+    pub fn computers(&self) -> &ComputerManager {
+        &self.inner.computers
     }
 
     pub fn workspace(&self) -> &Workspace {
@@ -381,7 +382,7 @@ impl Runtime {
             let agents = runtime.inner.store.list_agents().unwrap_or_default();
             for card in agents
                 .iter()
-                .filter(|c| c.lifecycle != Lifecycle::Terminated && c.sandbox_id.is_some())
+                .filter(|c| c.lifecycle != Lifecycle::Terminated && c.computer_id.is_some())
             {
                 match runtime.scan_signins(card.id).await {
                     Ok(found) if !found.is_empty() => {
@@ -633,8 +634,11 @@ impl Runtime {
                 let note = if file.is_image() {
                     match self.inner.files.read(&file.digest) {
                         Ok(bytes) => {
-                            let data =
-                                format!("data:{};base64,{}", file.mime, crate::e2b::encode(&bytes));
+                            let data = format!(
+                                "data:{};base64,{}",
+                                file.mime,
+                                crate::computer::desktop::encode(&bytes)
+                            );
                             messages.push(ChatMessage::user_seeing(
                                 format!("The attached file {} looks like this.", file.name),
                                 data,
@@ -748,12 +752,12 @@ impl Runtime {
         if path.contains('\'') {
             return Err("a path with a quote in it cannot be read".to_string());
         }
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let machine = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
 
         // Size first, so a file too big to carry is refused before it is read
         // into this process twice over.
-        let sized = client
-            .run(&sandbox.id, &sandbox.envd_token, &format!("test -f '{path}' && wc -c < '{path}'"))
+        let sized = machine
+            .run(&format!("test -f '{path}' && wc -c < '{path}'"))
             .await
             .map_err(|e| e.to_string())?;
         if sized.exit_code != 0 {
@@ -768,16 +772,13 @@ impl Runtime {
             ));
         }
 
-        let read = client
-            .run(&sandbox.id, &sandbox.envd_token, &format!("base64 -w0 '{path}'"))
-            .await
-            .map_err(|e| e.to_string())?;
+        let read = machine.run(&format!("base64 -w0 '{path}'")).await.map_err(|e| e.to_string())?;
         if read.exit_code != 0 {
             return Err(format!("{path} could not be read: {}", read.stderr.trim()));
         }
         self.inner
             .files
-            .put(&name, &crate::e2b::decode_bytes(read.stdout.trim()))
+            .put(&name, &crate::computer::desktop::decode_bytes(read.stdout.trim()))
             .map_err(|e| e.to_string())
     }
 
@@ -795,24 +796,21 @@ impl Runtime {
             ));
         }
         let bytes = self.inner.files.read(&file.digest).map_err(|e| e.to_string())?;
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let machine = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
 
         let path = format!("{INBOX}/{}", file.name);
         // In pieces, because the whole payload travels inside one shell
         // command and a command line has a ceiling. The first write truncates
         // and the rest append, so a retry of a half-written file replaces it
         // rather than doubling it.
-        let encoded = crate::e2b::encode(&bytes);
+        let encoded = crate::computer::desktop::encode(&bytes);
         let mut first = true;
         for chunk in encoded.as_bytes().chunks(PLACE_CHUNK) {
             let chunk = String::from_utf8_lossy(chunk);
             let redirect = if first { ">" } else { ">>" };
             let command =
                 format!("mkdir -p {INBOX} && printf %s '{chunk}' | base64 -d {redirect} '{path}'");
-            client
-                .run(&sandbox.id, &sandbox.envd_token, &command)
-                .await
-                .map_err(|e| e.to_string())?;
+            machine.run(&command).await.map_err(|e| e.to_string())?;
             first = false;
         }
         Ok(path)
@@ -1782,9 +1780,7 @@ impl Runtime {
             ToolInvocation::RunCommand { command } => {
                 let used = self.credentials_named_in(card, &command);
                 let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.run(&sandbox.id, &sandbox.envd_token, &command).await
-                    }
+                    Ok(machine) => machine.run(&command).await.map_err(ComputerError::from),
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -1823,8 +1819,8 @@ impl Runtime {
 
             ToolInvocation::Browse { action, args } => {
                 let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.browse(&sandbox.id, &sandbox.envd_token, &action, &args).await
+                    Ok(machine) => {
+                        machine.browse(&action, &args).await.map_err(ComputerError::from)
                     }
                     Err(err) => Err(err),
                 };
@@ -1842,8 +1838,8 @@ impl Runtime {
 
             ToolInvocation::OpenOnDesktop { command } => {
                 let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.open_on_desktop(&sandbox.id, &sandbox.envd_token, &command).await
+                    Ok(machine) => {
+                        machine.open_on_desktop(&command).await.map_err(ComputerError::from)
                     }
                     Err(err) => Err(err),
                 };
@@ -2258,8 +2254,8 @@ impl Runtime {
             )
         };
 
-        let (client, sandbox) = match self.ensure_computer(card).await {
-            Ok(pair) => pair,
+        let machine = match self.ensure_computer(card).await {
+            Ok(machine) => machine,
             Err(err) => {
                 return failed(
                     format!("Error: your screen is not available ({err})."),
@@ -2270,7 +2266,7 @@ impl Runtime {
         };
 
         if matches!(action, tools::ScreenAction::Look) {
-            return match client.screenshot(&sandbox.id, &sandbox.envd_token).await {
+            return match machine.screenshot().await {
                 Ok((image, geometry)) => (
                     format!(
                         "Here is your screen, {geometry} pixels. Coordinates are measured from \
@@ -2296,27 +2292,26 @@ impl Runtime {
         let (desktop, described) = match &action {
             tools::ScreenAction::Look => unreachable!("handled above"),
             tools::ScreenAction::Click { x, y, button, count } => (
-                crate::e2b::DesktopAction::Click { x: *x, y: *y, button: *button, count: *count },
+                DesktopAction::Click { x: *x, y: *y, button: *button, count: *count },
                 format!("clicked at {x}, {y}"),
             ),
-            tools::ScreenAction::Move { x, y } => (
-                crate::e2b::DesktopAction::Move { x: *x, y: *y },
-                format!("moved the pointer to {x}, {y}"),
-            ),
+            tools::ScreenAction::Move { x, y } => {
+                (DesktopAction::Move { x: *x, y: *y }, format!("moved the pointer to {x}, {y}"))
+            }
             tools::ScreenAction::Type { text } => (
-                crate::e2b::DesktopAction::Type { text: text.clone() },
+                DesktopAction::Type { text: text.clone() },
                 format!("typed {} characters", text.chars().count()),
             ),
             tools::ScreenAction::Key { keys } => {
-                (crate::e2b::DesktopAction::Key { keys: keys.clone() }, format!("pressed {keys}"))
+                (DesktopAction::Key { keys: keys.clone() }, format!("pressed {keys}"))
             }
             tools::ScreenAction::Scroll { down, amount } => (
-                crate::e2b::DesktopAction::Scroll { down: *down, amount: *amount },
+                DesktopAction::Scroll { down: *down, amount: *amount },
                 format!("scrolled {} {amount}", if *down { "down" } else { "up" }),
             ),
         };
 
-        match client.act_on_desktop(&sandbox.id, &sandbox.envd_token, &desktop).await {
+        match machine.act_on_desktop(&desktop).await {
             Ok(_) => (
                 format!("{described}. Look again to see what changed."),
                 Part::ToolCall {
@@ -2492,95 +2487,28 @@ impl Runtime {
 
     // ---- lookups ---------------------------------------------------------
 
-    /// The peers one agent can see: its own group, discoverable, not itself.
-    ///
-    /// The group filter is the isolation boundary, not a display convenience.
-    /// `send_to_peers` resolves names against exactly the same scope, so an
-    /// agent cannot address a peer it was never shown. An agent whose own card
-    /// has gone sees nobody, which fails closed.
     /// The agent's computer, made or replaced if there is not a live one.
     ///
-    /// The single place a sandbox is provisioned, so the agent's tool, the
+    /// The single place a machine is provisioned, so the agent's tool, the
     /// operator's terminal and the desktop button cannot disagree about which
     /// machine an agent has. Lazy on purpose: there is nothing to switch on,
-    /// and an agent that never runs a command never costs a sandbox.
-    pub async fn ensure_computer(
-        &self,
-        card: &AgentCard,
-    ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox), crate::e2b::E2bError> {
-        use crate::e2b::{E2bClient, E2bError, Sandbox, SandboxState};
-
-        let config = self.config();
-        // The one place a sandbox is provisioned is the one place that knows
+    /// and an agent that never runs a command never costs a machine.
+    pub async fn ensure_computer(&self, card: &AgentCard) -> Result<Machine, ComputerError> {
+        // The one place a machine is provisioned is the one place that knows
         // which agent it is for, so it is where the group's credentials are
-        // attached. Every command this client goes on to run carries them, and
+        // attached. Every command this machine goes on to run carries them, and
         // no other path can forget to.
-        let client = E2bClient::new(&config.e2b.api_key)
-            .ok_or(E2bError::NoKey)?
-            .with_env(self.inner.store.connector_env(card.group_id).unwrap_or_default());
-        let idle = config.e2b.idle_minutes.max(1) * 60;
-
-        // A sandbox recorded without its tokens predates them and cannot be
-        // reached, so it counts as absent rather than as something to retry.
-        let known = match (&card.sandbox_id, &card.sandbox_envd_token) {
-            (Some(id), Some(envd)) => Some((id.clone(), envd.clone())),
-            _ => None,
-        };
-
-        if let Some((id, envd)) = known {
-            match client.state(&id).await.unwrap_or(SandboxState::Gone) {
-                SandboxState::Running => {
-                    // Every use pushes the sleep deadline back, which is what
-                    // makes the timeout idle time rather than a lifetime.
-                    client.keep_awake(&id, idle).await;
-                    return Ok((
-                        client,
-                        Sandbox {
-                            id,
-                            envd_token: envd,
-                            traffic_token: card.sandbox_traffic_token.clone().unwrap_or_default(),
-                        },
-                    ));
-                }
-                SandboxState::Paused => {
-                    // Woken rather than replaced. The disk is the point: a
-                    // browser that was signed in still is.
-                    let woken = client.resume(&id, idle).await?;
-                    // Both tokens are reissued on waking, so the stored ones are
-                    // now wrong. Keeping them is a machine that is running and
-                    // unreachable, which looks exactly like a broken one.
-                    if let Err(err) = self.inner.store.set_agent_sandbox(
-                        card.id,
-                        Some((&woken.id, &woken.envd_token, &woken.traffic_token)),
-                    ) {
-                        tracing::error!(%err, "could not record the woken machine's tokens");
-                    }
-                    self.inner.events.emit(UiEvent::AgentsChanged);
-                    return Ok((client, woken));
-                }
-                SandboxState::Gone => {}
-            }
+        let env = self.inner.store.connector_env(card.group_id).unwrap_or_default();
+        let (machine, provisioned) = self.inner.computers.ensure(card, env).await?;
+        // Only when something changed. This is what refreshes the card's
+        // `computerId` after a first create and the pane after a wake, but it
+        // is also on the path of every command an agent runs, and redrawing
+        // every card for a machine that was already running is work nobody
+        // asked for.
+        if provisioned != Provisioned::Reused {
+            self.inner.events.emit(UiEvent::AgentsChanged);
         }
-
-        let fresh = client.create(&card.name, idle).await?;
-
-        // A sandbox that cannot be written down is a sandbox nobody can reach
-        // and nobody will stop paying for, so it is killed rather than left.
-        // Failing to read the create reply once already orphaned three of them.
-        if let Err(err) = self
-            .inner
-            .store
-            .set_agent_sandbox(card.id, Some((&fresh.id, &fresh.envd_token, &fresh.traffic_token)))
-        {
-            tracing::error!(%err, sandbox = %fresh.id, "could not record a sandbox; killing it");
-            let _ = client.kill(&fresh.id).await;
-            return Err(E2bError::Protocol(format!(
-                "the sandbox could not be recorded and was released ({err})"
-            )));
-        }
-
-        self.inner.events.emit(UiEvent::AgentsChanged);
-        Ok((client, fresh))
+        Ok(machine)
     }
 
     /// Books one model call's cost and says so, immediately.
@@ -2628,30 +2556,13 @@ impl Runtime {
         });
     }
 
-    /// Kills every sandbox this app made that no agent still refers to.
+    /// Releases every machine this app made that nothing still refers to.
     ///
-    /// A crash between creating a sandbox and recording it, or an agent deleted
+    /// A crash between creating a machine and recording it, or an agent deleted
     /// while its machine was up, leaves something running that nothing in the
-    /// app can see. Only sandboxes labelled by Guac are touched.
-    pub async fn sweep_computers(&self) -> Result<usize, crate::e2b::E2bError> {
-        let config = self.config();
-        let Some(client) = crate::e2b::E2bClient::new(&config.e2b.api_key) else {
-            return Ok(0);
-        };
-
-        let known = claimed_sandboxes(&self.inner.store.list_agents().unwrap_or_default());
-
-        let mut swept = 0;
-        for sandbox in client.list_ours().await? {
-            if known.contains(&sandbox) {
-                continue;
-            }
-            tracing::info!(%sandbox, "releasing a sandbox no agent refers to");
-            if client.kill(&sandbox).await.is_ok() {
-                swept += 1;
-            }
-        }
-        Ok(swept)
+    /// app can see. Only machines labelled by Guac are touched.
+    pub async fn sweep_computers(&self) -> Result<usize, ComputerError> {
+        self.inner.computers.sweep().await
     }
 
     /// Reads or changes an agent's own schedule.
@@ -2736,6 +2647,12 @@ impl Runtime {
         }
     }
 
+    /// The peers one agent can see: its own group, discoverable, not itself.
+    ///
+    /// The group filter is the isolation boundary, not a display convenience.
+    /// `send_to_peers` resolves names against exactly the same scope, so an
+    /// agent cannot address a peer it was never shown. An agent whose own card
+    /// has gone sees nobody, which fails closed.
     fn roster_excluding(&self, me: AgentId) -> Vec<DirectoryEntry> {
         let agents = self.inner.store.list_agents().unwrap_or_default();
         let Some(group) = agents.iter().find(|c| c.id == me).map(|c| c.group_id) else {
@@ -2783,27 +2700,16 @@ impl Runtime {
     /// login wall.
     ///
     /// A machine that is asleep or gone is left alone and the last known list
-    /// stands. Waking a sandbox to refresh a list would cost money every time
+    /// stands. Waking a machine to refresh a list would cost money every time
     /// anybody looked at an agent.
     pub async fn scan_signins(&self, agent: AgentId) -> Result<Vec<Signin>, RuntimeError> {
         let card = self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
 
-        let Some(sandbox) = card.sandbox_id.clone() else {
+        let Some(machine) = self.inner.computers.if_running(agent).await? else {
             return Ok(self.inner.store.agent_signins(agent)?);
         };
-        let Some(envd) = card.sandbox_envd_token.clone() else {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        };
-        let Some(client) = crate::e2b::E2bClient::new(&self.config().e2b.api_key) else {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        };
-        if client.state(&sandbox).await.unwrap_or(crate::e2b::SandboxState::Gone)
-            != crate::e2b::SandboxState::Running
-        {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        }
 
-        let state = match crate::e2b::signed_in_state(&client, &sandbox, &envd).await {
+        let state = match machine.signed_in_state().await {
             Ok(state) => state,
             Err(err) => {
                 // Not worth failing whatever asked. A browser that will not
@@ -3041,25 +2947,11 @@ fn resolve_recipient<'a>(
         .or_else(|| directory.iter().find(matching))
 }
 
-/// The sandboxes an agent could still be using.
-///
-/// Only a live agent holds a claim. A deleted agent keeps its row so its
-/// transcript still reads, and that row keeps its sandbox id, but the agent can
-/// never act again. Counting it as a referrer let its machine shield itself
-/// from the sweep for as long as the row existed, which is forever.
-fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
-    cards
-        .iter()
-        .filter(|card| card.lifecycle != Lifecycle::Terminated)
-        .filter_map(|card| card.sandbox_id.clone())
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn card(lifecycle: Lifecycle, sandbox: &str) -> AgentCard {
+    fn card(lifecycle: Lifecycle) -> AgentCard {
         AgentCard {
             id: AgentId::new(),
             group_id: GroupId::new(),
@@ -3069,9 +2961,7 @@ mod tests {
             model: "m".into(),
             system_prompt: String::new(),
             skills: Vec::new(),
-            sandbox_id: Some(sandbox.into()),
-            sandbox_envd_token: None,
-            sandbox_traffic_token: None,
+            computer_id: None,
             lifecycle,
             pinned: false,
             version: 1,
@@ -3105,16 +2995,10 @@ mod tests {
     #[test]
     fn a_live_agent_wins_a_name_a_deleted_one_used_to_hold() {
         let group = GroupId::new();
-        let stale = AgentCard {
-            group_id: group,
-            name: "Researcher".into(),
-            ..card(Lifecycle::Terminated, "old")
-        };
-        let live = AgentCard {
-            group_id: group,
-            name: "researcher".into(),
-            ..card(Lifecycle::Active, "new")
-        };
+        let stale =
+            AgentCard { group_id: group, name: "Researcher".into(), ..card(Lifecycle::Terminated) };
+        let live =
+            AgentCard { group_id: group, name: "researcher".into(), ..card(Lifecycle::Active) };
         // Deleted first, exactly as the rows are ordered: it was found first and
         // answered for a name its replacement was using.
         let directory = [stale.clone(), live.clone()];
@@ -3131,24 +3015,5 @@ mod tests {
         // Another group's agent is not reachable and not distinguishable from
         // nobody, which is what the group boundary is for.
         assert!(resolve_recipient(&directory, GroupId::new(), "Researcher").is_none());
-    }
-
-    #[test]
-    fn a_deleted_agents_machine_is_nobodys() {
-        let cards = [
-            card(Lifecycle::Active, "keep-me"),
-            card(Lifecycle::Paused, "keep-me-too"),
-            card(Lifecycle::Terminated, "sweep-me"),
-        ];
-        let claimed = claimed_sandboxes(&cards);
-
-        // A paused agent is coming back and its logins are worth keeping; a
-        // deleted one is not.
-        assert!(claimed.contains("keep-me"));
-        assert!(claimed.contains("keep-me-too"));
-        assert!(
-            !claimed.contains("sweep-me"),
-            "a terminated agent's sandbox must not shield itself from the sweep"
-        );
     }
 }

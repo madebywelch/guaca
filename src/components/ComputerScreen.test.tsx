@@ -20,7 +20,7 @@ function card(id: string, name: string): AgentCard {
   return {
     id,
     groupId: "00000000-0000-4000-8000-000000000001",
-    sandboxId: null,
+    computerId: null,
     name,
     avatar: "plain",
     color: "#c7d96b",
@@ -36,7 +36,8 @@ function card(id: string, name: string): AgentCard {
 }
 
 const HAS_ONE: Computer = {
-  sandboxId: "sb-live",
+  id: "c-live",
+  provider: "e2b",
   state: "running",
   vncUrl: "http://127.0.0.1:9/vnc.html",
 };

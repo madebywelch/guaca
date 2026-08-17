@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::{AgentId, GroupId};
+use super::ids::{AgentId, ComputerId, GroupId};
 
 /// Where an agent is in its lifecycle.
 ///
@@ -78,15 +78,9 @@ pub struct AgentCard {
     /// Free-text capability lines. This is what peers actually read when they
     /// decide who to talk to, so it is the highest-leverage field on the card.
     pub skills: Vec<String>,
-    /// The sandbox this agent uses as its computer, once it has been given one,
-    /// and the tokens that reach it. Never set by an operator edit.
-    pub sandbox_id: Option<String>,
-    /// Never sent to the webview in a form it could use directly; the viewer
-    /// goes through the local proxy, which holds these.
-    #[serde(skip_serializing)]
-    pub sandbox_envd_token: Option<String>,
-    #[serde(skip_serializing)]
-    pub sandbox_traffic_token: Option<String>,
+    /// The computer this agent has been given, once it has one. Never set by
+    /// an operator edit; provisioning writes it.
+    pub computer_id: Option<ComputerId>,
     pub lifecycle: Lifecycle,
     /// Kept at the top of the rail. Where a row is drawn and nothing else: a
     /// pinned agent is addressed, paid for and messaged exactly as before, so
@@ -400,9 +394,7 @@ mod tests {
             model: "m".into(),
             system_prompt: "SECRET INSTRUCTIONS".into(),
             skills: vec!["delegation".into()],
-            sandbox_id: None,
-            sandbox_envd_token: None,
-            sandbox_traffic_token: None,
+            computer_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
             version: 1,

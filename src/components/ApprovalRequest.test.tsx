@@ -18,7 +18,7 @@ vi.mock("../lib/ipc", () => ({
 const MANAGER: AgentCard = {
   id: "manager",
   groupId: "g1",
-  sandboxId: null,
+  computerId: null,
   name: "Manager",
   avatar: "avocado",
   color: "#c7d96b",

@@ -100,12 +100,13 @@ pub fn run() {
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.
-            let viewer_port = tauri::async_runtime::block_on(proxy::start(runtime.store().clone()))
-                .map_err(|e| format!("could not start the computer viewer: {e}"))?;
-            runtime.set_viewer_port(viewer_port);
+            let viewer_port =
+                tauri::async_runtime::block_on(proxy::start(Arc::new(runtime.computers().clone())))
+                    .map_err(|e| format!("could not start the computer viewer: {e}"))?;
+            runtime.computers().set_viewer_port(viewer_port);
 
-            // Anything this app left running that no agent still refers to is
-            // released, since a forgotten sandbox bills exactly like a used one.
+            // Anything this app left running that nothing still refers to is
+            // released, since a forgotten computer bills exactly like a used one.
             {
                 let runtime = runtime.clone();
                 tauri::async_runtime::spawn(async move {
@@ -113,9 +114,9 @@ pub fn run() {
                         // Said even when it is nothing, because "no orphans" and
                         // "the sweep never ran" look identical from the outside
                         // and only one of them is fine.
-                        Ok(0) => tracing::debug!("swept: no orphaned sandboxes"),
-                        Ok(n) => tracing::info!(released = n, "released orphaned sandboxes"),
-                        Err(err) => tracing::warn!(%err, "could not sweep sandboxes"),
+                        Ok(0) => tracing::debug!("swept: no orphaned computers"),
+                        Ok(n) => tracing::info!(released = n, "released orphaned computers"),
+                        Err(err) => tracing::warn!(%err, "could not sweep computers"),
                     }
                 });
             }

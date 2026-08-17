@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { type Envelope, errorMessage, isCommandError, isInterAgent, plainText } from "./types";
+import {
+  type Computer,
+  type Envelope,
+  errorMessage,
+  isCommandError,
+  isInterAgent,
+  plainText,
+} from "./types";
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
   return {
@@ -61,6 +68,15 @@ describe("isInterAgent", () => {
     expect(
       isInterAgent(envelope({ from: { kind: "system" }, to: { kind: "agent", id: "a2" } })),
     ).toBe(false);
+  });
+});
+
+describe("Computer", () => {
+  it("a computer is shown by its own id and provider, never a sandbox id", () => {
+    const computer: Computer = { id: "c-1", provider: "e2b", state: "running", vncUrl: null };
+    expect(computer.id).toBe("c-1");
+    // @ts-expect-error the sandbox id no longer crosses IPC
+    expect(computer.sandboxId).toBeUndefined();
   });
 });
 

@@ -18,7 +18,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
   return {
     id: "a1",
     groupId: "g1",
-    sandboxId: "sb-1",
+    computerId: "c-1",
     name: "Researcher",
     avatar: "plain",
     color: "#c7d96b",
@@ -95,7 +95,7 @@ describe("SigninList", () => {
   });
 
   it("says there is nothing to be signed in to when the agent has no computer", async () => {
-    render(<SigninList agent={card({ sandboxId: null })} />);
+    render(<SigninList agent={card({ computerId: null })} />);
     expect(await screen.findByText(/no computer yet/)).toBeTruthy();
     expect(scanAgentSignins).not.toHaveBeenCalled();
   });

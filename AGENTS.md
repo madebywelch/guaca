@@ -140,6 +140,15 @@ does not turn it into a turn has to release it too: an agent deleted while
 holding queued work used to take the booking with it, and that run never ended.
 Nothing else decrements.
 
+**A woken machine answers to a new name, and anything that makes or unmakes
+an agent's computer runs under that agent's lock.** E2B's resume reply
+reissues the whole handle, the sandbox id included, so `computer/mod.rs`
+writes all of it back: keeping the old id leaves a machine running,
+unreachable, and invisible to the sweep. The startup sweep takes the same
+per-agent lock and re-reads the row under it, because `ensure` holds a
+`provisioning` row across a create, and a sweep that reaped one mid-flight
+deleted a machine just paid for.
+
 **A file's bytes never travel in an envelope, and never cross IPC.** A message
 carries a `Part::File` naming the digest; the bytes sit once in `files.rs`,
 addressed by content, and a drop hands Rust the *path* rather than the file.
@@ -250,7 +259,13 @@ src-tauri/src/
     events.rs        Events pushed to the UI.
   llm/               OpenAI-compatible client, SSE decoding, tool definitions.
   db/                SQLite. Plain SQL, numbered migrations.
-  e2b.rs             Sandboxes: the machines agents work on.
+  computer/
+    mod.rs           ComputerManager: one machine per agent, made through a
+                     provider.
+    provider.rs      The provider boundary. exec is the only primitive.
+    desktop.rs       Desktop, browser, screenshots, sign-in reading: all
+                     commands.
+    e2b.rs           The E2B provider.
   proxy.rs           Loopback viewer for those machines.
   eval.rs            Reads a run and says whether it communicated sensibly.
   trajectory.rs      Reads a run's events and says whether the machinery did.

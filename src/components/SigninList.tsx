@@ -42,7 +42,7 @@ export function SigninList({ agent }: Props) {
   // Asking the machine costs a round trip, so the stored answer is drawn first
   // and corrected a moment later rather than leaving the panel empty.
   useEffect(() => {
-    if (!agent.sandboxId) return;
+    if (!agent.computerId) return;
     let cancelled = false;
     void api
       .scanAgentSignins(agent.id)
@@ -53,7 +53,7 @@ export function SigninList({ agent }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [agent.id, agent.sandboxId]);
+  }, [agent.id, agent.computerId]);
 
   const rescan = async () => {
     setBusy(true);
@@ -76,20 +76,20 @@ export function SigninList({ agent }: Props) {
         <button
           type="button"
           className="btn btn--ghost btn--small"
-          disabled={busy || !agent.sandboxId}
+          disabled={busy || !agent.computerId}
           onClick={() => void rescan()}
         >
           {busy ? "Checking…" : "Check now"}
         </button>
       </div>
 
-      {!agent.sandboxId && (
+      {!agent.computerId && (
         <p className="field__hint">
           {agent.name} has no computer yet, so there is no browser to be signed in to.
         </p>
       )}
 
-      {agent.sandboxId && signins.length === 0 && (
+      {agent.computerId && signins.length === 0 && (
         <p className="field__hint">
           Nothing. Open this agent's computer, sign in to a site on its screen, and it will show up
           here and on every other agent's roster. You do not have to tell {agent.name} about it.
