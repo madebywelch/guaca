@@ -112,14 +112,13 @@ impl From<crate::domain::connector::ConnectorError> for CommandError {
 
 impl From<ComputerError> for CommandError {
     fn from(err: ComputerError) -> Self {
-        match err {
-            // Its own kind so the UI can offer to open settings rather than
-            // showing a failure for something that was simply never set up.
-            ComputerError::Unconfigured => {
-                CommandError::new("computerUnconfigured", err.to_string())
-            }
-            other => CommandError::new("computer", other.to_string()),
-        }
+        // Its own kind so the UI can offer to open settings rather than
+        // showing a failure for something that was simply never set up.
+        let code = match err {
+            ComputerError::Unconfigured(_) => "computerUnconfigured",
+            _ => "computer",
+        };
+        CommandError::new(code, err.to_string())
     }
 }
 

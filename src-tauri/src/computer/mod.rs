@@ -22,13 +22,14 @@ use serde::{Deserialize, Serialize};
 use crate::config::AppConfig;
 use crate::db::Store;
 use crate::domain::agent::AgentCard;
-use crate::domain::computer::{ComputerRecord, Provider, RecordState, Secret};
+use crate::domain::computer::{ComputerRecord, Provider, ProviderChoice, RecordState, Secret};
 use crate::domain::ids::{AgentId, ComputerId};
 use crate::domain::now_ms;
+use apple::AppleContainer;
 use e2b::E2bProvider;
 use provider::{
     ComputerProvider, CreateComputer, ExecRequest, Output, ProviderError, ProviderHandle,
-    ProviderState, ViewerTarget,
+    ProviderReadiness, ProviderState, ProviderStatus, ViewerTarget,
 };
 
 /// The host the webview loads an agent's desktop from. Named here because the
@@ -165,10 +166,10 @@ pub enum Provisioned {
 /// step: set a key, wait and retry, or read the message.
 #[derive(Debug, thiserror::Error)]
 pub enum ComputerError {
-    #[error(
-        "no computer provider is configured; add an E2B API key in app settings to give agents a computer"
-    )]
-    Unconfigured,
+    /// Carries its own sentence because the way out differs: a key to add, a
+    /// package to install, or two providers that each said why not.
+    #[error("{0}")]
+    Unconfigured(String),
     #[error(transparent)]
     Provider(#[from] ProviderError),
     #[error(transparent)]
@@ -177,23 +178,129 @@ pub enum ComputerError {
     Recording(String),
 }
 
+/// Said to whoever asked for E2B by name and has no key. The other way out is
+/// named too: an operator who chose E2B on a Mac that could run a computer
+/// locally would otherwise be sent to sign up for an account they do not need.
+const NO_E2B_KEY: &str = "no E2B API key is set; add one in Settings, or choose Automatic or \
+                          Apple Container as the computer provider";
+
+/// The same fact as a row in Settings' list of providers, where "choose
+/// something else" is the list itself and saying it again is noise.
+const NO_E2B_KEY_STATUS: &str =
+    "No E2B API key is set. Add one in Settings to give agents a sandbox in E2B's cloud.";
+
+/// Every provider this build knows, in the order `automatic` tries them: a
+/// machine on this Mac before one that is rented, because it costs nothing and
+/// keeps the operator's work on their own disk.
+const PROVIDERS: [Provider; 2] = [Provider::AppleContainer, Provider::E2b];
+
+/// How long an answer about a provider is worth keeping. Long enough that
+/// Settings, the prompt and a create moments apart ask once; short enough that
+/// an operator who starts the runtime in Terminal sees it within one look.
+const PROBE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// How often local machines are looked at: often enough that a minute of idle
+/// is a minute, cheap enough that it is one command per running machine.
+const IDLE_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The file the guest's PID 1 watches. It exits when this goes stale, so a
+/// machine outlives a force-quit of this app by one idle period and no more.
+const HEARTBEAT: &str = "/run/guaca/heartbeat";
+
+/// A touch on a running machine. Longer than the command needs and shorter
+/// than the tick, so a wedged machine costs one tick rather than the ticker.
+const HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether the sweep may delete what a local runtime lists, rather than only
+/// saying what it would delete.
+///
+/// Off until the spike confirms that `container ls --format json` reports the
+/// container's *name* at `configuration.id`. The rows hold the name `create`
+/// chose; if Apple puts anything else there — a digest, a generated id — every
+/// live machine looks unclaimed and the first sweep after a restart deletes all
+/// of them. It is the one guess in this feature whose failure is silent and
+/// destructive, so until it is checked against a real runtime the local half of
+/// the sweep only reports.
+const APPLE_SWEEP_ENABLED: bool = false;
+
+/// Whether an unclaimed resource of this kind is this build's to delete.
+fn releasable(which: Provider) -> bool {
+    match which {
+        Provider::E2b => true,
+        Provider::AppleContainer => APPLE_SWEEP_ENABLED,
+    }
+}
+
+/// One touch of the heartbeat: no credentials, nothing to interpret, and a
+/// deadline, because this runs on every running machine every minute.
+fn heartbeat() -> ExecRequest {
+    ExecRequest {
+        argv: vec!["touch".to_string(), HEARTBEAT.to_string()],
+        env: BTreeMap::new(),
+        cwd: "/".to_string(),
+        timeout: HEARTBEAT_TIMEOUT,
+    }
+}
+
+/// Why this build cannot drive a kind at all, as the error whoever asked for it
+/// by name reads.
+fn unconfigured(which: Provider) -> ComputerError {
+    ComputerError::Unconfigured(match which {
+        Provider::E2b => NO_E2B_KEY.to_string(),
+        Provider::AppleContainer => apple::not_installed().detail,
+    })
+}
+
+/// The same, as the status Settings draws and `automatic` explains itself with.
+fn unconfigured_status(which: Provider) -> ProviderStatus {
+    match which {
+        Provider::E2b => ProviderStatus {
+            state: ProviderReadiness::NotInstalled,
+            can_start: false,
+            detail: NO_E2B_KEY_STATUS.to_string(),
+        },
+        Provider::AppleContainer => apple::not_installed(),
+    }
+}
+
+/// Whether a provider could make a machine if asked now. A stopped service
+/// counts: starting a computer is what starts it, which is the one state where
+/// this app acts on the operator's behalf rather than reporting.
+fn usable(status: &ProviderStatus) -> bool {
+    match status.state {
+        ProviderReadiness::Ready => true,
+        ProviderReadiness::NotRunning => status.can_start,
+        _ => false,
+    }
+}
+
 struct Inner {
     store: Store,
     config: Arc<RwLock<AppConfig>>,
     /// One lock per agent, so an operator click and an agent tool call cannot
     /// make two machines. Held across the whole `ensure`, including the create.
     locks: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
-    /// The provider last built, with the API key it was built from. Kept
-    /// because the viewer resolves a target per proxied request and one noVNC
-    /// page is fifty of those plus a WebSocket: building a provider there was
-    /// a connection pool made and thrown away per asset, and a provider that
-    /// drives a CLI would be a process per asset. Rebuilt when the key differs,
-    /// which is how a settings change takes effect.
-    e2b_provider: RwLock<Option<(String, Arc<dyn ComputerProvider>)>>,
+    /// The providers built so far, each under the kind it runs and the setting
+    /// it was built from. Kept because the viewer resolves a target per proxied
+    /// request and one noVNC page is fifty of those plus a WebSocket: building
+    /// a provider there was a connection pool made and thrown away per asset,
+    /// and a provider that drives a CLI would be a process per asset.
+    ///
+    /// The second half of the key is what a settings change moves: the E2B API
+    /// key, and the installation id every local resource is labelled with. A
+    /// provider built from either is wrong the moment it changes, and an entry
+    /// under the old one is never read again.
+    providers: RwLock<HashMap<(Provider, String), Arc<dyn ComputerProvider>>>,
+    /// The last answer each provider gave about itself, with when it gave it.
+    /// A probe spawns processes, and Settings, the prompt and every automatic
+    /// resolution ask the same question within seconds of each other.
+    probes: Mutex<HashMap<Provider, (std::time::Instant, ProviderStatus)>>,
     /// Loopback port of the viewer proxy. Zero until it is listening.
     viewer_port: AtomicU16,
+    /// The whole registry, in tests: what is in here is what this build can
+    /// drive, and a kind that is absent is one nothing on this Mac provides.
     #[cfg(test)]
-    injected: Option<Arc<dyn ComputerProvider>>,
+    injected: Option<HashMap<Provider, Arc<dyn ComputerProvider>>>,
 }
 
 /// Every agent's computer: who runs it, what state it is in, and the row that
@@ -216,7 +323,8 @@ impl ComputerManager {
                 store,
                 config,
                 locks: Mutex::new(HashMap::new()),
-                e2b_provider: RwLock::new(None),
+                providers: RwLock::new(HashMap::new()),
+                probes: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
                 #[cfg(test)]
                 injected: None,
@@ -232,14 +340,30 @@ impl ComputerManager {
         config: Arc<RwLock<AppConfig>>,
         provider: Arc<dyn ComputerProvider>,
     ) -> Self {
+        Self::with_providers(store, config, vec![provider])
+    }
+
+    /// A manager whose registry holds exactly these providers, each under the
+    /// kind it says it is, and nothing this Mac happens to have installed.
+    ///
+    /// An empty list is a real state and the reason this takes one: it is an
+    /// install with no key and no local runtime, which is what a fresh one is.
+    #[cfg(test)]
+    pub(crate) fn with_providers(
+        store: Store,
+        config: Arc<RwLock<AppConfig>>,
+        providers: Vec<Arc<dyn ComputerProvider>>,
+    ) -> Self {
+        let injected = providers.into_iter().map(|p| (p.kind(), p)).collect();
         Self {
             inner: Arc::new(Inner {
                 store,
                 config,
                 locks: Mutex::new(HashMap::new()),
-                e2b_provider: RwLock::new(None),
+                providers: RwLock::new(HashMap::new()),
+                probes: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
-                injected: Some(provider),
+                injected: Some(injected),
             }),
         }
     }
@@ -253,6 +377,194 @@ impl ComputerManager {
 
     pub fn viewer_port(&self) -> u16 {
         self.inner.viewer_port.load(Ordering::SeqCst)
+    }
+
+    /// What every provider this build knows would say about itself, in the
+    /// order `automatic` tries them. What Settings draws, one row each.
+    pub async fn statuses(&self) -> Vec<(Provider, ProviderStatus)> {
+        let mut answers = Vec::with_capacity(PROVIDERS.len());
+        for which in PROVIDERS {
+            answers.push((which, self.status(which).await));
+        }
+        answers
+    }
+
+    /// One provider's answer, from the last one it gave while that is still
+    /// worth believing.
+    async fn status(&self, which: Provider) -> ProviderStatus {
+        // Read out and released before the probe: probing a local runtime is
+        // three processes, and a lock held across that is every other caller
+        // queueing behind this one's CLI.
+        let remembered = self
+            .inner
+            .probes
+            .lock()
+            .get(&which)
+            .filter(|(asked, _)| asked.elapsed() < PROBE_TTL)
+            .map(|(_, status)| status.clone());
+        if let Some(status) = remembered {
+            return status;
+        }
+
+        let status = match self.provider(which) {
+            Ok(provider) => provider.probe().await,
+            // Nothing to ask, and the reason is the same sentence a probe
+            // would have given: there is no key, or there is no binary.
+            Err(_) => unconfigured_status(which),
+        };
+        self.inner.probes.lock().insert(which, (std::time::Instant::now(), status.clone()));
+        status
+    }
+
+    /// Forgets every provider built and everything they said about themselves.
+    ///
+    /// Called when settings change: the key a provider was built from, the
+    /// installation its resources are labelled with, and which provider is even
+    /// wanted can all move in one save, and an answer from before that is not
+    /// an answer about now.
+    pub fn invalidate(&self) {
+        self.inner.providers.write().clear();
+        self.forget_probes();
+    }
+
+    /// The answers only, for when this app changed the thing being asked about.
+    fn forget_probes(&self) {
+        self.inner.probes.lock().clear();
+    }
+
+    /// Whether this agent can be given a computer at all, which is what its
+    /// prompt and its tool list are built from.
+    ///
+    /// An agent that owns one keeps it whatever the default provider is now: a
+    /// setting that moved does not take away a disk, and telling a model
+    /// mid-crew that its machine is gone is how a working computer disappears
+    /// from under a turn.
+    pub async fn availability(&self, card: &AgentCard) -> bool {
+        card.computer_id.is_some() || self.default_provider().await.is_ok()
+    }
+
+    /// Keeps local machines alive while they are being used, and stops them
+    /// when they are not.
+    ///
+    /// Hosted machines are not touched: E2B stops its own sandboxes on its own
+    /// timeout, and two authorities over one machine is one too many.
+    pub fn start_idle_ticker(&self, handle: tokio::runtime::Handle) {
+        let manager = self.clone();
+        handle.spawn(async move {
+            let mut ticker = tokio::time::interval(IDLE_TICK);
+            loop {
+                ticker.tick().await;
+                manager.idle_tick(now_ms()).await;
+            }
+        });
+    }
+
+    /// One tick, taking the time it is rather than reading the clock, so a test
+    /// can stand at any point in an idle period without waiting to get there.
+    pub(crate) async fn idle_tick(&self, now: i64) {
+        let listed = match self.inner.store.list_computers() {
+            Ok(listed) => listed,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the computers to keep them awake");
+                return;
+            }
+        };
+        let idle_ms = i64::from(self.idle_seconds()) * 1000;
+
+        for listed in listed.into_iter().filter(|record| record.provider != Provider::E2b) {
+            let lock = self.lock_for(listed.agent_id);
+            let _held = lock.lock().await;
+            let Some((record, provider, handle)) = self.running_local(listed.id).await else {
+                continue;
+            };
+
+            if now - record.last_used_at > idle_ms {
+                match provider.stop(&handle).await {
+                    Ok(()) => tracing::info!(
+                        computer = %record.id,
+                        "stopped a computer nobody has used lately; its disk is kept"
+                    ),
+                    Err(err) => {
+                        tracing::warn!(%err, computer = %record.id, "could not stop an idle computer")
+                    }
+                }
+                continue;
+            }
+
+            // The other half of the watchdog. The guest's PID 1 exits when this
+            // file goes stale, which is what stops a machine when this app is
+            // force-quit and there is nothing left to stop it.
+            if let Err(err) = provider.exec(&handle, heartbeat()).await {
+                tracing::debug!(
+                    %err,
+                    computer = %record.id,
+                    "could not touch a computer's heartbeat"
+                );
+            }
+        }
+    }
+
+    /// Stops every local machine, for a shutdown that is not a crash.
+    ///
+    /// Without it a VM holding four gigabytes outlives the app by a whole idle
+    /// period, on a Mac whose owner has already closed the window. Hosted
+    /// machines are left running: their timeout is the provider's, and stopping
+    /// one early is a decision about somebody's bill that this is not the place
+    /// to make.
+    pub async fn stop_local_machines(&self) {
+        let listed = match self.inner.store.list_computers() {
+            Ok(listed) => listed,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the computers to stop them");
+                return;
+            }
+        };
+
+        for listed in listed.into_iter().filter(|record| record.provider != Provider::E2b) {
+            let lock = self.lock_for(listed.agent_id);
+            let _held = lock.lock().await;
+            let Some((record, provider, handle)) = self.running_local(listed.id).await else {
+                continue;
+            };
+            match provider.stop(&handle).await {
+                Ok(()) => {
+                    tracing::info!(computer = %record.id, "stopped a computer on the way out")
+                }
+                Err(err) => {
+                    tracing::warn!(%err, computer = %record.id, "could not stop a computer on the way out")
+                }
+            }
+        }
+    }
+
+    /// This computer, its provider and its handle, if it is a machine that can
+    /// be acted on right now.
+    ///
+    /// Re-read rather than taken from the list the caller walked: `ensure`
+    /// writes `last_used_at` under this same lock, and a machine a turn started
+    /// using a millisecond ago must not be stopped for being idle.
+    async fn running_local(
+        &self,
+        id: ComputerId,
+    ) -> Option<(ComputerRecord, Arc<dyn ComputerProvider>, ProviderHandle)> {
+        let record = self.inner.store.computer(id).ok()??;
+        if record.state != RecordState::Ready {
+            return None;
+        }
+        let handle = Self::handle_of(&record)?;
+        let provider = self.provider(record.provider).ok()?;
+        match provider.inspect(&handle).await {
+            Ok(ProviderState::Running) => Some((record, provider, handle)),
+            // Asleep, gone, or a runtime that would not say: none of the three
+            // is something to keep awake or stop, and none is worth a failure.
+            _ => None,
+        }
+    }
+
+    /// What every resource this install makes is labelled with, so another copy
+    /// of Guac on the same Mac is never swept up as this one's orphan.
+    pub fn installation_id(&self) -> String {
+        self.inner.config.read().computer.installation_id.clone()
     }
 
     /// This agent's machine, made, woken or reused. `env` is the group's
@@ -329,7 +641,15 @@ impl ComputerManager {
             }
         }
 
-        let provider = self.provider_for_new()?;
+        let provider = self.default_provider().await?;
+        // A local runtime may have a service that is installed and stopped, and
+        // an operator asking for a computer is the permission to start it; a
+        // hosted one has nothing to prepare. Before the row, because a failure
+        // here has made nothing and should leave nothing behind.
+        provider.prepare().await?;
+        // Whatever that started, an answer given before it is now wrong.
+        self.forget_probes();
+
         let id = ComputerId::new();
         let now = now_ms();
         // Written down before it exists: a resource made with nothing claiming
@@ -404,7 +724,7 @@ impl ComputerManager {
             // Nothing to ask. Whoever wanted the scan already holds the last
             // answer, and telling them to configure a provider is not the reply
             // to "what is this browser signed in to".
-            Err(ComputerError::Unconfigured) => return Ok(None),
+            Err(ComputerError::Unconfigured(_)) => return Ok(None),
             Err(err) => return Err(err),
         };
         match provider.inspect(&handle).await {
@@ -573,10 +893,27 @@ impl ComputerManager {
             }
         }
 
-        // Only a provider that is configured can be asked, and E2B is the only
-        // one there is. Anything it made that no row refers to is a leak.
-        if let Ok(provider) = self.provider(Provider::E2b) {
-            let owned = provider.list_owned().await?;
+        // Only a provider this build can drive can be asked, and each is asked
+        // about its own kind alone: a container's name on this Mac and a
+        // sandbox id in a cloud share a namespace with nothing, so a row
+        // claiming one says nothing about the other.
+        for which in PROVIDERS {
+            let Ok(provider) = self.provider(which) else {
+                continue;
+            };
+            let owned = match provider.list_owned().await {
+                Ok(owned) => owned,
+                // One runtime that will not answer is not a reason to leave
+                // another one's machines running and billing.
+                Err(err) => {
+                    tracing::warn!(
+                        %err,
+                        provider = which.as_str(),
+                        "could not ask a provider what it is running"
+                    );
+                    continue;
+                }
+            };
             // Read after the list, never before: a machine made while the list
             // was in flight is absent from it, but its row is here, so nothing
             // is deleted for being younger than the question. What is left is a
@@ -588,11 +925,20 @@ impl ComputerManager {
                 .store
                 .list_computers()?
                 .into_iter()
+                .filter(|record| record.provider == which)
                 .filter_map(|record| record.provider_id)
                 .collect();
 
             for id in owned {
                 if claimed.contains(&id) {
+                    continue;
+                }
+                if !releasable(which) {
+                    tracing::info!(
+                        would_release = %id,
+                        provider = which.as_str(),
+                        "a computer no agent refers to"
+                    );
                     continue;
                 }
                 tracing::info!(%id, "releasing a computer no agent refers to");
@@ -659,33 +1005,74 @@ impl ComputerManager {
     fn provider(&self, which: Provider) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
         #[cfg(test)]
         if let Some(injected) = &self.inner.injected {
-            return Ok(injected.clone());
+            return injected.get(&which).cloned().ok_or_else(|| unconfigured(which));
         }
-        match which {
-            Provider::E2b => {
-                let key = self.inner.config.read().e2b.api_key.trim().to_string();
-                if let Some((built_from, provider)) = self.inner.e2b_provider.read().as_ref() {
-                    if *built_from == key {
-                        return Ok(provider.clone());
-                    }
-                }
-                let provider = E2bProvider::new(&key)
-                    .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>)
-                    .ok_or(ComputerError::Unconfigured)?;
-                *self.inner.e2b_provider.write() = Some((key, provider.clone()));
-                Ok(provider)
-            }
-            // Nothing in this build makes one, so only a row written by a newer
-            // one can name it, and there is nothing here that could drive it.
-            // The Apple Container provider is the next task.
-            Provider::AppleContainer => Err(ComputerError::Unconfigured),
+
+        // What the entry is keyed on as well as what builds it, so an operator
+        // who changes either in Settings gets a provider that uses the new one
+        // on the next call.
+        let key = match which {
+            Provider::E2b => self.inner.config.read().e2b.api_key.trim().to_string(),
+            Provider::AppleContainer => self.installation_id(),
+        };
+        // Cloned out rather than answered from under the guard: this is on the
+        // viewer's path, and a read lock held while a provider is built is one
+        // fifty concurrent asset requests queue behind.
+        let cached = self.inner.providers.read().get(&(which, key.clone())).cloned();
+        if let Some(provider) = cached {
+            return Ok(provider);
         }
+
+        let built = match which {
+            Provider::E2b => E2bProvider::new(&key)
+                .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>),
+            // `None` is the one thing a probe cannot tell us afterwards: there
+            // is no binary to ask. Everything else about a runtime that is
+            // installed is `probe`'s answer, not this one's.
+            Provider::AppleContainer => AppleContainer::discover(&key)
+                .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>),
+        }
+        .ok_or_else(|| unconfigured(which))?;
+
+        self.inner.providers.write().insert((which, key), built.clone());
+        Ok(built)
     }
 
-    /// Who runs a machine this app is about to make. One provider today; PR B
-    /// turns this into the automatic resolution.
-    fn provider_for_new(&self) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
-        self.provider(Provider::E2b)
+    /// Who runs a machine this app is about to make.
+    ///
+    /// Resolved here and written to the row by `ensure`, once: a computer that
+    /// changed hands because a setting moved is a disk its agent can no longer
+    /// reach, and a second machine on a provider nobody asked for.
+    ///
+    /// A provider named in settings is used or refused on its own terms —
+    /// falling through to another one would be this app quietly overruling the
+    /// choice, and the refusal is what says how to make that choice work.
+    async fn default_provider(&self) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
+        // Copied out of the guard rather than matched under it: the automatic
+        // half awaits, and a lock held across an await is a future that cannot
+        // cross threads.
+        let choice = self.inner.config.read().computer.provider;
+        if let ProviderChoice::Provider(which) = choice {
+            return self.provider(which);
+        }
+
+        let mut refusals = Vec::new();
+        for which in PROVIDERS {
+            let status = self.status(which).await;
+            if usable(&status) {
+                if let Ok(provider) = self.provider(which) {
+                    return Ok(provider);
+                }
+            }
+            refusals.push(status.detail);
+        }
+        // Every provider's own sentence, because "nothing is ready" on its own
+        // is a dead end: what the operator does next depends on which of them
+        // they are closer to having, and only they can tell.
+        Err(ComputerError::Unconfigured(format!(
+            "no computer provider is ready. {}",
+            refusals.join(" ")
+        )))
     }
 
     /// How long a machine may sit unused. Pushed back on every use, so what
@@ -742,8 +1129,12 @@ pub(crate) mod fake {
         pub execs: Mutex<Vec<ExecRequest>>,
         pub creates: Mutex<u32>,
         pub deletes: Mutex<Vec<String>>,
+        pub prepares: Mutex<u32>,
+        pub probes: Mutex<u32>,
         pub fail_create: Mutex<bool>,
         pub fail_delete: Mutex<bool>,
+        pub fail_list: Mutex<bool>,
+        pub fail_prepare: Mutex<bool>,
         pub create_delay: Mutex<Option<std::time::Duration>>,
         /// What every exec answers with, in order; the last one repeats.
         pub replies: Mutex<Vec<Output>>,
@@ -751,16 +1142,35 @@ pub(crate) mod fake {
         /// works before it would work is one every existing test would have to
         /// set up.
         pub probe: Mutex<Option<ProviderStatus>>,
+        /// Which kind this stands in for. `None` is E2B for the same reason.
+        pub kind: Mutex<Option<Provider>>,
+    }
+
+    impl FakeProvider {
+        /// A fake of the local kind: what the manager keeps awake with a
+        /// heartbeat, stops at shutdown, and sweeps behind the gate.
+        pub fn local() -> Self {
+            Self { kind: Mutex::new(Some(Provider::AppleContainer)), ..Self::default() }
+        }
     }
 
     #[async_trait::async_trait]
     impl ComputerProvider for FakeProvider {
         fn kind(&self) -> Provider {
-            Provider::E2b
+            self.kind.lock().unwrap_or(Provider::E2b)
         }
 
         async fn probe(&self) -> ProviderStatus {
+            *self.probes.lock() += 1;
             self.probe.lock().clone().unwrap_or_else(|| ProviderStatus::ready("fake: ready"))
+        }
+
+        async fn prepare(&self) -> Result<(), ProviderError> {
+            if *self.fail_prepare.lock() {
+                return Err(ProviderError::Unavailable("fake: the service would not start".into()));
+            }
+            *self.prepares.lock() += 1;
+            Ok(())
         }
 
         async fn create(&self, request: &CreateComputer) -> Result<ProviderHandle, ProviderError> {
@@ -859,7 +1269,14 @@ pub(crate) mod fake {
         }
 
         async fn list_owned(&self) -> Result<Vec<String>, ProviderError> {
-            Ok(self.machines.lock().keys().cloned().collect())
+            if *self.fail_list.lock() {
+                return Err(ProviderError::Unavailable("fake: cannot list".into()));
+            }
+            let mut owned: Vec<String> = self.machines.lock().keys().cloned().collect();
+            // Sorted so a sweep's log and a test's assertion read the same way
+            // twice running; a HashMap's order is not an answer.
+            owned.sort();
+            Ok(owned)
         }
     }
 }
@@ -873,7 +1290,7 @@ mod tests {
     use crate::config::AppConfig;
     use crate::db::Store;
     use crate::domain::agent::{AgentCard, CleanDraft};
-    use crate::domain::computer::{ComputerRecord, Provider, RecordState, Secret};
+    use crate::domain::computer::{ComputerRecord, Provider, ProviderChoice, RecordState, Secret};
 
     fn draft(name: &str) -> CleanDraft {
         CleanDraft {
@@ -895,6 +1312,354 @@ mod tests {
         let config = Arc::new(parking_lot::RwLock::new(AppConfig::default()));
         let manager = ComputerManager::with_provider(store.clone(), config, provider.clone());
         (manager, provider, store, card, dir)
+    }
+
+    /// A manager whose whole world is the fakes given: nothing here asks this
+    /// Mac what it has installed, which is the difference between a test that
+    /// passes everywhere and one that passes on the machine that wrote it.
+    #[allow(clippy::type_complexity)]
+    fn setup_with(
+        providers: Vec<Arc<fake::FakeProvider>>,
+    ) -> (ComputerManager, Store, AgentCard, Arc<RwLock<AppConfig>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store.create_agent(&draft("Manager")).unwrap();
+        let config = Arc::new(parking_lot::RwLock::new(AppConfig::default()));
+        let registry =
+            providers.into_iter().map(|p| p as Arc<dyn ComputerProvider>).collect::<Vec<_>>();
+        let manager = ComputerManager::with_providers(store.clone(), config.clone(), registry);
+        (manager, store, card, config, dir)
+    }
+
+    fn says(state: ProviderReadiness, can_start: bool, detail: &str) -> ProviderStatus {
+        ProviderStatus { state, can_start, detail: detail.to_string() }
+    }
+
+    fn provider_of(store: &Store, agent: AgentId) -> Provider {
+        store.computer_for_agent(agent).unwrap().expect("a computer").provider
+    }
+
+    #[tokio::test]
+    async fn automatic_takes_the_local_runtime_first_and_skips_one_that_is_not_installed() {
+        // The order is the point: a machine on this Mac costs nothing and keeps
+        // the operator's work on their own disk, so a rented one is what is
+        // left when there is no local runtime to be had.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() = Some(says(ProviderReadiness::NotInstalled, false, "no binary"));
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone(), hosted.clone()]);
+
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        assert_eq!((*hosted.creates.lock(), *local.creates.lock()), (1, 0));
+        assert_eq!(provider_of(&store, card.id), Provider::E2b, "written to the row");
+    }
+
+    #[tokio::test]
+    async fn a_local_runtime_that_is_only_stopped_is_started_and_chosen_first() {
+        // "Installed and stopped" is the one state this app acts on rather than
+        // reports: starting a computer is what starts the service, and the
+        // operator asked for a computer.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() = Some(says(ProviderReadiness::NotRunning, true, "stopped"));
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone(), hosted.clone()]);
+
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        assert_eq!((*local.creates.lock(), *hosted.creates.lock()), (1, 0));
+        assert_eq!(*local.prepares.lock(), 1, "the service was started before anything was made");
+        assert_eq!(provider_of(&store, card.id), Provider::AppleContainer);
+    }
+
+    #[tokio::test]
+    async fn a_service_that_will_not_start_leaves_no_machine_and_no_row() {
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.fail_prepare.lock() = true;
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone()]);
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("nothing can be made on a runtime that would not start");
+        };
+
+        assert!(err.to_string().contains("would not start"), "{err}");
+        assert_eq!(*local.creates.lock(), 0);
+        assert!(store.list_computers().unwrap().is_empty(), "a claim on nothing is a leak");
+    }
+
+    #[tokio::test]
+    async fn with_nothing_ready_the_refusal_repeats_what_each_provider_said() {
+        // One sentence per provider, in their own words, because "no computer
+        // provider is ready" on its own is a dead end: what the operator does
+        // next depends on which of the two they are closer to having.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() =
+            Some(says(ProviderReadiness::NotRunning, false, "the runtime is wedged."));
+        let hosted = Arc::new(fake::FakeProvider::default());
+        *hosted.probe.lock() = Some(says(ProviderReadiness::NotInstalled, false, "no key here."));
+        let (manager, _store, card, _config, _dir) = setup_with(vec![local, hosted]);
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("neither provider could make anything");
+        };
+
+        let said = err.to_string();
+        assert!(matches!(err, ComputerError::Unconfigured(_)), "{err}");
+        assert!(said.contains("no computer provider is ready"), "{said}");
+        assert!(said.contains("the runtime is wedged."), "{said}");
+        assert!(said.contains("no key here."), "{said}");
+    }
+
+    #[tokio::test]
+    async fn asking_for_e2b_by_name_without_a_key_says_both_ways_out() {
+        let (manager, _store, card, config, _dir) = setup_with(vec![]);
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("there is no key to make a sandbox with");
+        };
+
+        let said = err.to_string();
+        assert!(matches!(err, ComputerError::Unconfigured(_)), "{err}");
+        assert!(said.contains("E2B API key"), "what is missing: {said}");
+        assert!(said.contains("Settings"), "where to put it: {said}");
+        assert!(said.contains("Apple Container"), "and that a key is not the only way: {said}");
+    }
+
+    #[tokio::test]
+    async fn asking_for_a_local_runtime_that_is_not_installed_says_where_to_get_it() {
+        let (manager, _store, card, config, _dir) = setup_with(vec![]);
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("there is no runtime on this machine");
+        };
+
+        assert!(matches!(err, ComputerError::Unconfigured(_)), "{err}");
+        assert!(
+            err.to_string().contains("github.com/apple/container/releases"),
+            "the refusal is the provider's own words: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_computer_keeps_the_provider_that_made_it_when_the_setting_changes() {
+        let local = Arc::new(fake::FakeProvider::local());
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, config, _dir) = setup_with(vec![local.clone(), hosted.clone()]);
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(provider_of(&store, card.id), Provider::AppleContainer);
+
+        // The operator changes their mind in Settings, which is exactly what
+        // must not reach into a disk an agent is already using.
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+        manager.invalidate();
+
+        let (_, again) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(again, Provisioned::Reused);
+        assert_eq!(provider_of(&store, card.id), Provider::AppleContainer);
+        assert_eq!(*hosted.creates.lock(), 0, "the new choice is for the next computer");
+    }
+
+    #[tokio::test]
+    async fn availability_is_the_agents_own_computer_or_a_provider_that_could_make_one() {
+        // The prompt and the tool list are built from this. An agent that owns
+        // a machine must keep being told so when the default provider is
+        // unusable, or a working computer disappears from under a turn.
+        let (manager, store, card, _config, _dir) = setup_with(vec![]);
+        assert!(!manager.availability(&card).await, "nothing configured, nothing owned");
+
+        store
+            .insert_computer(&ComputerRecord {
+                id: ComputerId::new(),
+                agent_id: card.id,
+                provider: Provider::E2b,
+                provider_id: Some("sbx".into()),
+                control_secret: Secret::new("ctl"),
+                viewer_secret: Secret::new("view"),
+                image_ref: String::new(),
+                state: RecordState::Ready,
+                last_used_at: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+        let owner = store.list_agents().unwrap().into_iter().find(|a| a.id == card.id).unwrap();
+
+        assert!(owner.computer_id.is_some());
+        assert!(manager.availability(&owner).await);
+    }
+
+    #[tokio::test]
+    async fn a_local_machine_idle_past_the_setting_is_stopped_and_a_busy_one_is_kept_alive() {
+        let local = Arc::new(fake::FakeProvider::local());
+        let (manager, store, card, config, _dir) = setup_with(vec![local.clone()]);
+        let busy = store.create_agent(&draft("Chef")).unwrap();
+        let (forgotten, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (working, _) = manager.ensure(&busy, BTreeMap::new()).await.unwrap();
+
+        let idle_minutes = config.read().computer.idle_minutes as i64;
+        store.touch_computer(forgotten.id(), now_ms() - (idle_minutes + 1) * 60_000).unwrap();
+
+        manager.idle_tick(now_ms()).await;
+
+        let machines = local.machines.lock();
+        assert_eq!(machines[&format!("fake-{}", forgotten.id().short())], ProviderState::Asleep);
+        assert_eq!(machines[&format!("fake-{}", working.id().short())], ProviderState::Running);
+        drop(machines);
+
+        // The other half of the watchdog: the guest's PID 1 exits when this
+        // file goes stale, so a machine nobody stopped still stops when the app
+        // that was touching it is gone.
+        let execs = local.execs.lock();
+        assert_eq!(execs.len(), 1, "only the machine still in use is touched");
+        assert_eq!(execs[0].argv, vec!["touch", "/run/guaca/heartbeat"]);
+        assert!(execs[0].env.is_empty(), "a heartbeat carries no credentials");
+    }
+
+    #[tokio::test]
+    async fn the_idle_tick_leaves_a_hosted_machine_to_its_own_timeout() {
+        // E2B stops its own sandboxes and bills for what it stopped. Reaching
+        // in to stop one from here is a second authority over the same machine.
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, config, _dir) = setup_with(vec![hosted.clone()]);
+        let (machine, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let idle_minutes = config.read().computer.idle_minutes as i64;
+        store.touch_computer(machine.id(), now_ms() - (idle_minutes + 1) * 60_000).unwrap();
+
+        manager.idle_tick(now_ms()).await;
+
+        assert_eq!(
+            hosted.machines.lock()[&format!("fake-{}", machine.id().short())],
+            ProviderState::Running
+        );
+        assert!(hosted.execs.lock().is_empty(), "and nothing was spent keeping it awake");
+    }
+
+    #[tokio::test]
+    async fn shutting_down_stops_local_machines_and_leaves_hosted_ones_alone() {
+        let local = Arc::new(fake::FakeProvider::local());
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, config, _dir) = setup_with(vec![local.clone(), hosted.clone()]);
+        let (mine, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+        let renter = store.create_agent(&draft("Chef")).unwrap();
+        let (rented, _) = manager.ensure(&renter, BTreeMap::new()).await.unwrap();
+
+        manager.stop_local_machines().await;
+
+        assert_eq!(
+            local.machines.lock()[&format!("fake-{}", mine.id().short())],
+            ProviderState::Asleep
+        );
+        assert_eq!(
+            hosted.machines.lock()[&format!("fake-{}", rented.id().short())],
+            ProviderState::Running,
+            "a hosted machine's own timeout stays authoritative"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_sweep_reaps_within_a_kind_and_only_reports_what_a_local_runtime_would_lose() {
+        // Two claims that look alike across two providers are not the same
+        // machine: a name on this Mac and a sandbox id in a cloud share a
+        // namespace with nothing.
+        let local = Arc::new(fake::FakeProvider::local());
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone(), hosted.clone()]);
+        local.machines.lock().insert("guac-orphan".into(), ProviderState::Running);
+        local.machines.lock().insert("guac-kept".into(), ProviderState::Running);
+        hosted.machines.lock().insert("shared-name".into(), ProviderState::Running);
+
+        for (agent, provider, id) in [
+            (card.id, Provider::AppleContainer, "guac-kept"),
+            // A local row claiming the name a sandbox happens to have. It says
+            // nothing about that sandbox, and the sweep must not read it as a
+            // claim on one.
+            (
+                store.create_agent(&draft("Chef")).unwrap().id,
+                Provider::AppleContainer,
+                "shared-name",
+            ),
+        ] {
+            store
+                .insert_computer(&ComputerRecord {
+                    id: ComputerId::new(),
+                    agent_id: agent,
+                    provider,
+                    provider_id: Some(id.into()),
+                    control_secret: Secret::default(),
+                    viewer_secret: Secret::default(),
+                    image_ref: String::new(),
+                    state: RecordState::Ready,
+                    last_used_at: 0,
+                    created_at: 0,
+                    updated_at: 0,
+                })
+                .unwrap();
+        }
+
+        let released = manager.sweep().await.unwrap();
+
+        assert_eq!(released, 1);
+        assert_eq!(*hosted.deletes.lock(), vec!["shared-name".to_string()]);
+        assert!(
+            local.deletes.lock().is_empty(),
+            "the local half only says what it would release until the spike confirms the list"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_provider_that_will_not_list_does_not_stop_the_other_from_being_swept() {
+        // A wedged local runtime and a leaking cloud account are two problems,
+        // and only one of them is charging by the hour.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.fail_list.lock() = true;
+        let hosted = Arc::new(fake::FakeProvider::default());
+        hosted.machines.lock().insert("sbx-orphan".into(), ProviderState::Running);
+        let (manager, _store, _card, _config, _dir) = setup_with(vec![local, hosted.clone()]);
+
+        assert_eq!(manager.sweep().await.unwrap(), 1);
+        assert_eq!(*hosted.deletes.lock(), vec!["sbx-orphan".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_provider_is_asked_how_it_is_once_until_something_makes_the_answer_wrong() {
+        // Settings draws this, the prompt asks it per turn, and every automatic
+        // resolution asks it again. Probing a local runtime is three processes.
+        let local = Arc::new(fake::FakeProvider::local());
+        let hosted = Arc::new(fake::FakeProvider::default());
+        let (manager, _store, _card, _config, _dir) =
+            setup_with(vec![local.clone(), hosted.clone()]);
+
+        let first = manager.statuses().await;
+        manager.statuses().await;
+
+        assert_eq!(
+            first.iter().map(|(which, _)| *which).collect::<Vec<_>>(),
+            vec![Provider::AppleContainer, Provider::E2b],
+            "one row per provider this build knows, in the order automatic tries them"
+        );
+        assert_eq!((*local.probes.lock(), *hosted.probes.lock()), (1, 1));
+
+        manager.invalidate();
+        manager.statuses().await;
+        assert_eq!((*local.probes.lock(), *hosted.probes.lock()), (2, 2));
+    }
+
+    #[tokio::test]
+    async fn a_service_this_app_started_is_not_still_reported_as_stopped() {
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() = Some(says(ProviderReadiness::NotRunning, true, "stopped"));
+        let (manager, _store, card, _config, _dir) = setup_with(vec![local.clone()]);
+        manager.statuses().await;
+
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        *local.probe.lock() = Some(ProviderStatus::ready("running now"));
+
+        assert_eq!(manager.statuses().await[0].1.state, ProviderReadiness::Ready);
+        assert_eq!(*local.probes.lock(), 2, "starting it is a change, not a cache hit");
     }
 
     #[tokio::test]
@@ -1145,12 +1910,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
         let card = store.create_agent(&draft("Manager")).unwrap();
-        let manager =
-            ComputerManager::new(store, Arc::new(parking_lot::RwLock::new(AppConfig::default())));
+        let config = Arc::new(parking_lot::RwLock::new(AppConfig::default()));
+        // Named rather than left automatic: this is the real registry, and what
+        // `automatic` would resolve to depends on what the machine running the
+        // test has installed.
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+        let manager = ComputerManager::new(store, config);
         let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
             panic!("there is nothing to make a machine with");
         };
-        assert!(matches!(err, ComputerError::Unconfigured), "{err}");
+        assert!(matches!(err, ComputerError::Unconfigured(_)), "{err}");
         assert!(
             err.to_string().contains("E2B API key"),
             "the operator has to be told what to do about it: {err}"

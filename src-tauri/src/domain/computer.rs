@@ -10,7 +10,7 @@ use super::ids::{AgentId, ComputerId};
 
 /// Who runs the machine. Stored as text, so it fails closed on a value this
 /// build does not know rather than defaulting to one it does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     E2b,

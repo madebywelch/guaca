@@ -18,6 +18,11 @@ use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
 use crate::runtime::Runtime;
 use crate::workspace::Workspace;
 
+/// How long a quit waits for local machines to stop. Long enough for a
+/// handful of them at a couple of seconds each, short of the point where an
+/// operator decides the app has hung and force-quits it anyway.
+const SHUTDOWN_GRACE: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Bridges runtime events onto the webview's event bus.
 struct TauriSink {
     app: tauri::AppHandle,
@@ -97,6 +102,10 @@ pub fn run() {
             // And find out what their browsers are already signed in to, so the
             // roster is right before anybody asks rather than after.
             runtime.start_signin_sweep();
+            // A machine on this Mac has no server-side timeout to stop it, so
+            // this is what makes its idle period idle time: a touch on the
+            // guest's heartbeat while it is used, and a stop when it is not.
+            runtime.computers().start_idle_ticker(handle.clone());
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.
@@ -182,8 +191,28 @@ pub fn run() {
             commands::update_settings,
             commands::test_connection,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Guac");
+        .build(tauri::generate_context!())
+        .expect("error while running Guac")
+        .run(|app, event| {
+            // A local machine has no server-side timeout: left running, it
+            // holds its VM's memory for a whole idle period after the window
+            // is gone. Hosted ones are left to the timeout they already have.
+            //
+            // Bounded, because this blocks the quit: a runtime that will not
+            // answer must not turn closing the app into a beachball, and the
+            // guest's own watchdog stops anything this gave up on.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let runtime = app.state::<AppState>().runtime.clone();
+                tauri::async_runtime::block_on(async move {
+                    let stopping = runtime.computers().stop_local_machines();
+                    if tokio::time::timeout(SHUTDOWN_GRACE, stopping).await.is_err() {
+                        tracing::warn!(
+                            "gave up stopping local computers; their watchdogs will stop them"
+                        );
+                    }
+                });
+            }
+        });
 
     drop(tokio_runtime);
 }

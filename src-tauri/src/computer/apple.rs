@@ -394,6 +394,16 @@ impl ComputerProvider for AppleContainer {
         self.probe_runtime().await
     }
 
+    /// The service, started, because somebody asked for a computer.
+    ///
+    /// `create` asks for it too, and that is not a duplicate: this one exists
+    /// so the manager knows the service was started and stops answering from a
+    /// probe taken before it was. The second call is a status check on a
+    /// service that is already up.
+    async fn prepare(&self) -> Result<(), ProviderError> {
+        self.ensure_running().await
+    }
+
     /// One network, one volume, one container, started.
     ///
     /// Anything that fails takes back exactly what this call made: a network
@@ -905,7 +915,9 @@ fn unsupported_platform() -> ProviderStatus {
     }
 }
 
-fn not_installed() -> ProviderStatus {
+/// Also the manager's answer when `discover` found nothing: an install that is
+/// not there is the same sentence whether a probe or a refusal is what says it.
+pub(crate) fn not_installed() -> ProviderStatus {
     ProviderStatus {
         state: ProviderReadiness::NotInstalled,
         can_start: false,

@@ -236,6 +236,20 @@ pub trait ComputerProvider: Send + Sync {
     /// states.
     async fn probe(&self) -> ProviderStatus;
 
+    /// Whatever has to be running on this Mac before a machine can be made.
+    ///
+    /// A hosted provider has nothing to prepare and takes the default. A local
+    /// runtime has a service that can be installed and stopped, and starting it
+    /// is a decision: it happens because somebody asked for a computer, never
+    /// because something asked how things stand.
+    ///
+    /// The manager calls this rather than leaving it to `create` because
+    /// starting a service changes the answer it caches: a probe that said
+    /// "installed but stopped" is wrong the moment this returns.
+    async fn prepare(&self) -> Result<(), ProviderError> {
+        Ok(())
+    }
+
     async fn create(&self, request: &CreateComputer) -> Result<ProviderHandle, ProviderError>;
 
     /// Without waking it. Asking a sleeping machine anything else would wake

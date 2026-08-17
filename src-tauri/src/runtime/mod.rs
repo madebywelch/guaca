@@ -362,6 +362,10 @@ impl Runtime {
     pub fn set_config(&self, config: AppConfig) {
         self.inner.guard.lock().set_limits(config.limits);
         *self.inner.config.write() = config;
+        // A key, a provider choice or an installation id may all have moved,
+        // and every one of them makes a provider built from the old settings —
+        // and the last answer it gave about itself — the wrong one to hand out.
+        self.inner.computers.invalidate();
     }
 
     pub fn limits(&self) -> GuardLimits {
