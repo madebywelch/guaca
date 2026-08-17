@@ -160,6 +160,7 @@ pub fn run() {
             commands::set_agent_notes,
             commands::channel_messages,
             commands::conversation_flow,
+            commands::search,
             commands::send_message,
             commands::retry_turn,
             commands::clear_channel,

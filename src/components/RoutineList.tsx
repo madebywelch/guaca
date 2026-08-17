@@ -1,27 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/ipc";
-import { relativeTime, useNow } from "../lib/time";
+import { relativeTime, splitGap, toSeconds, type Unit, useNow } from "../lib/time";
 import { type AgentId, errorMessage, type Routine, type RoutineDraft } from "../lib/types";
-
-export type Unit = "minutes" | "hours" | "days";
-
-const SECONDS: Record<Unit, number> = { minutes: 60, hours: 3600, days: 86_400 };
-
-/** The shortest true way to say a gap: 7200 seconds is "2 hours". */
-export function splitGap(secs: number): { value: number; unit: Unit } {
-  for (const unit of ["days", "hours", "minutes"] as Unit[]) {
-    const size = SECONDS[unit];
-    if (secs % size === 0 && secs >= size) return { value: secs / size, unit };
-  }
-  // Under a minute cannot be set here at all, and the backend refuses it, but
-  // a row written by something else still has to draw.
-  return { value: Math.max(1, Math.round(secs / 60)), unit: "minutes" };
-}
-
-export function toSeconds(value: number, unit: Unit): number {
-  return Math.max(1, Math.round(value)) * SECONDS[unit];
-}
 
 interface Props {
   agentId: AgentId;

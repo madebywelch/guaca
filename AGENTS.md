@@ -153,13 +153,32 @@ either, because that disk survives the sleep this app relies on.
 **A session belongs to one agent; a credential belongs to the group.** That is
 physical, not a policy: cookies are on one disk and a token is a string.
 
+**Search happens in two places and is ranked in one.** The workspace is held in
+two places, so it is matched in two: messages, files, links and routines are in
+SQLite and are matched there, while agents and groups are already in the
+webview's store to draw the rail and actions are not stored anywhere at all.
+Reading the transcript into the renderer to search it would copy the database
+across IPC on every keystroke; going to IPC for two agent names would make the
+commonest search the slow one. What must not be split is the ordering: both
+halves arrive in `lib/search.ts` as raw matches and are scored by one function,
+because a list where an agent and a message are ordered by different rules is a
+list you have to read twice. A file and a link are the same rows as the
+messages read from a different angle, which is why one scan produces all three.
+
+**A search hit that opens the wrong part of a channel is a search that failed.**
+A transcript is read as "the newest three hundred", and a hit from last month is
+not in that window. `channel_messages` takes a `through` so the window reaches
+back to the message being opened, bounded at a thousand; past that the operator
+lands in the right channel at its newest end. Anything that jumps to a message
+goes through `openMessage` rather than `select`.
+
 ## Where things are
 
 ```
 src/                 React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
   domain/            AgentCard, Envelope, Routine, Connector, Signin, Approval,
-                     ids. No I/O.
+                     Search, ids. No I/O.
   runtime/
     guard.rs         The loop guard. Read this one first.
     mod.rs           Agent actors and the message bus.
