@@ -54,6 +54,11 @@ blank if it does not need one.
 Messaging is asynchronous throughout. Manager does not wait for Researcher; all
 four peers think at once.
 
+Right-click any agent in the rail to pin it to the top, to duplicate it, or to
+open its profile. Pinning and duplicating are one click because they are the
+ones you do; a name and a set of instructions are written once and read often,
+so editing a profile is deliberately one click further away.
+
 ## What an agent can do
 
 Ten tools, described to the model and visible in the transcript when used:
@@ -125,23 +130,31 @@ crew that is stuck.
 
 Each agent has a memory file it maintains itself with `update_notes`, shown to
 it at the start of every turn. It is the only thing that survives between
-conversations. You can read and edit it in the agent editor.
+conversations. You can read and edit it in the agent's profile.
 
 Memory and notes are one file under two names: memory is what an agent is told
 it has, notes is what the tool and the files are called. Ask an agent to update
 its memory, to remember something, or to make a note of it, and all three land
 in the same place.
 
-An agent can also keep its own schedule: "check the listings every five hours"
-is a routine, stored as a next-due time rather than a timer, so it survives a
-restart. Routines are listed in the agent editor and can be written, retimed and
-deleted by hand.
+An agent can also keep its own schedule: "check the listings every weekday" is a
+routine, stored as a next-due time rather than a timer, so it survives a
+restart. A routine has a name, an instruction, and a trigger: every hour, every
+day, weekdays, every week, every month, or once. Calendar repeats keep the time
+of day they were set for, across a clock change and, for weekdays, across the
+weekend.
+
+Routines are listed in the panel beside the conversation, one line each. Open
+one and the panel becomes that routine: switch it off without deleting it, fire
+a test run that does not move the schedule, rewrite what it says, retime it, and
+read what it has actually done.
 
 ## Computers
 
 With an [E2B](https://e2b.dev) key configured, an agent can be given a Linux
-machine with a desktop, a browser and a shell. The screen appears in the corner
-of its channel: a live picture while you read, and interactive when expanded.
+machine with a desktop, a browser and a shell. The screen sits at the top of the
+panel beside the conversation: a live picture while you read, and interactive
+when you click it open.
 
 - The machine sleeps after fifteen idle minutes and keeps its disk, so it wakes
   up still signed in to whatever it was signed in to.

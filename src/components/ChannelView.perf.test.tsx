@@ -55,6 +55,7 @@ function agent(id: string, name: string): AgentCard {
     systemPrompt: "",
     skills: [],
     lifecycle: "active",
+    pinned: false,
     createdAt: 0,
     updatedAt: 0,
     sandboxId: null,
