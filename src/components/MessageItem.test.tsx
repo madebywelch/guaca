@@ -1,8 +1,9 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { Lookups } from "../lib/transcript";
 import type { AgentCard, Envelope, Part } from "../lib/types";
-import { type Lookups, MessageItem } from "./MessageItem";
+import { MessageItem } from "./MessageItem";
 
 const retryTurn = vi.fn<(agentId: string, messageId: string) => Promise<string>>(
   async () => "run-2",
@@ -56,8 +57,8 @@ function envelope(overrides: Partial<Envelope>): Envelope {
   };
 }
 
-function show(message: Envelope, feed = false) {
-  return render(<MessageItem message={message} lookups={lookups} continued={false} feed={feed} />);
+function show(message: Envelope) {
+  return render(<MessageItem message={message} lookups={lookups} continued={false} />);
 }
 
 describe("messages addressed to the operator", () => {
@@ -83,45 +84,21 @@ describe("messages addressed to the operator", () => {
 });
 
 describe("agent-to-agent traffic", () => {
-  const peerMessage = envelope({
-    channelId: "chef",
-    from: { kind: "agent", id: "manager" },
-    to: { kind: "agent", id: "chef" },
-    hop: 2,
-    parts: [{ type: "text", text: "a very long briefing document" }],
-  });
-
-  it("collapses to one line instead of a wall of text", () => {
-    // This is the whole point: peer chatter must not bury the operator's own
-    // conversation.
-    const { container } = show(peerMessage);
-    expect(screen.getByText(/Received from Manager/)).toBeTruthy();
-    expect(screen.queryByText("a very long briefing document")).toBeNull();
-    expect(container.querySelector(".msg")).toBeNull();
-  });
-
-  it("opens the content in a modal when clicked", () => {
-    show(peerMessage);
-    fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByRole("dialog")).toBeTruthy();
+  it("is a bubble here, because the only place it is drawn one by one is the pair's own thread", () => {
+    // In a channel these never reach this component: the transcript collapses
+    // them into a burst row first. What is left is the thread the operator
+    // opened off that row, which they opened in order to read.
+    show(
+      envelope({
+        channelId: "chef",
+        from: { kind: "agent", id: "manager" },
+        to: { kind: "agent", id: "chef" },
+        hop: 2,
+        parts: [{ type: "text", text: "a very long briefing document" }],
+      }),
+    );
     expect(screen.getByText("a very long briefing document")).toBeTruthy();
-  });
-
-  it("closes the modal again", () => {
-    show(peerMessage);
-    fireEvent.click(screen.getByRole("button"));
-    fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
-  });
-
-  it("names both ends in the activity feed", () => {
-    show(peerMessage, true);
-    expect(screen.getByText(/Manager → Chef/)).toBeTruthy();
-  });
-
-  it("shows the hop so a relay chain is visible", () => {
-    show(peerMessage);
-    expect(screen.getByText("hop 2")).toBeTruthy();
+    expect(screen.getByText("Manager")).toBeTruthy();
   });
 });
 
@@ -133,90 +110,6 @@ describe("an agent's own record of what it did", () => {
       trust: "system",
       parts: [part],
     });
-
-  it("shows one line per recipient, naming each", () => {
-    // "sent to 2 agents" hides which two.
-    show(
-      record({
-        type: "toolCall",
-        name: "send_message",
-        arguments: { to: ["Chef", "Ghost"], text: "please review" },
-        outcome: { status: "ok", summary: "queued for 2 agent(s)" },
-      }),
-    );
-    expect(screen.getByText(/Sent to Chef/)).toBeTruthy();
-    expect(screen.getByText(/Sent to Ghost/)).toBeTruthy();
-  });
-
-  it("puts the message body behind the click, not in the transcript", () => {
-    show(
-      record({
-        type: "toolCall",
-        name: "send_message",
-        arguments: { to: ["Chef"], text: "the briefing" },
-        outcome: { status: "ok", summary: "queued" },
-      }),
-    );
-    expect(screen.queryByText("the briefing")).toBeNull();
-    fireEvent.click(screen.getByRole("button"));
-    expect(screen.getByText("the briefing")).toBeTruthy();
-  });
-
-  it("says plainly when a message did not go, and why", () => {
-    show(
-      record({
-        type: "toolCall",
-        name: "send_message",
-        arguments: { to: ["Chef"], text: "undelivered" },
-        outcome: { status: "refused", reason: "Refused: hop limit reached." },
-      }),
-    );
-    expect(screen.getByText(/Not delivered to Chef/)).toBeTruthy();
-    // On the chip and again in full when opened, which is why this counts
-    // rather than asserting a single match.
-    expect(screen.getAllByText(/hop limit reached/).length).toBe(1);
-    fireEvent.click(screen.getByRole("button"));
-    expect(screen.getAllByText(/hop limit reached/).length).toBeGreaterThan(1);
-  });
-
-  it("marks only the recipients a half-delivered send actually missed", () => {
-    // The bug this replaces: one verdict for the whole call, so a send that
-    // reached two of three drew all three as delivered.
-    show(
-      record({
-        type: "toolCall",
-        name: "send_message",
-        arguments: { to: ["Chef", "Ghost", "Sous"], text: "standup" },
-        outcome: {
-          status: "partial",
-          summary: "queued for 2 of 3 agent(s)",
-          refused: [{ to: "Ghost", reason: "Refused: Ghost has been deleted." }],
-        },
-      }),
-    );
-    expect(screen.getByText(/Not delivered to Ghost/)).toBeTruthy();
-    expect(screen.getByText(/Sent to Chef/)).toBeTruthy();
-    expect(screen.getByText(/Sent to Sous/)).toBeTruthy();
-    expect(screen.queryByText(/Sent to Ghost/)).toBeNull();
-  });
-
-  it("says why a message did not go, without needing a click", () => {
-    // A row of bare "not delivered" chips reads as the app breaking. The
-    // reason is usually a guard doing its job, and it was behind a click.
-    show(
-      record({
-        type: "toolCall",
-        name: "send_message",
-        arguments: { to: ["Chef"], text: "the same thing again" },
-        outcome: {
-          status: "refused",
-          reason:
-            "Refused: you already sent Chef this exact message in this run. Repeating it will not produce a different reply. Move on.",
-        },
-      }),
-    );
-    expect(screen.getByText("you already sent Chef this exact message in this run")).toBeTruthy();
-  });
 
   it("keeps a directory lookup quiet and unclickable", () => {
     show(
@@ -259,6 +152,21 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText(/used run_code/)).toBeTruthy();
   });
 
+  it("says why a tool call failed, not just that it happened", () => {
+    // The one send that lands here is the one naming nobody, and it is exactly
+    // the one where the reason is the whole of what there is to see. A line
+    // saying only "Manager used send_message" describes a working app.
+    show(
+      record({
+        type: "toolCall",
+        name: "send_message",
+        arguments: { text: "hello?" },
+        outcome: { status: "refused", reason: "Refused: name a recipient." },
+      }),
+    );
+    expect(screen.getByText(/name a recipient/)).toBeTruthy();
+  });
+
   it("surfaces a guard stop as a centred notice", () => {
     show(record({ type: "notice", kind: "guardStop", text: "hop limit (8) reached" }));
     expect(screen.getByText("hop limit (8) reached")).toBeTruthy();
@@ -287,14 +195,7 @@ describe("a failed turn", () => {
 
   it("offers to send the message again, and says which", () => {
     retryTurn.mockClear();
-    render(
-      <MessageItem
-        message={failure("m-original")}
-        lookups={lookups}
-        continued={false}
-        feed={false}
-      />,
-    );
+    render(<MessageItem message={failure("m-original")} lookups={lookups} continued={false} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retryTurn).toHaveBeenCalledWith("manager", "m-original");
@@ -306,9 +207,7 @@ describe("a failed turn", () => {
   });
 
   it("offers nothing when there is nothing to send again", () => {
-    render(
-      <MessageItem message={failure(null)} lookups={lookups} continued={false} feed={false} />,
-    );
+    render(<MessageItem message={failure(null)} lookups={lookups} continued={false} />);
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
@@ -321,7 +220,7 @@ describe("a failed turn", () => {
       cause: "m-original",
       parts: [{ type: "notice", kind: "guardStop", text: "this conversation used its budget" }],
     });
-    render(<MessageItem message={stopped} lookups={lookups} continued={false} feed={false} />);
+    render(<MessageItem message={stopped} lookups={lookups} continued={false} />);
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });
@@ -347,7 +246,7 @@ describe("a command that used a credential", () => {
       ],
     });
     const { container } = render(
-      <MessageItem message={used} lookups={lookups} continued={false} feed={false} />,
+      <MessageItem message={used} lookups={lookups} continued={false} />,
     );
 
     expect(container.textContent).toContain("used Mistral ($MISTRAL_API_KEY)");
@@ -362,15 +261,11 @@ describe("redrawing a transcript", () => {
     // message on screen re-parsed for each arrival, which is the other half of
     // what made the window stop responding.
     const message = envelope({ parts: [{ type: "text", text: "the answer is 42" }] });
-    const view = render(
-      <MessageItem message={message} lookups={lookups} continued={false} feed={false} />,
-    );
+    const view = render(<MessageItem message={message} lookups={lookups} continued={false} />);
     const drawn = screen.getByText("the answer is 42");
 
     // The same envelope, the same lookups: a parent redraw with nothing new.
-    view.rerender(
-      <MessageItem message={message} lookups={lookups} continued={false} feed={false} />,
-    );
+    view.rerender(<MessageItem message={message} lookups={lookups} continued={false} />);
 
     // The node survives rather than being replaced, which is what memoisation
     // buys: React never called the component at all.
@@ -383,7 +278,6 @@ describe("redrawing a transcript", () => {
         message={envelope({ parts: [{ type: "text", text: "first" }] })}
         lookups={lookups}
         continued={false}
-        feed={false}
       />,
     );
     view.rerender(
@@ -391,7 +285,6 @@ describe("redrawing a transcript", () => {
         message={envelope({ parts: [{ type: "text", text: "second" }] })}
         lookups={lookups}
         continued={false}
-        feed={false}
       />,
     );
 

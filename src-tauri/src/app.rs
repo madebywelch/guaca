@@ -161,6 +161,7 @@ pub fn run() {
             commands::agent_notes,
             commands::set_agent_notes,
             commands::channel_messages,
+            commands::pair_messages,
             commands::conversation_flow,
             commands::search,
             commands::send_message,

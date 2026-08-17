@@ -68,7 +68,6 @@ function draw(state: ApprovalState | undefined, part = REQUEST) {
       message={asking(part)}
       lookups={{ byId: (id) => (id === MANAGER.id ? MANAGER : undefined), byName: () => undefined }}
       continued={false}
-      feed={false}
     />,
   );
 }

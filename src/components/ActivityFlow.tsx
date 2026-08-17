@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
+import type { WirePeer } from "../lib/transcript";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
 import { compact, money } from "./TokenMeter";
-import { MessageModal, type WirePeer } from "./WireRow";
+import { MessageModal } from "./WireRow";
 
 /**
  * The conversation as a sequence diagram, one board per run.

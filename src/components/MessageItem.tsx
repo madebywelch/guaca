@@ -3,7 +3,7 @@ import { memo } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { sendBody, sendRecipients } from "../lib/toolArgs";
+import { type Lookups, toPeer } from "../lib/transcript";
 import {
   type AgentCard,
   type AgentId,
@@ -15,21 +15,13 @@ import {
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
 import { Markdown } from "./Markdown";
-import { NoticeRow, toPeer, WireRow } from "./WireRow";
-
-export interface Lookups {
-  byId: (id: AgentId) => AgentCard | undefined;
-  /** Tool calls name their recipients, so names need resolving too. */
-  byName: (name: string) => AgentCard | undefined;
-}
+import { NoticeRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
   lookups: Lookups;
   /** Hides the avatar and header when the previous message had the same author. */
   continued: boolean;
-  /** The activity feed shows both ends of a message; a channel shows one. */
-  feed: boolean;
 }
 
 const HUMAN = { id: "human", name: "You", color: "#5b665e", avatar: "plain" };
@@ -65,14 +57,6 @@ function onRetry(agentId: AgentId, messageId: MessageId) {
   });
 }
 
-function plainBody(message: Envelope): string {
-  return message.parts
-    .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
-    .map((p) => p.text)
-    .join("\n")
-    .trim();
-}
-
 /**
  * One entry in a transcript.
  *
@@ -80,9 +64,10 @@ function plainBody(message: Envelope): string {
  *
  * - operator to agent, or agent to operator: a chat bubble. These are the only
  *   messages written to be read in full.
- * - agent to agent: a single centred line with the content one click away.
- *   Rendering these as bubbles buried the operator's own conversation under
- *   machine chatter they were never meant to read line by line.
+ * - agent to agent: also a bubble, because the only place these are drawn one
+ *   by one is the thread between that pair, which is opened to read them.
+ *   Inside a channel they never reach here: `transcriptRows` has already
+ *   collapsed them into a burst.
  * - agent to system: that agent's own record of what it did on its turn.
  *
  * Memoised because a transcript is redrawn whenever any message is appended,
@@ -91,7 +76,7 @@ function plainBody(message: Envelope): string {
  * themselves never change, so an entry that is already on screen is already
  * correct.
  */
-export const MessageItem = memo(function MessageItem({ message, lookups, continued, feed }: Props) {
+export const MessageItem = memo(function MessageItem({ message, lookups, continued }: Props) {
   const { from, to } = message;
 
   // Ahead of everything else: a request for permission is addressed to the
@@ -103,19 +88,6 @@ export const MessageItem = memo(function MessageItem({ message, lookups, continu
     return <ApprovalRequest part={asking} agent={lookups.byId(askerId)} />;
   }
 
-  if (from.kind === "agent" && to.kind === "agent") {
-    return (
-      <WireRow
-        direction={feed ? "between" : "received"}
-        peer={toPeer(lookups.byId(from.id), from.id)}
-        counterpart={toPeer(lookups.byId(to.id), to.id)}
-        hop={message.hop}
-        at={message.createdAt}
-        body={plainBody(message)}
-      />
-    );
-  }
-
   if (from.kind === "agent" && to.kind === "system") {
     return <ActivityRecord message={message} lookups={lookups} />;
   }
@@ -123,7 +95,15 @@ export const MessageItem = memo(function MessageItem({ message, lookups, continu
   return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
 });
 
-/** What an agent did on its own turn: who it wrote to, and any guard stops. */
+/**
+ * What an agent did on its own turn: guard stops, and the tools it reached for.
+ *
+ * Sends are not here. They are traffic between two agents however they were
+ * made, so `transcriptRows` lifts them out of the record and into the burst
+ * row, leaving this the trail around them. A send that named nobody does stay,
+ * because there is no peer to file it under and the reason it went nowhere is
+ * the whole of what there is to see.
+ */
 function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Lookups }) {
   const actorId = message.from.kind === "agent" ? message.from.id : "";
   const actor = toPeer(lookups.byId(actorId), actorId);
@@ -136,61 +116,33 @@ function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Look
         }
         if (part.type !== "toolCall") return null;
 
-        // Everything that is not a send is a quiet one-liner. This used to fall
-        // through to the send renderer, so `update_notes` — which has no
-        // recipients — was drawn as "Sent to no one" with the memory body as
-        // the message. Naming the tools that are not sends is what stops the
-        // next one from doing the same.
-        if (part.name !== "send_message") {
-          const summary =
-            part.outcome.status === "ok" || part.outcome.status === "partial"
-              ? part.outcome.summary
-              : "";
-          const what =
-            part.name === "directory"
-              ? "checked who is available"
-              : part.name === "update_notes"
-                ? "updated its memory"
-                : part.name === "create_agent"
-                  ? "asked to add an agent"
-                  : `used ${part.name}`;
-          return (
-            <div className="wire wire--quiet" key={key}>
-              <span className="wire__quiet-text">
-                {actor.name} {what}
-                {summary ? ` — ${summary}` : ""}
-              </span>
-            </div>
-          );
-        }
-
-        const names = sendRecipients(part.arguments);
-        const text = sendBody(part.arguments);
+        // Naming the tools rather than describing whatever came back: a tool
+        // this does not know about should read as a tool nobody has explained
+        // yet, not as a send. `update_notes`, which has no recipients, was once
+        // drawn as "Sent to no one" with the memory body as the message.
         const outcome = part.outcome;
-        // Per recipient, because a fan-out can be half-delivered. Painting one
-        // verdict across every row drew agents that were refused as "Sent to",
-        // which is the one thing this trail exists to be right about.
-        const refusalFor = (name: string): string | null => {
-          if (outcome.status === "refused") return outcome.reason;
-          if (outcome.status === "failed") return outcome.error;
-          if (outcome.status === "partial") {
-            return outcome.refused.find((r) => r.to === name)?.reason ?? null;
-          }
-          return null;
-        };
-
-        // One row per recipient: "sent to three agents" hides which three.
-        const targets = names.length > 0 ? names : ["no one"];
-        return targets.map((name) => (
-          <WireRow
-            key={`${key}:${name}`}
-            direction="sent"
-            peer={toPeer(lookups.byName(name), name, name)}
-            at={message.createdAt}
-            body={text}
-            refusal={refusalFor(name)}
-          />
-        ));
+        const said =
+          outcome.status === "ok" || outcome.status === "partial"
+            ? outcome.summary
+            : outcome.status === "refused"
+              ? outcome.reason
+              : outcome.error;
+        const what =
+          part.name === "directory"
+            ? "checked who is available"
+            : part.name === "update_notes"
+              ? "updated its memory"
+              : part.name === "create_agent"
+                ? "asked to add an agent"
+                : `used ${part.name}`;
+        return (
+          <div className="wire wire--quiet" key={key}>
+            <span className="wire__quiet-text">
+              {actor.name} {what}
+              {said ? ` — ${said}` : ""}
+            </span>
+          </div>
+        );
       })}
     </>
   );

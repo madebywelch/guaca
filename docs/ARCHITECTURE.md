@@ -36,6 +36,25 @@ introduction, and fills Manager's channel with the replies as they come back.
 Deciding this at write time rather than inferring it at read time means the
 transcript cannot disagree with itself later.
 
+## A channel says an exchange happened; the pair's thread is what it said
+
+The same rule that makes a channel readable means no channel holds a
+conversation between two agents. A → B is filed under B and B's answer under A,
+and an automatic reply leaves no trace at all in the channel of the agent that
+wrote it: only explicit tool calls are recorded there. So the thread is its own
+query, `pair_messages`, read from the messages themselves in both directions.
+Anything assembled from one channel's rows would be missing messages nobody
+could account for.
+
+What a channel shows of peer traffic is therefore a summary, and a deliberately
+lossy one. `transcriptRows` collapses a burst (a fan-out, and the answers
+landing milliseconds apart) into one centred line per peer, counting what that
+channel holds. The thread behind the line can hold more, which is the right way
+round: clicking reveals more, never less. Two things never fold in. A refusal is
+the runtime stopping a message rather than a message, so it keeps its own line
+with its reason; and anything that is not peer traffic ends the burst, because a
+tool trail between two exchanges is a break in what was happening.
+
 ## Cascades terminate because of one asymmetry
 
 The loop guard (`runtime/guard.rs`) bounds the worst case, but bounding is not

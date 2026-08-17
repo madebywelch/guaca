@@ -520,6 +520,20 @@ pub fn channel_messages(
     Ok(store.channel_messages(channel_id, limit.unwrap_or(300).min(MAX_CHANNEL_WINDOW))?)
 }
 
+/// What two agents said to each other, for the thread opened off a channel.
+///
+/// Neither agent's channel holds it: a send is filed under the recipient and
+/// the answer under the sender, so this is read from the messages themselves.
+#[tauri::command]
+pub fn pair_messages(
+    state: State<'_, AppState>,
+    a: AgentId,
+    b: AgentId,
+    limit: Option<u32>,
+) -> Reply<Vec<Envelope>> {
+    Ok(state.runtime.store().pair_messages(a, b, limit.unwrap_or(200).min(1000))?)
+}
+
 /// The whole conversation, for the flow board.
 #[tauri::command]
 pub fn conversation_flow(state: State<'_, AppState>, limit: Option<u32>) -> Reply<Vec<Envelope>> {

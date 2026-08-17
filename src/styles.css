@@ -1236,6 +1236,26 @@ button {
   color: var(--pit);
 }
 
+/* A burst: one chip per peer, on one line. Several peers is the common case
+   for a fan-out, and they belong together: it was one moment of the run. */
+.wire--burst {
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.wire--burst .wire__chip {
+  max-width: 100%;
+}
+
+/* There is a conversation behind this one. The chip lifts on hover rather
+   than only recolouring, because "click me" is the thing it has to say. */
+.wire__chip--open:hover {
+  background: color-mix(in oklab, var(--accent, var(--flesh)) 8%, var(--raised));
+  border-color: color-mix(in oklab, var(--accent, var(--flesh)) 55%, var(--edge));
+  color: var(--text);
+}
+
 .wire[data-refused="true"] .wire__arrow {
   color: var(--pit);
 }
@@ -1433,6 +1453,119 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ==========================================================================
+   A pair's own thread
+
+   Two agents' exchange, opened off a burst row. It takes the whole pane rather
+   than a dialog: it is a conversation, sometimes a long one, and a modal is a
+   bad place to read forty messages.
+   ========================================================================== */
+
+.pane__pair {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.pane__between {
+  color: var(--faint);
+  font-size: 0.9rem;
+  font-weight: 400;
+  line-height: 1;
+  margin: 0 0.1rem;
+}
+
+/* Where the composer would be. The shape of the pane does not change when a
+   thread is open, so the eye does not have to find the transcript again. */
+.viewonly {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  margin: 0.5rem 1.15rem 1.15rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px dashed var(--edge);
+  border-radius: var(--radius);
+  background: var(--sunken);
+  flex: none;
+}
+
+.viewonly__note {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.viewonly__lock {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: none;
+  opacity: 0.75;
+}
+
+/* ==========================================================================
+   Still working
+
+   Above the box you would type into, because that is where an operator waits.
+   The name is revealed on hover: whose channel this is has been established
+   several times over by the time you reach the bottom of it, so the resting
+   state is one moving character.
+   ========================================================================== */
+
+.working {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 1.15rem 0.35rem;
+  flex: none;
+  /* Its own stacking context, so the pulse behind the character stays behind
+     the character and not behind the page. */
+  position: relative;
+  z-index: 0;
+}
+
+.working__label {
+  font-size: 0.8rem;
+  color: var(--muted);
+  opacity: 0;
+  transform: translateX(-0.3rem);
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+
+.working:hover .working__label {
+  opacity: 1;
+  transform: none;
+}
+
+/* The pulse is what carries "still going" when the label is hidden. It rides
+   under the character rather than on it: the avatar has its own idle motion
+   and stacking a second transform on the same element fought with it. */
+.working .avatar::before {
+  content: "";
+  position: absolute;
+  inset: -0.28rem;
+  border-radius: 0.7rem;
+  background: color-mix(in oklab, var(--accent, var(--flesh)) 26%, transparent);
+  animation: working-pulse 1.9s ease-in-out infinite;
+  z-index: -1;
+}
+
+@keyframes working-pulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1.06);
+  }
 }
 
 .composer {
