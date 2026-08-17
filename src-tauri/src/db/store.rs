@@ -19,7 +19,7 @@ use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
-use crate::domain::routine::Routine;
+use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::signin::Signin;
 use crate::domain::usage::{Tokens, UsageEntry};
 
@@ -163,6 +163,7 @@ impl Store {
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
+            pinned: false,
             version: 1,
             created_at: now,
             updated_at: now,
@@ -243,7 +244,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -260,7 +261,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -269,6 +270,23 @@ impl Store {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    /// Keeps an agent at the top of the rail, or lets it back down.
+    ///
+    /// Deliberately not part of `update_agent`: where a row is drawn is not an
+    /// edit to the card, and bumping the version for it would tell every peer
+    /// the agent changed under them when nothing about it did.
+    pub fn set_agent_pinned(&self, id: AgentId, pinned: bool) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET pinned=?2 WHERE id=?1",
+            params![id.to_string(), i64::from(pinned)],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
     /// Records which sandbox is this agent's computer.
@@ -319,28 +337,32 @@ impl Store {
     pub fn create_routine(
         &self,
         agent: AgentId,
+        name: &str,
         what: &str,
-        every_secs: Option<u32>,
+        trigger: Trigger,
         first_run_at: i64,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let routine = Routine {
             id: RoutineId::new(),
             agent_id: agent,
+            name: name.trim().to_string(),
             what: what.trim().to_string(),
-            every_secs,
+            trigger,
+            active: true,
             next_run_at: first_run_at,
             last_run_at: None,
             created_at: now_ms(),
         };
         conn.execute(
-            "INSERT INTO routines (id,agent_id,what,every_secs,next_run_at,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO routines (id,agent_id,name,what,fires,next_run_at,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7)",
             params![
                 routine.id.to_string(),
                 agent.to_string(),
+                routine.name,
                 routine.what,
-                routine.every_secs,
+                routine.trigger.as_str(),
                 routine.next_run_at,
                 routine.created_at,
             ],
@@ -351,7 +373,7 @@ impl Store {
     pub fn get_routine(&self, id: RoutineId) -> Result<Option<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
                FROM routines WHERE id=?1",
         )?;
         match stmt.query_row(params![id.to_string()], row_to_routine).optional()? {
@@ -369,21 +391,22 @@ impl Store {
     pub fn update_routine(
         &self,
         id: RoutineId,
+        name: &str,
         what: &str,
-        every_secs: Option<u32>,
+        trigger: Trigger,
         next_run_at: i64,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE routines SET what=?2, every_secs=?3, next_run_at=?4 WHERE id=?1",
-            params![id.to_string(), what.trim(), every_secs, next_run_at],
+            "UPDATE routines SET name=?2, what=?3, fires=?4, next_run_at=?5 WHERE id=?1",
+            params![id.to_string(), name.trim(), what.trim(), trigger.as_str(), next_run_at],
         )?;
         if changed == 0 {
             return Err(StoreError::RoutineNotFound(id));
         }
 
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
                FROM routines WHERE id=?1",
         )?;
         stmt.query_row(params![id.to_string()], row_to_routine)?
@@ -392,7 +415,7 @@ impl Store {
     pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,what,every_secs,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
                FROM routines WHERE agent_id=?1 ORDER BY next_run_at",
         )?;
         let rows = stmt.query_map(params![agent.to_string()], row_to_routine)?;
@@ -410,10 +433,10 @@ impl Store {
     pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT r.id,r.agent_id,r.what,r.every_secs,r.next_run_at,r.last_run_at,r.created_at
+            "SELECT r.id,r.agent_id,r.name,r.what,r.fires,r.active,r.next_run_at,r.last_run_at,r.created_at
                FROM routines r
                JOIN agents a ON a.id = r.agent_id
-              WHERE r.next_run_at <= ?1 AND a.lifecycle = 'active'
+              WHERE r.next_run_at <= ?1 AND r.active = 1 AND a.lifecycle = 'active'
               ORDER BY r.next_run_at",
         )?;
         let rows = stmt.query_map(params![now], row_to_routine)?;
@@ -442,6 +465,61 @@ impl Store {
             }
         }
         Ok(())
+    }
+
+    /// Turns a routine off, or back on.
+    ///
+    /// Deliberately not part of `update_routine`: switching something off is
+    /// not an edit to what it says, and it must not move the next firing. A
+    /// routine turned back on comes due at the slot it was already holding, or
+    /// at the next one the trigger allows if that has gone by; the scheduler
+    /// does the second part on its own, because an overdue slot fires once.
+    pub fn set_routine_active(&self, id: RoutineId, active: bool) -> Result<Routine, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE routines SET active=?2 WHERE id=?1",
+            params![id.to_string(), i64::from(active)],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::RoutineNotFound(id));
+        }
+        drop(conn);
+        self.get_routine(id)?.ok_or(StoreError::RoutineNotFound(id))
+    }
+
+    /// Records that a routine fired, and under which run.
+    ///
+    /// Separate from `routine_ran`, which moves the schedule: a test run fires
+    /// without the schedule moving at all, and both have to appear in the
+    /// history or "did it run on Tuesday" has no answer.
+    pub fn record_routine_run(
+        &self,
+        id: RoutineId,
+        run: RunId,
+        kind: RunKind,
+        at: i64,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES (?1,?2,?3,?4)",
+            params![id.to_string(), run.to_string(), kind.as_str(), at],
+        )?;
+        Ok(())
+    }
+
+    /// What a routine has done lately, newest first.
+    pub fn routine_runs(&self, id: RoutineId, limit: usize) -> Result<Vec<RoutineRun>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT run_id,kind,at FROM routine_runs
+              WHERE routine_id=?1 ORDER BY at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![id.to_string(), limit as i64], row_to_routine_run)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
     }
 
     pub fn delete_routine(&self, id: RoutineId) -> Result<bool, StoreError> {
@@ -1297,6 +1375,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             sandbox_id: row.get(12)?,
             sandbox_envd_token: row.get(13)?,
             sandbox_traffic_token: row.get(14)?,
+            pinned: row.get::<_, i64>(15)? != 0,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -1316,11 +1395,33 @@ fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
             agent_id: agent_raw
                 .parse::<AgentId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
-            what: row.get(2)?,
-            every_secs: row.get(3)?,
-            next_run_at: row.get(4)?,
-            last_run_at: row.get(5)?,
-            created_at: row.get(6)?,
+            name: row.get(2)?,
+            what: row.get(3)?,
+            trigger: {
+                let raw: String = row.get(4)?;
+                Trigger::parse(&raw)
+                    .ok_or_else(|| StoreError::Corrupt(format!("unknown trigger {raw:?}")))?
+            },
+            active: row.get::<_, i64>(5)? != 0,
+            next_run_at: row.get(6)?,
+            last_run_at: row.get(7)?,
+            created_at: row.get(8)?,
+        })
+    })())
+}
+
+fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
+    let run_raw: String = row.get(0)?;
+    let kind_raw: String = row.get(1)?;
+
+    Ok((|| {
+        Ok(RoutineRun {
+            run_id: run_raw
+                .parse::<RunId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
+            kind: RunKind::parse(&kind_raw)
+                .ok_or_else(|| StoreError::Corrupt(format!("unknown run kind {kind_raw:?}")))?,
+            at: row.get(2)?,
         })
     })())
 }
@@ -1809,29 +1910,168 @@ mod tests {
         // schedule it is keeping.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made =
-            f.store.create_routine(card.id, "check the listings", Some(3600), 1_000_000).unwrap();
+        let made = f
+            .store
+            .create_routine(
+                card.id,
+                "Listings sweep",
+                "check the listings",
+                Trigger::Every(3600),
+                1_000_000,
+            )
+            .unwrap();
 
         let fixed = f
             .store
             .update_routine(
                 made.id,
+                "Listings sweep",
                 "check the listings and say what is new",
-                Some(3600),
+                Trigger::Every(3600),
                 made.next_run_at,
             )
             .unwrap();
         assert_eq!(fixed.what, "check the listings and say what is new");
         assert_eq!(fixed.next_run_at, made.next_run_at, "the schedule did not move");
-        assert_eq!(fixed.every_secs, Some(3600));
+        assert_eq!(fixed.trigger, Trigger::Every(3600));
+        assert_eq!(fixed.name, "Listings sweep");
 
         // And a routine that is gone is a clear error rather than a silent
         // success, so an operator editing a stale screen is told.
         f.store.delete_routine(made.id).unwrap();
         assert!(matches!(
-            f.store.update_routine(made.id, "anything", None, 1),
+            f.store.update_routine(made.id, "", "anything", Trigger::Once, 1),
             Err(StoreError::RoutineNotFound(_))
         ));
+    }
+
+    #[test]
+    fn pinning_moves_a_row_on_screen_and_nothing_a_peer_can_see() {
+        // The version is how a peer notices a card changed under it. Where the
+        // operator likes the row drawn is not a change to the card, and
+        // bumping it would say a card was rewritten when it was not.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        assert!(!card.pinned, "nothing arrives pinned");
+
+        let pinned = f.store.set_agent_pinned(card.id, true).unwrap();
+        assert!(pinned.pinned);
+        assert_eq!(pinned.version, card.version, "a pin is not an edit");
+        assert_eq!(pinned.updated_at, card.updated_at);
+
+        assert!(f.store.get_agent(card.id).unwrap().unwrap().pinned, "and it is durable");
+        assert!(!f.store.set_agent_pinned(card.id, false).unwrap().pinned);
+    }
+
+    #[test]
+    fn a_calendar_trigger_survives_the_round_trip_through_the_database() {
+        // The column is text, so a trigger that stored as something nothing can
+        // parse would be a schedule that silently never fires again.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        for trigger in
+            [Trigger::Once, Trigger::Weekdays, Trigger::Weekly, Trigger::Monthly, Trigger::Daily]
+        {
+            let made = f.store.create_routine(card.id, "", "check", trigger, 1_000_000).unwrap();
+            let read = f.store.get_routine(made.id).unwrap().unwrap();
+            assert_eq!(read.trigger, trigger);
+            assert_eq!(read.name, "", "a routine an agent set has no name to invent");
+        }
+    }
+
+    #[test]
+    fn a_weekday_routine_that_fires_advances_to_the_next_weekday_not_the_next_day() {
+        // `routine_ran` is the only thing that moves a schedule forward, and it
+        // used to add a fixed gap. A Friday routine has to land on Monday.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let friday = friday_at_nine();
+        let made = f.store.create_routine(card.id, "", "check", Trigger::Weekdays, friday).unwrap();
+
+        f.store.routine_ran(&made, friday + 1000).unwrap();
+
+        let moved = f.store.get_routine(made.id).unwrap().unwrap();
+        assert_eq!(moved.next_run_at, Trigger::Weekdays.next_after(friday, friday + 1000).unwrap());
+        assert_eq!(moved.last_run_at, Some(friday + 1000));
+        assert!(moved.next_run_at - friday > 2 * 86_400_000, "it skipped the weekend");
+    }
+
+    #[test]
+    fn a_routine_that_is_switched_off_is_not_due_and_keeps_everything_else() {
+        // Deleting was the only way to stop something, which threw away the
+        // wording and the history along with the schedule.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "Sweep", "check the listings", Trigger::Daily, 1_000)
+            .unwrap();
+        assert!(made.active, "a routine arrives running");
+        assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
+
+        let off = f.store.set_routine_active(made.id, false).unwrap();
+        assert!(!off.active);
+        assert!(f.store.due_routines(2_000).unwrap().is_empty(), "an inactive routine never fires");
+        assert_eq!(off.next_run_at, made.next_run_at, "and its slot did not move");
+        assert_eq!(off.what, made.what);
+
+        // Back on, still holding the slot it was holding. The scheduler fires
+        // an overdue slot once, which is what "resume" has to mean.
+        let on = f.store.set_routine_active(made.id, true).unwrap();
+        assert_eq!(on.next_run_at, made.next_run_at);
+        assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_history_says_which_firings_were_tests() {
+        // "Did it run on Tuesday" has no answer if a button press and a real
+        // firing look the same in the list.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+
+        let scheduled = RunId::new();
+        let tested = RunId::new();
+        f.store.record_routine_run(made.id, scheduled, RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, tested, RunKind::Test, 2_000).unwrap();
+
+        let history = f.store.routine_runs(made.id, 20).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].run_id, tested, "newest first");
+        assert_eq!(history[0].kind, RunKind::Test);
+        assert_eq!(history[1].kind, RunKind::Scheduled);
+    }
+
+    #[test]
+    fn deleting_a_routine_takes_its_history_with_it() {
+        // Rows pointing at a routine that no longer exists are rows nothing can
+        // ever draw, and the id is free to be reused.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+        f.store.record_routine_run(made.id, RunId::new(), RunKind::Scheduled, 1_000).unwrap();
+
+        f.store.delete_routine(made.id).unwrap();
+        assert!(f.store.routine_runs(made.id, 20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_one_shot_that_fires_leaves_no_row_behind() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f.store.create_routine(card.id, "", "wake me", Trigger::Once, 1_000).unwrap();
+        f.store.routine_ran(&made, 2_000).unwrap();
+        assert!(f.store.get_routine(made.id).unwrap().is_none());
+    }
+
+    /// 2025-01-03 at nine in the morning, wherever this is running.
+    fn friday_at_nine() -> i64 {
+        use chrono::{Local, NaiveDate, TimeZone};
+        let naive = NaiveDate::from_ymd_opt(2025, 1, 3)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .expect("nine in the morning exists");
+        Local.from_local_datetime(&naive).earliest().unwrap().timestamp_millis()
     }
 
     #[test]
@@ -1863,7 +2103,9 @@ mod tests {
         // goes too: leaving it behind is what "start fresh" is not.
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
 
-        f.store.create_routine(scholar.id, "check the listings", Some(3600), 1).unwrap();
+        f.store
+            .create_routine(scholar.id, "", "check the listings", Trigger::Every(3600), 1)
+            .unwrap();
         f.store
             .record_usage(&UsageEntry {
                 agent_id: scholar.id,

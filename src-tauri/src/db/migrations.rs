@@ -408,6 +408,76 @@ CREATE INDEX approvals_granted
 ALTER TABLE messages ADD COLUMN intent TEXT NOT NULL DEFAULT 'courtesy';
 "#,
     ),
+    (
+        16,
+        r#"
+-- What makes a routine fire, and what to call it.
+--
+-- `every_secs` could say "every five hours" and could not say "every weekday"
+-- or "every month": one is not a fixed number of seconds and the other is four
+-- different numbers. Both are what an operator actually schedules, so the gap
+-- becomes one case of a trigger rather than the only thing a routine can have.
+--
+-- `fires` is text rather than a number because the trigger after these is
+-- "when a Linear issue is assigned to me", and that has to be a new value in
+-- this column instead of a new column. `every:N` keeps the old meaning exactly,
+-- so every existing row carries over unchanged.
+--
+-- `name` is blank on everything an agent set for itself, and blank stays legal:
+-- a routine with no name is titled by what it does.
+ALTER TABLE routines ADD COLUMN name TEXT NOT NULL DEFAULT '';
+ALTER TABLE routines ADD COLUMN fires TEXT NOT NULL DEFAULT 'once';
+
+UPDATE routines SET fires = 'every:' || every_secs WHERE every_secs IS NOT NULL;
+
+-- Dropped rather than left as a second place the same fact could be written.
+-- Neither index is on it, which is what makes this legal.
+ALTER TABLE routines DROP COLUMN every_secs;
+"#,
+    ),
+    (
+        17,
+        r#"
+-- Agents the operator keeps at the top of the rail.
+--
+-- On the agent rather than in a preferences blob because it is a fact about
+-- that agent and has to die with it: a name is free to reuse the moment an
+-- agent is deleted, and whoever takes it next must not inherit a pin.
+ALTER TABLE agents ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0;
+"#,
+    ),
+    (
+        18,
+        r#"
+-- A routine that is set up but not running.
+--
+-- Distinct from deleting it: an operator turning something off for a week
+-- keeps the wording, the schedule and the history, and deleting was the only
+-- way to stop it. Existing routines are active, which is what they were.
+ALTER TABLE routines ADD COLUMN active INTEGER NOT NULL DEFAULT 1;
+
+-- What a routine actually did.
+--
+-- `last_run_at` on the routine answers "is this thing alive" in one number and
+-- stays; this answers "what has it been doing", which a single number cannot.
+-- A test run is recorded the same way and marked as one, because the operator
+-- asking whether it fired last Tuesday needs to know which of those they are
+-- looking at.
+--
+-- `run_id` is not a foreign key: runs are not a table, they are what ties
+-- together messages and usage rows, and this is the thread back to them.
+CREATE TABLE routine_runs (
+    id         INTEGER PRIMARY KEY,
+    routine_id TEXT    NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    run_id     TEXT    NOT NULL,
+    kind       TEXT    NOT NULL,
+    at         INTEGER NOT NULL
+);
+
+-- The one question asked of it: what has this routine done lately.
+CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -692,6 +762,58 @@ mod tests {
         let signins: i64 =
             conn.query_row("SELECT count(*) FROM signins", [], |r| r.get(0)).unwrap();
         assert_eq!(signins, 0);
+    }
+
+    #[test]
+    fn an_existing_schedule_keeps_firing_on_exactly_the_gap_it_was_set_for() {
+        // The upgrade that could quietly change what a crew is already doing:
+        // a routine written as a number of seconds has to come out the other
+        // side saying the same thing, and a one-shot has to stay a one-shot.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take(15) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0,?1)",
+            [DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        let row = "INSERT INTO routines (id,agent_id,what,every_secs,next_run_at,created_at)
+                   VALUES (?1,'a',?2,?3,0,0)";
+        conn.execute(row, rusqlite::params!["r1", "check the listings", Some(18_000)]).unwrap();
+        conn.execute(row, rusqlite::params!["r2", "wake me", None::<u32>]).unwrap();
+
+        run(&mut conn).unwrap();
+
+        let fires = |id: &str| -> String {
+            conn.query_row("SELECT fires FROM routines WHERE id=?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(fires("r1"), "every:18000", "a five-hour repeat stays a five-hour repeat");
+        assert_eq!(fires("r2"), "once", "a one-shot must not become a repeat");
+
+        let name: String =
+            conn.query_row("SELECT name FROM routines WHERE id='r1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "", "nothing invents a name for a routine an agent set");
+    }
+
+    #[test]
+    fn an_existing_agent_is_not_pinned() {
+        let mut conn = memory();
+        run(&mut conn).unwrap();
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0,?1)",
+            [DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        let pinned: i64 =
+            conn.query_row("SELECT pinned FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
+        assert_eq!(pinned, 0, "an upgrade must not rearrange the rail");
     }
 
     #[test]

@@ -24,6 +24,7 @@ use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::now_ms;
+use guac_lib::domain::routine::{RunKind, Trigger};
 use guac_lib::domain::signin::Signin;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
@@ -1212,7 +1213,13 @@ async fn a_routine_that_is_due_wakes_its_agent() {
     // Due a moment ago, the state the scheduler actually finds things in.
     h.runtime
         .store()
-        .create_routine(h.id("Watcher"), "check the listings", Some(3600), now_ms() - 1000)
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "check the listings",
+            Trigger::Every(3600),
+            now_ms() - 1000,
+        )
         .unwrap();
 
     h.runtime.start_scheduler();
@@ -1236,7 +1243,10 @@ async fn a_one_off_routine_does_not_come_due_twice() {
     let stub = serve(|_| Script::Say("woke up".into())).await;
     let h = harness(&stub, &["Sleeper"], GuardLimits::default());
 
-    h.runtime.store().create_routine(h.id("Sleeper"), "wake up", None, now_ms() - 1000).unwrap();
+    h.runtime
+        .store()
+        .create_routine(h.id("Sleeper"), "", "wake up", Trigger::Once, now_ms() - 1000)
+        .unwrap();
 
     h.runtime.start_scheduler();
     h.wait_until("the alarm to go off", |h| {
@@ -1248,6 +1258,73 @@ async fn a_one_off_routine_does_not_come_due_twice() {
         h.runtime.store().agent_routines(h.id("Sleeper")).unwrap().is_empty(),
         "a one-off must be gone once it has run, not left with a time in the past"
     );
+}
+
+#[tokio::test]
+async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
+    // The button exists so an operator can find out what a routine does before
+    // Tuesday morning. Firing it through the scheduler's own path would move
+    // the slot, and on a one-shot it would consume the only firing it had.
+    let stub = serve(|_| Script::Say("checked the listings".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+
+    let due_next_week = now_ms() + 7 * 24 * 60 * 60 * 1000;
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Sweep",
+            "check the listings",
+            Trigger::Once,
+            due_next_week,
+        )
+        .unwrap();
+
+    h.runtime.test_routine(&routine).unwrap();
+    h.wait_until("the test run to reach the agent", |h| {
+        h.channel_texts("Watcher").iter().any(|t| t.contains("checked the listings"))
+    })
+    .await;
+
+    let after = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(after.len(), 1, "a one-shot must survive being tested");
+    assert_eq!(after[0].next_run_at, due_next_week, "and must still be due when it was");
+    assert!(after[0].last_run_at.is_none(), "a test is not the routine having run");
+
+    // It is in the history, marked as the test it was.
+    let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].kind, RunKind::Test);
+}
+
+#[tokio::test]
+async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked() {
+    let stub = serve(|_| Script::Say("checked".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(h.id("Watcher"), "Sweep", "check", Trigger::Daily, now_ms() - 1000)
+        .unwrap();
+    h.runtime.store().set_routine_active(routine.id, false).unwrap();
+
+    h.runtime.start_scheduler();
+    // Overdue and inactive: the one state where the scheduler must do nothing.
+    // Two ticks' worth, since proving a negative here is proving it stayed
+    // silent through the sweep that would otherwise have caught it.
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        h.channel_texts("Watcher").is_empty(),
+        "an inactive routine must not fire, however overdue it is"
+    );
+
+    h.runtime.store().set_routine_active(routine.id, true).unwrap();
+    h.wait_until("it to fire once switched back on", |h| {
+        h.channel_texts("Watcher").iter().any(|t| t.contains("checked"))
+    })
+    .await;
 }
 
 #[test]

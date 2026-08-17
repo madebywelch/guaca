@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::envelope::Intent;
+use crate::domain::routine::Trigger;
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
 pub const DIRECTORY: &str = "directory";
@@ -130,8 +131,9 @@ pub fn specs() -> Vec<ToolSpec> {
             // with a fresh budget: polling for a reply is the one use of this
             // tool that routes around every limit on what a run may spend.
             description: "Keep your own schedule. Use this to do something later, or to keep \
-                          doing it: `add` with `every_secs` repeats, `add` with only `in_secs` \
-                          fires once. When it fires you get the instruction back as a new \
+                          doing it: `add` with `repeat` or `every_secs` keeps happening, `add` \
+                          with only `in_secs` happens once. When it fires you get the \
+                          instruction back as a new \
                           message and work as usual, so write it as something you will be able \
                           to act on with no other context. Nothing is running while you wait, \
                           and a routine outlives restarts. Never schedule a check for a reply, a \
@@ -147,15 +149,29 @@ pub fn specs() -> Vec<ToolSpec> {
                         "type": "string",
                         "description": "The instruction to give yourself when it fires."
                     },
+                    "name": {
+                        "type": "string",
+                        "description": "A short label for it, three or four words, so the \
+                                        operator can see at a glance what you have standing."
+                    },
+                    "repeat": {
+                        "type": "string",
+                        "enum": ["daily", "weekdays", "weekly", "monthly"],
+                        "description": "Repeat on the calendar, at the time of the first run. \
+                                        Prefer this over `every_secs` for anything a person \
+                                        would say in days: it keeps its hour across a clock \
+                                        change, and `weekdays` genuinely skips the weekend."
+                    },
                     "every_secs": {
                         "type": "integer",
-                        "description": "Repeat this often. 18000 is every five hours. \
-                                        Omit for something that happens once."
+                        "description": "Repeat on a fixed gap instead. 18000 is every five \
+                                        hours. For gaps shorter than a day."
                     },
                     "in_secs": {
                         "type": "integer",
-                        "description": "How long until the first run. Defaults to one interval \
-                                        away, or immediately for a one-off."
+                        "description": "How long until the first run, which is also the time of \
+                                        day a `repeat` lands on. Defaults to one interval away, \
+                                        or immediately for a one-off."
                     },
                     "id": { "type": "string", "description": "For `cancel`, from `list`." }
                 },
@@ -458,10 +474,14 @@ pub struct NewAgent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScheduleAction {
     List,
-    /// `every_secs` absent fires once, after `in_secs`.
+    /// `in_secs` moves the first firing; without it a repeat waits one whole
+    /// interval and a one-shot happens now.
     Add {
+        /// What to call it in the operator's list. Blank is legal: a routine
+        /// with no name is titled by what it does.
+        name: String,
         what: String,
-        every_secs: Option<u32>,
+        trigger: Trigger,
         in_secs: Option<u32>,
     },
     Cancel {
@@ -535,7 +555,8 @@ impl ToolParseError {
             }
             ToolParseError::IncompleteSchedule { needs } => format!(
                 "Error: to add a routine you need {needs}. For example \
-                 {{\"action\": \"add\", \"what\": \"check the listings\", \"every_secs\": 18000}}."
+                 {{\"action\": \"add\", \"name\": \"Listings sweep\", \"what\": \"check the \
+                 listings\", \"repeat\": \"weekdays\"}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -687,6 +708,13 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                         .and_then(|v| v.as_str())
                         .unwrap_or_default()
                         .to_string();
+                    let name = value
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string();
+                    let repeat = value.get("repeat").and_then(|v| v.as_str());
                     let every = secs("every_secs");
                     let delay = secs("in_secs");
                     if what.trim().is_empty() {
@@ -694,14 +722,28 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                             needs: "a `what` to do".to_string(),
                         });
                     }
-                    if every.is_none() && delay.is_none() {
-                        return Err(ToolParseError::IncompleteSchedule {
-                            needs: "either `every_secs` to repeat or `in_secs` to happen once"
-                                .to_string(),
-                        });
-                    }
+                    // A named repeat beats a gap in seconds when both arrive:
+                    // it is the more specific of the two, and a model that
+                    // sends "weekdays" alongside 86400 means the weekdays.
+                    let trigger = match (repeat, every, delay) {
+                        (Some(named), _, _) => Trigger::parse(named).ok_or_else(|| {
+                            ToolParseError::IncompleteSchedule {
+                                needs: "`repeat` to be one of daily, weekdays, weekly or monthly"
+                                    .to_string(),
+                            }
+                        })?,
+                        (None, Some(gap), _) => Trigger::Every(gap),
+                        (None, None, Some(_)) => Trigger::Once,
+                        (None, None, None) => {
+                            return Err(ToolParseError::IncompleteSchedule {
+                                needs: "`repeat` or `every_secs` to keep doing it, or `in_secs` \
+                                        to do it once"
+                                    .to_string(),
+                            })
+                        }
+                    };
                     Ok(ToolInvocation::Schedule {
-                        action: ScheduleAction::Add { what, every_secs: every, in_secs: delay },
+                        action: ScheduleAction::Add { name, what, trigger, in_secs: delay },
                     })
                 }
                 "cancel" | "remove" | "delete" => match value.get("id").and_then(|v| v.as_str()) {
@@ -1093,15 +1135,66 @@ mod tests {
         // having worked.
         let err = parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"check\"}")).unwrap_err();
         assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
-        assert!(err.guidance().contains("every_secs"), "the way out has to be in the message");
+        assert!(err.guidance().contains("repeat"), "the way out has to be in the message");
 
         assert_eq!(
             parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"check\",\"every_secs\":18000}")),
             Ok(ToolInvocation::Schedule {
                 action: ScheduleAction::Add {
+                    name: String::new(),
                     what: "check".into(),
-                    every_secs: Some(18000),
+                    trigger: Trigger::Every(18000),
                     in_secs: None
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn a_named_repeat_is_taken_over_a_gap_in_seconds() {
+        // Both arriving is the ordinary case for a model that has been told
+        // "every weekday": it says weekdays and then says the day in seconds
+        // as well. Reading the gap would put it back on Saturday.
+        assert_eq!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"add\",\"name\":\"Standup\",\"what\":\"check\",\
+                  \"repeat\":\"weekdays\",\"every_secs\":86400}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add {
+                    name: "Standup".into(),
+                    what: "check".into(),
+                    trigger: Trigger::Weekdays,
+                    in_secs: None
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn an_invented_repeat_is_refused_rather_than_quietly_becoming_a_one_shot() {
+        // Storing it as "once" would silently drop the repeat the agent asked
+        // for, and it would look like it had worked.
+        let err = parse(&call(
+            SCHEDULE,
+            "{\"action\":\"add\",\"what\":\"check\",\"repeat\":\"fortnightly\"}",
+        ))
+        .unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
+        assert!(err.guidance().contains("weekdays"), "the list has to be in the message");
+    }
+
+    #[test]
+    fn a_delay_on_its_own_is_a_one_shot() {
+        assert_eq!(
+            parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"wake me\",\"in_secs\":3600}")),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add {
+                    name: String::new(),
+                    what: "wake me".into(),
+                    trigger: Trigger::Once,
+                    in_secs: Some(3600)
                 }
             })
         );

@@ -88,6 +88,10 @@ pub struct AgentCard {
     #[serde(skip_serializing)]
     pub sandbox_traffic_token: Option<String>,
     pub lifecycle: Lifecycle,
+    /// Kept at the top of the rail. Where a row is drawn and nothing else: a
+    /// pinned agent is addressed, paid for and messaged exactly as before, so
+    /// no peer is ever told about this.
+    pub pinned: bool,
     /// Bumped on every update. A2A's Update phase exists so peers can detect
     /// that a card changed under them; the version is what makes that possible.
     pub version: u32,
@@ -263,6 +267,45 @@ pub fn suggest_look(name: &str, taken: &[AgentCard]) -> (String, String) {
     (unused(&CHARACTERS, &avatars), unused(&ACCENTS, &colors))
 }
 
+/// What to call a copy of an agent, given who is already in the group.
+///
+/// Names are unique per group and the database enforces it, so a duplicate
+/// that guessed wrong would surface to the operator as a constraint violation
+/// on a button whose whole job is to succeed. Copying a copy gives
+/// `Manager copy 2` rather than `Manager copy copy`: the second is what the
+/// rule says and not what anybody means.
+pub fn copy_name(original: &str, taken: &[String]) -> String {
+    let base = original.trim();
+    // Strip a trailing `copy` or `copy N` so the chain stays flat.
+    let root = base
+        .rsplit_once(" copy")
+        .filter(|(_, tail)| tail.trim().is_empty() || tail.trim().parse::<u32>().is_ok())
+        .map(|(head, _)| head)
+        .unwrap_or(base);
+
+    let is_free = |candidate: &str| !taken.iter().any(|t| t.trim().eq_ignore_ascii_case(candidate));
+
+    let first = format!("{root} copy");
+    if is_free(&first) {
+        return truncate_name(&first);
+    }
+    // Bounded by the roster: one of the first `taken.len() + 2` has to be free.
+    (2..=taken.len() as u32 + 2)
+        .map(|n| format!("{root} copy {n}"))
+        .find(|candidate| is_free(candidate))
+        .map(|name| truncate_name(&name))
+        .unwrap_or_else(|| truncate_name(&first))
+}
+
+/// Keeps a generated name inside the limit `validate` enforces, by characters
+/// rather than bytes: a crew of emoji-named agents is legal.
+fn truncate_name(name: &str) -> String {
+    if name.chars().count() <= MAX_NAME_LEN {
+        return name.to_string();
+    }
+    name.chars().take(MAX_NAME_LEN).collect()
+}
+
 /// Accepts `#rgb` and `#rrggbb`, with or without the leading `#`, and returns
 /// a canonical lowercase `#rrggbb`.
 fn normalize_color(input: &str) -> Option<String> {
@@ -361,6 +404,7 @@ mod tests {
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
+            pinned: false,
             version: 1,
             created_at: 0,
             updated_at: 0,
@@ -379,6 +423,52 @@ mod tests {
         assert!(!Lifecycle::Paused.accepts_work(), "paused agents queue instead of running");
         assert!(Lifecycle::Active.is_discoverable());
         assert!(Lifecycle::Active.accepts_work());
+    }
+
+    #[test]
+    fn a_copy_takes_a_name_nobody_in_the_group_is_using() {
+        assert_eq!(copy_name("Manager", &taken_names(&["Manager"])), "Manager copy");
+        assert_eq!(
+            copy_name("Manager", &taken_names(&["Manager", "Manager copy"])),
+            "Manager copy 2"
+        );
+        assert_eq!(
+            copy_name("Manager", &taken_names(&["Manager", "Manager copy", "Manager copy 2"])),
+            "Manager copy 3"
+        );
+        // Names are unique case-insensitively, so a clash in another case is
+        // still a clash the database would refuse.
+        assert_eq!(copy_name("Manager", &taken_names(&["manager copy"])), "Manager copy 2");
+    }
+
+    #[test]
+    fn copying_a_copy_does_not_stack_the_word() {
+        // `Manager copy copy` is what the rule says and not what anyone means.
+        assert_eq!(
+            copy_name("Manager copy", &taken_names(&["Manager", "Manager copy"])),
+            "Manager copy 2"
+        );
+        assert_eq!(
+            copy_name("Manager copy 2", &taken_names(&["Manager copy", "Manager copy 2"])),
+            "Manager copy 3"
+        );
+        // A name that merely ends in a word starting with "copy" is not one.
+        assert_eq!(copy_name("Manager copywriter", &[]), "Manager copywriter copy");
+    }
+
+    #[test]
+    fn a_copy_of_a_maximum_length_name_is_still_a_legal_name() {
+        // The suffix is what pushes it over, and a draft the operator cannot
+        // fix is worse than a name that lost its last few characters.
+        let long = "\u{1f951}".repeat(MAX_NAME_LEN);
+        let copy = copy_name(&long, &[]);
+        assert_eq!(copy.chars().count(), MAX_NAME_LEN);
+        let draft = AgentDraft { name: copy, ..draft() };
+        assert!(draft.validate().is_ok());
+    }
+
+    fn taken_names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| n.to_string()).collect()
     }
 
     #[test]

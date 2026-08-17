@@ -5,7 +5,6 @@ import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../
 import { type AgentCard, type Envelope, errorMessage } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
-import { ComputerPane } from "./ComputerPane";
 import { MessageItem, StreamingMessage } from "./MessageItem";
 import { toPeer, WritingRow } from "./WireRow";
 
@@ -177,10 +176,6 @@ export function ChannelView({ channel, onEditAgent }: Props) {
         <ActivityFlow messages={messages ?? []} byId={lookups.byId} />
       ) : (
         <div className="pane__scroll" ref={scrollRef}>
-          {/* The agent's computer sits over the transcript rather than beside
-              it: the reading column keeps its measure, and a desktop is
-              something you glance at while reading, not a second column. */}
-          {agent && <ComputerPane agent={agent} />}
           {messages === undefined ? (
             <p className="hint" style={{ padding: "1rem 1.15rem" }}>
               Loading…

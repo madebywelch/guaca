@@ -1,7 +1,7 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Settings } from "./lib/types";
+import type { AgentCard, Routine, Settings } from "./lib/types";
 
 /**
  * Smoke test for the shell.
@@ -14,6 +14,9 @@ import type { AgentCard, Settings } from "./lib/types";
 
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
+const agentRoutines = vi.fn<() => Promise<Routine[]>>(async () => []);
+const setAgentPinned = vi.fn<(id: string, pinned: boolean) => Promise<AgentCard>>();
+const duplicateAgent = vi.fn<(id: string) => Promise<AgentCard>>();
 const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   baseUrl: "https://openrouter.ai/api/v1",
   defaultModel: "test/model",
@@ -58,6 +61,13 @@ vi.mock("./lib/ipc", () => ({
     getSettings: () => getSettings(),
     channelMessages: async () => [],
     activityFeed: async () => [],
+    agentRoutines: () => agentRoutines(),
+    agentComputer: async () => null,
+    agentNotes: async () => "",
+    agentSignins: async () => [],
+    agentGrants: async () => [],
+    setAgentPinned: (id: string, pinned: boolean) => setAgentPinned(id, pinned),
+    duplicateAgent: (id: string) => duplicateAgent(id),
     createAgent: async () => {
       throw new Error("not used");
     },
@@ -81,10 +91,25 @@ function agent(name: string): AgentCard {
     systemPrompt: "",
     skills: ["testing"],
     lifecycle: "active",
+    pinned: false,
     version: 1,
     createdAt: 1,
     updatedAt: 1,
   };
+}
+
+/**
+ * The row in the rail, specifically.
+ *
+ * An agent's name is on its row, on its channel header and in any menu open
+ * over it, so a bare text query is ambiguous the moment more than one of those
+ * is on screen.
+ */
+function railRow(name: string): HTMLElement {
+  const rail = screen.getByRole("navigation", { name: /agents/i });
+  const row = [...rail.querySelectorAll(".agent-row__name")].find((n) => n.textContent === name);
+  if (!row) throw new Error(`no row for ${name} in the rail`);
+  return row as HTMLElement;
 }
 
 beforeEach(() => {
@@ -173,6 +198,88 @@ describe("App", () => {
     });
     render(<App />);
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
+  });
+
+  it("puts a pinned agent above the rest and leaves it there", async () => {
+    // The rail floats whoever just spoke to the top. A row pinned so it could
+    // be found in one glance must not join in.
+    listAgents.mockResolvedValue([
+      agent("Manager"),
+      { ...agent("Chef"), pinned: true },
+      agent("Host"),
+    ]);
+    agentLastActive.mockResolvedValue({ "id-Host": 900, "id-Manager": 500 });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
+    const rail = screen.getByRole("navigation", { name: /agents/i });
+    const names = [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
+    expect(names).toEqual(["Chef", "Host", "Manager"]);
+    expect(screen.getByText("Pinned")).toBeTruthy();
+  });
+
+  it("counts a pinned agent in its group even though the row is drawn above", async () => {
+    // It is still in the group, still costs it money, and its peers can still
+    // message it. Only where the row is drawn has changed.
+    listAgents.mockResolvedValue([agent("Manager"), { ...agent("Chef"), pinned: true }]);
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
+    expect(screen.getByText("Everyone").closest(".rail__group-head")?.textContent).toContain("2");
+  });
+
+  it("pins and duplicates from the menu that right-clicking opens", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    setAgentPinned.mockResolvedValue({ ...agent("Manager"), pinned: true });
+    duplicateAgent.mockResolvedValue(agent("Manager copy"));
+    render(<App />);
+
+    await waitFor(() => railRow("Manager"));
+    fireEvent.contextMenu(railRow("Manager"));
+
+    // Right-clicking used to open the whole profile dialog. It opens a menu
+    // now, and the dialog is one deliberate click further away.
+    expect(screen.queryByRole("dialog", { name: /edit agent/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Pin to top" }));
+    await waitFor(() => expect(setAgentPinned).toHaveBeenCalledWith("id-Manager", true));
+
+    fireEvent.contextMenu(railRow("Manager"));
+    fireEvent.click(screen.getByRole("button", { name: "Duplicate" }));
+    await waitFor(() => expect(duplicateAgent).toHaveBeenCalledWith("id-Manager"));
+  });
+
+  it("reaches the profile dialog in two clicks, not one", async () => {
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+
+    await waitFor(() => railRow("Manager"));
+    fireEvent.contextMenu(railRow("Manager"));
+    fireEvent.click(screen.getByRole("button", { name: "Edit profile" }));
+    expect(await screen.findByRole("dialog", { name: /edit agent/i })).toBeTruthy();
+  });
+
+  it("shows the open agent's screen and routines beside the transcript", async () => {
+    // Both used to be behind the dialog, which meant a standing commitment and
+    // a live desktop were things you had to open a modal to find.
+    listAgents.mockResolvedValue([agent("Manager")]);
+    agentRoutines.mockResolvedValue([
+      {
+        id: "r1",
+        agentId: "id-Manager",
+        name: "Boss commitment nudge",
+        what: "check what I promised",
+        trigger: "weekdays",
+        active: true,
+        nextRunAt: new Date(2025, 5, 10, 9, 28).getTime(),
+        lastRunAt: null,
+        createdAt: 0,
+      },
+    ]);
+    render(<App />);
+
+    expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
+    expect(screen.getByText(/Weekdays at 9:28/)).toBeTruthy();
+    expect(screen.getByRole("complementary", { name: /screen and routines/i })).toBeTruthy();
   });
 
   it("still renders the rail when startup fails", async () => {

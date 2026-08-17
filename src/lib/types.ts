@@ -218,6 +218,8 @@ export interface AgentCard {
   systemPrompt: string;
   skills: string[];
   lifecycle: Lifecycle;
+  /** Kept at the top of the rail. Where the row is drawn, and nothing else. */
+  pinned: boolean;
   version: number;
   createdAt: number;
   updatedAt: number;
@@ -336,23 +338,51 @@ export interface GroupReset {
 
 export type RoutineId = string;
 
+/**
+ * What makes a routine fire.
+ *
+ * `once`, `daily`, `weekdays`, `weekly`, `monthly`, or `every:<seconds>` for a
+ * fixed gap. A string rather than a union of literals because `every:N` is
+ * open-ended and because the trigger after these is a connector event, which
+ * has to be a new value here rather than a new field. Read it with
+ * `parseTrigger` in `lib/trigger.ts`; nothing branches on the raw text.
+ */
+export type TriggerSpec = string;
+
 /** An agent's own schedule. Set by the agent, or by hand. */
 export interface Routine {
   id: RoutineId;
   agentId: AgentId;
+  /** What the operator calls it. Empty on anything an agent set unnamed. */
+  name: string;
   /** The instruction, delivered to the agent when it fires. */
   what: string;
-  /** Null fires once and is done. */
-  everySecs: number | null;
+  trigger: TriggerSpec;
+  /** Set up but not running. Everything else about it survives being off. */
+  active: boolean;
   nextRunAt: number;
   lastRunAt: number | null;
   createdAt: number;
 }
 
+/** Why a routine ran. A test is the operator's button, not the clock. */
+export type RunKind = "scheduled" | "test";
+
+/**
+ * One firing. `runId` threads back to everything it produced: the messages in
+ * the channel and the model calls on the bill are both filed under it.
+ */
+export interface RoutineRun {
+  runId: RunId;
+  kind: RunKind;
+  at: number;
+}
+
 /** Absent `inSecs` on an edit leaves the next firing where it was. */
 export interface RoutineDraft {
+  name: string;
   what: string;
-  everySecs: number | null;
+  trigger: TriggerSpec;
   inSecs: number | null;
 }
 

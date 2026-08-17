@@ -174,6 +174,7 @@ use crate::domain::envelope::{
 };
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
+use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::Signin;
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
@@ -863,6 +864,28 @@ impl Runtime {
         Ok(run_id)
     }
 
+    /// Fires a routine now, without touching its schedule.
+    ///
+    /// The same delivery the scheduler makes, so what the operator sees from
+    /// the button is what they will see on Tuesday morning. Deliberately does
+    /// not move `next_run_at` or delete a one-shot: testing a routine must not
+    /// be a way to spend the only firing it had.
+    pub fn test_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
+        let run = self.send_from_routine(routine.agent_id, &routine.what)?;
+        self.log_routine_run(routine, run, RunKind::Test, now_ms());
+        Ok(run)
+    }
+
+    /// Files a firing against the routine that caused it.
+    ///
+    /// A history nobody can read is not worth failing a delivery over, so this
+    /// warns and carries on: the agent has already been given the work.
+    fn log_routine_run(&self, routine: &Routine, run: RunId, kind: RunKind, at: i64) {
+        if let Err(err) = self.inner.store.record_routine_run(routine.id, run, kind, at) {
+            tracing::warn!(%err, "could not record what a routine did");
+        }
+    }
+
     /// Watches the clock so agents can keep their own appointments.
     ///
     /// Polls rather than holding a timer per routine: what is stored is when a
@@ -897,8 +920,9 @@ impl Runtime {
                         repeats = routine.repeats(),
                         "a routine came due"
                     );
-                    if let Err(err) = runtime.send_from_routine(routine.agent_id, &routine.what) {
-                        tracing::warn!(%err, "a routine could not be delivered");
+                    match runtime.send_from_routine(routine.agent_id, &routine.what) {
+                        Ok(run) => runtime.log_routine_run(&routine, run, RunKind::Scheduled, now),
+                        Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
                     }
                 }
 
@@ -2660,19 +2684,17 @@ impl Runtime {
                 Ok(out)
             }
 
-            tools::ScheduleAction::Add { what, every_secs, in_secs } => {
-                if let Err(err) = validate(what, *every_secs, *in_secs) {
+            tools::ScheduleAction::Add { name, what, trigger, in_secs } => {
+                if let Err(err) = validate(name, what, *trigger, *in_secs) {
                     return Ok(format!(
                         "Refused: {err}. The shortest repeat is {}.",
                         human_gap(MIN_EVERY_SECS)
                     ));
                 }
 
-                // A repeat with no stated start waits one full interval, which
-                // is what "every five hours" means to the person who said it.
-                let delay = in_secs.or(*every_secs).unwrap_or(0);
-                let first = now_ms() + i64::from(delay) * 1000;
-                let routine = self.inner.store.create_routine(card.id, what, *every_secs, first)?;
+                let first = trigger.first_run(now_ms(), *in_secs);
+                let routine =
+                    self.inner.store.create_routine(card.id, name, what, *trigger, first)?;
 
                 Ok(format!(
                     "Scheduled: {} ({}). Its id is {}.",
@@ -3051,6 +3073,7 @@ mod tests {
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
             lifecycle,
+            pinned: false,
             version: 1,
             created_at: 0,
             updated_at: 0,

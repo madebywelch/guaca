@@ -561,6 +561,7 @@ mod tests {
             system_prompt: "You coordinate the kitchen.".into(),
             skills: vec!["delegation".into(), "scheduling".into()],
             lifecycle: Lifecycle::Active,
+            pinned: false,
             version: 1,
             created_at: 0,
             updated_at: 0,

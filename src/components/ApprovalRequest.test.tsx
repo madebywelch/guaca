@@ -26,6 +26,7 @@ const MANAGER: AgentCard = {
   systemPrompt: "",
   skills: [],
   lifecycle: "active",
+  pinned: false,
   version: 1,
   createdAt: 0,
   updatedAt: 0,
