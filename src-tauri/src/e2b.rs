@@ -122,43 +122,7 @@ pub struct Sandbox {
     pub traffic_token: String,
 }
 
-/// The result of one command.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Output {
-    pub stdout: String,
-    pub stderr: String,
-    pub exit_code: i32,
-}
-
-impl Output {
-    /// What the model is shown. Both streams, labelled, with the exit code only
-    /// when it is not zero: a successful command should read as its output and
-    /// nothing else.
-    pub fn rendered(&self) -> String {
-        let mut out = String::new();
-        if !self.stdout.trim().is_empty() {
-            out.push_str(self.stdout.trim_end());
-        }
-        if !self.stderr.trim().is_empty() {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str("stderr: ");
-            out.push_str(self.stderr.trim_end());
-        }
-        if self.exit_code != 0 {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str(&format!("(exit code {})", self.exit_code));
-        }
-        if out.is_empty() {
-            out.push_str("(no output)");
-        }
-        out
-    }
-}
+pub use crate::computer::provider::Output;
 
 /// Only the id is taken. Liveness comes from whether a sandbox appears in the
 /// running list at all, which is the one signal E2B reports consistently.
@@ -1414,17 +1378,5 @@ mod tests {
         let mut body = stream(&[(0, serde_json::json!({"event": {"data": {"stdout": "aGk="}}}))]);
         body.truncate(body.len() - 2);
         assert!(matches!(collect(&body), Err(E2bError::Protocol(_))));
-    }
-
-    #[test]
-    fn rendering_favours_the_output_and_mentions_the_exit_code_only_when_it_matters() {
-        let ok = Output { stdout: "72F sunny\n".into(), stderr: String::new(), exit_code: 0 };
-        assert_eq!(ok.rendered(), "72F sunny");
-
-        let bad = Output { stdout: String::new(), stderr: "not found".into(), exit_code: 127 };
-        assert_eq!(bad.rendered(), "stderr: not found\n(exit code 127)");
-
-        let quiet = Output { stdout: String::new(), stderr: String::new(), exit_code: 0 };
-        assert_eq!(quiet.rendered(), "(no output)", "silence must not look like a failure");
     }
 }
