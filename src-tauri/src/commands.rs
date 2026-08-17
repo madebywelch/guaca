@@ -13,10 +13,11 @@ use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{AgentCard, AgentDraft, Lifecycle};
+use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
-use crate::domain::ids::{AgentId, ConnectorId, GroupId, RoutineId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{self, Routine};
 use crate::domain::signin::Signin;
@@ -54,7 +55,14 @@ impl From<crate::db::StoreError> for CommandError {
             StoreError::DuplicateName(_) => CommandError::new("duplicateName", err.to_string()),
             StoreError::AgentNotFound(_)
             | StoreError::GroupNotFound(_)
+            | StoreError::ApprovalNotFound(_)
             | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
+            // Its own kind: a request answered twice, or answered after it
+            // lapsed, is a stale button rather than anything being wrong. The
+            // UI redraws it instead of showing a failure.
+            StoreError::ApprovalSettled { .. } => {
+                CommandError::new("alreadyAnswered", err.to_string())
+            }
             // An operator naming a variable twice is a mistake they can fix,
             // not a disk failure, and the message already says which name.
             StoreError::DuplicateEnvVar(_) => CommandError::new("validation", err.to_string()),
@@ -75,6 +83,7 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::Store(inner) => inner.into(),
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
+            RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
         }
     }
 }
@@ -245,6 +254,47 @@ pub fn agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signi
     Ok(state.runtime.store().agent_signins(id)?)
 }
 
+// ---- permission requests -------------------------------------------------
+
+/// What every recent request came to, keyed by id.
+///
+/// The requests themselves travel in the transcript, so this is only the half
+/// that changes: whether the buttons on a request already in a channel are
+/// still live, and what was decided if they are not.
+#[tauri::command]
+pub fn approval_states(state: State<'_, AppState>) -> Reply<HashMap<ApprovalId, ApprovalState>> {
+    Ok(state.runtime.store().approval_states(500)?)
+}
+
+/// What this agent no longer has to ask about.
+#[tauri::command]
+pub fn agent_grants(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<ProtectedAction>> {
+    Ok(state.runtime.store().standing_grants(id)?)
+}
+
+/// Takes one back. A permission that could only ever be given is a trap, and
+/// "always" has to stay something the operator can change their mind about.
+#[tauri::command]
+pub fn revoke_grant(
+    state: State<'_, AppState>,
+    id: AgentId,
+    action: ProtectedAction,
+) -> Reply<Vec<ProtectedAction>> {
+    state.runtime.store().revoke_grant(id, action)?;
+    Ok(state.runtime.store().standing_grants(id)?)
+}
+
+/// Answers one. Refused if it was already answered or has expired, which is
+/// what the operator's second click on a stale widget is.
+#[tauri::command]
+pub fn decide_approval(
+    state: State<'_, AppState>,
+    id: ApprovalId,
+    decision: Decision,
+) -> Reply<Approval> {
+    Ok(state.runtime.decide_approval(id, decision)?)
+}
+
 // ---- groups --------------------------------------------------------------
 
 #[tauri::command]
@@ -336,6 +386,10 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
     // destroyed above. Left behind, the roster would keep telling the crew to
     // ask this agent for an account nothing can reach any more.
     let _ = state.runtime.store().delete_agent_signins(id);
+    // Permission the operator gave this agent dies with it. A name is free to
+    // reuse the moment an agent is deleted, and whoever takes it next must not
+    // inherit a standing grant given to somebody else.
+    let _ = state.runtime.store().delete_agent_approvals(id);
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }
@@ -412,6 +466,19 @@ pub fn send_message(state: State<'_, AppState>, agent_id: AgentId, text: String)
         return Err(CommandError::new("validation", "message must not be empty"));
     }
     Ok(state.runtime.send_from_human(agent_id, trimmed)?)
+}
+
+/// Sends a failed turn's message again, as a new run.
+///
+/// Offered on the notice the failure left behind, so the operator retries the
+/// thing that broke rather than retyping what they asked for.
+#[tauri::command]
+pub fn retry_turn(
+    state: State<'_, AppState>,
+    agent_id: AgentId,
+    message_id: MessageId,
+) -> Reply<RunId> {
+    Ok(state.runtime.retry_turn(agent_id, message_id)?)
 }
 
 #[tauri::command]

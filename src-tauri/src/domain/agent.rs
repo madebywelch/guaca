@@ -222,6 +222,47 @@ pub struct CleanDraft {
     pub skills: Vec<String>,
 }
 
+/// The character keys and accents the UI offers when a person picks a look.
+///
+/// Here so an agent created by another agent gets one too. This is a courtesy
+/// and not a contract with the frontend catalog: an unrecognised key still
+/// draws, from a hash of the key itself, so the two drifting apart costs a
+/// character somebody did not choose rather than a blank avatar.
+const CHARACTERS: [&str; 16] = [
+    "avocado", "lime", "tomato", "onion", "garlic", "chilli", "cilantro", "salt", "corn", "pepper",
+    "radish", "carrot", "mushroom", "chip", "pit", "mill",
+];
+const ACCENTS: [&str; 12] = [
+    "#c7d96b", "#6faa5c", "#b0784a", "#7fd1a3", "#e2674a", "#d9534f", "#e8b84b", "#6aa9d9",
+    "#9b8ad4", "#d97ea8", "#c2926b", "#8aa0a6",
+];
+
+/// Picks a look for an agent nobody chose one for.
+///
+/// Deterministic from the name and then nudged past whatever the group is
+/// already using, so ten agents made in one turn are ten different faces rather
+/// than ten of the same one.
+pub fn suggest_look(name: &str, taken: &[AgentCard]) -> (String, String) {
+    let seed = name
+        .trim()
+        .to_lowercase()
+        .bytes()
+        .fold(0u32, |hash, byte| hash.wrapping_mul(31).wrapping_add(u32::from(byte)));
+
+    let unused = |options: &[&str], used: &[String]| -> String {
+        let start = (seed as usize) % options.len();
+        (0..options.len())
+            .map(|offset| options[(start + offset) % options.len()])
+            .find(|option| !used.iter().any(|t| t.eq_ignore_ascii_case(option)))
+            .unwrap_or(options[start])
+            .to_string()
+    };
+
+    let avatars: Vec<String> = taken.iter().map(|card| card.avatar.clone()).collect();
+    let colors: Vec<String> = taken.iter().map(|card| card.color.clone()).collect();
+    (unused(&CHARACTERS, &avatars), unused(&ACCENTS, &colors))
+}
+
 /// Accepts `#rgb` and `#rrggbb`, with or without the leading `#`, and returns
 /// a canonical lowercase `#rrggbb`.
 fn normalize_color(input: &str) -> Option<String> {

@@ -115,6 +115,11 @@ export function Sidebar({
         return { text: "typing", kind: "thinking" };
       case "queued":
         return { text: `${state.depth} queued`, kind: "queued" };
+      // The one state the operator is the fix for. It reads as an instruction
+      // rather than a status because the agent is parked until they act, and
+      // the request itself is in a channel they may not have open.
+      case "awaitingApproval":
+        return { text: "needs you", kind: "asking" };
       case "paused":
         return { text: "paused", kind: "paused" };
       default: {
@@ -222,23 +227,19 @@ export function Sidebar({
               <div key={group.id} className="rail__group">
                 <div className="rail__group-head">
                   <span className="rail__group-name">{group.name}</span>
-                  {group.defaultModel && (
-                    <span className="rail__group-pin" title={`Runs on ${group.defaultModel}`}>
-                      {group.defaultModel}
-                    </span>
-                  )}
-                  <span style={{ flex: 1 }} />
-                  <TokenMeter groupId={group.id} />
-                  <span className="rail__group-count">{members.length}</span>
-                  <button
-                    type="button"
-                    className="rail__gear"
-                    onClick={() => onEditGroup(group)}
-                    title={`${group.name} settings`}
-                    aria-label={`${group.name} settings`}
-                  >
-                    ⚙
-                  </button>
+                  <span className="rail__group-tail">
+                    <TokenMeter groupId={group.id} />
+                    <span className="rail__group-count">{members.length}</span>
+                    <button
+                      type="button"
+                      className="rail__gear"
+                      onClick={() => onEditGroup(group)}
+                      title={`${group.name} settings`}
+                      aria-label={`${group.name} settings`}
+                    >
+                      ⚙
+                    </button>
+                  </span>
                 </div>
                 {members.map(row)}
                 {members.length === 0 && <p className="rail__empty">No agents in here.</p>}

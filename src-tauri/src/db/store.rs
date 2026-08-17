@@ -13,10 +13,11 @@ use rusqlite::{params, OptionalExtension, Row};
 
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
+use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAction};
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
-use crate::domain::ids::{AgentId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
@@ -48,6 +49,10 @@ pub enum StoreError {
     RoutineNotFound(RoutineId),
     #[error("no connector with id {0}")]
     ConnectorNotFound(ConnectorId),
+    #[error("no permission request with id {0}")]
+    ApprovalNotFound(ApprovalId),
+    #[error("that request was already answered ({})", state.as_str())]
+    ApprovalSettled { state: ApprovalState },
     #[error("{0} is already used by another credential in this group")]
     DuplicateEnvVar(String),
 }
@@ -450,6 +455,194 @@ impl Store {
         Ok(conn.execute("DELETE FROM routines WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
+    // ---- approvals -------------------------------------------------------
+
+    /// Records a request and returns it pending.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_approval(
+        &self,
+        agent: AgentId,
+        group: GroupId,
+        run: RunId,
+        action: ProtectedAction,
+        summary: &str,
+        detail: &[DetailField],
+    ) -> Result<Approval, StoreError> {
+        let conn = self.conn()?;
+        let approval = Approval {
+            id: ApprovalId::new(),
+            agent_id: agent,
+            group_id: group,
+            run_id: run,
+            action,
+            summary: summary.to_string(),
+            detail: detail.to_vec(),
+            state: ApprovalState::Pending,
+            created_at: now_ms(),
+            decided_at: None,
+        };
+
+        conn.execute(
+            "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,created_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![
+                approval.id.to_string(),
+                agent.to_string(),
+                group.to_string(),
+                run.to_string(),
+                action.as_str(),
+                approval.summary,
+                serde_json::to_string(&approval.detail).unwrap_or_else(|_| "[]".into()),
+                approval.state.as_str(),
+                approval.created_at,
+            ],
+        )?;
+
+        Ok(approval)
+    }
+
+    pub fn get_approval(&self, id: ApprovalId) -> Result<Option<Approval>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at
+               FROM approvals WHERE id=?1",
+        )?;
+        match stmt.query_row(params![id.to_string()], row_to_approval).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Settles a request, and only from pending.
+    ///
+    /// The `state='pending'` in the WHERE clause is the whole point: the
+    /// operator clicking Allow and the turn's own timeout both land here, and
+    /// whichever arrives second must not overwrite the first. Losing that race
+    /// is how a request the agent has already given up on gets recorded as
+    /// granted, leaving a standing grant for an action that never happened.
+    pub fn settle_approval(
+        &self,
+        id: ApprovalId,
+        state: ApprovalState,
+    ) -> Result<Approval, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE approvals SET state=?2, decided_at=?3 WHERE id=?1 AND state='pending'",
+            params![id.to_string(), state.as_str(), now_ms()],
+        )?;
+        if changed == 0 {
+            return match self.get_approval(id)? {
+                Some(existing) => Err(StoreError::ApprovalSettled { state: existing.state }),
+                None => Err(StoreError::ApprovalNotFound(id)),
+            };
+        }
+        self.get_approval(id)?.ok_or(StoreError::ApprovalNotFound(id))
+    }
+
+    /// Whether this agent has already been let off asking about this action.
+    pub fn has_standing_grant(
+        &self,
+        agent: AgentId,
+        action: ProtectedAction,
+    ) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM approvals
+              WHERE agent_id=?1 AND action=?2 AND state='alwaysAllow'",
+            params![agent.to_string(), action.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// What this agent has been let off asking about.
+    pub fn standing_grants(&self, agent: AgentId) -> Result<Vec<ProtectedAction>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT action FROM approvals
+              WHERE agent_id=?1 AND state='alwaysAllow' ORDER BY action",
+        )?;
+        let rows = stmt.query_map(params![agent.to_string()], |row| row.get::<_, String>(0))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let raw = row?;
+            out.push(
+                ProtectedAction::parse(&raw).ok_or_else(|| {
+                    StoreError::Corrupt(format!("unknown protected action {raw:?}"))
+                })?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Takes a standing grant back, so the next attempt asks again.
+    ///
+    /// The rows go rather than moving to another state. Every state this table
+    /// has is a thing the operator did at the time, and a revoked grant is not
+    /// one of them: recording it as denied or expired would put words in their
+    /// mouth about a request they actually allowed. What is lost is one line of
+    /// history; what is kept is that no state ever means two things.
+    pub fn revoke_grant(
+        &self,
+        agent: AgentId,
+        action: ProtectedAction,
+    ) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM approvals WHERE agent_id=?1 AND action=?2 AND state='alwaysAllow'",
+            params![agent.to_string(), action.as_str()],
+        )?)
+    }
+
+    /// What every recent request came to, for the UI to draw its widgets from.
+    ///
+    /// Bounded because this seeds a lookup table in the webview and a workspace
+    /// that has been running for a year should not send a year of decisions to
+    /// draw the four requests still on screen.
+    pub fn approval_states(
+        &self,
+        limit: u32,
+    ) -> Result<HashMap<ApprovalId, ApprovalState>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn
+            .prepare("SELECT id,state FROM approvals ORDER BY created_at DESC, id DESC LIMIT ?1")?;
+        let rows = stmt.query_map(params![limit], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut out = HashMap::new();
+        for row in rows {
+            let (id, state) = row?;
+            let id = id.parse::<ApprovalId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
+            let state = ApprovalState::parse(&state)
+                .ok_or_else(|| StoreError::Corrupt(format!("unknown approval state {state:?}")))?;
+            out.insert(id, state);
+        }
+        Ok(out)
+    }
+
+    /// Expires everything still waiting. Called at startup.
+    ///
+    /// The turn that raised a request is holding a channel in memory, so a
+    /// restart takes every waiter with it. Left pending, those rows would draw
+    /// live buttons that answer nothing.
+    pub fn expire_pending_approvals(&self) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE approvals SET state='expired', decided_at=?1 WHERE state='pending'",
+            params![now_ms()],
+        )?)
+    }
+
+    /// Removes an agent's requests along with the agent, standing grants
+    /// included: a name can be reused, and the next holder of it inherits
+    /// nothing the operator granted this one.
+    pub fn delete_agent_approvals(&self, agent: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM approvals WHERE agent_id=?1", params![agent.to_string()])?)
+    }
+
     // ---- connectors ------------------------------------------------------
 
     pub fn create_connector(&self, clean: &CleanConnector) -> Result<Connector, StoreError> {
@@ -792,6 +985,20 @@ impl Store {
 
     /// The newest `limit` messages in a channel, returned oldest-first for
     /// direct rendering.
+    /// One message, by id. Used to put a failed turn back on its feet: what to
+    /// deliver again is exactly what was delivered before.
+    pub fn get_message(&self, id: MessageId) -> Result<Option<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,cause,created_at
+               FROM messages WHERE id=?1",
+        )?;
+        match stmt.query_row(params![id.to_string()], row_to_envelope).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
     pub fn channel_messages(
         &self,
         channel: AgentId,
@@ -1113,6 +1320,46 @@ fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
             next_run_at: row.get(4)?,
             last_run_at: row.get(5)?,
             created_at: row.get(6)?,
+        })
+    })())
+}
+
+fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
+    let id_raw: String = row.get(0)?;
+    let agent_raw: String = row.get(1)?;
+    let group_raw: String = row.get(2)?;
+    let run_raw: String = row.get(3)?;
+    let action_raw: String = row.get(4)?;
+    let detail_raw: String = row.get(6)?;
+    let state_raw: String = row.get(7)?;
+
+    Ok((|| {
+        Ok(Approval {
+            id: id_raw
+                .parse::<ApprovalId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad approval id {id_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            run_id: run_raw
+                .parse::<RunId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
+            action: ProtectedAction::parse(&action_raw).ok_or_else(|| {
+                StoreError::Corrupt(format!("unknown protected action {action_raw:?}"))
+            })?,
+            summary: row.get(5)?,
+            // The wording is what the operator reads, and a request whose
+            // fields would not parse is one nobody should be asked to answer.
+            detail: serde_json::from_str(&detail_raw)
+                .map_err(|e| StoreError::Corrupt(format!("bad approval detail: {e}")))?,
+            state: ApprovalState::parse(&state_raw).ok_or_else(|| {
+                StoreError::Corrupt(format!("unknown approval state {state_raw:?}"))
+            })?,
+            created_at: row.get(8)?,
+            decided_at: row.get(9)?,
         })
     })())
 }
@@ -2056,5 +2303,173 @@ mod tests {
         });
 
         assert_eq!(f.store.count_messages().unwrap(), 200);
+    }
+
+    // ---- approvals -------------------------------------------------------
+
+    /// One request from `agent`, pending.
+    fn ask(store: &Store, agent: &AgentCard) -> Approval {
+        store
+            .create_approval(
+                agent.id,
+                agent.group_id,
+                RunId::new(),
+                ProtectedAction::CreateAgent,
+                "Manager wants to create an agent called Scout",
+                &[DetailField::new("Name", "Scout")],
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_standing_grant_belongs_to_the_one_agent_it_was_given_to() {
+        // "Always allow" is an answer about the agent that asked. Reading it as
+        // a workspace-wide setting would let an agent the operator has never
+        // been asked about act on somebody else's permission.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let critic = f.store.create_agent(&draft("Critic")).unwrap();
+
+        let request = ask(&f.store, &manager);
+        assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
+
+        f.store.settle_approval(request.id, ApprovalState::AlwaysAllow).unwrap();
+        assert!(f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
+        assert!(!f.store.has_standing_grant(critic.id, ProtectedAction::CreateAgent).unwrap());
+    }
+
+    #[test]
+    fn allowing_once_grants_nothing_standing() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &manager);
+
+        f.store.settle_approval(request.id, ApprovalState::Allow).unwrap();
+        assert!(
+            !f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap(),
+            "one yes must not become every yes"
+        );
+    }
+
+    #[test]
+    fn a_request_can_only_be_answered_once() {
+        // The operator's click and the turn's own timeout both land here. The
+        // loser must not overwrite the winner: a request the agent has already
+        // given up on, recorded as granted, is a standing grant for something
+        // that never happened.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &manager);
+
+        let allowed = f.store.settle_approval(request.id, ApprovalState::Allow).unwrap();
+        assert_eq!(allowed.state, ApprovalState::Allow);
+        assert!(allowed.decided_at.is_some());
+
+        let second = f.store.settle_approval(request.id, ApprovalState::Expired);
+        assert!(
+            matches!(second, Err(StoreError::ApprovalSettled { state: ApprovalState::Allow })),
+            "{second:?}"
+        );
+        assert_eq!(
+            f.store.get_approval(request.id).unwrap().unwrap().state,
+            ApprovalState::Allow,
+            "the first answer has to survive the second"
+        );
+    }
+
+    #[test]
+    fn a_restart_closes_what_was_still_waiting_and_leaves_the_rest() {
+        // Nothing holds a parked turn across a restart, so a pending row is a
+        // question nobody can answer any more.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let answered = ask(&f.store, &manager);
+        let waiting = ask(&f.store, &manager);
+        f.store.settle_approval(answered.id, ApprovalState::Deny).unwrap();
+
+        assert_eq!(f.store.expire_pending_approvals().unwrap(), 1);
+        assert_eq!(
+            f.store.get_approval(waiting.id).unwrap().unwrap().state,
+            ApprovalState::Expired
+        );
+        assert_eq!(
+            f.store.get_approval(answered.id).unwrap().unwrap().state,
+            ApprovalState::Deny,
+            "a decision the operator made is not a casualty of a restart"
+        );
+    }
+
+    #[test]
+    fn deleting_an_agent_takes_the_permission_it_was_given() {
+        // A deleted agent frees its name, and the next agent to hold it must
+        // not inherit what the operator allowed somebody else.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &manager);
+        f.store.settle_approval(request.id, ApprovalState::AlwaysAllow).unwrap();
+
+        assert_eq!(f.store.delete_agent_approvals(manager.id).unwrap(), 1);
+        assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
+        assert!(f.store.get_approval(request.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_standing_grant_can_be_taken_back() {
+        // "Always allow" is one click about every future request. A permission
+        // that could only ever be given would make that click a decision to
+        // agonise over, which is the opposite of what it is for.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &manager);
+        f.store.settle_approval(request.id, ApprovalState::AlwaysAllow).unwrap();
+        assert_eq!(
+            f.store.standing_grants(manager.id).unwrap(),
+            vec![ProtectedAction::CreateAgent]
+        );
+
+        assert_eq!(f.store.revoke_grant(manager.id, ProtectedAction::CreateAgent).unwrap(), 1);
+        assert!(f.store.standing_grants(manager.id).unwrap().is_empty());
+        assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
+
+        // And revoking again is a no-op rather than an error: the operator
+        // clicking twice has already got what they asked for.
+        assert_eq!(f.store.revoke_grant(manager.id, ProtectedAction::CreateAgent).unwrap(), 0);
+    }
+
+    #[test]
+    fn revoking_leaves_answered_requests_alone() {
+        // Only the standing grant goes. A one-off yes was an answer about one
+        // request and stays in the record as one.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let once = ask(&f.store, &manager);
+        let standing = ask(&f.store, &manager);
+        f.store.settle_approval(once.id, ApprovalState::Allow).unwrap();
+        f.store.settle_approval(standing.id, ApprovalState::AlwaysAllow).unwrap();
+
+        f.store.revoke_grant(manager.id, ProtectedAction::CreateAgent).unwrap();
+
+        assert_eq!(f.store.get_approval(once.id).unwrap().unwrap().state, ApprovalState::Allow);
+        assert!(f.store.get_approval(standing.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn the_state_table_carries_what_the_widgets_need_and_survives_a_round_trip() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let request = ask(&f.store, &manager);
+
+        let stored = f.store.get_approval(request.id).unwrap().unwrap();
+        assert_eq!(stored, request, "what was written is what comes back");
+        assert_eq!(stored.detail, vec![DetailField::new("Name", "Scout")]);
+
+        let states = f.store.approval_states(500).unwrap();
+        assert_eq!(states.get(&request.id), Some(&ApprovalState::Pending));
+
+        f.store.settle_approval(request.id, ApprovalState::Deny).unwrap();
+        assert_eq!(
+            f.store.approval_states(500).unwrap().get(&request.id),
+            Some(&ApprovalState::Deny)
+        );
     }
 }

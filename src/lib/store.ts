@@ -14,6 +14,8 @@ import type {
   Activity,
   AgentCard,
   AgentId,
+  ApprovalId,
+  ApprovalState,
   Envelope,
   Group,
   GroupId,
@@ -67,6 +69,12 @@ interface State {
    */
   pulse: Record<GroupId, { at: number; tokens: number }[] | undefined>;
 
+  /**
+   * What each permission request came to. The request itself lives in the
+   * transcript, which is immutable; this is the part that moves.
+   */
+  approvals: Record<ApprovalId, ApprovalState | undefined>;
+
   selected: ChannelKey | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
   streams: Record<MessageId, StreamBuffer | undefined>;
@@ -78,6 +86,7 @@ interface State {
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
   refreshUsage: () => Promise<void>;
+  refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
   loadChannel: (key: ChannelKey) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
@@ -122,6 +131,7 @@ export const useStore = create<State>((set, get) => ({
   settings: null,
   usage: {},
   pulse: {},
+  approvals: {},
   selected: null,
   messages: {},
   streams: {},
@@ -129,15 +139,16 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, groups, activity, lastActive, settings, usage] = await Promise.all([
+    const [agents, groups, activity, lastActive, settings, usage, approvals] = await Promise.all([
       api.listAgents(),
       api.listGroups(),
       api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
       api.usageSummary(),
+      api.approvalStates(),
     ]);
-    set({ agents, groups, activity, lastActive, settings, usage: byGroup(usage) });
+    set({ agents, groups, activity, lastActive, settings, usage: byGroup(usage), approvals });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
@@ -180,6 +191,14 @@ export const useStore = create<State>((set, get) => ({
 
   async refreshUsage() {
     set({ usage: byGroup(await api.usageSummary()) });
+  },
+
+  /**
+   * Re-reads what every request came to. Used when a decision is refused,
+   * which means this side is holding a stale answer.
+   */
+  async refreshApprovals() {
+    set({ approvals: await api.approvalStates() });
   },
 
   applyEvent(event) {
@@ -337,6 +356,20 @@ export const useStore = create<State>((set, get) => ({
         // grouped sum over a local table, and only when a run has gone quiet.
         void get().refreshUsage();
         break;
+
+      case "approvalRequested": {
+        set((state) => ({
+          approvals: { ...state.approvals, [event.approvalId]: "pending" },
+        }));
+        break;
+      }
+
+      case "approvalSettled": {
+        set((state) => ({
+          approvals: { ...state.approvals, [event.approvalId]: event.state },
+        }));
+        break;
+      }
     }
   },
 

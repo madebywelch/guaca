@@ -210,13 +210,44 @@ export function WritingRow({ from, to }: { from: WirePeer; to: WirePeer }) {
   );
 }
 
-/** A centred system line: guard stops, upstream failures, lifecycle notes. */
-export function NoticeRow({ kind, text }: { kind: string; text: string }) {
+/**
+ * A centred system line: guard stops, upstream failures, lifecycle notes.
+ *
+ * `onRetry` is offered only where trying again could plausibly work. The
+ * runtime has already retried a failed call several times by the time one of
+ * these is written, so this is the operator's attempt, not the first one: a
+ * button on a guard stop would only spend the same budget to hit the same
+ * limit.
+ */
+export function NoticeRow({
+  kind,
+  text,
+  onRetry,
+}: {
+  kind: string;
+  text: string;
+  onRetry?: () => void;
+}) {
+  const [tried, setTried] = useState(false);
+
   return (
     <div className="wire wire--notice">
       <span className={kind === "upstreamError" ? "chip chip--error" : "chip chip--guard"}>
         <span aria-hidden="true">{kind === "upstreamError" ? "!" : "◆"}</span>
         <span style={{ whiteSpace: "normal" }}>{text}</span>
+        {onRetry && (
+          <button
+            type="button"
+            className="chip__action"
+            disabled={tried}
+            onClick={() => {
+              setTried(true);
+              onRetry();
+            }}
+          >
+            {tried ? "Sent again" : "Try again"}
+          </button>
+        )}
       </span>
     </div>
   );

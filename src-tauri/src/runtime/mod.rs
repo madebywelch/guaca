@@ -93,13 +93,84 @@ struct ToolResult {
     /// answer a model cannot act on as text.
     image: Option<String>,
 }
+
+/// The placeholder the UI draws while a model call is in flight.
+///
+/// Owns its own id because a retry has to be able to throw one away: text that
+/// arrived before a stream broke is text the operator has already seen, and the
+/// answer that replaces it starts from the beginning. Ending the old one and
+/// opening a new one is what stops the second attempt appending to the first.
+struct Stream {
+    message_id: MessageId,
+    channel_id: AgentId,
+    agent_id: AgentId,
+    run_id: RunId,
+    to: Participant,
+}
+
+impl Stream {
+    fn open(&self, events: &dyn EventSink) {
+        events.emit(UiEvent::StreamStarted {
+            message_id: self.message_id,
+            channel_id: self.channel_id,
+            agent_id: self.agent_id,
+            run_id: self.run_id,
+            to: self.to,
+        });
+    }
+
+    fn close(&self, events: &dyn EventSink) {
+        events.emit(UiEvent::StreamEnded {
+            message_id: self.message_id,
+            channel_id: self.channel_id,
+        });
+    }
+
+    /// Discards whatever was drawn and starts again under a new id.
+    fn reopen(&mut self, events: &dyn EventSink) {
+        self.close(events);
+        self.message_id = MessageId::new();
+        self.open(events);
+    }
+}
+
+/// How many times one model call is attempted before the operator is told.
+///
+/// The failure this exists for is a connection that never opened: a laptop that
+/// changed network, a provider blipping. Three attempts covers that without
+/// turning a real outage into a minute of silence.
+const CALL_ATTEMPTS: usize = 3;
+
+/// Waits between attempts. One entry per retry, so this is `CALL_ATTEMPTS - 1`.
+const CALL_BACKOFF: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(3)];
+
+/// The longest this will sit on a `Retry-After` before giving the turn back.
+///
+/// A provider is entitled to ask for five minutes; an agent holding its turn
+/// open that long is indistinguishable from one that has hung, so the honest
+/// move is to stop and let the operator decide.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(20);
+
+/// What the operator said, from the point of view of the parked turn.
+///
+/// A refusal and a silence are separate because they are separate to the agent:
+/// one is an answer to accept and report, the other is a question still hanging
+/// that it should leave with the operator rather than ask again.
+enum Permission {
+    Granted,
+    Refused,
+    Unanswered,
+    /// Nobody was asked, because the request could not be recorded.
+    Failed(String),
+}
 use crate::db::{Store, StoreError};
-use crate::domain::agent::{AgentCard, DirectoryEntry, Lifecycle};
+use crate::domain::agent::{AgentCard, CleanDraft, DirectoryEntry, Lifecycle};
+use crate::domain::approval::{Approval, ApprovalState, Decision, DetailField, ProtectedAction};
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{
     channel_for, Envelope, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome, Trust,
 };
-use crate::domain::ids::{AgentId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
@@ -131,6 +202,16 @@ const BURST_POLL: Duration = Duration::from_millis(25);
 /// right by the time anyone reads it.
 const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 
+/// How long an agent holds its turn open waiting for the operator to answer a
+/// permission request.
+///
+/// The request is on screen in the channel that agent is talking in, so this is
+/// generous rather than urgent: the cost of waiting is one parked actor, and
+/// the cost of giving up too early is an operator who walked to the kitchen
+/// coming back to a request that has already lapsed. What it must not be is
+/// forever, because a turn that never ends is a run that never settles.
+const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error(transparent)]
@@ -139,6 +220,10 @@ pub enum RuntimeError {
     UnknownAgent(AgentId),
     #[error("{0} has been deleted")]
     AgentTerminated(String),
+    #[error(
+        "the message that failed is no longer in the transcript, so there is nothing to send again"
+    )]
+    NothingToRetry,
 }
 
 struct Inbox {
@@ -162,6 +247,9 @@ struct Inner {
     activity: Mutex<HashMap<AgentId, Activity>>,
     /// Outstanding work per run, used to decide when a cascade has settled.
     inflight: Mutex<HashMap<RunId, usize>>,
+    /// Turns parked on a permission request, by request id. The row in SQLite
+    /// is the record; this is the way back to the agent that is holding.
+    waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
     /// Per-agent notes on disk.
     workspace: Workspace,
     /// When each machine was last asked what it is signed in to, so browsing
@@ -211,6 +299,7 @@ impl Runtime {
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 inflight: Mutex::new(HashMap::new()),
+                waiting: Mutex::new(HashMap::new()),
                 workspace,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
@@ -562,6 +651,39 @@ impl Runtime {
         Ok(run_id)
     }
 
+    /// Puts a turn that failed back on its feet.
+    ///
+    /// Delivers the same envelope again rather than a summary of it: what broke
+    /// was the model call, not the message, so the agent should read exactly
+    /// what it read before.
+    ///
+    /// A new run, because the operator pressing a button is an operator action
+    /// and gets the budget of one. The hop is kept from the original: an agent
+    /// retrying three hops deep must not come back one hop from the top with
+    /// the whole cascade's allowance in front of it.
+    pub fn retry_turn(&self, agent: AgentId, cause: MessageId) -> Result<RunId, RuntimeError> {
+        let card = self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
+        if card.lifecycle == Lifecycle::Terminated {
+            return Err(RuntimeError::AgentTerminated(card.name));
+        }
+        let original = self.inner.store.get_message(cause)?.ok_or(RuntimeError::NothingToRetry)?;
+
+        let run_id = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: agent,
+            to: Participant::Agent { id: agent },
+            cause: Some(original.id),
+            created_at: now_ms(),
+            ..original
+        };
+
+        self.track_inflight(run_id, 1);
+        self.deliver(envelope)?;
+        Ok(run_id)
+    }
+
     /// Replies this agent is still owed in this run.
     fn awaiting_replies(&self, run: RunId, me: AgentId) -> usize {
         self.inner.guard.lock().run(run).awaiting(me)
@@ -598,26 +720,143 @@ impl Runtime {
         kind: NoticeKind,
         text: String,
     ) {
+        self.record_for(agent, run_id, cause, vec![Part::Notice { kind, text }]);
+    }
+
+    /// Writes something Guaca has to say into an agent's channel.
+    ///
+    /// Written straight to the transcript rather than delivered, so it never
+    /// wakes the agent it is about.
+    fn record_for(
+        &self,
+        agent: AgentId,
+        run_id: RunId,
+        cause: Option<MessageId>,
+        parts: Vec<Part>,
+    ) {
         let envelope = Envelope {
             id: MessageId::new(),
             run_id,
             channel_id: agent,
             from: Participant::System,
             to: Participant::Agent { id: agent },
-            parts: vec![Part::Notice { kind, text }],
+            parts,
             trust: Trust::System,
             hop: 0,
             expects_reply: false,
             cause,
             created_at: now_ms(),
         };
-        // A notice is written straight to the transcript rather than delivered,
-        // so it never wakes the agent it is about.
         if let Err(err) = self.inner.store.append(&envelope) {
-            tracing::error!(%err, "failed to record notice");
+            tracing::error!(%err, "failed to record a system message");
             return;
         }
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope) });
+    }
+
+    // ---- asking the operator ---------------------------------------------
+
+    /// Answers a permission request and wakes whatever is waiting on it.
+    ///
+    /// The row is settled first and only from pending, so a second click, or a
+    /// click that arrives as the request times out, is refused here rather than
+    /// overwriting an answer that is already recorded.
+    pub fn decide_approval(
+        &self,
+        id: ApprovalId,
+        decision: Decision,
+    ) -> Result<Approval, RuntimeError> {
+        let approval = self.inner.store.settle_approval(id, decision.into())?;
+        if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
+            let _ = waiter.send(());
+        }
+        self.inner.events.emit(UiEvent::ApprovalSettled { approval_id: id, state: approval.state });
+        Ok(approval)
+    }
+
+    /// Puts a request to the operator and holds the turn until it is answered.
+    ///
+    /// The verdict is read back from the row rather than from the channel the
+    /// answer arrived on. Those two can disagree by microseconds when a click
+    /// lands as the window closes, and the row is the thing the operator can
+    /// see: honouring it means a button that visibly said "allowed" allowed it.
+    async fn ask_operator(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        action: ProtectedAction,
+        summary: String,
+        detail: Vec<DetailField>,
+    ) -> Permission {
+        match self.inner.store.has_standing_grant(card.id, action) {
+            Ok(true) => return Permission::Granted,
+            Ok(false) => {}
+            Err(err) => return Permission::Failed(err.to_string()),
+        }
+
+        let approval = match self.inner.store.create_approval(
+            card.id,
+            card.group_id,
+            run_id,
+            action,
+            &summary,
+            &detail,
+        ) {
+            Ok(approval) => approval,
+            Err(err) => return Permission::Failed(err.to_string()),
+        };
+
+        let (waker, wait) = tokio::sync::oneshot::channel();
+        self.inner.waiting.lock().insert(approval.id, waker);
+
+        self.record_for(
+            card.id,
+            run_id,
+            None,
+            vec![Part::Approval {
+                id: approval.id,
+                action,
+                summary: approval.summary.clone(),
+                detail: approval.detail.clone(),
+            }],
+        );
+        // Parked before the request is announced, so anything that reacts to
+        // the announcement sees an agent that is already waiting rather than
+        // one that still looks like it is thinking.
+        self.set_activity(card.id, Activity::AwaitingApproval);
+        self.inner
+            .events
+            .emit(UiEvent::ApprovalRequested { approval_id: approval.id, agent_id: card.id });
+
+        let woken = tokio::time::timeout(APPROVAL_WINDOW, wait).await.is_ok();
+        self.inner.waiting.lock().remove(&approval.id);
+        self.set_activity(card.id, Activity::Thinking);
+
+        if !woken {
+            // Expiring can lose to an answer landing in this instant, and when
+            // it does that answer stands: `settle_approval` only moves a row out
+            // of pending, so the loser here changes nothing.
+            if let Ok(expired) =
+                self.inner.store.settle_approval(approval.id, ApprovalState::Expired)
+            {
+                self.inner.events.emit(UiEvent::ApprovalSettled {
+                    approval_id: approval.id,
+                    state: expired.state,
+                });
+            }
+        }
+
+        match self.inner.store.get_approval(approval.id) {
+            Ok(Some(settled)) => match settled.state {
+                ApprovalState::Allow | ApprovalState::AlwaysAllow => Permission::Granted,
+                ApprovalState::Deny => Permission::Refused,
+                ApprovalState::Pending | ApprovalState::Expired => Permission::Unanswered,
+            },
+            // The request cannot be read back, so nothing can be said about
+            // what the operator wanted. Refusing to act is the only safe end.
+            Ok(None) => Permission::Unanswered,
+            Err(err) => Permission::Failed(err.to_string()),
+        }
     }
 
     // ---- one agent turn --------------------------------------------------
@@ -720,14 +959,14 @@ impl Runtime {
             _ => (agent_id, Participant::Human),
         };
 
-        let stream_id = MessageId::new();
-        self.inner.events.emit(UiEvent::StreamStarted {
-            message_id: stream_id,
+        let mut stream = Stream {
+            message_id: MessageId::new(),
             channel_id: out_channel,
             agent_id,
             run_id,
             to: stream_to,
-        });
+        };
+        stream.open(&*self.inner.events);
 
         let config = self.config();
         let mut collected_text = String::new();
@@ -767,18 +1006,7 @@ impl Runtime {
                 temperature: None,
             };
 
-            let events = self.inner.events.clone();
-            let completion = self
-                .inner
-                .llm
-                .stream_chat(&inference, &request, |token| {
-                    events.emit(UiEvent::StreamDelta {
-                        message_id: stream_id,
-                        channel_id: out_channel,
-                        text: token.to_string(),
-                    });
-                })
-                .await;
+            let completion = self.stream_with_retries(&inference, &request, &mut stream).await;
 
             let completion = match completion {
                 Ok(completion) => completion,
@@ -832,9 +1060,7 @@ impl Runtime {
             }
         }
 
-        self.inner
-            .events
-            .emit(UiEvent::StreamEnded { message_id: stream_id, channel_id: out_channel });
+        stream.close(&*self.inner.events);
 
         if hit_tool_ceiling {
             tool_parts.push(Part::Notice {
@@ -880,6 +1106,69 @@ impl Runtime {
         }
 
         self.finish_turn(agent_id, run_id, batch.len());
+    }
+
+    /// One model call, attempted more than once when the failure is the kind
+    /// that fixes itself.
+    ///
+    /// The budget is not touched here. A call is one call however many times
+    /// the network dropped it, and reserving a step per attempt would bill a
+    /// run for requests that never reached a provider.
+    async fn stream_with_retries(
+        &self,
+        inference: &InferenceConfig,
+        request: &ChatRequest,
+        stream: &mut Stream,
+    ) -> Result<crate::llm::openrouter::Completion, LlmError> {
+        let mut last: Option<LlmError> = None;
+
+        for attempt in 0..CALL_ATTEMPTS {
+            if let Some(err) = &last {
+                let wait = match err {
+                    // A provider that says when to come back is worth obeying,
+                    // up to the point where waiting is worse than stopping.
+                    LlmError::RateLimited { retry_after_secs: Some(secs), .. } => {
+                        Duration::from_secs(*secs).min(MAX_RETRY_AFTER)
+                    }
+                    _ => CALL_BACKOFF[(attempt - 1).min(CALL_BACKOFF.len() - 1)],
+                };
+                tracing::warn!(
+                    attempt,
+                    error = %err,
+                    wait_ms = wait.as_millis() as u64,
+                    "retrying a model call"
+                );
+                tokio::time::sleep(wait).await;
+                // Anything already on screen belongs to the attempt that broke.
+                stream.reopen(&*self.inner.events);
+            }
+
+            let events = self.inner.events.clone();
+            let message_id = stream.message_id;
+            let channel_id = stream.channel_id;
+            let result = self
+                .inner
+                .llm
+                .stream_chat(inference, request, |token| {
+                    events.emit(UiEvent::StreamDelta {
+                        message_id,
+                        channel_id,
+                        text: token.to_string(),
+                    });
+                })
+                .await;
+
+            match result {
+                Ok(completion) => return Ok(completion),
+                Err(err) if err.is_transient() => last = Some(err),
+                // A rejected key or an unknown model answers the same way every
+                // time. Retrying it wastes the operator's time to reach the
+                // message they needed to read immediately.
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(last.expect("the loop only ends here after a failure"))
     }
 
     fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize) {
@@ -1077,9 +1366,17 @@ impl Runtime {
             return self.use_screen(card, action, arguments).await;
         }
 
+        if let ToolInvocation::CreateAgent { draft } = invocation {
+            let (rendered, part) = self.create_agent_for(card, run_id, draft, arguments).await;
+            return (rendered, part, None);
+        }
+
         let (rendered, part) = match invocation {
-            // Handled above, where it can answer with a picture.
-            ToolInvocation::UseScreen { .. } => unreachable!("taken by the branch above"),
+            // Both handled above: one answers with a picture, the other has to
+            // stop and ask the operator.
+            ToolInvocation::UseScreen { .. } | ToolInvocation::CreateAgent { .. } => {
+                unreachable!("taken by the branches above")
+            }
             ToolInvocation::Directory => {
                 let roster = self.roster_excluding(card.id);
                 let payload =
@@ -1139,6 +1436,7 @@ impl Runtime {
             }
 
             ToolInvocation::RunCommand { command } => {
+                let used = self.credentials_named_in(card, &command);
                 let outcome = match self.ensure_computer(card).await {
                     Ok((client, sandbox)) => {
                         client.run(&sandbox.id, &sandbox.envd_token, &command).await
@@ -1148,7 +1446,8 @@ impl Runtime {
                 let (rendered, outcome) = match outcome {
                     Ok(output) => {
                         let summary = format!(
-                            "exit {}, {} bytes out",
+                            "{}exit {}, {} bytes out",
+                            used,
                             output.exit_code,
                             output.stdout.len() + output.stderr.len()
                         );
@@ -1277,6 +1576,232 @@ impl Runtime {
         };
 
         (rendered, part, None)
+    }
+
+    /// Adding an agent to the workspace, if the operator says so.
+    ///
+    /// Split out because it is the only tool that stops mid-turn and waits for
+    /// a person. Everything that can be decided without them is decided first:
+    /// a request that would fail anyway is refused here rather than after the
+    /// operator has approved it, since an approval spent on an agent that then
+    /// could not be created is worse than no question at all.
+    async fn create_agent_for(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        draft: tools::NewAgent,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let failed = |message: String, error: String, arguments: serde_json::Value| {
+            (
+                message,
+                Part::ToolCall {
+                    name: tools::CREATE_AGENT.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Failed { error },
+                },
+            )
+        };
+
+        let roster = self.inner.store.list_agents().unwrap_or_default();
+        let crew: Vec<AgentCard> = roster
+            .into_iter()
+            .filter(|a| a.group_id == card.group_id && a.lifecycle != Lifecycle::Terminated)
+            .collect();
+
+        // Checked before the operator is asked. Coming back to say the name was
+        // taken after they pressed Allow spends their attention on nothing.
+        if crew.iter().any(|a| a.name.eq_ignore_ascii_case(draft.name.trim())) {
+            return failed(
+                format!(
+                    "Error: there is already an agent called {}. Nothing was created and the \
+                     operator was not asked. Use a different name, or message the one that \
+                     exists.",
+                    draft.name.trim()
+                ),
+                "duplicate name".to_string(),
+                arguments,
+            );
+        }
+
+        let (avatar, color) = crate::domain::agent::suggest_look(&draft.name, &crew);
+        let proposed = crate::domain::agent::AgentDraft {
+            // Its own group, never a parameter: the group wall is what stops an
+            // agent reaching agents it was not meant to, and an agent that could
+            // place a new one on the other side of that wall could walk through
+            // it by proxy.
+            group_id: Some(card.group_id),
+            name: draft.name.clone(),
+            avatar,
+            color,
+            // Blank means inherit, which is how an agent created in the UI
+            // starts too. What a new agent costs to run stays the operator's.
+            model: String::new(),
+            system_prompt: draft.instructions.clone(),
+            skills: draft.skills.clone(),
+        };
+
+        let clean = match proposed.validate() {
+            Ok(clean) => clean,
+            Err(err) => {
+                return failed(
+                    format!("Error: that agent could not be created ({err})."),
+                    err.to_string(),
+                    arguments,
+                )
+            }
+        };
+
+        let notes = draft.notes.trim().to_string();
+        let mut detail = vec![
+            DetailField::new("Name", &clean.name),
+            DetailField::new(
+                "Skills",
+                if clean.skills.is_empty() {
+                    "none stated".to_string()
+                } else {
+                    clean.skills.join(", ")
+                },
+            ),
+            DetailField::new("Instructions", &clean.system_prompt),
+        ];
+        if !notes.is_empty() {
+            detail.push(DetailField::new("Starting notes", &notes));
+        }
+
+        let permission = self
+            .ask_operator(
+                card,
+                run_id,
+                ProtectedAction::CreateAgent,
+                format!("{} wants to create an agent called {}", card.name, clean.name),
+                detail,
+            )
+            .await;
+
+        match permission {
+            Permission::Granted => self.add_agent(&clean, &notes, arguments),
+            Permission::Refused => (
+                format!(
+                    "The operator said no to creating {}, so it does not exist. That is their \
+                     decision to make and it is final for this request: do not ask again. Carry \
+                     on with the agents you have, and say what you would have given this one to \
+                     do if it matters.",
+                    clean.name
+                ),
+                Part::ToolCall {
+                    name: tools::CREATE_AGENT.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Refused { reason: "the operator declined".to_string() },
+                },
+            ),
+            Permission::Unanswered => (
+                format!(
+                    "Nobody answered the request to create {}, so nothing was created. The \
+                     operator is away rather than opposed. Finish what you can without it and \
+                     tell them plainly what you wanted to add and why, so they can decide when \
+                     they are back.",
+                    clean.name
+                ),
+                Part::ToolCall {
+                    name: tools::CREATE_AGENT.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Refused {
+                        reason: "the operator did not answer".to_string(),
+                    },
+                },
+            ),
+            Permission::Failed(err) => failed(
+                format!(
+                    "Error: the operator could not be asked about creating {} ({err}), so nothing \
+                     was created. Tell them what you were trying to add.",
+                    clean.name
+                ),
+                err,
+                arguments,
+            ),
+        }
+    }
+
+    /// The half of creating an agent that happens once permission is in hand.
+    fn add_agent(
+        &self,
+        clean: &CleanDraft,
+        notes: &str,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let card = match self.inner.store.create_agent(clean) {
+            Ok(card) => card,
+            Err(err) => {
+                return (
+                    format!("Error: {} could not be created ({err}).", clean.name),
+                    Part::ToolCall {
+                        name: tools::CREATE_AGENT.to_string(),
+                        arguments,
+                        outcome: ToolOutcome::Failed { error: err.to_string() },
+                    },
+                )
+            }
+        };
+
+        // Seeded before the agent is running, so its first turn already has
+        // them. A failure here costs the notes, not the agent.
+        if !notes.is_empty() {
+            if let Err(err) = self.inner.workspace.write(card.id, &card.name, notes) {
+                tracing::warn!(%err, agent = %card.name, "could not seed the new agent's notes");
+            }
+        }
+
+        self.start_agent(card.id);
+        self.inner.events.emit(UiEvent::AgentsChanged);
+
+        (
+            format!(
+                "Created {name}. It is in the workspace now and every agent here can reach it by \
+                 name. It is idle and will stay idle until something arrives for it, so if the \
+                 work is ready, send it.",
+                name = card.name
+            ),
+            Part::ToolCall {
+                name: tools::CREATE_AGENT.to_string(),
+                arguments,
+                outcome: ToolOutcome::Ok { summary: format!("created {}", card.name) },
+            },
+        )
+    }
+
+    /// Which of the group's credentials a command reaches for, as a prefix for
+    /// the line the operator reads.
+    ///
+    /// The transcript is where an operator finds out what their tokens were
+    /// used for, and until now it did not say: a credential went into the
+    /// environment of every command and nothing distinguished the command that
+    /// spent it. This reports the variables the command names, which is what
+    /// can honestly be known from here — whether the process then used it is
+    /// between the process and the service.
+    ///
+    /// Names only. The value is not in this string and could not be: nothing on
+    /// this side of the boundary holds one.
+    fn credentials_named_in(&self, card: &AgentCard, command: &str) -> String {
+        let named: Vec<String> = self
+            .inner
+            .store
+            .group_connectors(card.group_id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|connector| {
+                !connector.env_var.is_empty()
+                    && (command.contains(&format!("${}", connector.env_var))
+                        || command.contains(&format!("${{{}}}", connector.env_var)))
+            })
+            .map(|connector| format!("{} (${})", connector.service, connector.env_var))
+            .collect();
+
+        if named.is_empty() {
+            String::new()
+        } else {
+            format!("used {} · ", named.join(", "))
+        }
     }
 
     /// Looking at, and acting on, the screen.

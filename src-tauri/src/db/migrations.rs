@@ -355,6 +355,42 @@ CREATE TABLE signins (
 CREATE INDEX signins_agent ON signins (agent_id);
 "#,
     ),
+    (
+        14,
+        r#"
+-- What an agent asked the operator for permission to do, and what they said.
+--
+-- One table for both questions, because they are the same fact read at two
+-- times: `state` is the answer to "may it do this now", and a row that says
+-- alwaysAllow is the answer to "must it ask again". A separate grants table
+-- would let the two disagree about a decision the operator made once.
+--
+-- `summary` and `detail` are Guaca's own words for what was asked, written at
+-- request time and never rewritten: the transcript has to keep saying what the
+-- operator was actually shown, whatever the agent or its instructions became
+-- afterwards.
+CREATE TABLE approvals (
+    id         TEXT    PRIMARY KEY,
+    agent_id   TEXT    NOT NULL REFERENCES agents(id),
+    group_id   TEXT    NOT NULL,
+    run_id     TEXT    NOT NULL,
+    action     TEXT    NOT NULL,
+    summary    TEXT    NOT NULL,
+    detail     TEXT    NOT NULL DEFAULT '[]',
+    state      TEXT    NOT NULL,
+    created_at INTEGER NOT NULL,
+    decided_at INTEGER
+);
+
+-- The two questions asked of this table, both partial so they stay small: what
+-- is still waiting on the operator, and what has this agent already been let
+-- off asking about.
+CREATE INDEX approvals_pending ON approvals (created_at) WHERE state = 'pending';
+CREATE INDEX approvals_granted
+    ON approvals (agent_id, action)
+    WHERE state = 'alwaysAllow';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

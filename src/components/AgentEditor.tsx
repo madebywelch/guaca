@@ -11,6 +11,7 @@ import {
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
+import { GrantList } from "./GrantList";
 import { RoutineList } from "./RoutineList";
 import { SigninList } from "./SigninList";
 
@@ -283,6 +284,8 @@ export function AgentEditor({ agent, onClose }: Props) {
         )}
 
         {agent && <SigninList agent={agent} />}
+
+        {agent && <GrantList agent={agent} />}
 
         {agent && <RoutineList agentId={agent.id} />}
 

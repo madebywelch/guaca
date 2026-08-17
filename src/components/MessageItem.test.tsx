@@ -4,7 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import type { AgentCard, Envelope, Part } from "../lib/types";
 import { type Lookups, MessageItem } from "./MessageItem";
 
-vi.mock("../lib/ipc", () => ({ openExternal: vi.fn() }));
+const retryTurn = vi.fn<(agentId: string, messageId: string) => Promise<string>>(
+  async () => "run-2",
+);
+vi.mock("../lib/ipc", () => ({
+  openExternal: vi.fn(),
+  api: { retryTurn: (agentId: string, messageId: string) => retryTurn(agentId, messageId) },
+}));
 
 function card(id: string, name: string): AgentCard {
   return {
@@ -254,5 +260,95 @@ describe("an agent's own record of what it did", () => {
   it("surfaces a guard stop as a centred notice", () => {
     show(record({ type: "notice", kind: "guardStop", text: "hop limit (8) reached" }));
     expect(screen.getByText("hop limit (8) reached")).toBeTruthy();
+  });
+});
+
+describe("a failed turn", () => {
+  /** What the runtime writes once its own retries are spent. */
+  function failure(cause: string | null): Envelope {
+    return envelope({
+      id: "notice-1",
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      trust: "system",
+      expectsReply: false,
+      cause,
+      parts: [
+        {
+          type: "notice",
+          kind: "upstreamError",
+          text: "Manager could not reply: could not reach the inference endpoint",
+        },
+      ],
+    });
+  }
+
+  it("offers to send the message again, and says which", () => {
+    retryTurn.mockClear();
+    render(
+      <MessageItem
+        message={failure("m-original")}
+        lookups={lookups}
+        continued={false}
+        feed={false}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retryTurn).toHaveBeenCalledWith("manager", "m-original");
+    // And it will not fire twice on a double click: a second run is a second
+    // model call, billed.
+    expect((screen.getByRole("button", { name: "Sent again" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("offers nothing when there is nothing to send again", () => {
+    render(
+      <MessageItem message={failure(null)} lookups={lookups} continued={false} feed={false} />,
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+
+  it("does not offer a retry for a limit that would be hit again", () => {
+    // The guard refused this on purpose. A button here would spend the same
+    // budget to reach the same refusal.
+    const stopped = envelope({
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      cause: "m-original",
+      parts: [{ type: "notice", kind: "guardStop", text: "this conversation used its budget" }],
+    });
+    render(<MessageItem message={stopped} lookups={lookups} continued={false} feed={false} />);
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+  });
+});
+
+describe("a command that used a credential", () => {
+  it("says so in the transcript, by name, with no value anywhere", () => {
+    // The operator's audit trail for their own tokens. Before this, a
+    // credential went into the environment of every command and nothing
+    // distinguished the command that spent it.
+    const used = envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      parts: [
+        {
+          type: "toolCall",
+          name: "run_command",
+          arguments: { command: 'curl -H "Authorization: Bearer $MISTRAL_API_KEY" ...' },
+          outcome: {
+            status: "ok",
+            summary: "used Mistral ($MISTRAL_API_KEY) · exit 0, 812 bytes out",
+          },
+        },
+      ],
+    });
+    const { container } = render(
+      <MessageItem message={used} lookups={lookups} continued={false} feed={false} />,
+    );
+
+    expect(container.textContent).toContain("used Mistral ($MISTRAL_API_KEY)");
+    expect(container.textContent).toContain("Manager used run_command");
   });
 });

@@ -63,6 +63,17 @@ pub fn run() {
             let workspace_dir = data_dir.join("workspace");
 
             let store = Store::open(&db_path)?;
+            // A permission request is answered by a turn that is holding the
+            // line for it, and nothing holds a line across a restart. Anything
+            // still pending here is waiting on an agent that no longer exists,
+            // so it is closed rather than left drawing live buttons.
+            match store.expire_pending_approvals() {
+                Ok(0) => {}
+                Ok(n) => {
+                    tracing::info!(expired = n, "closed permission requests left by a restart")
+                }
+                Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
+            }
             let app_config = config::load(&config_path)?;
             let sink = Arc::new(TauriSink { app: app.handle().clone() });
 
@@ -128,6 +139,10 @@ pub fn run() {
             commands::create_group,
             commands::update_group,
             commands::delete_group,
+            commands::approval_states,
+            commands::decide_approval,
+            commands::agent_grants,
+            commands::revoke_grant,
             commands::list_agents,
             commands::create_agent,
             commands::update_agent,
@@ -140,6 +155,7 @@ pub fn run() {
             commands::channel_messages,
             commands::conversation_flow,
             commands::send_message,
+            commands::retry_turn,
             commands::clear_channel,
             commands::clear_group,
             commands::agent_routines,

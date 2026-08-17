@@ -116,6 +116,40 @@ principal. Guaca handles it in two places:
 The directory deliberately excludes `system_prompt`, so one agent cannot read
 another's instructions by listing peers. There is a test for that too.
 
+## A protected action parks the turn that asked for it
+
+Agents can add agents. Every other tool acts on the asking agent's own machine,
+notes or peers; this one changes the workspace and adds something the operator
+pays to run, so it stops and asks.
+
+The turn does not return and retry later. It parks: `create_agent` writes a
+request row, puts a card in the channel it is talking in, and awaits a channel
+under a ten-minute timeout while the actor holds its place. That costs one idle
+task and keeps the whole thing linear, so the tool result the model reads is the
+real outcome rather than a promise. It also means the run genuinely has not
+settled while a person is thinking, which is the truth.
+
+Three things follow, and each is load-bearing:
+
+- **The row is the verdict, not the channel.** The operator's click and the
+  turn's timeout can land in the same instant. `settle_approval` only moves a
+  row out of `pending`, so whichever arrives second changes nothing, and the
+  parked turn reads its answer back from the row afterwards. A button that
+  visibly said "allowed" therefore allowed it.
+- **A restart expires everything pending.** Nothing holds a parked turn across
+  one, so a `pending` row after a restart is a question that can no longer reach
+  anybody. `expire_pending_approvals` runs at startup, before the window opens.
+- **"Always allow" is one agent being let off one question.** The grant is the
+  decision row itself (`state = 'alwaysAllow'` for that agent and that action),
+  not a second table that could disagree with it. It is scoped per agent because
+  that is what the operator was asked: allowing the Manager to create agents
+  says nothing about anyone else. Deleting an agent deletes its grants, since a
+  freed name must not inherit them.
+
+The wording the operator reads is composed by the runtime from the validated
+draft, never by the model. An agent that could write its own request could
+describe creating an agent as tidying up.
+
 ## Storage
 
 SQLite, two tables, plain SQL, forward-only coded migrations. No ORM: there are
