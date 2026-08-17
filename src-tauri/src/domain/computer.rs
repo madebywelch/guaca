@@ -10,21 +10,23 @@ use super::ids::{AgentId, ComputerId};
 
 /// Who runs the machine. Stored as text, so it fails closed on a value this
 /// build does not know rather than defaulting to one it does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
     E2b,
 }
 
 impl Provider {
-    pub fn as_str(&self) -> &'static str {
+    /// The stored form. Identical to the serialized form on purpose: two
+    /// spellings of one token is a mapping table waiting to go wrong.
+    pub fn as_str(self) -> &'static str {
         match self {
             Provider::E2b => "e2b",
         }
     }
 
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
             "e2b" => Some(Provider::E2b),
             _ => None,
         }
@@ -42,7 +44,7 @@ pub enum RecordState {
 }
 
 impl RecordState {
-    pub fn as_str(&self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             RecordState::Provisioning => "provisioning",
             RecordState::Ready => "ready",
@@ -50,8 +52,8 @@ impl RecordState {
         }
     }
 
-    pub fn parse(raw: &str) -> Option<Self> {
-        match raw {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
             "provisioning" => Some(RecordState::Provisioning),
             "ready" => Some(RecordState::Ready),
             "deletePending" => Some(RecordState::DeletePending),
@@ -121,6 +123,11 @@ mod tests {
         assert_eq!(Provider::parse("E2B"), None);
         assert_eq!(Provider::parse("appleContainer"), None, "not in this PR");
         assert_eq!(Provider::E2b.as_str(), "e2b");
+
+        // One spelling, so a row written by the runtime and a provider read by
+        // the UI can never mean different things.
+        let provider = Provider::E2b;
+        assert_eq!(serde_json::to_value(provider).unwrap().as_str(), Some(provider.as_str()));
     }
 
     #[test]
@@ -129,6 +136,12 @@ mod tests {
             assert_eq!(RecordState::parse(state.as_str()), Some(state));
         }
         assert_eq!(RecordState::parse("ready "), None);
+
+        // Pinned, because renaming both halves together round-trips green while
+        // every row already in the database stops parsing.
+        assert_eq!(RecordState::Provisioning.as_str(), "provisioning");
+        assert_eq!(RecordState::Ready.as_str(), "ready");
+        assert_eq!(RecordState::DeletePending.as_str(), "deletePending");
     }
 
     #[test]
