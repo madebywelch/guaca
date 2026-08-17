@@ -1250,6 +1250,39 @@ async fn a_one_off_routine_does_not_come_due_twice() {
     );
 }
 
+#[test]
+fn a_schedule_that_cannot_be_read_does_not_starve_the_runtime() {
+    // A store error on the schedule used to skip the sleep at the bottom of the
+    // scheduler's loop, so a database that stayed broken turned the tick into
+    // a hot loop: one worker pinned on synchronous SQLite calls and a warning
+    // written as fast as it could be. On a single-threaded runtime that task
+    // never yields, so this runs the runtime on its own thread and gives it a
+    // deadline; a hang here is the bug, and a hang is not a test failure
+    // unless something is watching the clock.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(async {
+            let stub = serve(|_| Script::Say("unused".into())).await;
+            let h = harness(&stub, &["Watcher"], GuardLimits::default());
+            h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
+
+            h.runtime.start_scheduler();
+
+            // The scheduler is the only other task on this runtime. If it
+            // does not sleep between failed reads, this never returns.
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        });
+        let _ = done_tx.send(());
+    });
+
+    assert!(
+        done_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "the scheduler kept the runtime to itself: a schedule it cannot read has to wait for \
+         the next tick like a schedule it can"
+    );
+}
+
 /// The system prompt each agent was actually sent, by name.
 fn prompts_by_agent(stub: &harness::Stub) -> HashMap<String, String> {
     let mut out = HashMap::new();
