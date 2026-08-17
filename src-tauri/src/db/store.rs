@@ -417,20 +417,27 @@ impl Store {
         Ok(())
     }
 
-    /// The tokens a provider reissued on waking.
+    /// Everything a provider answers with after waking a machine.
     ///
-    /// Separate from `set_computer_ready` because waking does not change what
-    /// the row claims, only how to talk to it.
-    pub fn set_computer_secrets(
+    /// All three, not just the tokens: a provider is entitled to hand back a
+    /// different identifier for the same disk, and a row keeping the old one
+    /// names a machine that is not there while the one that is goes unclaimed.
+    ///
+    /// Separate from `set_computer_ready` because waking is not a state change:
+    /// the row was ready before and is ready after.
+    pub fn set_computer_handle(
         &self,
         id: ComputerId,
+        provider_id: &str,
         control: &Secret,
         viewer: &Secret,
     ) -> Result<(), StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE computers SET control_secret=?2, viewer_secret=?3, updated_at=?4 WHERE id=?1",
-            params![id.to_string(), control.expose(), viewer.expose(), now_ms()],
+            "UPDATE computers
+                SET provider_id=?2, control_secret=?3, viewer_secret=?4, updated_at=?5
+              WHERE id=?1",
+            params![id.to_string(), provider_id, control.expose(), viewer.expose(), now_ms()],
         )?;
         if changed == 0 {
             return Err(StoreError::ComputerNotFound(id));
@@ -2783,7 +2790,7 @@ mod tests {
     }
 
     #[test]
-    fn waking_records_the_reissued_secrets_without_bumping_the_card() {
+    fn waking_records_the_whole_reissued_handle_without_bumping_the_card() {
         let f = fixture();
         let card = f.store.create_agent(&draft("Manager")).unwrap();
         let id = ComputerId::new();
@@ -2803,11 +2810,16 @@ mod tests {
             })
             .unwrap();
         f.store
-            .set_computer_secrets(id, &Secret::new("new-ctl"), &Secret::new("new-view"))
+            .set_computer_handle(id, "sbx-woken", &Secret::new("new-ctl"), &Secret::new("new-view"))
             .unwrap();
         let found = f.store.computer(id).unwrap().unwrap();
+        // The identifier too: a provider may hand back a different one for the
+        // same disk, and a row that keeps the old one names nothing while the
+        // machine that is running goes unclaimed.
+        assert_eq!(found.provider_id.as_deref(), Some("sbx-woken"));
         assert_eq!(found.control_secret.expose(), "new-ctl");
         assert_eq!(found.viewer_secret.expose(), "new-view");
+        assert_eq!(found.state, RecordState::Ready, "waking is not a state change");
         assert_eq!(
             f.store.get_agent(card.id).unwrap().unwrap().version,
             1,
@@ -2827,7 +2839,7 @@ mod tests {
             Err(StoreError::ComputerNotFound(id)) if id == missing
         ));
         assert!(matches!(
-            f.store.set_computer_secrets(missing, &Secret::new("c"), &Secret::new("v")),
+            f.store.set_computer_handle(missing, "sbx", &Secret::new("c"), &Secret::new("v")),
             Err(StoreError::ComputerNotFound(_))
         ));
         assert!(matches!(

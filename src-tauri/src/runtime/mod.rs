@@ -22,7 +22,7 @@ use parking_lot::{Mutex, RwLock};
 use tokio::sync::{mpsc, Notify};
 
 use crate::computer::desktop::DesktopAction;
-use crate::computer::{ComputerError, ComputerManager, Machine};
+use crate::computer::{ComputerError, ComputerManager, Machine, Provisioned};
 use crate::config::{AppConfig, InferenceConfig};
 
 /// What a page is labelled as when it reaches the model.
@@ -2499,10 +2499,15 @@ impl Runtime {
         // attached. Every command this machine goes on to run carries them, and
         // no other path can forget to.
         let env = self.inner.store.connector_env(card.group_id).unwrap_or_default();
-        let machine = self.inner.computers.ensure(card, env).await?;
-        // Unconditional: this is what refreshes the card's `computerId` after a
-        // first create, and it cost nothing before.
-        self.inner.events.emit(UiEvent::AgentsChanged);
+        let (machine, provisioned) = self.inner.computers.ensure(card, env).await?;
+        // Only when something changed. This is what refreshes the card's
+        // `computerId` after a first create and the pane after a wake, but it
+        // is also on the path of every command an agent runs, and redrawing
+        // every card for a machine that was already running is work nobody
+        // asked for.
+        if provisioned != Provisioned::Reused {
+            self.inner.events.emit(UiEvent::AgentsChanged);
+        }
         Ok(machine)
     }
 

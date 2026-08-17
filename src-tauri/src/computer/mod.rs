@@ -9,7 +9,7 @@ pub mod desktop;
 pub mod e2b;
 pub mod provider;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 
@@ -143,6 +143,21 @@ pub struct Computer {
     pub vnc_url: Option<String>,
 }
 
+/// What `ensure` had to do, because only two of the three are worth telling the
+/// window about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Provisioned {
+    /// A new machine and a new row, so the agent's card now names a computer
+    /// where it named none.
+    Created,
+    /// The same disk, woken. The card is unchanged, but what the pane can draw
+    /// is not.
+    Woken,
+    /// Already running, which is nearly every call: a command, a page, a
+    /// screenshot. Nothing changed and nothing needs redrawing.
+    Reused,
+}
+
 /// Why an agent has no machine to work on. Each variant is a different next
 /// step: set a key, wait and retry, or read the message.
 #[derive(Debug, thiserror::Error)]
@@ -230,11 +245,14 @@ impl ComputerManager {
 
     /// This agent's machine, made, woken or reused. `env` is the group's
     /// credentials, which every command on the returned machine carries.
+    ///
+    /// Says which of the three it was, because the window only has to redraw
+    /// for two of them and this is called on every command an agent runs.
     pub async fn ensure(
         &self,
         card: &AgentCard,
         env: BTreeMap<String, String>,
-    ) -> Result<Machine, ComputerError> {
+    ) -> Result<(Machine, Provisioned), ComputerError> {
         let lock = self.lock_for(card.id);
         let _held = lock.lock().await;
 
@@ -251,29 +269,32 @@ impl ComputerManager {
                             // lifetime.
                             provider.keep_awake(&handle, self.idle_seconds()).await;
                             self.inner.store.touch_computer(record.id, now_ms())?;
-                            return Ok(self.machine(provider, handle, env));
+                            return Ok((self.machine(provider, handle, env), Provisioned::Reused));
                         }
                         ProviderState::Asleep => {
                             // Woken rather than replaced. The disk is the point:
                             // a browser that was signed in still is.
                             let woken = provider.start(&handle, self.idle_seconds()).await?;
-                            // Both tokens are reissued on waking, so the stored
-                            // ones are now wrong. Keeping them is a machine that
-                            // is running and unreachable, which looks exactly
-                            // like a broken one.
-                            if let Err(err) = self.inner.store.set_computer_secrets(
+                            // The whole handle is reissued on waking, the
+                            // identifier included, so the stored one is now
+                            // wrong. Keeping it is a machine that is running and
+                            // unreachable, which looks exactly like a broken
+                            // one, and a running machine the sweep can no longer
+                            // see anything claiming.
+                            if let Err(err) = self.inner.store.set_computer_handle(
                                 record.id,
+                                &woken.provider_id,
                                 &woken.control_secret,
                                 &woken.viewer_secret,
                             ) {
                                 tracing::error!(
                                     %err,
                                     computer = %record.id,
-                                    "could not record the woken machine's tokens"
+                                    "could not record the woken machine's handle"
                                 );
                             }
                             self.inner.store.touch_computer(record.id, now_ms())?;
-                            return Ok(self.machine(provider, woken, env));
+                            return Ok((self.machine(provider, woken, env), Provisioned::Woken));
                         }
                         ProviderState::Gone => self.inner.store.delete_computer(record.id)?,
                     }
@@ -354,7 +375,7 @@ impl ComputerManager {
             return Err(ComputerError::Recording(err.to_string()));
         }
 
-        Ok(self.machine(provider, handle, env))
+        Ok((self.machine(provider, handle, env), Provisioned::Created))
     }
 
     /// The machine only if it is already running; never wakes, never creates.
@@ -366,7 +387,14 @@ impl ComputerManager {
         let Some((record, handle)) = self.ready(agent)? else {
             return Ok(None);
         };
-        let provider = self.provider(record.provider)?;
+        let provider = match self.provider(record.provider) {
+            Ok(provider) => provider,
+            // Nothing to ask. Whoever wanted the scan already holds the last
+            // answer, and telling them to configure a provider is not the reply
+            // to "what is this browser signed in to".
+            Err(ComputerError::Unconfigured) => return Ok(None),
+            Err(err) => return Err(err),
+        };
         match provider.inspect(&handle).await {
             Ok(ProviderState::Running) => Ok(Some(self.machine(provider, handle, BTreeMap::new()))),
             // Asleep, gone, or a provider that would not answer: a scan is
@@ -492,9 +520,19 @@ impl ComputerManager {
     /// like one in use and is invisible from inside the app.
     pub async fn sweep(&self) -> Result<usize, ComputerError> {
         let mut released = 0;
-        let mut claimed: Vec<String> = Vec::new();
 
-        for record in self.inner.store.list_computers()? {
+        for listed in self.inner.store.list_computers()? {
+            // Under the agent's own lock, and re-read once it is held. `ensure`
+            // keeps a provisioning row for the whole of a create, and the
+            // startup sweep runs alongside a scheduler that can have a routine
+            // due: deleting that row from under a turn already in flight would
+            // destroy the machine that turn had just made.
+            let lock = self.lock_for(listed.agent_id);
+            let _held = lock.lock().await;
+            let Some(record) = self.inner.store.computer(listed.id)? else {
+                continue;
+            };
+
             match (record.state, Self::handle_of(&record)) {
                 (RecordState::DeletePending, Some(handle)) => {
                     let deleted = match self.provider(record.provider) {
@@ -507,31 +545,41 @@ impl ComputerManager {
                             released += 1;
                         }
                         // Left exactly as it is, to be tried again next time.
-                        Err(err) => {
-                            tracing::warn!(
-                                %err,
-                                computer = %record.id,
-                                "a computer marked for removal is still there"
-                            );
-                            claimed.push(handle.provider_id);
-                        }
+                        Err(err) => tracing::warn!(
+                            %err,
+                            computer = %record.id,
+                            "a computer marked for removal is still there"
+                        ),
                     }
                 }
-                // A row that names no machine claims nothing: either the create
-                // never happened, or what it made is unclaimed and is caught
-                // below.
+                // A row that names no machine: either the create never
+                // happened, or what it made is unclaimed and caught below.
                 (RecordState::Provisioning, None) | (RecordState::DeletePending, None) => {
                     self.inner.store.delete_computer(record.id)?
                 }
-                (_, Some(handle)) => claimed.push(handle.provider_id),
-                (_, None) => {}
+                _ => {}
             }
         }
 
         // Only a provider that is configured can be asked, and E2B is the only
-        // one there is. Anything it made that no row above refers to is a leak.
+        // one there is. Anything it made that no row refers to is a leak.
         if let Ok(provider) = self.provider(Provider::E2b) {
-            for id in provider.list_owned().await? {
+            let owned = provider.list_owned().await?;
+            // Read after the list, never before: a machine made while the list
+            // was in flight is absent from it, but its row is here, so nothing
+            // is deleted for being younger than the question. What is left is a
+            // create that returned before the list and was recorded after this
+            // read, which is a window of microseconds and the shape the sweep
+            // has always had.
+            let claimed: HashSet<String> = self
+                .inner
+                .store
+                .list_computers()?
+                .into_iter()
+                .filter_map(|record| record.provider_id)
+                .collect();
+
+            for id in owned {
                 if claimed.contains(&id) {
                     continue;
                 }
@@ -693,13 +741,21 @@ pub(crate) mod fake {
                 .unwrap_or(ProviderState::Gone))
         }
 
+        /// Wakes it under a *different* identifier, which is what the trait
+        /// allows and what E2B's resume reply actually does: everything on the
+        /// handle is reissued, and a caller that keeps the old one is holding
+        /// the address of a machine that is not there.
         async fn start(
             &self,
             handle: &ProviderHandle,
             _idle_seconds: u32,
         ) -> Result<ProviderHandle, ProviderError> {
-            self.machines.lock().insert(handle.provider_id.clone(), ProviderState::Running);
+            let woken = format!("{}-woken", handle.provider_id);
+            let mut machines = self.machines.lock();
+            machines.remove(&handle.provider_id);
+            machines.insert(woken.clone(), ProviderState::Running);
             Ok(ProviderHandle {
+                provider_id: woken,
                 control_secret: Secret::new("ctl-2"),
                 viewer_secret: Secret::new("view-2"),
                 ..handle.clone()
@@ -799,8 +855,13 @@ mod tests {
             manager.ensure(&card, BTreeMap::new()),
             manager.ensure(&card, BTreeMap::new())
         );
-        assert_eq!(a.unwrap().id(), b.unwrap().id());
+        let (first, made) = a.unwrap();
+        let (second, then) = b.unwrap();
+        assert_eq!(first.id(), second.id());
         assert_eq!(*provider.creates.lock(), 1);
+        // The loser of the race waited and found a machine, which is exactly
+        // what it should report: one create, one thing worth redrawing.
+        assert_eq!((made, then), (Provisioned::Created, Provisioned::Reused));
     }
 
     #[tokio::test]
@@ -832,22 +893,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_sleeping_machine_is_woken_and_its_new_secrets_are_kept() {
+    async fn a_sleeping_machine_is_woken_and_the_whole_reissued_handle_is_kept() {
         let (manager, provider, store, card, _dir) = setup();
-        let first = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (first, made) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let born = store.computer(first.id()).unwrap().unwrap().provider_id;
         manager.sleep(card.id).await.unwrap();
-        let again = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        let (again, woken) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
         assert_eq!(first.id(), again.id(), "the disk is the point");
         assert_eq!(*provider.creates.lock(), 1);
-        assert_eq!(store.computer(first.id()).unwrap().unwrap().control_secret.expose(), "ctl-2");
+        assert_eq!((made, woken), (Provisioned::Created, Provisioned::Woken));
+
+        // Waking reissues the identifier as well as the tokens. A row that kept
+        // the old one would name a machine that is not there, and the running
+        // one would look like an orphan to the sweep.
+        let record = store.computer(first.id()).unwrap().unwrap();
+        assert_eq!(record.provider_id, born.map(|id| format!("{id}-woken")));
+        assert_eq!(record.control_secret.expose(), "ctl-2");
+        assert_eq!(record.viewer_secret.expose(), "view-2");
+
+        // And the row that was written is the one that answers next time: found
+        // running, not created again.
+        let (third, reused) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(third.id(), first.id());
+        assert_eq!(reused, Provisioned::Reused);
+        assert_eq!(*provider.creates.lock(), 1, "the woken machine was found, not replaced");
     }
 
     #[tokio::test]
     async fn a_machine_the_provider_reports_gone_is_replaced_and_the_old_row_cleared() {
         let (manager, provider, store, card, _dir) = setup();
-        let first = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (first, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
         provider.machines.lock().clear();
-        let second = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (second, made) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        assert_eq!(made, Provisioned::Created);
         assert_ne!(first.id(), second.id());
         assert!(store.computer(first.id()).unwrap().is_none());
         assert_eq!(*provider.creates.lock(), 2);
@@ -856,7 +935,7 @@ mod tests {
     #[tokio::test]
     async fn describe_never_wakes_and_clears_a_gone_machine() {
         let (manager, provider, store, card, _dir) = setup();
-        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (machine, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
         manager.sleep(card.id).await.unwrap();
         let shown = manager.describe(card.id).await.unwrap().unwrap();
         assert_eq!(shown.state, "asleep");
@@ -887,7 +966,7 @@ mod tests {
     #[tokio::test]
     async fn a_failed_explicit_destroy_keeps_the_row_and_a_failed_release_marks_it_pending() {
         let (manager, provider, store, card, _dir) = setup();
-        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (machine, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
         *provider.fail_delete.lock() = true;
         assert!(manager.destroy(card.id).await.is_err());
         assert_eq!(store.computer(machine.id()).unwrap().unwrap().state, RecordState::Ready);
@@ -904,7 +983,7 @@ mod tests {
     #[tokio::test]
     async fn the_sweep_releases_what_nothing_claims_and_leaves_what_something_does() {
         let (manager, provider, store, card, _dir) = setup();
-        let kept = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (kept, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
         provider.machines.lock().insert("fake-orphan".into(), ProviderState::Running);
         // A provisioning row that never got its provider id is a crash mid-create.
         let stranded = store.create_agent(&draft("Chef")).unwrap();
@@ -931,6 +1010,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_sweep_leaves_alone_a_machine_that_is_being_created_under_it() {
+        // The startup sweep runs beside a scheduler that can have a routine due
+        // in the same second. `ensure` holds a provisioning row across the whole
+        // create, and a sweep that took it away made `set_computer_ready` find
+        // no row, which released the machine the turn had just been given.
+        let (manager, provider, store, card, _dir) = setup();
+        *provider.create_delay.lock() = Some(Duration::from_millis(80));
+
+        let sweeping = {
+            let manager = manager.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                manager.sweep().await
+            })
+        };
+
+        let (machine, made) = manager
+            .ensure(&card, BTreeMap::new())
+            .await
+            .expect("a create in flight must survive the sweep");
+        assert_eq!(made, Provisioned::Created);
+        assert_eq!(sweeping.await.unwrap().unwrap(), 0, "there was nothing to release");
+        assert!(store.computer(machine.id()).unwrap().is_some(), "the row survived");
+        assert!(provider.deletes.lock().is_empty(), "the machine survived");
+    }
+
+    #[tokio::test]
+    async fn a_scan_with_no_provider_configured_says_nothing_rather_than_failing() {
+        // The key can be removed from settings while an agent still has a row.
+        // Whoever asked for a scan holds the last answer already, and "add an
+        // API key" is not a reply to "what is this browser signed in to".
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let card = store.create_agent(&draft("Manager")).unwrap();
+        store
+            .insert_computer(&ComputerRecord {
+                id: ComputerId::new(),
+                agent_id: card.id,
+                provider: Provider::E2b,
+                provider_id: Some("sbx".into()),
+                control_secret: Secret::new("ctl"),
+                viewer_secret: Secret::new("view"),
+                image_ref: String::new(),
+                state: RecordState::Ready,
+                last_used_at: 0,
+                created_at: 0,
+                updated_at: 0,
+            })
+            .unwrap();
+        let manager =
+            ComputerManager::new(store, Arc::new(parking_lot::RwLock::new(AppConfig::default())));
+
+        assert!(manager.if_running(card.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn without_a_provider_the_answer_is_unconfigured_not_a_crash() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
@@ -953,7 +1088,7 @@ mod tests {
         use crate::proxy::ViewerResolver;
 
         let (manager, _provider, _store, card, _dir) = setup();
-        let machine = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+        let (machine, _) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
 
         let target =
             manager.viewer_target(&machine.id().to_string(), 6080).await.expect("a target");

@@ -376,7 +376,7 @@ impl ComputerProvider for E2bProvider {
         handle: &ProviderHandle,
         port: u16,
     ) -> Result<ViewerTarget, ProviderError> {
-        Ok(viewer_target(handle, port))
+        viewer_target(handle, port)
     }
 
     /// Every sandbox this app made, whether or not anything still refers to it.
@@ -500,8 +500,20 @@ fn classify(id: &str, body: &str) -> Result<ProviderState, ProviderError> {
 /// and the port is in the hostname rather than on the socket. The traffic token
 /// rides in the head, which is why this is answered to the proxy and never to
 /// the webview.
-fn viewer_target(handle: &ProviderHandle, port: u16) -> ViewerTarget {
-    ViewerTarget {
+///
+/// A sandbox with no traffic token is refused rather than pointed at. Rows
+/// carried over from before the tokens existed have an empty one, and sending
+/// an empty header is a 403 from E2B: an error the operator can act on, drawn
+/// as a broken frame with no explanation.
+fn viewer_target(handle: &ProviderHandle, port: u16) -> Result<ViewerTarget, ProviderError> {
+    if handle.viewer_secret.is_empty() {
+        return Err(ProviderError::Operation(format!(
+            "computer {} has no viewer token, so its desktop cannot be shown; it predates the \
+             tokens and has to be destroyed and made again from its pane",
+            handle.computer
+        )));
+    }
+    Ok(ViewerTarget {
         tls: true,
         host: format!("{port}-{}.e2b.app", handle.provider_id),
         port: 443,
@@ -509,7 +521,7 @@ fn viewer_target(handle: &ProviderHandle, port: u16) -> ViewerTarget {
             "e2b-traffic-access-token".to_string(),
             handle.viewer_secret.expose().to_string(),
         )],
-    }
+    })
 }
 
 /// envd's address for one sandbox.
@@ -703,7 +715,7 @@ mod tests {
             control_secret: Secret::new("envd"),
             viewer_secret: Secret::new("traffic-tok"),
         };
-        let target = viewer_target(&handle, 6080);
+        let target = viewer_target(&handle, 6080).expect("a token makes a target");
         assert!(target.tls);
         assert_eq!(target.host, "6080-sbx1.e2b.app");
         assert_eq!(target.port, 443);
@@ -711,6 +723,25 @@ mod tests {
             target.headers,
             vec![("e2b-traffic-access-token".to_string(), "traffic-tok".to_string())]
         );
+    }
+
+    #[test]
+    fn a_sandbox_with_no_traffic_token_is_refused_rather_than_pointed_at() {
+        // Rows carried over from before the tokens existed have an empty one.
+        // Forwarding it is an empty header and a 403, which the viewer draws as
+        // a black rectangle with nothing said; the operator has to be told the
+        // machine predates the tokens and cannot be shown.
+        let handle = ProviderHandle {
+            computer: ComputerId::new(),
+            provider_id: "sbx1".into(),
+            control_secret: Secret::new("envd"),
+            viewer_secret: Secret::new(""),
+        };
+        let Err(ProviderError::Operation(message)) = viewer_target(&handle, 6080) else {
+            panic!("an empty token must not become a header");
+        };
+        assert!(message.contains(&handle.computer.to_string()), "which machine: {message}");
+        assert!(message.contains("destroyed and made again"), "and what to do: {message}");
     }
 
     #[test]
