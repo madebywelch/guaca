@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Guac: a local, no-auth chat surface where you and your agents talk to each other."
 authors = ["madebywelch"]
 edition = "2021"
-rust-version = "1.82"
+# What the lockfile actually needs, not an aspiration. `time`, `plist` and the
+# `icu` crates declare 1.88, and thirty-odd more are edition 2024, so an older
+# toolchain fails on the first crate it downloads rather than on this line. It
+# also steers `cargo update` toward versions that build here.
+rust-version = "1.88"
 
 [lib]
 name = "guac_lib"
