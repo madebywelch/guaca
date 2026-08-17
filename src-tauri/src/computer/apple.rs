@@ -37,9 +37,15 @@ const WELL_KNOWN: &[&str] = &["/usr/local/bin/container"];
 pub const MIN_VERSION: (u32, u32, u32) = (1, 2, 2);
 const UNSUPPORTED_MAJOR: u32 = 2;
 
-/// Whether this build can drive Apple Container at all. Decided at compile
-/// time: it virtualises arm64 Linux on Apple silicon and exists nowhere else.
-const SUPPORTED_PLATFORM: bool = cfg!(target_os = "macos") && cfg!(target_arch = "aarch64");
+/// Whether this build could drive Apple Container at all. The operating system
+/// is the whole of the compile-time question, and deliberately so: the
+/// architecture of *this* binary says nothing about the one it spawns, because
+/// macOS runs a native `container` natively even when the process asking for it
+/// is translated. Gating on `target_arch` reported "unsupported" on the very
+/// Macs this is built and tested on. What the machine can actually do is
+/// settled by whether the binary is there at all — it installs on nothing but
+/// macOS 26 on Apple silicon — and then by the version window.
+const SUPPORTED_PLATFORM: bool = cfg!(target_os = "macos");
 
 /// The guest's home: the volume's mount point, and where commands run. The
 /// image puts the unprivileged account here and the desktop code assumes it.
@@ -69,8 +75,17 @@ const HOME_SIZE: &str = "20G";
 
 /// What to tell an operator who has no runtime installed. Names where the
 /// signed package is, because Apple Container is not in any package manager.
-const INSTALL_HINT: &str = "Apple Container is not installed. Install the signed package from \
-                            github.com/apple/container/releases, then start a computer.";
+/// What to tell an operator whose Mac has no runtime on it.
+///
+/// This is where the hardware is spoken about, rather than at compile time,
+/// because this is the point where it is actually known: the package installs
+/// on nothing but macOS 26 on Apple silicon, so a Mac with no `container` on it
+/// is either one of those without the download or a Mac that will never have
+/// one, and the same sentence serves both.
+const INSTALL_HINT: &str =
+    "Apple Container needs macOS 26 on Apple silicon; this Mac has no `container` binary at \
+     /usr/local/bin/container or on PATH. Install the signed package from \
+     github.com/apple/container/releases, then start a computer.";
 
 /// Apple Container, behind the boundary.
 ///
@@ -83,11 +98,10 @@ pub struct AppleContainer {
     /// is never swept up as this one's orphan.
     installation: String,
     image: String,
-    /// Whether this build can drive the runtime at all: `SUPPORTED_PLATFORM`
+    /// Whether this build could drive the runtime at all: `SUPPORTED_PLATFORM`
     /// for anything `discover` made. Held rather than read from the constant at
-    /// each site so both answers can be tested wherever the suite runs —
-    /// including the machine this was written on, whose toolchain targets
-    /// x86_64 and where the constant is false.
+    /// each site so that both answers are testable wherever the suite runs,
+    /// including on a machine that is not a Mac.
     platform: bool,
 }
 
@@ -772,13 +786,16 @@ fn spoken(out: &CliOutput) -> String {
     format!("{} {}", out.stderr, out.stdout_str()).to_lowercase()
 }
 
-/// This Mac cannot run the thing at all. The one answer that needs no process.
+/// Not a Mac at all, which is the one answer that needs no process. Anything
+/// finer than the operating system — the chip, the OS version — is left to
+/// whether the binary is there and what version it says it is, because those
+/// are answers about the machine rather than about this build.
 fn unsupported_platform() -> ProviderStatus {
     ProviderStatus {
         state: ProviderReadiness::Unsupported,
         can_start: false,
-        detail: "Apple Container needs macOS on Apple silicon. Add an E2B API key in settings to \
-                 give agents a computer instead."
+        detail: "Apple Container runs only on macOS. Add an E2B API key in settings to give \
+                 agents a computer instead."
             .to_string(),
     }
 }
@@ -1356,15 +1373,14 @@ mod fake_runtime {
         Cli::at(write_exec(dir, "container", &script))
     }
 
-    /// On a Mac that can run the thing, which is what every test below is about
-    /// except the two that are about the other case. Asserted rather than read
-    /// from `SUPPORTED_PLATFORM`, so these run identically on a machine whose
-    /// toolchain targets x86_64.
+    /// On a Mac, which is what every test below is about except the two that
+    /// are about the other case. Asserted rather than read from
+    /// `SUPPORTED_PLATFORM`, so these run identically wherever the suite does.
     fn provider(cli: Cli) -> AppleContainer {
         AppleContainer::with_cli(cli, "inst-7", "img:1".into(), true)
     }
 
-    /// On a Mac that cannot.
+    /// On something that is not a Mac.
     fn provider_off_platform(cli: Cli) -> AppleContainer {
         AppleContainer::with_cli(cli, "inst-7", "img:1".into(), false)
     }
@@ -1396,14 +1412,27 @@ mod fake_runtime {
     }
 
     #[tokio::test]
-    async fn a_runtime_that_is_not_installed_says_where_to_get_it() {
-        // Apple Container is in no package manager, so "install it" without a
-        // location is a search the operator has to run.
+    async fn a_runtime_that_is_not_installed_says_what_it_needs_and_where_to_get_it() {
+        // This message carries the hardware requirement, because this is where
+        // it is actually known: the package installs on nothing but macOS 26 on
+        // Apple silicon, so an absent binary is the honest place to say so.
+        // Claiming it from `cfg!(target_arch)` instead was a build that called
+        // this Mac unsupported while the runtime on it worked.
+        //
+        // Apple Container is also in no package manager, so "install it"
+        // without a location is a search the operator has to run.
         let dir = tempfile::tempdir().unwrap();
         let status = provider(Cli::at(dir.path().join("container"))).probe_runtime().await;
 
         assert_eq!(status.state, ProviderReadiness::NotInstalled);
         assert!(!status.can_start, "there is nothing to start");
+        assert!(status.detail.contains("macOS 26 on Apple silicon"), "{}", status.detail);
+        assert!(
+            status.detail.contains("/usr/local/bin/container"),
+            "where it looked: {}",
+            status.detail
+        );
+        assert!(status.detail.contains("PATH"), "and the other place: {}", status.detail);
         assert!(status.detail.contains("github.com/apple/container/releases"), "{}", status.detail);
     }
 
@@ -1480,9 +1509,11 @@ mod fake_runtime {
     }
 
     #[tokio::test]
-    async fn a_mac_that_cannot_virtualise_this_is_unsupported_whatever_is_installed() {
-        // Answered without spawning anything: on a Mac that cannot run arm64
-        // Linux there is nothing to install and nothing worth a process.
+    async fn a_machine_that_is_not_a_mac_is_unsupported_whatever_is_installed() {
+        // The operating system is the whole of the compile-time question, and
+        // it is answered without spawning anything. Nothing finer is claimed
+        // here: a `container` on the box is what settles the rest, because the
+        // architecture of this binary says nothing about the one it spawns.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
         let cli = fake_container(dir.path(), &log, &[("system status", "exit 0")]);
@@ -1490,13 +1521,18 @@ mod fake_runtime {
         let status = provider_off_platform(cli).probe().await;
 
         assert_eq!(status.state, ProviderReadiness::Unsupported);
-        assert!(status.detail.contains("Apple silicon"), "{}", status.detail);
+        assert!(status.detail.contains("only on macOS"), "{}", status.detail);
+        assert!(
+            !status.detail.contains("Apple silicon"),
+            "the chip is not this build's to claim: {}",
+            status.detail
+        );
         assert!(status.detail.contains("E2B"), "and what would work: {}", status.detail);
         assert!(log_lines(&log).is_empty(), "nothing is spawned to find out");
     }
 
     #[tokio::test]
-    async fn a_mac_that_cannot_virtualise_this_refuses_to_make_a_machine_on_it() {
+    async fn a_machine_that_is_not_a_mac_refuses_to_make_a_machine_on_it() {
         // The provider fails closed on its own rather than trusting that
         // whoever called it consulted `probe` first.
         let dir = tempfile::tempdir().unwrap();
@@ -1509,7 +1545,7 @@ mod fake_runtime {
             .expect_err("this Mac cannot run it");
 
         assert!(matches!(err, ProviderError::Unsupported(_)), "{err:?}");
-        assert!(err.to_string().contains("Apple silicon"), "{err}");
+        assert!(err.to_string().contains("only on macOS"), "{err}");
         assert!(log_lines(&log).is_empty(), "and nothing was spawned to find out");
     }
 
