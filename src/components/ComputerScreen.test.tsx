@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { AgentCard, Computer } from "../lib/types";
+import type { AgentCard, Computer, ComputerProviderStatus } from "../lib/types";
 import { ComputerScreen } from "./ComputerScreen";
 
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
@@ -42,10 +42,31 @@ const HAS_ONE: Computer = {
   vncUrl: "http://127.0.0.1:9/vnc.html",
 };
 
+const READY: ComputerProviderStatus[] = [
+  {
+    provider: "appleContainer",
+    state: "ready",
+    canStart: false,
+    detail: "Apple Container 1.2.2 is running.",
+  },
+  { provider: "e2b", state: "notInstalled", canStart: false, detail: "E2B needs an API key." },
+];
+
+const NOTHING_READY: ComputerProviderStatus[] = [
+  {
+    provider: "appleContainer",
+    state: "notInstalled",
+    canStart: false,
+    detail: "Apple Container is not installed.",
+  },
+  { provider: "e2b", state: "notInstalled", canStart: false, detail: "E2B needs an API key." },
+];
+
 describe("ComputerScreen", () => {
   beforeEach(() => {
     agentComputer.mockReset();
     useStore.setState({
+      computerStatuses: READY,
       settings: {
         operatorName: "",
         e2bKeySet: true,
@@ -135,12 +156,26 @@ describe("ComputerScreen", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /take over/i })).toBeTruthy());
   });
 
-  it("says nothing at all when computers were never set up", async () => {
-    // Offering to give an agent a machine that cannot be made is worse than
-    // not mentioning computers.
-    useStore.setState({ settings: { ...useStore.getState().settings!, e2bKeySet: false } });
+  it("says nothing at all when no provider could make a computer", async () => {
+    // Offering to give an agent a machine that cannot be made is worse than not
+    // mentioning computers: the button fails, and the reason is in Settings.
+    useStore.setState({ computerStatuses: NOTHING_READY });
+    agentComputer.mockResolvedValue(null);
+
     const { container } = render(<ComputerScreen agent={card("has-none", "Scribe")} />);
+
     await waitFor(() => expect(container.firstChild).toBeNull());
     expect(agentComputer).not.toHaveBeenCalled();
+  });
+
+  it("shows the machine an agent already has, whatever the default provider is now", async () => {
+    // A setting that moved does not take away a disk. The agent owns one, so
+    // the screen is its way to watch it even with nothing able to make another.
+    useStore.setState({ computerStatuses: NOTHING_READY });
+    agentComputer.mockResolvedValue(HAS_ONE);
+
+    render(<ComputerScreen agent={{ ...card("has-one", "Cook"), computerId: HAS_ONE.id }} />);
+
+    await waitFor(() => expect(screen.getByTitle("Cook's computer")).toBeTruthy());
   });
 });

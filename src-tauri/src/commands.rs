@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
-use crate::computer::provider::ProviderError;
+use crate::computer::provider::{ProviderError, ProviderReadiness, ProviderStatus};
 use crate::computer::{Computer, ComputerError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
-use crate::domain::computer::ProviderChoice;
+use crate::domain::computer::{Provider, ProviderChoice};
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
@@ -192,6 +192,39 @@ pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> R
     state.runtime.computers().destroy(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
+}
+
+/// What one provider would say about itself if asked for a machine now.
+///
+/// The provider's own words, and nothing else it knows: no key, no guest
+/// address, no port and no external id. A `detail` may name where something is
+/// installed, because that is what the operator has to go and change.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerProviderStatus {
+    pub provider: Provider,
+    pub state: ProviderReadiness,
+    /// Whether asking for a computer would start whatever is stopped. The
+    /// `detail` already says so in words; this is for the UI to act on.
+    pub can_start: bool,
+    pub detail: String,
+}
+
+impl From<(Provider, ProviderStatus)> for ComputerProviderStatus {
+    fn from((provider, status): (Provider, ProviderStatus)) -> Self {
+        Self { provider, state: status.state, can_start: status.can_start, detail: status.detail }
+    }
+}
+
+/// Every provider this build knows, in the order `automatic` tries them.
+///
+/// Settings draws one line each. Answered from the manager's cached probes, so
+/// opening the dialog does not spawn a process per provider per render.
+#[tauri::command]
+pub async fn computer_provider_statuses(
+    state: State<'_, AppState>,
+) -> Reply<Vec<ComputerProviderStatus>> {
+    Ok(state.runtime.computers().statuses().await.into_iter().map(Into::into).collect())
 }
 
 // ---- connectors ----------------------------------------------------------
@@ -914,6 +947,32 @@ mod tests {
         let broken: CommandError =
             ComputerError::Provider(ProviderError::Unavailable("the runtime hung".into())).into();
         assert_eq!(broken.kind, "computer");
+    }
+
+    #[test]
+    fn a_provider_status_crosses_ipc_in_camel_case_and_says_nothing_about_a_machine() {
+        // Four fields, and the test names all of them: this is the one type in
+        // the feature that carries a provider's own words to the webview, and
+        // what must never ride along with them is a key, a host path to
+        // anything but an installer, a guest address or an external id.
+        let row = ComputerProviderStatus::from((
+            Provider::AppleContainer,
+            ProviderStatus {
+                state: ProviderReadiness::NotRunning,
+                can_start: true,
+                detail: "Apple Container is installed but stopped. Starting a computer will \
+                         start its service."
+                    .into(),
+            },
+        ));
+        let json = serde_json::to_value(&row).unwrap();
+        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["canStart", "detail", "provider", "state"]);
+        assert_eq!(json["provider"], "appleContainer");
+        assert_eq!(json["state"], "notRunning", "the state is one token the UI can switch on");
+        assert_eq!(json["canStart"], true);
+        assert!(json["detail"].as_str().unwrap().contains("Starting a computer"));
     }
 
     #[test]

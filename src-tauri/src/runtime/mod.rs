@@ -1274,6 +1274,11 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
+        // Asked once for the whole turn, so the prompt and the tool list agree:
+        // a turn told it has a machine is offered the tools for one, and a turn
+        // told it has none is not. Cheap by design — the manager answers from a
+        // cached probe rather than starting anything.
+        let has_computer = self.inner.computers.availability(&card).await;
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -1281,6 +1286,7 @@ impl Runtime {
             &roster,
             &credentials,
             &signins,
+            has_computer,
             &names,
             &notes,
             &history,
@@ -1343,7 +1349,7 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                tools: tools::specs(),
+                tools: tools::offered(has_computer),
                 temperature: None,
             };
 

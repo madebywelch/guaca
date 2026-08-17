@@ -146,6 +146,7 @@ pub fn run() {
             commands::start_agent_computer,
             commands::stop_agent_computer,
             commands::delete_agent_computer,
+            commands::computer_provider_statuses,
             commands::group_connectors,
             commands::create_connector,
             commands::delete_connector,

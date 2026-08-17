@@ -191,14 +191,39 @@ export interface Signin {
   lastSeenAt: number;
 }
 
+/**
+ * Who runs a machine. A computer is pinned to the one that made it until it is
+ * destroyed, so this is an answer rather than the setting: see
+ * {@link ComputerProvider} for the choice.
+ */
+export type Provider = "appleContainer" | "e2b";
+
 /** An agent's computer: a Linux machine with a shell, a network and a desktop. */
 export interface Computer {
   id: ComputerId;
-  provider: "e2b";
+  provider: Provider;
   /** `running` or `asleep` (disk kept, wakes on use). */
   state: string;
   /** Absent until the desktop processes are up inside the machine. */
   vncUrl: string | null;
+}
+
+/** Whether a provider could make a machine right now, and what to do if not. */
+export type ProviderReadiness = "ready" | "notInstalled" | "notRunning" | "unsupported" | "error";
+
+/**
+ * What one provider says about itself, as Settings draws it.
+ *
+ * The provider's own words and nothing else it knows: no key, no guest address
+ * and no external id ever crosses this boundary.
+ */
+export interface ComputerProviderStatus {
+  provider: Provider;
+  state: ProviderReadiness;
+  /** Whether asking for a computer would start whatever is stopped. */
+  canStart: boolean;
+  /** What is true now, and the next step when there is one. Shown as written. */
+  detail: string;
 }
 
 /** One command's result, from the agent's computer. */
@@ -259,7 +284,7 @@ export interface GuardLimits {
  * Who to ask for a new computer. `automatic` is resolved once, when the
  * computer is made; the ones that exist keep whoever made them.
  */
-export type ComputerProvider = "automatic" | "appleContainer" | "e2b";
+export type ComputerProvider = "automatic" | Provider;
 
 export interface Settings {
   /** What agents call you. Empty means they say "the operator". */

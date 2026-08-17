@@ -20,6 +20,7 @@ use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
 use guac_lib::domain::approval::{Decision, ProtectedAction};
+use guac_lib::domain::computer::{Provider, ProviderChoice};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
@@ -1328,6 +1329,66 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
     .await;
 }
 
+#[tokio::test]
+async fn an_agent_no_provider_can_serve_is_not_offered_a_computer_and_is_told_it_has_none() {
+    // Both halves of the join, on the one path that has it: the tool list and
+    // the prompt are put together in the runtime, and a unit test on either
+    // side cannot see them disagree.
+    let stub = serve(|_| Script::Say("noted".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+
+    // Named rather than left automatic. `automatic` asks what is installed on
+    // the machine running the test, and a developer's Mac with Apple Container
+    // on it would answer differently from CI; an operator who chose the hosted
+    // provider and has no key is the same "nothing can make one" either way.
+    let mut config = h.runtime.config();
+    config.computer.provider = ProviderChoice::Provider(Provider::E2b);
+    h.runtime.set_config(config);
+    assert!(h.runtime.config().e2b.api_key.is_empty(), "and no key to make one with");
+
+    let run = h.runtime.send_from_human(h.id("Clerk"), "hello").unwrap();
+    h.settle(run).await;
+
+    let without = stub.transcript.lock().last().cloned().expect("the model was called");
+    let offered = tool_names(&without);
+    for tool in ["run_command", "open_on_desktop", "use_screen", "browse"] {
+        assert!(!offered.contains(&tool.to_string()), "{tool} offered with nothing behind it");
+    }
+    assert!(offered.contains(&"send_message".to_string()), "the rest are still there: {offered:?}");
+    let prompt = without["messages"][0]["content"].as_str().unwrap_or_default();
+    assert!(prompt.contains("do not have one"), "the prompt says so too: {prompt}");
+
+    // The operator adds a key in Settings. The next turn has a machine, and
+    // nothing has to restart for the agent to be told so.
+    let mut config = h.runtime.config();
+    config.e2b.api_key = "e2b_test".into();
+    h.runtime.set_config(config);
+
+    let run = h.runtime.send_from_human(h.id("Clerk"), "hello again").unwrap();
+    h.settle(run).await;
+
+    let with = stub.transcript.lock().last().cloned().unwrap();
+    let offered = tool_names(&with);
+    for tool in ["run_command", "open_on_desktop", "use_screen", "browse"] {
+        assert!(offered.contains(&tool.to_string()), "{tool} must be back: {offered:?}");
+    }
+    let prompt = with["messages"][0]["content"].as_str().unwrap_or_default();
+    assert!(prompt.contains("Never say you have no computer"), "and the prompt says so: {prompt}");
+}
+
+/// The tools a request offered, by name.
+fn tool_names(body: &serde_json::Value) -> Vec<String> {
+    body["tools"]
+        .as_array()
+        .map(|tools| {
+            tools
+                .iter()
+                .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[test]
 fn a_schedule_that_cannot_be_read_does_not_starve_the_runtime() {
     // A store error on the schedule used to skip the sleep at the bottom of the
@@ -1392,6 +1453,12 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     // tries and hits a login wall.
     let stub = serve(|_| Script::Say("Noted.".into())).await;
     let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    // A session lives in a browser and a credential goes into a shell, so what
+    // an agent can reach is only said to one that can have a machine. Nothing
+    // below starts one; the key only has to be set for there to be a provider.
+    let mut config = h.runtime.config();
+    config.e2b.api_key = "e2b_test".into();
+    h.runtime.set_config(config);
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     h.runtime

@@ -19,6 +19,7 @@ import type {
   ApprovalId,
   ApprovalState,
   Computer,
+  ComputerProviderStatus,
   Connector,
   ConnectorDraft,
   ConnectorId,
@@ -58,6 +59,12 @@ export const api = {
 
   /** Destroys the machine and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
+
+  /**
+   * What each provider would say if asked for a machine now, in the order
+   * `automatic` tries them. Answered from cached probes, so asking is cheap.
+   */
+  computerProviderStatuses: () => invoke<ComputerProviderStatus[]>("computer_provider_statuses"),
 
   /** Every account a crew can reach. Never carries a credential's value. */
   groupConnectors: (groupId: GroupId) => invoke<Connector[]>("group_connectors", { groupId }),

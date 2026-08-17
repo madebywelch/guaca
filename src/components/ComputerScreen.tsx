@@ -26,6 +26,7 @@ interface Props {
  */
 export function ComputerScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
+  const statuses = useStore((s) => s.computerStatuses);
   const [computer, setComputer] = useState<Computer | null>(null);
   const [full, setFull] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -41,9 +42,16 @@ export function ComputerScreen({ agent }: Props) {
   // the previous one's screen.
   const showing = useRef(agent.id);
 
-  // Nothing at all until there is a key. Offering to give an agent a computer
-  // that cannot be made is worse than not mentioning computers.
-  const configured = settings?.e2bKeySet === true;
+  // Nothing at all until some provider could make one. Offering to give an
+  // agent a computer that cannot be made is worse than not mentioning
+  // computers: the button fails and the reason is in another window.
+  //
+  // An agent that already owns one is the exception, and it is the whole
+  // reason this is not simply "is anything ready": a provider the operator
+  // turned off does not take away a disk, and the screen is how they reach it.
+  const configured =
+    agent.computerId !== null ||
+    statuses.some((status) => status.state === "ready" || status.canStart);
 
   const look = useCallback(async () => {
     const asked = agent.id;

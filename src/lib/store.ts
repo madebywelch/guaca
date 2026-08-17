@@ -16,6 +16,7 @@ import type {
   AgentId,
   ApprovalId,
   ApprovalState,
+  ComputerProviderStatus,
   Envelope,
   Group,
   GroupId,
@@ -57,6 +58,12 @@ interface State {
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
+  /**
+   * What each provider says about itself. Empty until the first answer, which
+   * reads as "nothing can make a computer" — the same thing the window would
+   * show a second later anyway, and the honest answer while nobody has asked.
+   */
+  computerStatuses: ComputerProviderStatus[];
 
   /** Everything each group has spent, ever. Keyed by group id. */
   usage: Record<GroupId, Tokens | undefined>;
@@ -92,6 +99,7 @@ interface State {
 
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
+  refreshComputerStatuses: () => Promise<void>;
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
@@ -139,6 +147,7 @@ export const useStore = create<State>((set, get) => ({
   activity: {},
   lastActive: {},
   settings: null,
+  computerStatuses: [],
   usage: {},
   pulse: {},
   approvals: {},
@@ -161,10 +170,33 @@ export const useStore = create<State>((set, get) => ({
     ]);
     set({ agents, groups, activity, lastActive, settings, usage: byGroup(usage), approvals });
 
+    // Not awaited with the rest: asking a local runtime how it is doing spawns
+    // processes, and the window should not wait on a virtualisation service to
+    // draw the first channel. The computer pane appears when the answer lands.
+    void get().refreshComputerStatuses();
+
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
     if (!current && live.length > 0) {
       await get().select(live[0]!.id);
+    }
+  },
+
+  /**
+   * Asks every provider how it is doing. Called at startup and after a save,
+   * because the answer moves with the settings: a key added in the dialog is a
+   * provider that can suddenly make a machine.
+   *
+   * A failure leaves the last answer alone rather than emptying the list. This
+   * decides whether the computer pane is drawn at all, and a blink of "no
+   * provider" over one refused call is worse than a stale line of text.
+   */
+  async refreshComputerStatuses() {
+    try {
+      set({ computerStatuses: await api.computerProviderStatuses() });
+    } catch {
+      // Nothing to tell the operator: the statuses are themselves the report,
+      // and Settings shows what it last heard.
     }
   },
 
