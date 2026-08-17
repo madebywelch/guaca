@@ -73,9 +73,8 @@ const SHM_SIZE: &str = "1G";
 /// it can be enforced.
 const HOME_SIZE: &str = "20G";
 
-/// What to tell an operator who has no runtime installed. Names where the
-/// signed package is, because Apple Container is not in any package manager.
-/// What to tell an operator whose Mac has no runtime on it.
+/// What to tell an operator whose Mac has no runtime on it. Names where the
+/// signed package is, because Apple Container is in no package manager.
 ///
 /// This is where the hardware is spoken about, rather than at compile time,
 /// because this is the point where it is actually known: the package installs
@@ -229,6 +228,36 @@ impl AppleContainer {
         Ok(())
     }
 
+    /// Why one of the two shared-name resources refused to be created, which
+    /// decides whether this create can carry on with what is already there.
+    ///
+    /// Fails closed at every step: a runtime that will not describe the thing,
+    /// output this build cannot read, and labels that are absent are all
+    /// somebody else's, because the alternative is mounting a stranger's home
+    /// volume into an agent's machine and deleting it on the way out.
+    async fn why_refused(
+        &self,
+        refused: &CliOutput,
+        inspect: &[String],
+        computer: ComputerId,
+    ) -> Result<Refusal, ProviderError> {
+        if !already_exists(refused) {
+            return Ok(Refusal::Other);
+        }
+        let described = self.control(inspect).await?;
+        if !described.ok() {
+            return Ok(Refusal::SomebodyElses);
+        }
+        let Ok(described) = described.json() else {
+            return Ok(Refusal::SomebodyElses);
+        };
+        Ok(if left_by(&described, computer) {
+            Refusal::OurLeftover
+        } else {
+            Refusal::SomebodyElses
+        })
+    }
+
     /// Makes the network, the volume and the container, recording each as it
     /// succeeds so a failure knows what there is to unmake.
     async fn assemble(
@@ -238,23 +267,44 @@ impl AppleContainer {
     ) -> Result<(), ProviderError> {
         let name = resource_name(request.computer);
 
-        // One left over from a create that failed and could not tidy up after
-        // itself is this computer's own — the name is its id — so it is taken
-        // over rather than treated as an obstacle. Without that, the one
-        // computer whose rollback failed can never be made again, and all the
-        // operator sees is a machine that refuses to appear. Recorded as ours
-        // either way, so a failure later in this call still unmakes it.
+        // A name already taken is usually this computer's own leftover, from a
+        // create that failed and could not tidy up after itself, and taking it
+        // over is the only way that computer is ever made again. Usually, not
+        // certainly: the name carries eight hex characters of a random id, so
+        // another installation holding it is unlikely rather than impossible,
+        // and what would be adopted then is a stranger's home volume — mounted
+        // into this agent's machine, and deleted along with it. So the label is
+        // asked for, and anything that cannot be shown to be ours is refused.
+        // Adopted or made, it goes in `made`, so a failure later in this call
+        // unmakes it either way.
         let network =
             self.control(&network_create_argv(&self.installation, request.computer)).await?;
-        if !network.ok() && !already_exists(&network) {
-            return Err(step_failed("creating the computer's private network", &network));
+        if !network.ok() {
+            match self.why_refused(&network, &network_inspect_argv(&name), request.computer).await?
+            {
+                Refusal::OurLeftover => {}
+                Refusal::SomebodyElses => {
+                    return Err(name_taken("private network", &name, "container network delete"))
+                }
+                Refusal::Other => {
+                    return Err(step_failed("creating the computer's private network", &network))
+                }
+            }
         }
         made.push(Made::Network);
 
         let volume =
             self.control(&volume_create_argv(&self.installation, request.computer)).await?;
-        if !volume.ok() && !already_exists(&volume) {
-            return Err(step_failed("creating the computer's home volume", &volume));
+        if !volume.ok() {
+            match self.why_refused(&volume, &volume_inspect_argv(&name), request.computer).await? {
+                Refusal::OurLeftover => {}
+                Refusal::SomebodyElses => {
+                    return Err(name_taken("home volume", &name, "container volume delete"))
+                }
+                Refusal::Other => {
+                    return Err(step_failed("creating the computer's home volume", &volume))
+                }
+            }
         }
         made.push(Made::Volume);
 
@@ -274,7 +324,9 @@ impl AppleContainer {
 
     /// Best-effort teardown of a half-made computer, newest first.
     ///
-    /// Only what was actually made: a forced delete of a container this call
+    /// Only what this call made or adopted — and adoption is only ever of a
+    /// resource that carries this computer's own label, so everything in `made`
+    /// is this computer's either way. A forced delete of a container this call
     /// never created would destroy a machine that happens to share a name. A
     /// failure here is logged rather than returned, because the caller is
     /// already reporting why the computer could not be made and that is the
@@ -315,6 +367,18 @@ enum Made {
     Container,
 }
 
+/// What a refused `network create` or `volume create` turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Refusal {
+    /// The name is taken by something carrying this computer's own label: a
+    /// create that got this far and could not tidy up after itself.
+    OurLeftover,
+    /// The name is taken by something that is not demonstrably ours.
+    SomebodyElses,
+    /// It refused for some other reason entirely.
+    Other,
+}
+
 #[async_trait::async_trait]
 impl ComputerProvider for AppleContainer {
     fn kind(&self) -> Provider {
@@ -322,9 +386,8 @@ impl ComputerProvider for AppleContainer {
     }
 
     async fn probe(&self) -> ProviderStatus {
-        // Asked before anything is spawned, because on a Mac that cannot
-        // virtualise arm64 Linux there is nothing to install and nothing worth
-        // a process.
+        // Asked before anything is spawned, because on something that is not a
+        // Mac there is nothing to look for and nothing worth a process.
         if !self.platform {
             return unsupported_platform();
         }
@@ -529,6 +592,11 @@ fn network_delete_argv(name: &str) -> Vec<String> {
     argv(&["network", "delete", name])
 }
 
+/// Asked only of a name that is already taken, to find out whose it is.
+fn network_inspect_argv(name: &str) -> Vec<String> {
+    argv(&["network", "inspect", name])
+}
+
 /// The quota is given here because here is where it can be given: a volume
 /// that was made without one cannot be held to it later, and the agent's home
 /// is the only place a runaway download can land.
@@ -541,6 +609,10 @@ fn volume_create_argv(installation: &str, computer: ComputerId) -> Vec<String> {
 
 fn volume_delete_argv(name: &str) -> Vec<String> {
     argv(&["volume", "delete", name])
+}
+
+fn volume_inspect_argv(name: &str) -> Vec<String> {
+    argv(&["volume", "inspect", name])
 }
 
 fn container_create_argv(request: &CreateComputer, installation: &str, image: &str) -> Vec<String> {
@@ -709,6 +781,39 @@ fn read_owned(list: &serde_json::Value, installation: &str) -> Vec<String> {
         .filter(|listed| ours(listed, installation))
         .filter_map(|listed| listed["configuration"]["id"].as_str().map(str::to_string))
         .collect()
+}
+
+/// Whether an inspected resource is one this very computer left behind.
+///
+/// The name is not evidence: it carries eight hex characters of a random id,
+/// so another installation holding the same one is unlikely rather than
+/// impossible, and what would be adopted on the strength of a name alone is a
+/// stranger's home volume. The label is the evidence, read down the same path
+/// as `read_owned` uses and just as defensively — absent, unreadable, or
+/// anyone else's all mean not ours.
+///
+/// The array is unwrapped if there is one, because whether `network inspect`
+/// answers with an array or a bare object is unconfirmed until the spike.
+/// Being relaxed about that shape is safe while being strict about the label:
+/// the worst a misread shape does is refuse an adoption that would have been
+/// allowed.
+fn left_by(described: &serde_json::Value, computer: ComputerId) -> bool {
+    let described = described.as_array().and_then(|items| items.first()).unwrap_or(described);
+    let owner = computer.to_string();
+    described["configuration"]["labels"]["guac.computer"].as_str() == Some(owner.as_str())
+}
+
+/// A name held by something this computer cannot show it owns.
+///
+/// The remedy is manual and says so: this build will not delete a resource it
+/// cannot prove is its own, and the operator is the only one who can tell
+/// whether the thing in the way is theirs to remove.
+fn name_taken(kind: &str, name: &str, delete_command: &str) -> ProviderError {
+    ProviderError::Operation(format!(
+        "the computer's {kind} could not be made: something on this Mac is already called {name}, \
+         and it does not carry this computer's label. Remove it with `{delete_command} {name}` if \
+         it is yours to remove, then try again."
+    ))
 }
 
 /// Whether one listed container carries this installation's ownership labels.
@@ -884,6 +989,13 @@ fn service_silent() -> ProviderStatus {
 /// the caller does with it differs: `Unsupported` is never worth retrying,
 /// `Unconfigured` is answered by installing something, and anything else is a
 /// message for a person.
+///
+/// One consequence worth knowing: a `--version` that timed out arrives here as
+/// `Error` and leaves as `Operation`, not `Timeout`. That is deliberate —
+/// `Timeout` is the variant that says a command may still be running on a
+/// machine, and there is no machine yet — but it means a runtime wedged at the
+/// version check is reported as an operation failure carrying the wedged
+/// runtime's own next step.
 fn refusal(status: ProviderStatus) -> ProviderError {
     match status.state {
         ProviderReadiness::Unsupported => ProviderError::Unsupported(status.detail),
@@ -1002,6 +1114,62 @@ mod tests {
 
         assert_eq!(network_delete_argv(&name), ["network", "delete", name.as_str()]);
         assert_eq!(volume_delete_argv(&name), ["volume", "delete", name.as_str()]);
+
+        // Asked only of a name that is already taken, to find out whose it is.
+        assert_eq!(network_inspect_argv(&name), ["network", "inspect", name.as_str()]);
+        assert_eq!(volume_inspect_argv(&name), ["volume", "inspect", name.as_str()]);
+    }
+
+    #[test]
+    fn a_resource_is_only_ours_when_it_says_so() {
+        // The name proves nothing: it is eight hex characters of a random id,
+        // and adopting on the strength of it would mount a stranger's home
+        // volume into an agent's machine and delete it on the way out.
+        let computer = ComputerId::new();
+        let labelled = |owner: &str| {
+            serde_json::json!([{
+                "configuration": {
+                    "id": "guac-x",
+                    "labels": {"guac": "true", "guac.installation": "inst-7", "guac.computer": owner},
+                },
+            }])
+        };
+
+        assert!(left_by(&labelled(&computer.to_string()), computer));
+        assert!(
+            !left_by(&labelled(&ComputerId::new().to_string()), computer),
+            "another computer's, even in this same installation"
+        );
+
+        // Everything unreadable is somebody else's: absent labels, an empty
+        // description, a shape this build does not know.
+        assert!(!left_by(&serde_json::json!([{"configuration": {"id": "guac-x"}}]), computer));
+        assert!(!left_by(&serde_json::json!([]), computer));
+        assert!(!left_by(&serde_json::json!({}), computer));
+        assert!(!left_by(&serde_json::json!("guac-x"), computer));
+
+        // Whether inspect answers with an array or a bare object is unconfirmed
+        // until the spike, so a correctly labelled object is ours either way.
+        assert!(left_by(
+            &serde_json::json!({"configuration": {"labels": {"guac.computer": computer.to_string()}}}),
+            computer
+        ));
+    }
+
+    #[test]
+    fn a_name_held_by_a_stranger_says_which_name_and_how_to_clear_it() {
+        // This build will not delete something it cannot prove is its own, so
+        // the way out is the operator's and the message has to hand it over.
+        let err = name_taken("home volume", "guac-abcd1234", "container volume delete");
+        let message = err.to_string();
+
+        assert!(matches!(err, ProviderError::Operation(_)));
+        assert!(message.contains("home volume"), "{message}");
+        assert!(message.contains("guac-abcd1234"), "which name: {message}");
+        assert!(
+            message.contains("container volume delete guac-abcd1234"),
+            "and the command that clears it: {message}"
+        );
     }
 
     #[test]
@@ -1746,29 +1914,152 @@ mod fake_runtime {
 
     #[tokio::test]
     async fn a_name_left_behind_by_a_failed_rollback_does_not_lock_the_computer_out_forever() {
-        // Names come from the computer's id, so anything already carrying this
-        // one is this computer's own, left by a create that could not tidy up.
-        // Treated as an obstacle, that computer could never be made again and
-        // the operator would only see a machine that refuses to appear.
+        // A create that made the network and could not unmake it leaves a name
+        // that is never free again. Treated as an obstacle, that one computer
+        // could never be made, and all the operator sees is a machine that
+        // refuses to appear.
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("invocations");
+        let request = creation(900);
+        let name = resource_name(request.computer);
+        let ours = format!("printf '%s' '{}'", described_as(&request.computer.to_string()));
         let cli = fake_container(
             dir.path(),
             &log,
-            &[("network create", "echo 'network guac-x already exists' >&2; exit 1")],
+            &[
+                ("network create", "echo 'network already exists' >&2; exit 1"),
+                ("network inspect", &ours),
+            ],
         );
-        let request = creation(900);
-        let name = resource_name(request.computer);
 
         let made = provider(cli).create(&request).await.expect("the leftover is ours to take over");
 
         assert_eq!(made.provider_id, name);
         let seen = log_lines(&log);
         assert!(
+            seen.contains(&format!("network inspect {name}")),
+            "it asked whose the name was: {seen:?}"
+        );
+        assert!(
             seen.iter().any(|line| line.starts_with("volume create")),
             "it carried on: {seen:?}"
         );
         assert_eq!(seen.last().unwrap(), &format!("start {name}"));
+    }
+
+    /// What `network inspect` / `volume inspect` prints for a resource whose
+    /// `guac.computer` label is `owner`.
+    fn described_as(owner: &str) -> String {
+        serde_json::json!([{
+            "configuration": {
+                "id": "guac-x",
+                "labels": {"guac": "true", "guac.installation": "inst-7", "guac.computer": owner},
+            },
+        }])
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn a_volume_left_behind_is_adopted_through_its_own_inspect() {
+        // The same rule down the other branch, which is worth its own test
+        // because the two differ only in the argv they pass: a copy-paste
+        // between them would ask about the network and adopt the volume.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let request = creation(900);
+        let name = resource_name(request.computer);
+        let ours = format!("printf '%s' '{}'", described_as(&request.computer.to_string()));
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[
+                ("volume create", "echo 'volume already exists' >&2; exit 1"),
+                ("volume inspect", &ours),
+            ],
+        );
+
+        provider(cli).create(&request).await.expect("the leftover is ours to take over");
+
+        let seen = log_lines(&log);
+        assert!(seen.contains(&format!("volume inspect {name}")), "{seen:?}");
+        assert!(
+            !seen.iter().any(|line| line.starts_with("network inspect")),
+            "the network was made, so nothing was asked about it: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_held_by_another_computer_is_refused_rather_than_taken_over() {
+        // The collision this guards against: eight hex characters of a random
+        // id, held by another installation. Adopted, that volume is a
+        // stranger's home directory mounted into this agent's machine — and
+        // deleted along with it when this computer is destroyed.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let request = creation(900);
+        let name = resource_name(request.computer);
+        let theirs = format!("printf '%s' '{}'", described_as(&ComputerId::new().to_string()));
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[
+                ("network create", "echo 'network already exists' >&2; exit 1"),
+                ("network inspect", &theirs),
+            ],
+        );
+
+        let err = provider(cli).create(&request).await.expect_err("that network is not ours");
+
+        assert!(matches!(err, ProviderError::Operation(_)), "{err:?}");
+        assert!(err.to_string().contains(&name), "which name: {err}");
+        assert!(
+            err.to_string().contains(&format!("container network delete {name}")),
+            "and how to clear it: {err}"
+        );
+        let seen = log_lines(&log);
+        assert!(
+            !seen.iter().any(|line| line.starts_with("volume create")),
+            "it stopped there: {seen:?}"
+        );
+        assert!(
+            !seen.iter().any(|line| line.starts_with("network delete")),
+            "and did not delete what it could not prove was its own: {seen:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_name_whose_owner_cannot_be_read_is_refused() {
+        // Fails closed. Every way of not knowing is the same answer: labels
+        // that are not there, output this build cannot read, and an inspect
+        // that would not answer at all.
+        let unlabelled = format!("printf '%s' '{}'", serde_json::json!([{"status": "running"}]));
+
+        for (which, description) in [
+            ("no labels", unlabelled.as_str()),
+            ("not json", "echo 'Warning: no kernel'"),
+            ("refused", "echo 'no such network' >&2; exit 1"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("invocations");
+            let cli = fake_container(
+                dir.path(),
+                &log,
+                &[
+                    ("network create", "echo 'network already exists' >&2; exit 1"),
+                    ("network inspect", description),
+                ],
+            );
+
+            let err = provider(cli)
+                .create(&creation(900))
+                .await
+                .expect_err("nothing here says the name is ours");
+
+            assert!(
+                err.to_string().contains("container network delete"),
+                "{which}: the operator is left without the remedy: {err}"
+            );
+        }
     }
 
     #[tokio::test]
