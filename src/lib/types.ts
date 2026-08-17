@@ -27,11 +27,20 @@ export type ToolOutcome =
   | { status: "refused"; reason: string }
   | { status: "failed"; error: string };
 
+/** Whether a message carries work or is a courtesy. */
+export type Intent = "work" | "courtesy";
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
   | { type: "notice"; kind: NoticeKind; text: string }
   | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
+  /**
+   * A file the message carries. The bytes stay in the runtime's file store and
+   * are addressed by `digest`; a transcript is read in bulk, so a document is
+   * never inlined into one.
+   */
+  | { type: "file"; digest: string; name: string; mime: string; bytes: number }
   /**
    * An agent asking the operator for permission. Carries its own wording, so an
    * old channel still says what was asked; what came of it is read from
@@ -48,7 +57,7 @@ export type Part =
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
-export type ProtectedAction = "createAgent";
+export type ProtectedAction = "createAgent" | "actOnBehalf";
 
 /** What the operator can answer. Pending and expired are not answers. */
 export type Decision = "allow" | "alwaysAllow" | "deny";
@@ -87,6 +96,12 @@ export interface Envelope {
   trust: Trust;
   hop: number;
   expectsReply: boolean;
+  /**
+   * What the sender said this message was for. Distinct from
+   * {@link Envelope.expectsReply}: that says whether anybody is waiting on your
+   * words, this says whether you were given something to do.
+   */
+  intent: Intent;
   cause: MessageId | null;
   createdAt: number;
 }

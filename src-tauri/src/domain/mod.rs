@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod approval;
+pub mod attachment;
 pub mod connector;
 pub mod envelope;
 pub mod group;

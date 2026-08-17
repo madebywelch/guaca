@@ -187,7 +187,7 @@ impl EventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::envelope::{Part, Participant, Trust};
+    use crate::domain::envelope::{Intent, Part, Participant, Trust};
 
     fn envelope(text: &str) -> Envelope {
         Envelope {
@@ -200,6 +200,7 @@ mod tests {
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: 0,
         }

@@ -63,6 +63,7 @@ vi.mock("./lib/ipc", () => ({
     },
   },
   onRuntimeEvent: async () => () => {},
+  onFileDrop: async () => () => {},
 }));
 
 const { default: App } = await import("./App");

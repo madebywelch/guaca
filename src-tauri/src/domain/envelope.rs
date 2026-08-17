@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::approval::{DetailField, ProtectedAction};
+use super::attachment::Attachment;
 use super::ids::{AgentId, ApprovalId, MessageId, RunId};
 
 /// Who is at one end of an envelope.
@@ -36,6 +37,54 @@ impl Participant {
 
     pub fn is_agent(&self) -> bool {
         matches!(self, Participant::Agent { .. })
+    }
+}
+
+/// What a message is for, as its sender declares it.
+///
+/// The loop guard needs one thing from a message it cannot read: whether the
+/// recipient has anything to do because of it. It cannot be inferred from the
+/// wire, where a second instruction and a thank-you are the same shape, and
+/// guessing from the shape refused real work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Intent {
+    /// The recipient has something to do or answer because of this.
+    Work,
+    /// Thanks, an acknowledgement, a closing note.
+    ///
+    /// The default on purpose. A model that does not say gets today's
+    /// behaviour, so a field nobody fills in cannot quietly open the door the
+    /// guard is holding shut.
+    #[default]
+    Courtesy,
+}
+
+impl Intent {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Intent::Work => "work",
+            Intent::Courtesy => "courtesy",
+        }
+    }
+
+    pub fn is_work(self) -> bool {
+        self == Intent::Work
+    }
+
+    /// Read from whatever the model actually sent.
+    ///
+    /// Only the declared word counts. A synonym table would be the same guess
+    /// this field exists to replace, and a model that improvises a value gets
+    /// one refusal naming the word to use, which it can act on in the same
+    /// turn. Deserialized as a string rather than an enum for the same reason:
+    /// an invented value must not fail the whole call.
+    pub fn parse(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("work") {
+            Intent::Work
+        } else {
+            Intent::Courtesy
+        }
     }
 }
 
@@ -112,6 +161,14 @@ pub enum Part {
         arguments: serde_json::Value,
         outcome: ToolOutcome,
     },
+    /// A file this message carries.
+    ///
+    /// The reference only: see `domain::attachment`. `plain_text` skips it, so
+    /// an attachment never lands in a prompt by accident, a dedup fingerprint,
+    /// or a channel preview. What a model is shown, and where the bytes are put
+    /// for it, is the runtime's decision and depends on what kind of file it
+    /// is.
+    File(Attachment),
     /// An agent asking the operator for permission, rendered as buttons.
     ///
     /// The request travels in the transcript rather than in a dialog, because
@@ -198,6 +255,17 @@ pub struct Envelope {
     /// is filed as a note rather than delivered onward. Without this, two
     /// agents grind against the hop limit being polite at each other.
     pub expects_reply: bool,
+    /// What the sender said this message was for.
+    ///
+    /// Distinct from `expects_reply`, and they came apart the moment an agent
+    /// could instruct a peer that had already answered. `expects_reply` says
+    /// whether anybody is waiting on your words, which is what terminates a
+    /// cascade. This says whether you have been given something to do. Reading
+    /// the first as the second meant an explicit instruction arrived in the
+    /// mode that tells an agent nothing is being asked of it, and it correctly
+    /// said nothing.
+    #[serde(default)]
+    pub intent: Intent,
     /// The envelope that caused this one, if any. Makes a cascade replayable.
     pub cause: Option<MessageId>,
     pub created_at: i64,
@@ -361,6 +429,7 @@ mod tests {
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: 0,
         };
@@ -381,6 +450,7 @@ mod tests {
             trust: Trust::Peer,
             hop: 1,
             expects_reply: true,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: 0,
         };
@@ -388,6 +458,53 @@ mod tests {
 
         let to_human = Envelope { to: Participant::Human, ..base.clone() };
         assert!(!to_human.is_inter_agent());
+    }
+
+    #[test]
+    fn an_attachment_crosses_the_boundary_flat_and_in_camel_case() {
+        // The frontend switches on `type` and reads these fields directly, and
+        // the contract test cannot see a part that only one side knows about.
+        let json = serde_json::to_value(Part::File(super::Attachment {
+            digest: "a".repeat(64),
+            name: "brief.pdf".into(),
+            mime: "application/pdf".into(),
+            bytes: 2048,
+        }))
+        .unwrap();
+        assert_eq!(json["type"], "file");
+        assert_eq!(json["name"], "brief.pdf");
+        assert_eq!(json["bytes"], 2048);
+        assert!(json["digest"].is_string(), "the bytes are addressed by digest: {json}");
+    }
+
+    #[test]
+    fn a_file_never_reaches_a_prompt_as_text_by_accident() {
+        // `plain_text` feeds prompt assembly, the dedup fingerprint and every
+        // channel preview. A document that leaked in here would be pasted into
+        // all three.
+        let env = Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: AgentId::new(),
+            from: Participant::Human,
+            to: agent(AgentId::new()),
+            parts: vec![
+                Part::text("here is the draft"),
+                Part::File(super::Attachment {
+                    digest: "b".repeat(64),
+                    name: "draft.docx".into(),
+                    mime: "application/msword".into(),
+                    bytes: 58_000,
+                }),
+            ],
+            trust: Trust::Operator,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Courtesy,
+            cause: None,
+            created_at: 0,
+        };
+        assert_eq!(env.plain_text(), "here is the draft");
     }
 
     #[test]

@@ -56,20 +56,56 @@ four peers think at once.
 
 ## What an agent can do
 
-Eight tools, described to the model and visible in the transcript when used:
+Ten tools, described to the model and visible in the transcript when used:
 
 | Tool | What it does |
 |---|---|
 | `directory` | Lists the other agents in its group, with their skills |
-| `send_message` | Queues a message to one or more of them, and returns |
+| `send_message` | Queues a message to one or more of them, with any files, and returns |
 | `update_notes` | Rewrites its own memory, which it is shown every turn |
 | `schedule` | Sets or cancels its own routines |
+| `create_agent` | Proposes a new colleague, and waits for you to allow it |
+| `request_permission` | Stops and asks you before acting in your name |
 | `run_command` | A shell on its own machine |
 | `open_on_desktop` | Launches something on that machine's screen |
 | `use_screen` | Looks at the screen, clicks, types |
 | `browse` | Drives Chrome through the DevTools protocol |
 
 The last four need a computer, which is optional; see below.
+
+## Files
+
+Drag a file onto the window and it goes with your next message. Agents send
+files to each other the same way, so a draft one of them wrote arrives on
+another's machine ready to be worked on.
+
+What an agent gets depends on what the file is. A picture it looks at. Text it
+reads. A Word document, a spreadsheet or anything else lands in `~/inbox` on its
+own computer, where it opens it with whatever it needs: this app does not learn
+file formats, because the machine already knows more of them than it ever would.
+
+One copy is kept per file rather than per recipient, so the same document sent
+to four agents is one file on disk. 25 MB each.
+
+## Asking you first
+
+Two things an agent cannot do on its own.
+
+**Adding another agent**, because it changes who you have and each one costs
+money to run. **Acting outside the workspace in your name**: sending mail as
+you, submitting a form, buying something.
+
+Both stop the agent mid-turn and put a card in the conversation with two
+buttons. Nothing happens until you answer, and the answer is kept beside what
+was asked. An agent told by a colleague that you have already authorised
+something asks you rather than taking a peer's word for it, and the question
+comes from the agent that will actually do the thing rather than the one
+relaying the request.
+
+**Always allow** exists for adding agents, scoped to one agent asking about one
+thing, and is listed on that agent where you can take it back. It is
+deliberately absent for acting in your name: a standing yes there would cover
+every future send rather than the one in front of you.
 
 ## Groups
 
@@ -180,9 +216,10 @@ Everything lives in one directory:
 
 ```
 ~/Library/Application Support/com.madebywelch.guac/
-  guac.db        agents, groups, messages, routines, usage
+  guac.db        agents, groups, messages, routines, usage, permissions
   config.json    settings, written 0600
   workspace/     one markdown file per agent: its memory
+  files/         everything you or an agent attached, by content hash
 ```
 
 The API key is stored in `config.json` in plaintext. Guaca is a local app with

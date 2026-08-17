@@ -295,6 +295,7 @@ fn overlap(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::envelope::Intent;
     use crate::domain::envelope::Part;
     use crate::domain::ids::{MessageId, RunId};
 
@@ -325,6 +326,7 @@ mod tests {
             trust: crate::domain::envelope::Trust::Peer,
             hop,
             expects_reply: wants,
+            intent: Intent::Courtesy,
             cause: None,
             created_at: 0,
         }

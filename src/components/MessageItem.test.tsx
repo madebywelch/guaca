@@ -48,6 +48,7 @@ function envelope(overrides: Partial<Envelope>): Envelope {
     trust: "operator",
     hop: 0,
     expectsReply: true,
+    intent: "courtesy",
     cause: null,
     createdAt: 1_700_000_000_000,
     ...overrides,
@@ -350,5 +351,50 @@ describe("a command that used a credential", () => {
 
     expect(container.textContent).toContain("used Mistral ($MISTRAL_API_KEY)");
     expect(container.textContent).toContain("Manager used run_command");
+  });
+});
+
+describe("redrawing a transcript", () => {
+  it("does not draw an entry again when nothing about it changed", () => {
+    // A transcript is rebuilt whenever any message is appended, and drawing an
+    // entry parses its markdown. Ten agents reporting at once meant every
+    // message on screen re-parsed for each arrival, which is the other half of
+    // what made the window stop responding.
+    const message = envelope({ parts: [{ type: "text", text: "the answer is 42" }] });
+    const view = render(
+      <MessageItem message={message} lookups={lookups} continued={false} feed={false} />,
+    );
+    const drawn = screen.getByText("the answer is 42");
+
+    // The same envelope, the same lookups: a parent redraw with nothing new.
+    view.rerender(
+      <MessageItem message={message} lookups={lookups} continued={false} feed={false} />,
+    );
+
+    // The node survives rather than being replaced, which is what memoisation
+    // buys: React never called the component at all.
+    expect(screen.getByText("the answer is 42")).toBe(drawn);
+  });
+
+  it("still redraws when the message itself changes", () => {
+    const view = render(
+      <MessageItem
+        message={envelope({ parts: [{ type: "text", text: "first" }] })}
+        lookups={lookups}
+        continued={false}
+        feed={false}
+      />,
+    );
+    view.rerender(
+      <MessageItem
+        message={envelope({ parts: [{ type: "text", text: "second" }] })}
+        lookups={lookups}
+        continued={false}
+        feed={false}
+      />,
+    );
+
+    expect(screen.getByText("second")).toBeTruthy();
+    expect(screen.queryByText("first")).toBeNull();
   });
 });

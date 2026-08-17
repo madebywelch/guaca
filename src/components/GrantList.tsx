@@ -10,6 +10,10 @@ interface Props {
 /** What each standing grant lets the agent do, in the operator's words. */
 const PHRASE: Record<ProtectedAction, string> = {
   createAgent: "Adds agents to this workspace without asking.",
+  // Not offered on the request itself, since a standing yes would cover every
+  // future send and purchase rather than the one being asked about. Listed
+  // anyway: a grant that exists and cannot be seen is worse than one that can.
+  actOnBehalf: "Acts outside this workspace in your name without asking.",
 };
 
 /**

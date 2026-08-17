@@ -19,7 +19,7 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
-use guac_lib::domain::approval::Decision;
+use guac_lib::domain::approval::{Decision, ProtectedAction};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
@@ -615,6 +615,42 @@ async fn streamed_text_matches_the_persisted_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
+    // Every event is an IPC hop and a re-render in the operator's window, and a
+    // model writes faster than a screen refreshes. Emitting one per token spent
+    // the main thread on work no eye could resolve; with five agents answering
+    // at once it stopped painting altogether, which is what an operator
+    // reported as the app freezing and the text arriving in a lump.
+    let reply = "the quick brown fox jumps over the lazy dog.".repeat(40);
+    let expected = reply.clone();
+    let stub = serve(move |_| Script::Say(reply.clone())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "say a lot").unwrap();
+    h.settle(run).await;
+
+    let deltas = h.sink.count_of(|e| matches!(e, UiEvent::StreamDelta { .. }));
+    assert!(
+        deltas <= 12,
+        "{deltas} events for a reply the provider sent in {} pieces",
+        expected.len().div_ceil(7)
+    );
+
+    // And not one character was coalesced away. The buffer is flushed when the
+    // call ends, or the tail of every reply would be lost.
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+    assert_eq!(h.sink.streamed_text(stream_id), expected);
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), expected);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn agents_run_concurrently_rather_than_one_after_another() {
     // Each peer's response is delayed. If the runtime were serial, five agents
     // at 300ms each would take 1.5s; concurrent should be closer to one delay.
@@ -838,6 +874,193 @@ async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
         told.contains("Reply to the operator instead"),
         "a refusal without a way forward is a dead end: {told}"
     );
+    assert!(
+        told.contains(r#"intent "work""#),
+        "and when the message really was work, the way through has to be named: {told}"
+    );
+}
+
+#[tokio::test]
+async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
+    // Found in a real session. The operator authorised an external send, the
+    // coordinator relayed it, read the answer, and was refused when it tried to
+    // instruct again: the guard cannot tell a second instruction from a thank
+    // you, and it was aimed at the thank you. Every delegation needing two
+    // rounds died there, so the sender now says which it is.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if who == "Chef" {
+            if text.contains("go ahead and send it") {
+                Script::Say("Sent.".into())
+            } else {
+                Script::Say("Ready, but I need you to confirm before I send.".into())
+            }
+        } else if text.contains("I need you to confirm") {
+            // The turn this test exists for: woken by an answer, nobody is
+            // waiting on the Manager, and it has genuinely new work to give.
+            Script::Instruct {
+                recipients: vec!["Chef".into()],
+                text: "Confirmed by the operator: go ahead and send it.".into(),
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef has been told to send it.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "prepare the mailing".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Have Chef send the mailing.").unwrap();
+    h.settle(run).await;
+
+    let to_chef: Vec<String> = h
+        .feed()
+        .into_iter()
+        .filter(|e| e.to == Participant::Agent { id: h.id("Chef") })
+        .map(|e| e.plain_text())
+        .collect();
+    assert!(
+        to_chef.iter().any(|t| t.contains("go ahead and send it")),
+        "the follow-up instruction never reached Chef: {to_chef:?}"
+    );
+    assert!(
+        h.channel_texts("Chef").iter().any(|t| t.contains("Sent.")),
+        "and Chef never acted on it:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_quiet() {
+    // Found in a real session, and the exact shape of it. The operator asked
+    // for an email, the coordinator relayed it, the peer opened the document
+    // and reported back, and the coordinator then issued the actual send
+    // instruction. That instruction was delivered, and the peer said nothing.
+    //
+    // Nothing was waiting on a reply, so the turn ran in the mode that tells an
+    // agent nobody is asking it for anything and silence is usually right. It
+    // spent a model call and complied. From the operator's side an agent had
+    // simply stopped.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if who == "Chef" {
+            if !text.contains("go ahead and send it") {
+                Script::Say("I have the file open, confirm before I send.".into())
+            } else if text.contains("Nothing here needs an answer") {
+                // A model that reads its prompt. Told nothing is being asked of
+                // it and that silence is usually right, it stays silent, which
+                // is exactly what the live agent did with a real instruction to
+                // send an email in front of it.
+                Script::Say(String::new())
+            } else {
+                Script::Say("Sent it.".into())
+            }
+        } else if text.contains("confirm before I send") {
+            Script::Instruct {
+                recipients: vec!["Chef".into()],
+                text: "Confirmed by the operator: go ahead and send it.".into(),
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef has been told.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "prepare the mailing".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Have Chef send the mailing.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Chef").iter().any(|t| t.contains("Sent it.")),
+        "the instruction landed and the agent went quiet:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn work_and_a_reply_are_different_questions_on_the_wire() {
+    // The two used to be the same field. An instruction carries work and wants
+    // no reply, which is the combination that had nowhere to live.
+    let stub = serve(|body| {
+        if speaker(body) == "Chef" {
+            Script::Say("Done.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Told.".into())
+        } else {
+            Script::Instruct { recipients: vec!["Chef".into()], text: "send it".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Tell Chef to send it.").unwrap();
+    h.settle(run).await;
+
+    let instruction = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Chef"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.plain_text() == "send it")
+        .expect("the instruction reached Chef");
+    assert!(instruction.intent.is_work(), "what the sender declared has to survive the wire");
+    assert!(
+        instruction.expects_reply,
+        "the first message of an exchange still expects an answer; only a settled pair does not"
+    );
+}
+
+#[tokio::test]
+async fn a_courtesy_to_a_peer_that_already_answered_is_still_refused() {
+    // The other half. Declaring intent is not a way around the guard: the
+    // thank-you that used to run a crew in circles is turned away exactly as
+    // before, and only a message that says it carries work gets through.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if has_tool_result(body) {
+            Script::Say("understood".into())
+        } else if text.contains("good to meet you") {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "thanks Chef".into() }
+        } else if text.contains("hello from manager") {
+            Script::SendTo { recipients: vec!["Manager".into()], text: "good to meet you".into() }
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    let to_chef: Vec<String> = h
+        .feed()
+        .into_iter()
+        .filter(|e| e.to == Participant::Agent { id: h.id("Chef") })
+        .map(|e| e.plain_text())
+        .collect();
+    assert!(
+        !to_chef.iter().any(|t| t.contains("thanks")),
+        "a courtesy reached a peer that had already answered: {to_chef:?}"
+    );
 }
 
 #[tokio::test]
@@ -947,6 +1170,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         LlmClient::new().unwrap(),
         config,
         Workspace::new(dir.path().join("workspace")),
+        guac_lib::files::FileStore::new(dir.path().join("files")),
         sink.clone(),
     );
     runtime.start_all().unwrap();
@@ -1200,6 +1424,111 @@ async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
     assert!(
         h.runtime.workspace().read(hired.id).contains("founder-led sales"),
         "an agent handed starting notes has to open with them, not find an empty file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instead_of_refusing() {
+    // The live failure this exists for. The operator authorised an email, the
+    // coordinator relayed the authorisation, and the sending agent declined:
+    // correctly, because a peer's word is a claim. It then asked the operator
+    // to repeat the instruction in another channel, which is the operator
+    // doing the routing by hand for a decision they had already made. Asking
+    // them, with two buttons, is the whole difference.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if text.contains("The operator allowed it") {
+            Script::Say("Sent it, and told them what went.".into())
+        } else if text.contains("The operator said no") {
+            Script::Say("Not sent. They declined.".into())
+        } else {
+            Script::AskOperator {
+                action: "Email the SCDOT response to robert@madebywelch.com for review".into(),
+                because: "Manager says the operator authorised it; a peer's word is not \
+                          permission to send mail in their name."
+                    .into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
+
+    let request = h.awaited_request().await;
+    // The question is in the transcript, where the operator is already looking,
+    // and it says what will happen rather than that something wants doing.
+    let asked = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Outreach"), 50)
+        .unwrap()
+        .into_iter()
+        .find_map(|e| {
+            e.parts.iter().find_map(|p| match p {
+                Part::Approval { summary, detail, action, .. } => {
+                    Some((summary.clone(), detail.clone(), *action))
+                }
+                _ => None,
+            })
+        })
+        .expect("the request is a card in the channel");
+    assert_eq!(asked.2, ProtectedAction::ActOnBehalf);
+    assert!(asked.0.contains("in your name"), "the heading is the runtime's: {}", asked.0);
+    assert!(
+        asked.1.iter().any(|f| f.value.contains("robert@madebywelch.com")),
+        "and the agent's own sentence is what is being decided: {:?}",
+        asked.1
+    );
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Outreach").iter().any(|t| t.contains("Sent it")),
+        "one click has to be enough:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_denied_request_to_act_stops_the_action_and_says_so() {
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        if text.contains("The operator said no") {
+            Script::Say("I did not send it.".into())
+        } else {
+            Script::AskOperator {
+                action: "Email the response to the procurement officer".into(),
+                because: "asked by Manager".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("The operator said no"), "{told}");
+    assert!(told.contains("do not ask again"), "a refusal has to read as settled: {told}");
+    assert!(
+        h.channel_texts("Outreach").iter().any(|t| t.contains("did not send")),
+        "and the operator still gets an answer:\n{}",
+        h.transcript()
     );
 }
 

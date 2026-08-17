@@ -1433,6 +1433,73 @@ button {
   border-color: color-mix(in oklab, var(--flesh) 55%, var(--edge));
 }
 
+/* A drag is over the window and will land here. The whole window is the drop
+   target, so the composer is what says where the file is going. */
+.composer[data-dragging] {
+  border-color: var(--flesh);
+  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+}
+
+.composer__files {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.55rem 0.65rem 0;
+}
+
+.composer__files .chip__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 16rem;
+}
+
+.chip__remove {
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+  padding: 0 0.1rem;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.chip__remove:hover {
+  opacity: 1;
+  color: var(--alarm);
+}
+
+/* A file on a message. Named and sized: it is a record of what went, not a
+   preview of it. */
+.file {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  max-width: 100%;
+}
+
+.file__name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file__size {
+  font-size: 0.66rem;
+  color: var(--muted);
+  flex: none;
+}
+
 /* The typeahead sits above the box it belongs to, so a long list grows away
    from the composer rather than pushing it down the pane. */
 .mentions {

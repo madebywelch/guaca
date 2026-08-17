@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
@@ -25,7 +25,6 @@ function isContinuation(previous: Envelope | undefined, current: Envelope): bool
 export function ChannelView({ channel, onEditAgent }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
-  const streams = useStore((s) => s.streams);
   const activity = useStore((s) => s.activity);
   const setBanner = useStore((s) => s.setBanner);
 
@@ -37,8 +36,6 @@ export function ChannelView({ channel, onEditAgent }: Props) {
 
   const isActivity = channel === ACTIVITY_CHANNEL;
   const agent = isActivity ? undefined : lookups.byId(channel);
-
-  const live = Object.entries(streams).filter(([, buffer]) => buffer?.channelId === channel);
 
   // Only auto-scroll when the operator is already at the bottom. Yanking the
   // view while they are reading back through a cascade is worse than a
@@ -53,10 +50,24 @@ export function ChannelView({ channel, onEditAgent }: Props) {
     return () => node.removeEventListener("scroll", onScroll);
   }, []);
 
+  // Reading `scrollHeight` forces the browser to lay the transcript out, so
+  // this is a real cost rather than a free one. Coalesced into a frame,
+  // because while text is arriving it is asked for far more often than the
+  // screen refreshes.
+  const pending = useRef(0);
+  const follow = useCallback(() => {
+    if (pending.current) return;
+    pending.current = requestAnimationFrame(() => {
+      pending.current = 0;
+      const node = scrollRef.current;
+      if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
+    });
+  }, []);
+
   useLayoutEffect(() => {
     const node = scrollRef.current;
     if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
-  }, [messages, live.length, streams]);
+  }, [messages]);
 
   // A channel switch always starts at the newest message, and abandons any
   // half-confirmed destructive action.
@@ -190,25 +201,7 @@ export function ChannelView({ channel, onEditAgent }: Props) {
             ))
           )}
 
-          {live.map(([id, buffer]) => {
-            if (!buffer) return null;
-
-            // A message bound for a peer will settle into a collapsed row, so
-            // it is announced rather than streamed. Only text meant for the
-            // operator is worth watching arrive.
-            if (buffer.to.kind === "agent") {
-              return (
-                <WritingRow
-                  key={id}
-                  from={toPeer(lookups.byId(buffer.agentId), buffer.agentId)}
-                  to={toPeer(lookups.byId(buffer.to.id), buffer.to.id)}
-                />
-              );
-            }
-            return buffer.text.length > 0 ? (
-              <StreamingMessage key={id} agent={lookups.byId(buffer.agentId)} text={buffer.text} />
-            ) : null;
-          })}
+          <LiveStreams channel={channel} lookups={lookups} follow={follow} />
         </div>
       )}
 
@@ -217,10 +210,10 @@ export function ChannelView({ channel, onEditAgent }: Props) {
           placeholder={`Message ${agent?.name ?? "agent"}`}
           disabled={!agent || agent.lifecycle === "terminated"}
           disabledReason="This agent has been deleted."
-          onSend={async (text) => {
+          onSend={async (text, files) => {
             if (!agent) return;
             try {
-              await api.sendMessage(agent.id, text);
+              await api.sendMessage(agent.id, text, files);
             } catch (error) {
               setBanner({ tone: "error", text: errorMessage(error) });
               throw error;
@@ -229,5 +222,55 @@ export function ChannelView({ channel, onEditAgent }: Props) {
         />
       )}
     </section>
+  );
+}
+
+/**
+ * The bubbles that are still being written, and nothing else.
+ *
+ * Its own component because it is the only thing on screen that changes while
+ * text arrives. Subscribing here rather than in the parent means a token
+ * re-renders two lines instead of the whole transcript above them: with thirty
+ * messages loaded that was six thousand renders for one reply, and the window
+ * froze with five agents working at once. It also means a token written in
+ * another agent's channel costs this one nothing.
+ */
+function LiveStreams({
+  channel,
+  lookups,
+  follow,
+}: {
+  channel: ChannelKey;
+  lookups: ReturnType<typeof useAgentLookup>;
+  follow: () => void;
+}) {
+  const streams = useStore((s) => s.streams);
+  const live = Object.entries(streams).filter(([, buffer]) => buffer?.channelId === channel);
+
+  // Keeps the newest text in view without the parent re-rendering to notice.
+  useLayoutEffect(follow);
+
+  return (
+    <>
+      {live.map(([id, buffer]) => {
+        if (!buffer) return null;
+
+        // A message bound for a peer will settle into a collapsed row, so it is
+        // announced rather than streamed. Only text meant for the operator is
+        // worth watching arrive.
+        if (buffer.to.kind === "agent") {
+          return (
+            <WritingRow
+              key={id}
+              from={toPeer(lookups.byId(buffer.agentId), buffer.agentId)}
+              to={toPeer(lookups.byId(buffer.to.id), buffer.to.id)}
+            />
+          );
+        }
+        return buffer.text.length > 0 ? (
+          <StreamingMessage key={id} agent={lookups.byId(buffer.agentId)} text={buffer.text} />
+        ) : null;
+      })}
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { onFileDrop } from "../lib/ipc";
 import { applyMention, matchMentions, mentionAt } from "../lib/mentions";
 import { useLiveAgents } from "../lib/store";
 
@@ -8,7 +9,12 @@ interface Props {
   placeholder: string;
   disabled?: boolean;
   disabledReason?: string;
-  onSend: (text: string) => Promise<void>;
+  onSend: (text: string, files: string[]) => Promise<void>;
+}
+
+/** The last segment of a path, which is what a person calls the file. */
+function basename(path: string): string {
+  return path.split(/[/\\]/).pop() || path;
 }
 
 export function Composer({ placeholder, disabled, disabledReason, onSend }: Props) {
@@ -17,7 +23,26 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const [files, setFiles] = useState<string[]>([]);
+  const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+
+  // Dropping anywhere on the window attaches to whatever channel is open,
+  // because the alternative is a small target the operator has to aim at while
+  // holding a file.
+  useEffect(() => {
+    if (disabled) return;
+    const stopping = onFileDrop({
+      over: setDragging,
+      dropped: (paths) =>
+        // Same file twice is one attachment: a second drop of the same
+        // document is a person making sure, not a request to send it twice.
+        setFiles((held) => [...held, ...paths.filter((p) => !held.includes(p))]),
+    });
+    return () => {
+      void stopping.then((stop) => stop());
+    };
+  }, [disabled]);
 
   const agents = useLiveAgents();
   const query = dismissed ? null : mentionAt(text, caret);
@@ -56,15 +81,19 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
 
   const submit = async () => {
     const body = text.trim();
-    if (!body || sending || disabled) return;
+    // A file on its own is a message. "Read this" with nothing typed is how
+    // people actually hand over a document.
+    if ((!body && files.length === 0) || sending || disabled) return;
     setSending(true);
     // Clear optimistically: the message is echoed back from the runtime, and
     // leaving the draft in place makes it look like nothing happened.
     setText("");
+    setFiles([]);
     try {
-      await onSend(body);
+      await onSend(body, files);
     } catch {
       setText(body);
+      setFiles(files);
     } finally {
       setSending(false);
       ref.current?.focus();
@@ -106,7 +135,24 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
   };
 
   return (
-    <div className="composer">
+    <div className="composer" data-dragging={dragging || undefined}>
+      {files.length > 0 && (
+        <ul className="composer__files" aria-label="Attached files">
+          {files.map((path) => (
+            <li key={path} className="chip">
+              <span className="chip__name">{basename(path)}</span>
+              <button
+                type="button"
+                className="chip__remove"
+                aria-label={`Remove ${basename(path)}`}
+                onClick={() => setFiles((held) => held.filter((p) => p !== path))}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
       {showing && (
         // Focus stays in the textarea and `aria-activedescendant` names the
         // highlighted option: the standard combobox arrangement, and the reason
@@ -174,13 +220,17 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
       />
       <div className="composer__foot">
         <span className="hint">
-          {showing ? "↑↓ to choose · Enter to insert" : "Enter to send · @ to tag an agent"}
+          {showing
+            ? "↑↓ to choose · Enter to insert"
+            : dragging
+              ? "Drop to attach"
+              : "Enter to send · @ to tag an agent · drop a file to attach it"}
         </span>
         <button
           type="button"
           className="btn btn--primary"
           onClick={() => void submit()}
-          disabled={disabled || sending || text.trim().length === 0}
+          disabled={disabled || sending || (text.trim().length === 0 && files.length === 0)}
         >
           Send
         </button>
