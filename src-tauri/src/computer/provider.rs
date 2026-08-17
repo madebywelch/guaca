@@ -110,9 +110,10 @@ pub struct ViewerTarget {
     pub headers: Vec<(String, String)>,
 }
 
+// A header value here is the token that reaches a machine's desktop. Nothing
+// prints a target today; a derived Debug is what would make the first
+// `tracing::warn!(?target, ..)` a leak, so the impl exists before the caller.
 impl std::fmt::Debug for ViewerTarget {
-    /// A header value here is the token that reaches a machine's desktop, and
-    /// the proxy logs a target whenever it cannot use one.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ViewerTarget")
             .field("tls", &self.tls)
