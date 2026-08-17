@@ -213,21 +213,6 @@ const HEARTBEAT: &str = "/run/guaca/heartbeat";
 /// than the tick, so a wedged machine costs one tick rather than the ticker.
 const HEARTBEAT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Whether the sweep may delete what a local runtime lists, rather than only
-/// saying what it would delete.
-///
-/// On since 2026-08-18, when a live Apple Container 1.2.2 confirmed what this
-/// was waiting for: `container ls --all --format json` reports the container's
-/// *name* at `configuration.id` (a container made as `guac-probe` listed as
-/// `configuration.id == "guac-probe"`), and the ownership labels are at
-/// `configuration.labels`. The rows hold the name `create` chose, so had Apple
-/// put anything else there — a digest, a generated id — every live machine
-/// would have looked unclaimed and the first sweep after a restart would have
-/// deleted all of them. That was the one guess in this feature whose failure
-/// was silent and destructive, which is why it was measured before this was
-/// turned on rather than after.
-const APPLE_SWEEP_ENABLED: bool = true;
-
 /// How often a running local machine's heartbeat is touched: twice per idle
 /// period, and never slower than a minute.
 ///
@@ -253,13 +238,6 @@ fn is_local(which: Provider) -> bool {
         Provider::E2b => false,
         Provider::AppleContainer => true,
     }
-}
-
-/// Whether an unclaimed resource of this kind is this build's to delete.
-fn releasable(which: Provider) -> bool {
-    // A hosted provider lists exact ids and always has. The gate is on the
-    // local half, whose list this build has not yet seen a real answer from.
-    !is_local(which) || APPLE_SWEEP_ENABLED
 }
 
 /// One touch of the heartbeat: no credentials, nothing to interpret, and a
@@ -1012,6 +990,14 @@ impl ComputerManager {
         // about its own kind alone: a container's name on this Mac and a
         // sandbox id in a cloud share a namespace with nothing, so a row
         // claiming one says nothing about the other.
+        //
+        // What a local runtime lists is matched against `provider_id`, which is
+        // the name `create` chose. A live Apple Container 1.2.2 was measured
+        // before this half was allowed to delete anything: `container ls --all
+        // --format json` reports that name at `configuration.id`. Had it
+        // reported a digest or a generated id instead, every live machine would
+        // have looked unclaimed and the first sweep after a restart would have
+        // deleted all of them.
         for which in PROVIDERS {
             let Ok(provider) = self.provider(which) else {
                 continue;
@@ -1031,29 +1017,41 @@ impl ComputerManager {
             };
             // Read after the list, never before: a machine made while the list
             // was in flight is absent from it, but its row is here, so nothing
-            // is deleted for being younger than the question. What is left is a
-            // create that returned before the list and was recorded after this
-            // read, which is a window of microseconds and the shape the sweep
-            // has always had.
-            let claimed: HashSet<String> = self
-                .inner
-                .store
-                .list_computers()?
-                .into_iter()
-                .filter(|record| record.provider == which)
-                .filter_map(|record| record.provider_id)
-                .collect();
+            // is deleted for being younger than the question.
+            let (claimed, provisioning) = self.claims(which)?;
+            if provisioning {
+                // A create of this kind is in flight, and the machine it is
+                // making exists under a name its row does not carry yet: the
+                // provider id is written when the create returns, and a local
+                // runtime makes the container first and boots its VM after.
+                // Nothing here can tell that from a leak, so the whole
+                // unclaimed half waits for the next sweep. Startup runs one,
+                // and a machine that really is orphaned costs one more idle
+                // period rather than being guessed at.
+                tracing::info!(
+                    provider = which.as_str(),
+                    "a computer of this kind is still being made; leaving unclaimed ones for now"
+                );
+                continue;
+            }
 
             for id in owned {
                 if claimed.contains(&id) {
                     continue;
                 }
-                if !releasable(which) {
+                // Asked again, immediately before the delete. The list above is
+                // seconds old by the time it arrives — long enough on a Mac for
+                // a whole create — and this delete is the one irreversible
+                // thing the sweep does.
+                let (claimed_now, provisioning_now) = self.claims(which)?;
+                if provisioning_now {
                     tracing::info!(
-                        would_release = %id,
                         provider = which.as_str(),
-                        "a computer no agent refers to"
+                        "a computer of this kind is being made; leaving unclaimed ones for now"
                     );
+                    break;
+                }
+                if claimed_now.contains(&id) {
                     continue;
                 }
                 tracing::info!(%id, "releasing a computer no agent refers to");
@@ -1073,6 +1071,28 @@ impl ComputerManager {
         }
 
         Ok(released)
+    }
+
+    /// What the rows of one kind say right now: every provider id one of them
+    /// names, and whether any create of that kind is still in flight.
+    ///
+    /// Both from one read, because the unclaimed half of the sweep is deciding
+    /// whether a resource is a leak and needs them to be the same instant. An
+    /// id is a claim; a create in flight is a claim that has not been written
+    /// down yet.
+    fn claims(&self, which: Provider) -> Result<(HashSet<String>, bool), ComputerError> {
+        let mut claimed = HashSet::new();
+        let mut provisioning = false;
+        for record in self.inner.store.list_computers()? {
+            if record.provider != which {
+                continue;
+            }
+            provisioning |= record.state == RecordState::Provisioning;
+            if let Some(id) = record.provider_id {
+                claimed.insert(id);
+            }
+        }
+        Ok((claimed, provisioning))
     }
 
     /// This agent's computer if it is ready to be used, with the handle that
@@ -1251,6 +1271,7 @@ pub(crate) mod fake {
         pub fail_list: Mutex<bool>,
         pub fail_prepare: Mutex<bool>,
         pub create_delay: Mutex<Option<std::time::Duration>>,
+        pub list_delay: Mutex<Option<std::time::Duration>>,
         pub stop_delay: Mutex<Option<std::time::Duration>>,
         /// How many stops were ever in flight at the same moment, which is the
         /// deterministic half of "these ran side by side".
@@ -1294,18 +1315,23 @@ pub(crate) mod fake {
         }
 
         async fn create(&self, request: &CreateComputer) -> Result<ProviderHandle, ProviderError> {
+            if *self.fail_create.lock() {
+                return Err(ProviderError::Unavailable("fake: create refused".into()));
+            }
+            *self.creates.lock() += 1;
+            let id = format!("fake-{}", request.computer.short());
+            // Registered before the wait, not after, because that is what a
+            // real runtime does: `container create` makes the resource and
+            // starting its VM is what takes the seconds. For all of them a
+            // machine exists that no row names yet, and anything that decides
+            // what is unclaimed has to survive that gap.
+            self.machines.lock().insert(id.clone(), ProviderState::Running);
             // Read out and released before the sleep: a guard held across an
             // await is a future that cannot cross threads.
             let delay = *self.create_delay.lock();
             if let Some(delay) = delay {
                 tokio::time::sleep(delay).await;
             }
-            if *self.fail_create.lock() {
-                return Err(ProviderError::Unavailable("fake: create refused".into()));
-            }
-            *self.creates.lock() += 1;
-            let id = format!("fake-{}", request.computer.short());
-            self.machines.lock().insert(id.clone(), ProviderState::Running);
             Ok(ProviderHandle {
                 computer: request.computer,
                 provider_id: id,
@@ -1405,6 +1431,14 @@ pub(crate) mod fake {
         async fn list_owned(&self) -> Result<Vec<String>, ProviderError> {
             if *self.fail_list.lock() {
                 return Err(ProviderError::Unavailable("fake: cannot list".into()));
+            }
+            // Read after the wait, so what comes back is what the runtime held
+            // when it answered rather than when it was asked. A real list of a
+            // Mac's containers takes long enough for a machine to be made
+            // inside it.
+            let delay = *self.list_delay.lock();
+            if let Some(delay) = delay {
+                tokio::time::sleep(delay).await;
             }
             let mut owned: Vec<String> = self.machines.lock().keys().cloned().collect();
             // Sorted so a sweep's log and a test's assertion read the same way
@@ -1853,6 +1887,41 @@ mod tests {
             *local.deletes.lock(),
             vec!["guac-orphan".to_string()],
             "the unclaimed local machine is released, and the claimed one is not"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_create_that_starts_after_the_sweep_did_survives_it() {
+        // The other half of "the sweep leaves alone a machine being created
+        // under it", and the half the per-agent lock cannot cover: this create
+        // has no row at all when the sweep reads the rows, so there is no lock
+        // it could have taken and nothing in the snapshot to re-read. Asking
+        // the runtime what it owns takes seconds on a Mac — long enough for a
+        // container to be made inside the question — and what comes back is a
+        // name that no row carries yet, because the create that chose it is
+        // still booting its VM. Deleting that is deleting a machine an agent
+        // was just given.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.list_delay.lock() = Some(Duration::from_millis(100));
+        *local.create_delay.lock() = Some(Duration::from_millis(300));
+        let (manager, store, card, _config, _dir) = setup_with(vec![local.clone()]);
+
+        let sweeping = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.sweep().await })
+        };
+        // After the sweep has read the rows and while it is still asking the
+        // runtime what it owns.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let (machine, made) = manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        assert_eq!(made, Provisioned::Created);
+        assert_eq!(sweeping.await.unwrap().unwrap(), 0, "there was nothing to release");
+        assert!(local.deletes.lock().is_empty(), "the machine survived");
+        assert!(store.computer(machine.id()).unwrap().is_some(), "and so did its row");
+        assert_eq!(
+            local.machines.lock().get(&format!("fake-{}", machine.id().short())),
+            Some(&ProviderState::Running)
         );
     }
 
