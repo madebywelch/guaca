@@ -1020,6 +1020,42 @@ impl Store {
         Ok(out)
     }
 
+    /// What two agents said to each other, oldest first.
+    ///
+    /// Read from the messages rather than assembled from either channel, and
+    /// that is the whole point of it existing. A send is filed under the
+    /// recipient and the reply under the sender, so each channel holds one half
+    /// of the exchange; worse, an automatic reply leaves no trace at all in the
+    /// channel of the agent that wrote it, since only explicit tool calls are
+    /// recorded there. A thread built from one side would be missing messages
+    /// nobody could account for.
+    ///
+    /// Both directions, because a conversation is not directional. Agent
+    /// activity records are excluded by the `to_kind` predicate: they are
+    /// bookkeeping filed against `system`, not something said to a peer.
+    pub fn pair_messages(
+        &self,
+        a: AgentId,
+        b: AgentId,
+        limit: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
+               FROM messages
+              WHERE from_kind='agent' AND to_kind='agent'
+                AND ((from_agent=?1 AND to_agent=?2) OR (from_agent=?2 AND to_agent=?1))
+              ORDER BY created_at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![a.to_string(), b.to_string(), limit], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
     /// The conversation as a whole, oldest last, for the flow board.
     ///
     /// Includes the operator's messages and the replies back to them, not just
@@ -2176,6 +2212,97 @@ mod tests {
         let flow: Vec<String> =
             f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
         assert_eq!(flow, vec!["m0", "m1", "m2", "m3", "m4"]);
+    }
+
+    #[test]
+    fn a_pair_thread_holds_both_directions_and_nobody_else() {
+        // The reason this query exists: neither agent's channel has the
+        // exchange. A to B is filed under B, B's answer under A, and the
+        // operator opening the thread expects to read it in order.
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let c = f.store.create_agent(&draft("C")).unwrap();
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+
+        let mut at = 1_000;
+        let mut send = |from, to, text: &str| {
+            let mut e = envelope(from, to, text, run);
+            e.created_at = at;
+            at += 1;
+            f.store.append(&e).unwrap();
+        };
+        send(Participant::Human, agent(a.id), "operator, not part of it");
+        send(agent(a.id), agent(b.id), "ask");
+        send(agent(b.id), agent(a.id), "answer");
+        send(agent(a.id), agent(c.id), "someone else entirely");
+        // Bookkeeping A filed against itself. Filed to `system`, so not said to
+        // anyone, and it carries A's private working notes.
+        send(agent(a.id), Participant::System, "tool trail");
+        send(agent(a.id), agent(b.id), "thanks");
+
+        let thread: Vec<String> = f
+            .store
+            .pair_messages(a.id, b.id, 50)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .collect();
+        assert_eq!(thread, vec!["ask", "answer", "thanks"]);
+
+        // And the pair is unordered: which one you clicked from does not change
+        // what was said.
+        let reversed: Vec<String> = f
+            .store
+            .pair_messages(b.id, a.id, 50)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .collect();
+        assert_eq!(reversed, thread);
+    }
+
+    #[test]
+    fn a_pair_thread_limit_keeps_the_newest_messages_in_order() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let run = RunId::new();
+        let agent = |id| Participant::Agent { id };
+
+        for i in 0..10 {
+            let mut e = envelope(agent(a.id), agent(b.id), &format!("m{i}"), run);
+            e.created_at = 1_000 + i as i64;
+            f.store.append(&e).unwrap();
+        }
+
+        let texts: Vec<String> = f
+            .store
+            .pair_messages(a.id, b.id, 3)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .collect();
+        assert_eq!(texts, vec!["m7", "m8", "m9"]);
+    }
+
+    #[test]
+    fn a_pair_with_nothing_between_them_is_empty_rather_than_everything() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("A")).unwrap();
+        let b = f.store.create_agent(&draft("B")).unwrap();
+        let run = RunId::new();
+        f.store
+            .append(&envelope(
+                Participant::Human,
+                Participant::Agent { id: a.id },
+                "only the operator",
+                run,
+            ))
+            .unwrap();
+
+        assert!(f.store.pair_messages(a.id, b.id, 50).unwrap().is_empty());
     }
 
     #[test]

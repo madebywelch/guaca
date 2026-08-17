@@ -62,6 +62,16 @@ expired, because nothing holds a parked turn across a restart. "Always allow" is
 the decision row itself, scoped to the one agent that asked. See
 `docs/ARCHITECTURE.md`.
 
+**No channel holds a conversation between two agents, so do not build one from
+`channel_messages`.** A send is filed under the recipient and the answer under
+the sender, and an automatic reply leaves no trace at all in the channel of the
+agent that wrote it, because only explicit tool calls are recorded there. A
+thread assembled from one channel's rows is missing messages nobody can account
+for. `pair_messages` reads both directions from the messages themselves; the
+channel only summarises, in `lib/transcript.ts`. A refusal never folds into that
+summary: it is the runtime stopping a message rather than a message. See
+`docs/ARCHITECTURE.md`.
+
 **Migrations are forward-only and numbered.** One has already run against a real
 database by the time you think of an improvement, and editing it leaves that
 database at the same `user_version` with a different schema. Add another.
@@ -157,6 +167,7 @@ physical, not a policy: cookies are on one disk and a token is a string.
 
 ```
 src/                 React + TypeScript. A view over the runtime, nothing more.
+  lib/transcript.ts  What a channel shows, and what it collapses. Read first.
 src-tauri/src/
   domain/            AgentCard, Envelope, Routine, Connector, Signin, Approval,
                      ids. No I/O.

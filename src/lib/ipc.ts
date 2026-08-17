@@ -125,6 +125,14 @@ export const api = {
   channelMessages: (channelId: AgentId, limit?: number) =>
     invoke<Envelope[]>("channel_messages", { channelId, limit }),
 
+  /**
+   * What two agents said to each other. Not a channel read: a send is filed
+   * under the recipient and the answer under the sender, so neither of their
+   * channels holds the exchange.
+   */
+  pairMessages: (a: AgentId, b: AgentId, limit?: number) =>
+    invoke<Envelope[]>("pair_messages", { a, b, limit }),
+
   /** The whole conversation, for the activity flow board. */
   conversationFlow: (limit?: number) => invoke<Envelope[]>("conversation_flow", { limit }),
 

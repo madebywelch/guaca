@@ -408,6 +408,20 @@ CREATE INDEX approvals_granted
 ALTER TABLE messages ADD COLUMN intent TEXT NOT NULL DEFAULT 'courtesy';
 "#,
     ),
+    (
+        16,
+        r#"
+-- One pair's exchange, for the thread the operator opens off a channel. A
+-- message from A to B is filed in B's channel and the reply in A's, so neither
+-- channel holds the back-and-forth and no existing index answers this. Ordered
+-- by sender so each direction is one range scan; the two are unioned by
+-- SQLite's OR optimisation. Partial for the same reason the old feed index
+-- was: most traffic is with the operator and does not belong here.
+CREATE INDEX messages_pair
+    ON messages (from_agent, to_agent, created_at DESC, id DESC)
+    WHERE from_kind = 'agent' AND to_kind = 'agent';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
