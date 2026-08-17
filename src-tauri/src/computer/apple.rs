@@ -11,10 +11,18 @@
 //! copy of Guac on the same Mac makes resources that look identical, and the
 //! sweep deletes what it believes it owns.
 //!
-//! Apple Container is not installed on the machine this was written on, so
-//! every claim about what it prints comes from Apple's 1.2.2 documentation and
-//! sources. The guesses are marked; the spike confirms them against the real
-//! binary before anyone relies on them.
+//! What this file believes about the runtime's output was measured against a
+//! live Apple Container 1.2.2 on macOS 26.5 on 2026-08-18, not read off the
+//! documentation: the JSON `inspect` and `ls --all --format json` print, where
+//! labels sit, the guest's address and that it moves across a stop, the text
+//! `--version` prints, which commands say "not found" and which do not, the
+//! account `exec` runs as, and that every flag `create` is given is accepted.
+//! Four of those had been guessed wrong from the documentation alone, and the
+//! comments on the readers below say which.
+//!
+//! One thing this build acts on is still unmeasured: whether `ls --all` lists
+//! *stopped* containers. The sweep deletes from that list, and a stopped
+//! orphan holding a 20 GiB volume is the expensive kind to miss.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -352,7 +360,7 @@ impl AppleContainer {
             self.control(&container_create_argv(request, &self.installation, &self.image)).await?;
         if !created.ok() {
             if already_exists(&created) {
-                return Err(name_taken("machine", &name, "container delete --force"));
+                return Err(container_name_taken(&name, &created));
             }
             return Err(step_failed("creating the computer", &created));
         }
@@ -763,6 +771,9 @@ fn list_argv() -> Vec<String> {
 /// every command an agent runs should be the same unprivileged account that
 /// owns the home volume — root would write files its own desktop cannot then
 /// open.
+///
+/// Confirmed end to end against the real image on 2026-08-18: a command run
+/// through this vector reported `id -un` as `user` and uid 1000.
 fn exec_argv(name: &str, request: &ExecRequest) -> Vec<String> {
     let mut parts =
         argv(&["exec", "--uid", GUEST_UID, "--gid", GUEST_GID, "--workdir", &request.cwd]);
@@ -922,7 +933,31 @@ fn labels(described: &serde_json::Value) -> &serde_json::Value {
     &described["configuration"]["labels"]
 }
 
+/// A container of this name already exists, whoever left it.
+///
+/// Kept apart from `name_taken` because nothing looked it up. A container is
+/// never adopted, so whose it is changes nothing about what happens next — and
+/// that means this must not say whose it is. Most often it is this computer's
+/// own leftover, and telling the operator it "does not carry this computer's
+/// label" would be a claim from a check that never ran.
+///
+/// The runtime's own words are kept for the same reason. "Already exists" is
+/// inferred from the text, loosely and on purpose, so a create that failed for
+/// some other reason with the word `exists` anywhere in it must still show what
+/// the runtime actually said rather than a paraphrase of what it might mean.
+fn container_name_taken(name: &str, out: &CliOutput) -> ProviderError {
+    ProviderError::Operation(format!(
+        "the computer could not be made: something is already called {name}. Remove it with \
+         `container delete --force {name}` if it is yours to remove, then try again. The runtime \
+         said: {}",
+        detail(out)
+    ))
+}
+
 /// A name held by something this computer cannot show it owns.
+///
+/// For the two kinds that *are* looked up first, so the label claim in the
+/// message is one a lookup actually made.
 ///
 /// The remedy is manual and says so: this build will not delete a resource it
 /// cannot prove is its own, and the operator is the only one who can tell
@@ -947,9 +982,11 @@ fn ours(listed: &serde_json::Value, installation: &str) -> bool {
 
 /// The first three dotted numbers in whatever `container --version` printed.
 ///
-/// Deliberately loose: the exact wording is unconfirmed until the spike, and a
-/// parser pinned to a sentence Apple then reworded would report every install
-/// as unreadable.
+/// 1.2.2 prints `container CLI version 1.2.2 (build: release, commit: 0190097)`,
+/// measured rather than assumed and pinned in the tests. Still read loosely: a
+/// parser tied to that exact sentence would report every install as unreadable
+/// the first time Apple rewords it, and an unreadable version now refuses a
+/// create rather than only greying out a badge.
 fn parse_version(text: &str) -> Option<(u32, u32, u32)> {
     text.split(|c: char| !c.is_ascii_digit() && c != '.').find_map(|token| {
         let mut numbers = token.split('.').map(str::parse::<u32>);
@@ -980,9 +1017,18 @@ fn step_failed(step: &str, out: &CliOutput) -> ProviderError {
 }
 
 /// Whether the runtime is saying there is no such thing, which is an answer
-/// rather than a failure. The wording is a guess from the 1.2.2 sources and
-/// the spike confirms it; reading a real error as an absence is what would
-/// throw away a disk, so both spellings are matched and nothing looser is.
+/// rather than a failure.
+///
+/// Measured on 1.2.2, which says it three ways and means the same thing each
+/// time: `container not found: X` from `inspect`, `notFound: "container with
+/// ID X not found"` from `delete --force`, and `get failed: container X not
+/// found` from `start`. Both spellings are matched and nothing looser is,
+/// because reading a real error as an absence is what throws a disk away.
+///
+/// What this deliberately does *not* catch is the volume and network deletes:
+/// they answer a missing name with `failed to delete one or more volumes:
+/// ["X"]` and no "not found" anywhere, which is also what they say about one
+/// that is still attached. `delete` confirms those with a lookup instead.
 ///
 /// Both streams, because which one a CLI complains on is a habit rather than a
 /// contract, and a "not found" printed to stdout read as a live machine.
@@ -996,9 +1042,14 @@ fn missing(out: &CliOutput) -> bool {
 /// Names are derived from the computer's id, so a create that made the network
 /// and then could not unmake it leaves a name that is never free again: without
 /// this, that one computer could never be made, and the operator's only symptom
-/// is a machine that refuses to appear. Deliberately loose, because Apple's
-/// wording is unconfirmed until the spike, and safe to be: the worst a false
-/// positive does is let the next step fail on its own terms.
+/// is a machine that refuses to appear.
+///
+/// `network create` was measured on 1.2.2: `Error: network X already exists`.
+/// The volume's and the container's wording were not seen, so the match stays
+/// loose on purpose — and it is safe to be, because nothing is destroyed on the
+/// strength of this alone. Every caller checks a label before adopting anything
+/// or, for a container, adopts nothing and quotes the runtime rather than
+/// paraphrasing it.
 fn already_exists(out: &CliOutput) -> bool {
     let said = spoken(out);
     said.contains("exists") || said.contains("already in use")
@@ -1722,29 +1773,53 @@ mod fake_runtime {
     use super::*;
     use crate::domain::ids::AgentId;
 
+    /// The argument every fixture answers by exiting at once, recording
+    /// nothing. See `warm`.
+    const WARMUP: &str = "__warmup";
+
+    /// Prefixed to every fixture, so each of them can be run once for free.
+    const WARMUP_CASE: &str = "case \"$1\" in __warmup) exit 0 ;; esac\n";
+
     /// Prints its arguments one per line, a marker, then its whole environment,
     /// so the two halves can be read separately. That separation is the claim:
     /// a secret is in the second and never the first.
     const REPORTER: &str =
-        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\necho ---ENV---\nenv | sort\n";
+        "for a in \"$@\"; do printf '%s\\n' \"$a\"; done\necho ---ENV---\nenv | sort\n";
 
     /// Character for character what a live 1.2.2 prints.
     const VERSION_1_2_2: &str =
         "echo 'container CLI version 1.2.2 (build: release, commit: 0190097)'";
 
-    fn write_exec(dir: &Path, name: &str, script: &str) -> PathBuf {
+    /// Writes a fixture, warms it, and hands back its path. The body is given
+    /// without a shebang: the warm-up case has to come first, before anything
+    /// the fixture would otherwise do.
+    fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
         let path = dir.join(name);
-        std::fs::write(&path, script).unwrap();
+        std::fs::write(&path, format!("#!/bin/sh\n{WARMUP_CASE}{body}")).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        warm(&path);
         path
+    }
+
+    /// Runs a fixture once, before anything is timed against it.
+    ///
+    /// macOS evaluates an executable it has never seen the first time it is
+    /// run, and this file writes about thirty of them. Started together, that
+    /// queue is deep enough to outlast a probe's ten-second deadline, and a
+    /// test about what a runtime said became a test of how long this Mac took
+    /// to think about a new file. Paid here, where nothing is being measured.
+    fn warm(path: &Path) {
+        std::process::Command::new(path)
+            .arg(WARMUP)
+            .output()
+            .expect("a fixture that cannot be run at all is a broken test");
     }
 
     /// A fake `container` that appends every invocation to `log` and exits 0,
     /// except where a rule says otherwise. A rule is matched against the whole
     /// argument vector joined by spaces, as a prefix.
     fn fake_container(dir: &Path, log: &Path, rules: &[(&str, &str)]) -> Cli {
-        let mut script =
-            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\ncase \"$*\" in\n", log.display());
+        let mut script = format!("printf '%s\\n' \"$*\" >> {}\ncase \"$*\" in\n", log.display());
         for (pattern, body) in rules {
             script.push_str(&format!("  \"{pattern}\"*) {body} ;;\n"));
         }
@@ -2222,7 +2297,10 @@ mod fake_runtime {
         let cli = fake_container(
             dir.path(),
             &log,
-            &[("create --name", "echo 'Error: container already exists' >&2; exit 1")],
+            &[(
+                "create --name",
+                "echo 'Error: container guac-x already exists (id 4f2)' >&2; exit 1",
+            )],
         );
 
         let err = provider(cli).create(&request).await.expect_err("that name is taken");
@@ -2232,6 +2310,16 @@ mod fake_runtime {
             err.to_string().contains(&format!("container delete --force {name}")),
             "and how to clear it: {err}"
         );
+        // Nothing was looked up, so nothing may be claimed about whose it is —
+        // most often it is this computer's own leftover. And the runtime's own
+        // words survive: "already exists" is inferred loosely from the text, so
+        // a create that failed for another reason with `exists` in it must
+        // still show what was actually said.
+        assert!(
+            !err.to_string().contains("this computer's label"),
+            "a claim from a check that never ran: {err}"
+        );
+        assert!(err.to_string().contains("(id 4f2)"), "the runtime's own words are kept: {err}");
         let seen = log_lines(&log);
         assert!(!seen.iter().any(|line| line.starts_with("inspect")), "nothing asked: {seen:?}");
         assert_eq!(
@@ -2354,7 +2442,7 @@ mod fake_runtime {
         // Two seconds against a twenty-second sleep: macOS takes its time over
         // the first execution of a file it has never seen.
         let dir = tempfile::tempdir().unwrap();
-        let cli = Cli::at(write_exec(dir.path(), "container", "#!/bin/sh\nsleep 20\n"));
+        let cli = Cli::at(write_exec(dir.path(), "container", "sleep 20\n"));
 
         let err = provider(cli)
             .exec(
