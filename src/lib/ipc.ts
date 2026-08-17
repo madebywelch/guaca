@@ -37,6 +37,7 @@ import type {
   RoutineRun,
   RunId,
   RunUsage,
+  SearchHits,
   Settings,
   SettingsPatch,
   Signin,
@@ -134,8 +135,14 @@ export const api = {
   setAgentNotes: (id: AgentId, content: string) =>
     invoke<string>("set_agent_notes", { id, content }),
 
-  channelMessages: (channelId: AgentId, limit?: number) =>
-    invoke<Envelope[]>("channel_messages", { channelId, limit }),
+  /**
+   * A channel's newest messages. `through` widens the window until it reaches
+   * one particular message, which is what opening a search result needs: a hit
+   * from last month is not in the newest three hundred, and a jump that lands
+   * somewhere else is a jump that failed.
+   */
+  channelMessages: (channelId: AgentId, limit?: number, through?: MessageId) =>
+    invoke<Envelope[]>("channel_messages", { channelId, limit, through }),
 
   /**
    * What two agents said to each other. Not a channel read: a send is filed
@@ -147,6 +154,15 @@ export const api = {
 
   /** The whole conversation, for the activity flow board. */
   conversationFlow: (limit?: number) => invoke<Envelope[]>("conversation_flow", { limit }),
+
+  /**
+   * Messages, files, links and routines matching a query.
+   *
+   * Agents and groups are deliberately not here: this side already holds both
+   * to draw the rail, so matching them locally costs no round trip and cannot
+   * fall behind the keystroke. `lib/search.ts` puts the two halves in one list.
+   */
+  search: (query: string, limit?: number) => invoke<SearchHits>("search", { query, limit }),
 
   /** `files` are absolute paths from a drop; the bytes never cross IPC. */
   sendMessage: (agentId: AgentId, text: string, files: string[] = []) =>

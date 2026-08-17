@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
-import { toPeer, transcriptRows } from "../lib/transcript";
+import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import { type Activity, type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
@@ -15,11 +15,16 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
 }
 
+/** How long a message arrived at from search stays marked. */
+const FLASH_MS = 1800;
+
 export function ChannelView({ channel, onEditAgent }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
   const setBanner = useStore((s) => s.setBanner);
+  const focused = useStore((s) => s.focused);
+  const clearFocus = useStore((s) => s.clearFocus);
 
   const loadChannel = useStore((s) => s.loadChannel);
   const [confirmClear, setConfirmClear] = useState(false);
@@ -88,6 +93,28 @@ export function ChannelView({ channel, onEditAgent }: Props) {
   // Built once per set of messages rather than per render: it walks every
   // message, and it is what decides which of them are drawn at all.
   const rows = useMemo(() => transcriptRows(messages ?? [], lookups), [messages, lookups]);
+
+  // A message somebody arrived at from search. Run after the transcript is on
+  // screen, because the row cannot be scrolled to before it exists, and the
+  // read that widens the window to reach it lands a render later than the
+  // channel switch does. The mark is cleared once it has been shown, so
+  // reopening the channel later does not jump again.
+  //
+  // Matched against a list rather than a single id, because a row does not
+  // stand for exactly one message: a burst stands for every message it
+  // collapsed, and a message found inside one is read by opening the thread
+  // behind the row rather than in the channel.
+  useEffect(() => {
+    if (!focused || messages === undefined) return;
+    const row = scrollRef.current?.querySelector<HTMLElement>(`[data-message~="${focused}"]`);
+    if (!row) return;
+    // Not the newest message any more, so following the bottom would undo this
+    // the moment anything else arrives.
+    pinnedToBottom.current = false;
+    row.scrollIntoView({ block: "center" });
+    const timer = window.setTimeout(clearFocus, FLASH_MS);
+    return () => window.clearTimeout(timer);
+  }, [focused, messages, clearFocus]);
 
   const paused = agent?.lifecycle === "paused";
 
@@ -209,27 +236,28 @@ export function ChannelView({ channel, onEditAgent }: Props) {
             </div>
           ) : (
             rows.map((row) => {
-              if (row.kind === "peers") {
-                return <PeerBurstRow key={row.key} peers={row.peers} onOpen={setReading} />;
-              }
-              if (row.kind === "refused") {
-                return (
-                  <RefusedRow
-                    key={row.key}
-                    peer={row.peer}
-                    at={row.at}
-                    body={row.body}
-                    reason={row.reason}
-                  />
-                );
-              }
+              const stands = rowStandsFor(row);
               return (
-                <MessageItem
+                // Wrapped rather than marked on the entry itself: a row renders
+                // as several different shapes depending on who sent what to
+                // whom, and one of them is several rows.
+                <div
                   key={row.key}
-                  message={row.message}
-                  lookups={lookups}
-                  continued={row.continued}
-                />
+                  data-message={stands.join(" ")}
+                  data-found={focused && stands.includes(focused) ? "true" : undefined}
+                >
+                  {row.kind === "peers" ? (
+                    <PeerBurstRow peers={row.peers} onOpen={setReading} />
+                  ) : row.kind === "refused" ? (
+                    <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                  ) : (
+                    <MessageItem
+                      message={row.message}
+                      lookups={lookups}
+                      continued={row.continued}
+                    />
+                  )}
+                </div>
               );
             })
           )}

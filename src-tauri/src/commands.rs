@@ -20,6 +20,7 @@ use crate::domain::group::{Group, GroupDraft};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
+use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
@@ -492,13 +493,31 @@ pub fn agent_last_active(state: State<'_, AppState>) -> Reply<HashMap<AgentId, i
 
 // ---- messages ------------------------------------------------------------
 
+/// The most of a transcript any one read will put in the webview.
+const MAX_CHANNEL_WINDOW: u32 = 1000;
+
+/// A channel's newest messages.
+///
+/// `through` widens the window to reach one particular message, which is what
+/// opening a search result needs: a hit from last month is not in the newest
+/// three hundred, and a jump that lands somewhere else is a jump that failed.
+/// A message that has since been cleared falls back to the plain newest window
+/// rather than to an empty channel.
 #[tauri::command]
 pub fn channel_messages(
     state: State<'_, AppState>,
     channel_id: AgentId,
     limit: Option<u32>,
+    through: Option<MessageId>,
 ) -> Reply<Vec<Envelope>> {
-    Ok(state.runtime.store().channel_messages(channel_id, limit.unwrap_or(300).min(1000))?)
+    let store = state.runtime.store();
+    if let Some(id) = through {
+        let reaching = store.channel_messages_through(channel_id, id, MAX_CHANNEL_WINDOW)?;
+        if !reaching.is_empty() {
+            return Ok(reaching);
+        }
+    }
+    Ok(store.channel_messages(channel_id, limit.unwrap_or(300).min(MAX_CHANNEL_WINDOW))?)
 }
 
 /// What two agents said to each other, for the thread opened off a channel.
@@ -519,6 +538,18 @@ pub fn pair_messages(
 #[tauri::command]
 pub fn conversation_flow(state: State<'_, AppState>, limit: Option<u32>) -> Reply<Vec<Envelope>> {
     Ok(state.runtime.store().conversation_flow(limit.unwrap_or(400).min(2000))?)
+}
+
+/// What the transcript has to say about a query.
+///
+/// Agents and groups are deliberately not here. The webview is already holding
+/// both to draw the rail, so matching them there costs no round trip and stays
+/// right while the operator types. What it is not holding is the transcript,
+/// and shipping that across IPC to search it in the renderer would copy the
+/// database once per keystroke.
+#[tauri::command]
+pub fn search(state: State<'_, AppState>, query: String, limit: Option<u32>) -> Reply<SearchHits> {
+    Ok(state.runtime.store().search(query.trim(), limit.unwrap_or(20).min(100))?)
 }
 
 /// Sends the operator's message, with anything they dropped on the window.

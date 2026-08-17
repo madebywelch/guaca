@@ -26,7 +26,7 @@
  */
 
 import { sendBody, sendRecipients } from "./toolArgs";
-import type { AgentCard, AgentId, Envelope, Part, ToolOutcome } from "./types";
+import type { AgentCard, AgentId, Envelope, MessageId, Part, ToolOutcome } from "./types";
 
 /**
  * Resolves agents for rendering history. Deleted agents resolve too: they are
@@ -79,8 +79,12 @@ export interface PeerSummary {
 export type Row =
   /** An envelope rendered whole: a bubble, a request, a tool trail. */
   | { kind: "message"; key: string; message: Envelope; continued: boolean }
-  /** A run of peer traffic, one summary per peer involved. */
-  | { kind: "peers"; key: string; peers: PeerSummary[] }
+  /**
+   * A run of peer traffic, one summary per peer involved. `folded` names the
+   * messages it stands for, so something looking for one of them can be sent
+   * to the row that swallowed it.
+   */
+  | { kind: "peers"; key: string; peers: PeerSummary[]; folded: MessageId[] }
   /** A send the runtime stopped. Never folded into a burst: it did not happen. */
   | {
       kind: "refused";
@@ -130,13 +134,20 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     agentId: AgentId | null,
     direction: "sent" | "received",
     key: string,
+    /**
+     * The message this row now stands for on screen, where there is one. A
+     * send made through a tool call has none: it is filed in the recipient's
+     * channel, and what this one holds is the sender's record of making it.
+     */
+    folded?: MessageId,
   ) => {
     let open = burst;
     if (!open) {
-      open = { kind: "peers", key: `peers:${key}`, peers: [] };
+      open = { kind: "peers", key: `peers:${key}`, peers: [], folded: [] };
       rows.push(open);
       burst = open;
     }
+    if (folded) open.folded.push(folded);
     let held = open.peers.find((entry) => entry.peer.id === peer.id);
     if (!held) {
       held = { peer, agentId, sent: 0, received: 0 };
@@ -165,7 +176,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     }
 
     if (from.kind === "agent" && to.kind === "agent") {
-      count(toPeer(lookups.byId(from.id), from.id), from.id, "received", message.id);
+      count(toPeer(lookups.byId(from.id), from.id), from.id, "received", message.id, message.id);
       spoken = undefined;
       continue;
     }
@@ -225,6 +236,21 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
   }
 
   return rows;
+}
+
+/**
+ * Which messages a row is the on-screen home of.
+ *
+ * More than one for a burst, which is the point of it: search finds a message
+ * by its text and hands back an id, and an agent-to-agent message has no row
+ * of its own here any more. Landing on the row that collapsed it is the honest
+ * answer, since the row is where that message is in this channel and opening
+ * the thread is how it is read.
+ */
+export function rowStandsFor(row: Row): MessageId[] {
+  if (row.kind === "peers") return row.folded;
+  if (row.kind === "refused") return [];
+  return [row.message.id];
 }
 
 /** How a burst reads for one peer: the count, or what the single message was. */

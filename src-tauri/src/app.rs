@@ -163,6 +163,7 @@ pub fn run() {
             commands::channel_messages,
             commands::pair_messages,
             commands::conversation_flow,
+            commands::search,
             commands::send_message,
             commands::retry_turn,
             commands::clear_channel,

@@ -4,7 +4,7 @@
 //! and eleven queries, and hiding those behind a query builder would add a
 //! dependency and remove the ability to read what actually hits the disk.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use r2d2::{Pool, PooledConnection};
@@ -20,6 +20,9 @@ use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
+use crate::domain::search::{
+    contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
+};
 use crate::domain::signin::Signin;
 use crate::domain::usage::{Tokens, UsageEntry};
 
@@ -79,6 +82,17 @@ fn classify(err: rusqlite::Error, name: &str) -> StoreError {
     }
     StoreError::Sqlite(err)
 }
+
+/// How many matching messages a search reads before it cuts each category.
+///
+/// Wider than any list it produces, because links are pulled out of the same
+/// rows: the URL somebody wants is rarely in the first few messages that
+/// mention its host. A search that finds the newest few hundred matches is the
+/// one an operator asked for; finding the oldest of ten thousand is a report.
+const SEARCH_SCAN: u32 = 400;
+
+/// How much of a message a result row shows.
+const EXCERPT_CHARS: usize = 160;
 
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -1157,6 +1171,183 @@ impl Store {
         Ok(out)
     }
 
+    /// A channel's newest messages, guaranteed to reach back through one of
+    /// them.
+    ///
+    /// What a search result needs in order to be openable: the transcript is
+    /// normally read as "the newest few hundred", and a hit older than that
+    /// would open its channel without itself in it. Still bounded, so a hit
+    /// older than `cap` messages opens the channel at its newest end rather
+    /// than pulling a year of history into the webview.
+    pub fn channel_messages_through(
+        &self,
+        channel: AgentId,
+        through: MessageId,
+        cap: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        // A row value, so the cut is made on exactly the ordering the channel
+        // is drawn in. Comparing `created_at` on its own would drop whatever
+        // was written in the same millisecond as the target, and a reply and
+        // the record of the call that produced it are usually that close.
+        let mut stmt = conn.prepare(
+            r"SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
+                FROM messages
+               WHERE channel_id=?1
+                 AND (created_at, id) >= (SELECT created_at, id FROM messages WHERE id=?2)
+               ORDER BY created_at DESC, id DESC LIMIT ?3",
+        )?;
+        let rows = stmt
+            .query_map(params![channel.to_string(), through.to_string(), cap], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    // ---- search ----------------------------------------------------------
+
+    /// Everything stored here that matches a query.
+    ///
+    /// Four categories from three statements, because a file and a link are a
+    /// message read from a different angle: both are found by the scan that
+    /// finds the message and neither is stored anywhere of its own. Ordering
+    /// across the categories is left to the caller, since which one a person
+    /// wants first depends on what they were doing when they started typing.
+    ///
+    /// An empty query is not an error and not empty-handed: it matches
+    /// everything, so what comes back is the newest of each kind.
+    pub fn search(&self, query: &str, limit: u32) -> Result<SearchHits, StoreError> {
+        let pattern = like_pattern(query);
+        let want = limit as usize;
+
+        let scanned = self.matching_messages(&pattern, SEARCH_SCAN)?;
+        let mut messages = Vec::new();
+        let mut links = Vec::new();
+        let mut seen_urls = HashSet::new();
+
+        for envelope in &scanned {
+            let body = envelope.plain_text();
+
+            if messages.len() < want {
+                messages.push(MessageHit {
+                    id: envelope.id,
+                    channel_id: envelope.channel_id,
+                    from: envelope.from,
+                    to: envelope.to,
+                    excerpt: excerpt(&body, query, EXCERPT_CHARS),
+                    created_at: envelope.created_at,
+                });
+            }
+
+            for url in links_in(&body) {
+                if links.len() >= want {
+                    break;
+                }
+                // The message matched, which does not mean this URL did: a
+                // message can mention a subject and link somewhere unrelated.
+                if !contains_fold(url, query) || !seen_urls.insert(url.to_string()) {
+                    continue;
+                }
+                links.push(LinkHit {
+                    url: url.to_string(),
+                    message_id: envelope.id,
+                    channel_id: envelope.channel_id,
+                    created_at: envelope.created_at,
+                });
+            }
+        }
+
+        Ok(SearchHits {
+            messages,
+            links,
+            files: self.matching_files(&pattern, want)?,
+            routines: self.matching_routines(&pattern, limit)?,
+        })
+    }
+
+    /// Messages with matching text, newest first.
+    ///
+    /// Matched part by part rather than against the stored blob. `parts` is
+    /// JSON, and a substring search over it also matches the keys: "text",
+    /// "name" and "type" are in every row, so searching for any of them
+    /// returned the entire transcript.
+    fn matching_messages(&self, pattern: &str, limit: u32) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r"SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
+                FROM messages
+               WHERE to_kind <> 'system'
+                 AND EXISTS (
+                     SELECT 1 FROM json_each(messages.parts) AS part
+                      WHERE json_extract(part.value, '$.type') = 'text'
+                        AND json_extract(part.value, '$.text') LIKE ?1 ESCAPE '\'
+                 )
+               ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Attachments with matching names, newest first and one row per file.
+    fn matching_files(&self, pattern: &str, limit: usize) -> Result<Vec<FileHit>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r"SELECT m.id, m.channel_id, m.from_kind, m.from_agent, m.created_at, part.value
+                FROM messages m, json_each(m.parts) AS part
+               WHERE m.to_kind <> 'system'
+                 AND json_extract(part.value, '$.type') = 'file'
+                 AND json_extract(part.value, '$.name') LIKE ?1 ESCAPE '\'
+               ORDER BY m.created_at DESC, m.id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, SEARCH_SCAN], row_to_file_hit)?;
+
+        // Deduplicated by digest, keeping the newest appearance. The bytes are
+        // addressed by content, so the same document sent to three agents is
+        // one file and belongs on one row.
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for row in rows {
+            let hit = row??;
+            if out.len() >= limit {
+                break;
+            }
+            if seen.insert(hit.file.digest.clone()) {
+                out.push(hit);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Routines whose name or instruction matches, in the order they will next
+    /// fire.
+    ///
+    /// Both columns, because either is what somebody would type: a routine
+    /// carries a title and the instruction it delivers, and only one of them is
+    /// ever filled in when an agent sets its own schedule. Switched-off ones are
+    /// included, since finding one is usually how it gets switched back on.
+    fn matching_routines(&self, pattern: &str, limit: u32) -> Result<Vec<Routine>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            r"SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
+                FROM routines
+               WHERE what LIKE ?1 ESCAPE '\' OR name LIKE ?1 ESCAPE '\'
+               ORDER BY next_run_at ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit], row_to_routine)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
     // ---- usage -----------------------------------------------------------
 
     /// Records what one model call cost.
@@ -1419,6 +1610,40 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
     })())
 }
 
+/// One attachment, out of the message that carried it.
+///
+/// The part is deserialized rather than read field by field, so the shape a
+/// message was written with is the shape it is read back with, and a part that
+/// is not a file cannot be mistaken for one.
+fn row_to_file_hit(row: &Row<'_>) -> RowResult<FileHit> {
+    let id_raw: String = row.get(0)?;
+    let channel_raw: String = row.get(1)?;
+    let from_kind: String = row.get(2)?;
+    let from_agent: Option<String> = row.get(3)?;
+    let created_at: i64 = row.get(4)?;
+    let part_raw: String = row.get(5)?;
+
+    Ok((|| {
+        let part: Part = serde_json::from_str(&part_raw)
+            .map_err(|e| StoreError::Corrupt(format!("unreadable part: {e}")))?;
+        let Part::File(file) = part else {
+            return Err(StoreError::Corrupt("a part matched as a file but is not one".into()));
+        };
+
+        Ok(FileHit {
+            file,
+            message_id: id_raw
+                .parse()
+                .map_err(|e| StoreError::Corrupt(format!("bad message id: {e}")))?,
+            channel_id: channel_raw
+                .parse()
+                .map_err(|e| StoreError::Corrupt(format!("bad channel id: {e}")))?,
+            from: participant_from_columns(&from_kind, from_agent)?,
+            created_at,
+        })
+    })())
+}
+
 fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
     let id_raw: String = row.get(0)?;
     let agent_raw: String = row.get(1)?;
@@ -1633,6 +1858,7 @@ fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
     use crate::domain::ids::RunId;
 
@@ -2454,6 +2680,223 @@ mod tests {
         let flow: Vec<String> =
             f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
         assert_eq!(flow, vec!["m0", "m1", "m2", "m3", "m4"]);
+    }
+
+    // ---- search ----------------------------------------------------------
+
+    /// A workspace with something of every searchable kind in it.
+    struct Searchable {
+        f: Fixture,
+        writer: AgentId,
+    }
+
+    fn searchable() -> Searchable {
+        let f = fixture();
+        let writer = f.store.create_agent(&draft("Scribe")).unwrap();
+        let run = RunId::new();
+        let mut at = 1_000;
+
+        let mut send = |parts: Vec<Part>| {
+            let mut e = envelope(Participant::Human, Participant::Agent { id: writer.id }, "", run);
+            e.parts = parts;
+            e.created_at = at;
+            at += 1;
+            f.store.append(&e).unwrap();
+        };
+
+        send(vec![Part::text("The quarterly budget is signed off.")]);
+        send(vec![Part::text("Nothing to do with money at all.")]);
+        send(vec![Part::text(
+            "Sources: https://example.com/budget-q3 and https://example.com/other",
+        )]);
+        send(vec![
+            Part::text("here is the deck"),
+            Part::File(Attachment {
+                digest: "aaa".into(),
+                name: "budget.pdf".into(),
+                mime: "application/pdf".into(),
+                bytes: 2048,
+            }),
+        ]);
+        f.store
+            .create_routine(writer.id, "", "post the budget summary", Trigger::Every(3600), 5_000)
+            .unwrap();
+        f.store.create_routine(writer.id, "Watering", "the plants", Trigger::Daily, 4_000).unwrap();
+
+        Searchable { f, writer: writer.id }
+    }
+
+    #[test]
+    fn a_message_is_found_by_its_text() {
+        let s = searchable();
+        let hits = s.f.store.search("budget", 20).unwrap();
+        let found: Vec<&str> = hits.messages.iter().map(|m| m.excerpt.as_str()).collect();
+        assert_eq!(found.len(), 2, "the two bodies that say it: {found:?}");
+        assert!(found.iter().all(|e| e.to_lowercase().contains("budget")), "{found:?}");
+        assert!(hits.messages.iter().all(|m| m.channel_id == s.writer), "a hit says where to go");
+    }
+
+    #[test]
+    fn a_json_key_is_not_a_word_anybody_wrote() {
+        // `parts` is stored as JSON, so a substring search over the blob also
+        // matches its keys. Every row has "text", "type" and "name" in it, and
+        // searching for any of them used to return the whole transcript.
+        let s = searchable();
+        for key in ["text", "type", "name", "digest", "mime"] {
+            let hits = s.f.store.search(key, 20).unwrap();
+            assert!(
+                hits.messages.is_empty(),
+                "{key:?} matched {} messages nobody wrote it in",
+                hits.messages.len()
+            );
+        }
+    }
+
+    #[test]
+    fn matching_ignores_case_and_a_wildcard_is_a_character() {
+        let s = searchable();
+        assert_eq!(s.f.store.search("QUARTERLY", 20).unwrap().messages.len(), 1);
+        // Unescaped this is `%%%`, which matches every row and reports the
+        // whole database as a hit for a query nothing contains.
+        assert!(s.f.store.search("%", 20).unwrap().messages.is_empty());
+        assert!(s.f.store.search("_", 20).unwrap().messages.is_empty());
+    }
+
+    #[test]
+    fn a_file_is_found_by_name_and_appears_once_however_often_it_was_sent() {
+        let s = searchable();
+        let run = RunId::new();
+        // The same document again, to a second agent. Content addressing means
+        // this is one file, so a result list showing it twice is showing the
+        // same row twice.
+        let other = s.f.store.create_agent(&draft("Critic")).unwrap();
+        let mut again = envelope(Participant::Human, Participant::Agent { id: other.id }, "", run);
+        again.parts = vec![Part::File(Attachment {
+            digest: "aaa".into(),
+            name: "budget.pdf".into(),
+            mime: "application/pdf".into(),
+            bytes: 2048,
+        })];
+        again.created_at = 9_000;
+        s.f.store.append(&again).unwrap();
+
+        let hits = s.f.store.search("budget.pdf", 20).unwrap();
+        assert_eq!(hits.files.len(), 1, "one document, one row: {:?}", hits.files);
+        assert_eq!(hits.files[0].file.name, "budget.pdf");
+        assert_eq!(hits.files[0].file.bytes, 2048);
+        assert_eq!(hits.files[0].channel_id, other.id, "the newest copy is the one to open");
+    }
+
+    #[test]
+    fn a_link_is_pulled_out_of_the_message_that_carried_it() {
+        let s = searchable();
+        let hits = s.f.store.search("budget", 20).unwrap();
+        let urls: Vec<&str> = hits.links.iter().map(|l| l.url.as_str()).collect();
+        // The other URL is in a message that matched, which is not the same as
+        // the URL matching: a message can mention a subject and link elsewhere.
+        assert_eq!(urls, vec!["https://example.com/budget-q3"]);
+        assert_eq!(hits.links[0].channel_id, s.writer);
+    }
+
+    #[test]
+    fn a_routine_is_found_by_what_it_says_or_by_its_title() {
+        let s = searchable();
+        let hits = s.f.store.search("budget", 20).unwrap();
+        assert_eq!(hits.routines.len(), 1);
+        assert_eq!(hits.routines[0].what, "post the budget summary");
+
+        // A routine an operator titled is found by the title, which is the part
+        // they see in the list and therefore the part they will type.
+        let titled = s.f.store.search("watering", 20).unwrap();
+        assert_eq!(titled.routines.len(), 1);
+        assert_eq!(titled.routines[0].name, "Watering");
+    }
+
+    #[test]
+    fn an_agents_own_activity_record_is_not_a_message_to_search() {
+        let s = searchable();
+        let mut record = envelope(
+            Participant::Agent { id: s.writer },
+            Participant::System,
+            "budget bookkeeping",
+            RunId::new(),
+        );
+        record.created_at = 8_000;
+        s.f.store.append(&record).unwrap();
+
+        let hits = s.f.store.search("bookkeeping", 20).unwrap();
+        assert!(hits.messages.is_empty(), "a tool trail is not something anybody said");
+    }
+
+    #[test]
+    fn an_empty_query_comes_back_with_the_newest_of_each_kind() {
+        // The palette opens before anybody types. Empty-handed there reads as
+        // a workspace with nothing in it.
+        let s = searchable();
+        let hits = s.f.store.search("", 20).unwrap();
+        assert_eq!(hits.messages.len(), 4);
+        assert_eq!(hits.files.len(), 1);
+        assert_eq!(hits.links.len(), 2);
+        assert_eq!(hits.routines.len(), 2);
+        assert!(
+            hits.messages[0].created_at > hits.messages[1].created_at,
+            "newest first, so the palette opens on what just happened"
+        );
+    }
+
+    #[test]
+    fn a_limit_cuts_every_category() {
+        let s = searchable();
+        let hits = s.f.store.search("", 1).unwrap();
+        assert_eq!(hits.messages.len(), 1);
+        assert_eq!(hits.links.len(), 1);
+        assert_eq!(hits.routines.len(), 1);
+    }
+
+    #[test]
+    fn a_channel_window_can_be_widened_to_reach_an_old_message() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        let run = RunId::new();
+        let mut first = None;
+        for i in 0..50 {
+            let mut e = envelope(
+                Participant::Human,
+                Participant::Agent { id: card.id },
+                &format!("m{i}"),
+                run,
+            );
+            e.created_at = 1_000 + i as i64;
+            f.store.append(&e).unwrap();
+            if i == 0 {
+                first = Some(e.id);
+            }
+        }
+
+        let window = f.store.channel_messages_through(card.id, first.unwrap(), 1000).unwrap();
+        assert_eq!(window.len(), 50, "the whole channel, because the target is at the bottom");
+        assert_eq!(window[0].plain_text(), "m0");
+        assert_eq!(window[49].plain_text(), "m49");
+    }
+
+    #[test]
+    fn widening_to_a_message_that_is_gone_returns_nothing_rather_than_everything() {
+        // The caller falls back to the newest window. Returning the whole
+        // channel here would make a cleared history look like a successful
+        // jump to a message that no longer exists.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Manager")).unwrap();
+        f.store
+            .append(&envelope(
+                Participant::Human,
+                Participant::Agent { id: card.id },
+                "still here",
+                RunId::new(),
+            ))
+            .unwrap();
+
+        let window = f.store.channel_messages_through(card.id, MessageId::new(), 1000).unwrap();
+        assert!(window.is_empty());
     }
 
     #[test]
