@@ -3,7 +3,13 @@ import { useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { type AgentCard, type Decision, errorMessage, type Part } from "../lib/types";
+import {
+  type AgentCard,
+  type Decision,
+  errorMessage,
+  type Part,
+  type ProtectedAction,
+} from "../lib/types";
 
 type ApprovalPart = Extract<Part, { type: "approval" }>;
 
@@ -14,6 +20,12 @@ interface Props {
 }
 
 /** What the operator is told after the fact, per outcome. */
+/** What has not happened yet while the operator decides, by what was asked. */
+const NOTHING_YET: Record<ProtectedAction, string> = {
+  createAgent: "Nothing has been created yet.",
+  actOnBehalf: "Nothing has been sent yet.",
+};
+
 const SETTLED: Record<string, string> = {
   allow: "You allowed this.",
   alwaysAllow: "You allowed this, and said not to ask again.",
@@ -69,7 +81,7 @@ export function ApprovalRequest({ part, agent }: Props) {
           <p className="ask__summary">{part.summary}</p>
           <p className="ask__note">
             {state === "pending"
-              ? `${asker} is waiting on you. Nothing has been created yet.`
+              ? `${asker} is waiting on you. ${NOTHING_YET[part.action]}`
               : (SETTLED[state] ?? "This request is no longer live.")}
           </p>
         </div>
@@ -94,15 +106,23 @@ export function ApprovalRequest({ part, agent }: Props) {
           >
             Allow
           </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={deciding !== null}
-            title={`Stop asking when ${asker} does this`}
-            onClick={() => answer("alwaysAllow")}
-          >
-            Always allow
-          </button>
+          {/* Deliberately absent for anything done in the operator's name.
+              "Always" is scoped to an agent and an action, and this action is
+              "act outside the workspace", so a standing yes here would cover
+              every future send, submission and purchase rather than this one.
+              Creating an agent is narrow enough to be worth not asking twice;
+              this is not. */}
+          {part.action === "createAgent" && (
+            <button
+              type="button"
+              className="btn"
+              disabled={deciding !== null}
+              title={`Stop asking when ${asker} does this`}
+              onClick={() => answer("alwaysAllow")}
+            >
+              Always allow
+            </button>
+          )}
           <button
             type="button"
             className="btn btn--ghost"
@@ -114,7 +134,11 @@ export function ApprovalRequest({ part, agent }: Props) {
           {/* The scope of the middle button, said in full. "Always" reads as a
               setting for the workspace, and it is not: it is one agent being
               let off one question. */}
-          <span className="ask__scope">Always allow is for {asker} only.</span>
+          {part.action === "createAgent" ? (
+            <span className="ask__scope">Always allow is for {asker} only.</span>
+          ) : (
+            <span className="ask__scope">This answer covers this one action only.</span>
+          )}
         </div>
       )}
     </div>

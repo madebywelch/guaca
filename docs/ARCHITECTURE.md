@@ -199,6 +199,21 @@ The wording the operator reads is composed by the runtime from the validated
 draft, never by the model. An agent that could write its own request could
 describe creating an agent as tidying up.
 
+**The second protected action is acting in the operator's name**, and it exists
+because refusing was the only other move. An agent told by a peer that the
+operator authorised an email is being told a claim; declining it is right, and
+the app's answer to that was for the agent to ask the operator to repeat the
+instruction in another channel. The operator had already decided, and was being
+asked to do the routing by hand. `request_permission` parks the turn and puts
+the question where they are already looking.
+
+Two differences from `create_agent`. The heading is the runtime's but the
+sentence being decided is the agent's own, quoted under it, because only the
+agent can describe what it is about to do. And there is no "always allow": a
+grant is scoped to an agent and an action, and when the action is "act outside
+the workspace" a standing yes covers every future send, submission and purchase.
+Creating an agent is narrow enough to be worth not asking twice; this is not.
+
 ## Files are references, and what a model gets depends on what they are
 
 Agents exchange documents, and the operator drops them into a channel. Three

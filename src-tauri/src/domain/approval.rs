@@ -8,7 +8,9 @@
 //!
 //! The wording an operator reads is composed here from what the runtime already
 //! validated, never by the model. An agent that could write its own request
-//! could describe creating an agent as tidying up.
+//! could describe creating an agent as tidying up. Where a request is
+//! necessarily about something only the agent can describe, its words appear as
+//! a quoted detail field, under a heading the runtime wrote.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +23,17 @@ pub enum ProtectedAction {
     /// Adding an agent to the workspace. Protected because it changes who the
     /// operator has, permanently, and every one of them costs money to run.
     CreateAgent,
+    /// Doing something outside the workspace in the operator's name: sending
+    /// mail as them, submitting a form, paying for something.
+    ///
+    /// Protected because it cannot be taken back and because the operator's
+    /// authority is not transitive. An agent told by a peer that it has been
+    /// authorised is being told a claim, not given permission, and the only
+    /// thing that settles it is the operator themselves. Before this existed
+    /// the agent's only move was to refuse and ask them to repeat the
+    /// instruction in another channel, which is the operator doing the
+    /// routing by hand.
+    ActOnBehalf,
 }
 
 impl ProtectedAction {
@@ -29,12 +42,14 @@ impl ProtectedAction {
     pub fn as_str(self) -> &'static str {
         match self {
             ProtectedAction::CreateAgent => "createAgent",
+            ProtectedAction::ActOnBehalf => "actOnBehalf",
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
             "createAgent" => Some(ProtectedAction::CreateAgent),
+            "actOnBehalf" => Some(ProtectedAction::ActOnBehalf),
             _ => None,
         }
     }

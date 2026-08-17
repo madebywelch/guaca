@@ -1682,10 +1682,17 @@ impl Runtime {
             return (rendered, part, None);
         }
 
+        if let ToolInvocation::RequestPermission { action, because } = invocation {
+            let (rendered, part) = self.ask_to_act(card, run_id, action, because, arguments).await;
+            return (rendered, part, None);
+        }
+
         let (rendered, part) = match invocation {
             // Both handled above: one answers with a picture, the other has to
             // stop and ask the operator.
-            ToolInvocation::UseScreen { .. } | ToolInvocation::CreateAgent { .. } => {
+            ToolInvocation::UseScreen { .. }
+            | ToolInvocation::CreateAgent { .. }
+            | ToolInvocation::RequestPermission { .. } => {
                 unreachable!("taken by the branches above")
             }
             ToolInvocation::Directory => {
@@ -1898,6 +1905,82 @@ impl Runtime {
         };
 
         (rendered, part, None)
+    }
+
+    /// Putting a question to the operator and waiting for the answer.
+    ///
+    /// The other reason a turn stops mid-flight. `create_agent` protects the
+    /// workspace from an agent that could staff it; this protects the operator
+    /// from an agent acting in their name outside it, and it exists because the
+    /// alternative an agent had was to refuse. An agent told by a peer that the
+    /// operator authorised something is being told a claim, and it was right to
+    /// decline it: what it lacked was any way to turn that claim into an
+    /// answer, so an operator who had already said yes was asked to say it
+    /// again somewhere else.
+    ///
+    /// The heading is the runtime's; the agent's sentence is quoted underneath
+    /// it. What is being decided is necessarily something only the agent can
+    /// describe, so it is shown as its words rather than as the app's.
+    async fn ask_to_act(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        action: String,
+        because: String,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let mut detail = vec![DetailField {
+            label: format!("What {} will do", card.name),
+            value: action.clone(),
+        }];
+        if !because.is_empty() {
+            detail.push(DetailField { label: "Why it is asking".to_string(), value: because });
+        }
+
+        let permission = self
+            .ask_operator(
+                card,
+                run_id,
+                ProtectedAction::ActOnBehalf,
+                format!("{} wants to do something in your name", card.name),
+                detail,
+            )
+            .await;
+
+        let outcome = |status: ToolOutcome, text: String| {
+            (
+                text,
+                Part::ToolCall {
+                    name: tools::REQUEST_PERMISSION.to_string(),
+                    arguments: arguments.clone(),
+                    outcome: status,
+                },
+            )
+        };
+
+        match permission {
+            Permission::Granted => outcome(
+                ToolOutcome::Ok { summary: "the operator allowed it".to_string() },
+                "The operator allowed it. Do it now, in this turn, and then say exactly what you                  did and what came of it. This answer came from them directly, so it is the                  authorisation you were missing: do not ask for it again and do not ask anybody                  else to confirm it."
+                    .to_string(),
+            ),
+            Permission::Refused => outcome(
+                ToolOutcome::Refused { reason: "the operator declined".to_string() },
+                "The operator said no. Do not do it, and do not ask again for this request. Say                  what you would have done so they know what was stopped, and carry on with                  anything else you were given."
+                    .to_string(),
+            ),
+            Permission::Unanswered => outcome(
+                ToolOutcome::Refused { reason: "nobody answered".to_string() },
+                "Nobody answered, so you do not have permission and must not act. The operator                  is away rather than opposed. Say plainly what is waiting on them, so they can                  decide when they are back."
+                    .to_string(),
+            ),
+            Permission::Failed(err) => outcome(
+                ToolOutcome::Failed { error: err.clone() },
+                format!(
+                    "The operator could not be asked ({err}), so you do not have permission and                      must not act. Tell them what is waiting."
+                ),
+            ),
+        }
     }
 
     /// Adding an agent to the workspace, if the operator says so.

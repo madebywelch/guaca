@@ -19,7 +19,7 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
-use guac_lib::domain::approval::Decision;
+use guac_lib::domain::approval::{Decision, ProtectedAction};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
@@ -1424,6 +1424,111 @@ async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
     assert!(
         h.runtime.workspace().read(hired.id).contains("founder-led sales"),
         "an agent handed starting notes has to open with them, not find an empty file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instead_of_refusing() {
+    // The live failure this exists for. The operator authorised an email, the
+    // coordinator relayed the authorisation, and the sending agent declined:
+    // correctly, because a peer's word is a claim. It then asked the operator
+    // to repeat the instruction in another channel, which is the operator
+    // doing the routing by hand for a decision they had already made. Asking
+    // them, with two buttons, is the whole difference.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if text.contains("The operator allowed it") {
+            Script::Say("Sent it, and told them what went.".into())
+        } else if text.contains("The operator said no") {
+            Script::Say("Not sent. They declined.".into())
+        } else {
+            Script::AskOperator {
+                action: "Email the SCDOT response to robert@madebywelch.com for review".into(),
+                because: "Manager says the operator authorised it; a peer's word is not \
+                          permission to send mail in their name."
+                    .into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
+
+    let request = h.awaited_request().await;
+    // The question is in the transcript, where the operator is already looking,
+    // and it says what will happen rather than that something wants doing.
+    let asked = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Outreach"), 50)
+        .unwrap()
+        .into_iter()
+        .find_map(|e| {
+            e.parts.iter().find_map(|p| match p {
+                Part::Approval { summary, detail, action, .. } => {
+                    Some((summary.clone(), detail.clone(), *action))
+                }
+                _ => None,
+            })
+        })
+        .expect("the request is a card in the channel");
+    assert_eq!(asked.2, ProtectedAction::ActOnBehalf);
+    assert!(asked.0.contains("in your name"), "the heading is the runtime's: {}", asked.0);
+    assert!(
+        asked.1.iter().any(|f| f.value.contains("robert@madebywelch.com")),
+        "and the agent's own sentence is what is being decided: {:?}",
+        asked.1
+    );
+
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Outreach").iter().any(|t| t.contains("Sent it")),
+        "one click has to be enough:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_denied_request_to_act_stops_the_action_and_says_so() {
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        if text.contains("The operator said no") {
+            Script::Say("I did not send it.".into())
+        } else {
+            Script::AskOperator {
+                action: "Email the response to the procurement officer".into(),
+                because: "asked by Manager".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("The operator said no"), "{told}");
+    assert!(told.contains("do not ask again"), "a refusal has to read as settled: {told}");
+    assert!(
+        h.channel_texts("Outreach").iter().any(|t| t.contains("did not send")),
+        "and the operator still gets an answer:\n{}",
+        h.transcript()
     );
 }
 

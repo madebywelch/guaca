@@ -41,6 +41,17 @@ a batch is a timing artifact: three peers answering at once can be split across
 turns, and deciding from the batch made two of them look like strangers. Ask the
 guard, which counts sends per pair for the whole run.
 
+**An agent that needs the operator's authority asks for it rather than
+refusing.** A peer saying "the operator authorised this" is a claim, and
+declining it is correct; what an agent lacked was any way to turn that claim
+into an answer, so it told the operator to repeat an instruction they had
+already given, somewhere else. `request_permission` parks the turn and puts two
+buttons in the channel they are already reading. `ProtectedAction::ActOnBehalf`
+deliberately has no "always allow" in the UI: the grant is scoped to an agent
+and an action, and this action is "act outside the workspace", so a standing yes
+would cover every future send and purchase rather than the one being asked
+about.
+
 **A protected action parks the turn that asked for it, and the row is the
 verdict.** `create_agent` stops mid-turn and waits on a person. The operator's
 click and the turn's own timeout can land in the same instant, so the answer is

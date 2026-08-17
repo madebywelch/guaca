@@ -43,14 +43,14 @@ const REQUEST: Extract<Part, { type: "approval" }> = {
 };
 
 /** The envelope the runtime writes: Guaca, in the asking agent's channel. */
-function asking(): Envelope {
+function asking(part: Extract<Part, { type: "approval" }> = REQUEST): Envelope {
   return {
     id: "m1",
     runId: "r1",
     channelId: MANAGER.id,
     from: { kind: "system" },
     to: { kind: "agent", id: MANAGER.id },
-    parts: [REQUEST],
+    parts: [part],
     trust: "system",
     hop: 0,
     expectsReply: false,
@@ -60,11 +60,11 @@ function asking(): Envelope {
   };
 }
 
-function draw(state: ApprovalState | undefined) {
-  useStore.setState({ approvals: state ? { [REQUEST.id]: state } : {}, banner: null });
+function draw(state: ApprovalState | undefined, part = REQUEST) {
+  useStore.setState({ approvals: state ? { [part.id]: state } : {}, banner: null });
   return render(
     <MessageItem
-      message={asking()}
+      message={asking(part)}
       lookups={{ byId: (id) => (id === MANAGER.id ? MANAGER : undefined), byName: () => undefined }}
       continued={false}
       feed={false}
@@ -132,5 +132,27 @@ describe("a request for permission", () => {
 
     expect(approvalStates).toHaveBeenCalled();
     expect(useStore.getState().banner?.text).toContain("already answered");
+  });
+
+  it("does not offer a standing yes for acting in the operator's name", () => {
+    // "Always allow" is scoped to an agent and an action, and this action is
+    // "act outside the workspace". A standing yes would cover every future
+    // send, submission and purchase rather than the one being asked about.
+    draw("pending", {
+      type: "approval",
+      id: "ap2",
+      action: "actOnBehalf",
+      summary: "Outreach wants to do something in your name",
+      detail: [
+        { label: "What Outreach will do", value: "Email the response to robert@madebywelch.com" },
+      ],
+    });
+
+    expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
+    expect(screen.getByText("This answer covers this one action only.")).toBeTruthy();
+    // And the waiting line says what has not happened, which is not a creation.
+    expect(screen.getByText(/Nothing has been sent yet/)).toBeTruthy();
   });
 });

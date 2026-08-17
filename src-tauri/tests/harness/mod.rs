@@ -58,6 +58,8 @@ pub enum Script {
     Memory(String),
     /// Emit a `create_agent` tool call.
     Hire { name: String, instructions: String, notes: String },
+    /// Emit a `request_permission` tool call.
+    AskOperator { action: String, because: String },
     /// Answer with a 503.
     ///
     /// Stands in for every failure worth retrying: a provider having a bad
@@ -130,6 +132,16 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_notes","type":"function",
                  "function":{"name": tool,"arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::AskOperator { action, because } => {
+            let args = serde_json::json!({ "action": action, "because": because }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_ask","type":"function",
+                 "function":{"name":"request_permission","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

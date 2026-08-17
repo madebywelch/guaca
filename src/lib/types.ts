@@ -57,7 +57,7 @@ export type Part =
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
-export type ProtectedAction = "createAgent";
+export type ProtectedAction = "createAgent" | "actOnBehalf";
 
 /** What the operator can answer. Pending and expired are not answers. */
 export type Decision = "allow" | "alwaysAllow" | "deny";
