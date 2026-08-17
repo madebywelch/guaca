@@ -22,9 +22,16 @@ while [ $# -gt 0 ]; do
     --vnc) VNC="$2"; shift 2 ;;
     --listen) LISTEN="$2"; shift 2 ;;
     --web) WEB="$2"; shift 2 ;;
-    # Anything else is a flag a future call site added. Skipping it rather than
-    # failing keeps a desktop that would otherwise have started.
-    *) shift ;;
+    # Anything else is refused rather than skipped. A flag added at the call
+    # site and silently dropped here — with its value then read as another flag
+    # — is a desktop that starts, serves, and is pointed somewhere nobody
+    # asked for. A desktop that does not start at all is the better failure:
+    # `start_desktop` reports it, and this message names the flag.
+    *)
+      echo "novnc_proxy: $1 is not a flag this launcher understands; it takes only" \
+        "--vnc, --listen and --web (see desktop.rs::start_desktop)" >&2
+      exit 2
+      ;;
   esac
 done
 

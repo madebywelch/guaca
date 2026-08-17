@@ -1,0 +1,27 @@
+# What the desktop image's build context is allowed to contain.
+#
+# The context is the repository root, because the image ships two files the app
+# compiles into itself. Without this, that context is the whole checkout:
+# `src-tauri/target` alone is several gigabytes, plus `node_modules`, `dist` and
+# `.git`, all of it read, hashed and handed to the builder before the first
+# instruction runs. On Apple Container the builder is a VM, so every byte of it
+# crosses a virtio mount.
+#
+# This is BuildKit's per-Dockerfile ignore file — `<dockerfile>.dockerignore`,
+# consulted ahead of any `.dockerignore` at the context root. It is used rather
+# than a root one on purpose: `Dockerfile.ci` at the repository root does
+# `COPY . .` and needs the whole checkout, and a root ignore file would starve
+# it. If a builder consulted neither, the build would be slow rather than wrong.
+#
+# Exclude everything, then name the files the image actually copies. Anything
+# added to a `COPY` in the Dockerfile has to be re-included here or the build
+# fails on a missing file; `build.sh --check` compares the two lists so that
+# failure happens before a build rather than during one.
+*
+
+!computer-image/guaca-init
+!computer-image/google-chrome
+!computer-image/google-chrome.desktop
+!computer-image/novnc_proxy
+!src-tauri/src/computer/browser.py
+!src-tauri/src/computer/sessions.py

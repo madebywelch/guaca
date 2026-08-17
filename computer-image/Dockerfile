@@ -191,8 +191,13 @@ ENV HOME=/home/user \
     DISPLAY=:0 \
     GUAC_IDLE_SECONDS=900
 
-# The one mount there is, and where every command runs.
-VOLUME /home/user
+# Deliberately no `VOLUME /home/user`. The provider always mounts a named
+# volume there, and every named volume it makes carries the three labels that
+# say whose it is. A `VOLUME` line adds an *anonymous* volume whenever somebody
+# runs this image without naming one, and an anonymous volume carries no labels
+# at all: `list_owned` cannot see it, the sweep cannot claim it, and it holds a
+# home directory's worth of disk until a person finds it by hand. The
+# declaration buys nothing the `--mount` does not already give.
 WORKDIR /home/user
 USER user
 

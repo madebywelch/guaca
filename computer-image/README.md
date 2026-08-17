@@ -36,6 +36,7 @@ image the release was tested with.
 | `google-chrome.desktop` | the entry the desktop icon and the menu read |
 | `novnc_proxy` | the launcher `desktop.rs` calls, installed over Debian's |
 | `build.sh` | build, and the checks that need no builder |
+| `Dockerfile.dockerignore` | the six files the build context needs, and nothing else |
 | `BASE_DIGEST` | the Debian base, pinned |
 | `IMAGE_REF` | what the app pulls. One line, no comment: `image.rs` includes it verbatim |
 
@@ -60,6 +61,11 @@ stopped container leaves behind and which would otherwise make the next Chrome
 refuse the profile as "in use". `guaca-init` reaches for `sudo` when it is not
 root, because whether the image's `USER` applies to PID 1 or only to `exec`
 sessions is the runtime's decision and not this file's.
+
+There is deliberately no `VOLUME /home/user` in the Dockerfile. The provider
+names its volume and labels it; a `VOLUME` line would add an *anonymous* one
+whenever the image is run without a mount, and an anonymous volume carries no
+labels, so nothing in this app can see it, claim it or clean it up.
 
 **The Chrome flags are here twice on purpose, and must not disagree.** The app
 writes its own copy of the wrapper into `~/.local/bin` on every desktop start;

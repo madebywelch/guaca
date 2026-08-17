@@ -24,6 +24,8 @@ BASE_TAG="debian:bookworm-slim"
 REF="${GUAC_COMPUTER_IMAGE:-guaca-computer:dev}"
 
 mode=build
+# Whether shellcheck actually ran, which decides what the last line claims.
+linted=no
 while [ $# -gt 0 ]; do
   case "$1" in
     --check) mode=check ;;
@@ -49,18 +51,23 @@ check_shell() {
   for script in guaca-init google-chrome novnc_proxy; do
     sh -n "$IMAGE_DIR/$script" || fail "$script is not valid POSIX sh"
   done
-  if command -v shellcheck >/dev/null 2>&1; then
-    # `guaca-init` runs as PID 1 with `set -u` and no `set -e`, so unchecked
-    # commands are deliberate; SC2317 fires on the signal handler, which is
-    # called by `trap` rather than by name.
-    shellcheck --shell=sh --exclude=SC2317 \
-      "$IMAGE_DIR/guaca-init" "$IMAGE_DIR/google-chrome" "$IMAGE_DIR/novnc_proxy" \
-      || fail "shellcheck refused one of the image's scripts"
-    shellcheck "${BASH_SOURCE[0]}" "$ROOT/scripts/spike-apple.sh" \
-      || fail "shellcheck refused one of the build scripts"
-  else
-    echo "  (shellcheck is not installed; syntax was checked with sh -n only)"
+  if ! command -v shellcheck >/dev/null 2>&1; then
+    linted=no
+    return
   fi
+  # Errors only, and deliberately so. This runs in two places that do not agree
+  # about what is installed: a maintainer's Mac usually has no shellcheck, and
+  # the runner that publishes the image always does. A gate that fires on style
+  # would therefore be discovered by the first publish, having never been seen
+  # by whoever wrote the script. An error is a bug in any shell; a warning here
+  # is mostly a deliberate choice, since `guaca-init` runs with `set -u` and no
+  # `set -e` and its signal handler is called by `trap` rather than by name.
+  shellcheck -S error --shell=sh \
+    "$IMAGE_DIR/guaca-init" "$IMAGE_DIR/google-chrome" "$IMAGE_DIR/novnc_proxy" \
+    || fail "shellcheck found an error in one of the image's scripts"
+  shellcheck -S error "${BASH_SOURCE[0]}" "$ROOT/scripts/spike-apple.sh" \
+    || fail "shellcheck found an error in one of the build scripts"
+  linted=yes
 }
 
 # The launcher `desktop.rs` calls, run against a stub. What matters is not that
@@ -68,7 +75,7 @@ check_shell() {
 # come out as the argument order websockify expects, which is web, then listen,
 # then the VNC server.
 check_novnc_launcher() {
-  local stub want with_flags bare
+  local stub want with_flags bare refused status
   stub="$(mktemp -d "${TMPDIR:-/tmp}/guaca-check.XXXXXX")"
   printf '#!/bin/sh\necho "$@"\n' > "$stub/websockify"
   chmod +x "$stub/websockify"
@@ -79,10 +86,23 @@ check_novnc_launcher() {
   # The same answer with no arguments at all, because the defaults in the
   # launcher are the call site's and not noVNC's.
   bare="$(PATH="$stub:$PATH" sh "$IMAGE_DIR/novnc_proxy")"
+
+  # And a flag it does not know refuses rather than proceeding. A dropped flag
+  # takes its value with it, the value is then read as another flag, and what
+  # serves on 6080 is a desktop pointed somewhere nobody asked for.
+  set +e
+  refused="$(PATH="$stub:$PATH" sh "$IMAGE_DIR/novnc_proxy" --cert /tmp/x 2>&1)"
+  status=$?
+  set -e
   rm -rf "$stub"
 
   [ "$with_flags" = "$want" ] || fail "novnc_proxy turned the call site's flags into: $with_flags"
   [ "$bare" = "$want" ] || fail "novnc_proxy with no arguments produced: $bare"
+  [ "$status" = "2" ] || fail "novnc_proxy accepted a flag it does not understand (exit $status)"
+  case "$refused" in
+    *--cert*) ;;
+    *) fail "novnc_proxy refused a flag without naming it: $refused" ;;
+  esac
 }
 
 # The strings this image and the running app both hold. Each of these was a real
@@ -125,6 +145,33 @@ check_desktop_paths() {
   [ -f "$ROOT/src-tauri/src/computer/sessions.py" ] || fail "sessions.py is not where the Dockerfile copies it from"
 }
 
+# Everything the Dockerfile copies has to be let through the ignore file, and
+# nothing else should be. A `COPY` added without its exception fails the build
+# on a missing file, which is a slow way to learn it; and a context that quietly
+# grows back to the whole checkout is minutes per build, on Apple Container
+# across a virtio mount.
+check_context() {
+  local ignore copied allowed path
+  ignore="$IMAGE_DIR/Dockerfile.dockerignore"
+  [ -f "$ignore" ] || fail "the image has no $ignore, so its context is the whole repository"
+  grep -qx '\*' "$ignore" || fail "$ignore must start from excluding everything"
+
+  # The source of each COPY, which for this Dockerfile is always its first
+  # argument and always a path in the repository.
+  copied="$(awk '/^COPY /{ print $2 }' "$IMAGE_DIR/Dockerfile")"
+  for path in $copied; do
+    grep -qx -- "!$path" "$ignore" \
+      || fail "the Dockerfile copies $path and $ignore does not let it through"
+  done
+  # And the other way: an exception for a file nothing copies is a context
+  # carrying something for no reason, and usually a leftover.
+  allowed="$(sed -n 's/^!//p' "$ignore")"
+  for path in $allowed; do
+    printf '%s\n' "$copied" | grep -qx -- "$path" \
+      || fail "$ignore lets $path through and no COPY in the Dockerfile wants it"
+  done
+}
+
 # One pinned base, named in two files. The Dockerfile's default is what a bare
 # `docker build` uses and `BASE_DIGEST` is what the publishing workflow passes
 # in, so a difference between them is an image built from something other than
@@ -153,9 +200,20 @@ checks() {
   echo "==> checking what the image and desktop.rs both claim"
   check_chrome_agreement
   check_desktop_paths
-  echo "==> checking the pinned base"
+  echo "==> checking the build context and the pinned base"
+  check_context
   check_base_pin
-  echo "    all checks passed"
+  # Said as what actually ran. On a machine with no linter installed, "all
+  # checks passed" reads as a lint that approved these scripts, when the truth
+  # is that the only place it has run is the runner that publishes the image.
+  #
+  # (A comment line here must not begin with the linter's own name: it reads
+  # `#<name>` as a directive and refuses the file. Found by running it.)
+  if [ "$linted" = yes ]; then
+    echo "    all checks passed, shellcheck included"
+  else
+    echo "    checks passed; shellcheck: not installed, skipped (brew install shellcheck)"
+  fi
 }
 
 # The digest the registry currently gives for the base tag. Read from the

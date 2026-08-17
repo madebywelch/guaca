@@ -18,6 +18,11 @@ on:
     branches: [main]
     paths:
       - computer-image/**
+      # The pull request this workflow opens edits exactly one file, in this
+      # directory. Without this line that merge is a push that matches the
+      # pattern above, which publishes an image, which opens another pull
+      # request: a publish loop with nothing in it that stops.
+      - '!computer-image/IMAGE_REF'
       - .github/workflows/computer-image.yml
       # The image ships these two verbatim, so a change to either is a change to
       # the image even though it is not in `computer-image/`.

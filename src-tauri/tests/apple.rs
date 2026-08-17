@@ -66,22 +66,21 @@ const SETTLE: Duration = Duration::from_secs(180);
 /// Not a real credential, and deliberately shaped like one.
 const SENTINEL: &str = "spike-sentinel-9f21c7-not-a-secret";
 
-/// The runtime, or a reason this Mac cannot answer the question.
+/// The runtime, or a failure that says what is missing.
 ///
-/// A skip rather than a failure: this suite is run by hand on a machine that
-/// has Apple Container, and a red test on a machine that never could is noise
-/// that trains people to ignore it.
-fn runtime() -> Option<Arc<AppleContainer>> {
+/// Deliberately not a skip. Every test here is already behind `#[ignore]`, so
+/// nothing reaches this without somebody asking for it by name, and a suite
+/// that answered "10 passed" on a Mac with no runtime would be a conformance
+/// report for a machine that was never made — read, reasonably, as the spike
+/// having been done.
+fn runtime() -> Arc<AppleContainer> {
     match AppleContainer::discover(INSTALLATION) {
-        Some(provider) => Some(Arc::new(provider)),
-        None => {
-            eprintln!(
-                "skipped: no `container` binary at /usr/local/bin/container or on PATH. Install \
-                 the signed package from github.com/apple/container/releases and run \
-                 scripts/spike-apple.sh."
-            );
-            None
-        }
+        Some(provider) => Arc::new(provider),
+        None => panic!(
+            "Apple Container is not installed: no `container` binary at \
+             /usr/local/bin/container or on PATH. Install the signed package from \
+             github.com/apple/container/releases, then run scripts/spike-apple.sh."
+        ),
     }
 }
 
@@ -234,7 +233,7 @@ impl ViewerResolver for OneMachine {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_computer_is_made_as_a_container_a_volume_and_a_network() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
     let name = spike.handle.provider_id.clone();
 
@@ -288,7 +287,7 @@ async fn a_computer_is_made_as_a_container_a_volume_and_a_network() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_command_keeps_its_two_streams_and_its_exit_code() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
 
     let out = provider
@@ -332,7 +331,7 @@ async fn a_command_keeps_its_two_streams_and_its_exit_code() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_credential_reaches_one_command_and_nothing_else() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
 
     let carried = provider
@@ -402,7 +401,7 @@ async fn a_credential_reaches_one_command_and_nothing_else() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_binary_file_arrives_on_a_machine_byte_for_byte() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
 
     // Every byte value, including the ones a shell would eat, and big enough to
@@ -439,7 +438,7 @@ async fn a_binary_file_arrives_on_a_machine_byte_for_byte() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn the_desktop_is_watchable_through_the_loopback_viewer() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
 
     // The proxy first: the port it chose is what the machine's URL is built
     // from, and the machine's handle is what the proxy resolves. One of the two
@@ -488,7 +487,7 @@ async fn the_desktop_is_watchable_through_the_loopback_viewer() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn the_browser_is_driven_over_its_remote_interface_and_the_screen_photographed() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
 
     // `websocket-client` must already be there. E2B installs it on first
@@ -602,7 +601,7 @@ async fn the_browser_is_driven_over_its_remote_interface_and_the_screen_photogra
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_home_file_and_the_browser_profile_survive_a_sleep() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
 
     spike.run("echo 'work in progress' > /home/user/spike-home.txt").await;
@@ -641,7 +640,7 @@ async fn a_home_file_and_the_browser_profile_survive_a_sleep() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn a_machine_nobody_is_using_stops_itself_and_keeps_its_disk() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     // Twenty seconds, and the watchdog looks every thirty, so a machine nothing
     // touches is asleep within a minute. Nothing here touches the heartbeat:
     // that is the app's job, and this is the case where the app is gone.
@@ -665,7 +664,7 @@ async fn a_machine_nobody_is_using_stops_itself_and_keeps_its_disk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn destroying_a_computer_takes_all_three_of_its_resources() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let spike = Spike::make(&provider).await;
     let name = spike.handle.provider_id.clone();
 
@@ -715,7 +714,7 @@ async fn destroying_a_computer_takes_all_three_of_its_resources() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "needs Apple Container 1.2.x and the desktop image; run scripts/spike-apple.sh"]
 async fn one_agent_cannot_reach_another_agents_desktop() {
-    let Some(provider) = runtime() else { return };
+    let provider = runtime();
     let first = Spike::make(&provider).await;
     let second = Spike::make(&provider).await;
 
