@@ -101,7 +101,6 @@ struct SandboxRow {
 /// No environment on it. Credentials arrive on each `ExecRequest`, because
 /// which agent a command acts for is a property of the command and a provider
 /// held per session was one that eight call sites could each forget to rebuild.
-#[derive(Clone)]
 pub struct E2bProvider {
     http: reqwest::Client,
     api_key: String,
@@ -194,26 +193,24 @@ impl ComputerProvider for E2bProvider {
             .await
             .map_err(|e| E2bError::Transport(e.to_string()))?;
 
-        if response.status().as_u16() == 404 {
+        let status = response.status();
+        if status.as_u16() == 404 {
             return Ok(ProviderState::Gone);
         }
         let body = response.text().await.unwrap_or_default();
-        let state = serde_json::from_str::<serde_json::Value>(&body)
-            .ok()
-            .and_then(|v| v["state"].as_str().map(str::to_string))
-            .unwrap_or_default();
-
-        match state.as_str() {
-            "running" => Ok(ProviderState::Running),
-            "paused" => Ok(ProviderState::Asleep),
-            // Not `Gone`, which is permission to throw the disk away. A state
-            // this build has not heard of is more likely a machine that is fine
-            // and an app that is old.
-            _ => Err(ProviderError::Operation(format!(
-                "E2B reports sandbox {id} in state {state:?}, which this build does not \
-                 understand; try again, and if it persists destroy the computer from its pane"
-            ))),
+        // An expired key or a bad gateway is a rejected request, not a state.
+        // Read as one it became "state \"\", which this build does not
+        // understand", which tells the operator E2B said something it never
+        // said and advises destroying a machine that is fine.
+        if !status.is_success() {
+            return Err(E2bError::Api {
+                status: status.as_u16(),
+                message: body.chars().take(200).collect(),
+            }
+            .into());
         }
+
+        classify(id, &body)
     }
 
     /// Wakes it, and hands back the handle it now answers to.
@@ -255,12 +252,16 @@ impl ComputerProvider for E2bProvider {
             .await;
 
         match sent {
-            Ok(response) if !response.status().is_success() => {
-                tracing::debug!(sandbox = %id, status = response.status().as_u16(), "E2B refused to push back the sleep deadline");
-            }
-            Err(e) => {
-                tracing::debug!(sandbox = %id, error = %e, "could not reach E2B to push back the sleep deadline")
-            }
+            Ok(response) if !response.status().is_success() => tracing::debug!(
+                sandbox = %id,
+                status = response.status().as_u16(),
+                "E2B refused to push back the sleep deadline"
+            ),
+            Err(e) => tracing::debug!(
+                sandbox = %id,
+                error = %e,
+                "could not reach E2B to push back the sleep deadline"
+            ),
             Ok(_) => {}
         }
     }
@@ -467,6 +468,30 @@ fn process_body(request: &ExecRequest) -> serde_json::Value {
             "envs": request.env,
         }
     })
+}
+
+/// What E2B's description of a sandbox says it is doing.
+///
+/// Extracted so the one state this build refuses can be asserted on. Anything
+/// outside the two known words is an error rather than `Gone`, because `Gone`
+/// is permission to throw a disk away: a state this build has not heard of is
+/// more likely a machine that is fine and an app that is old, and E2B has
+/// shipped intermediate states before. A body that does not parse arrives here
+/// as the same kind of unknown.
+fn classify(id: &str, body: &str) -> Result<ProviderState, ProviderError> {
+    let state = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["state"].as_str().map(str::to_string))
+        .unwrap_or_default();
+
+    match state.as_str() {
+        "running" => Ok(ProviderState::Running),
+        "paused" => Ok(ProviderState::Asleep),
+        _ => Err(ProviderError::Operation(format!(
+            "E2B reports sandbox {id} in state {state:?}, which this build does not \
+             understand; try again, and if it persists destroy the computer from its pane"
+        ))),
+    }
 }
 
 /// Where the viewer proxy should connect for one of a sandbox's ports.
@@ -692,6 +717,44 @@ mod tests {
     fn a_blank_key_means_not_configured_rather_than_a_client_that_always_fails() {
         assert!(E2bProvider::new("   ").is_none());
         assert!(E2bProvider::new("e2b_x").is_some());
+    }
+
+    #[test]
+    fn an_e2b_state_this_build_does_not_know_is_an_error_rather_than_a_dead_machine() {
+        assert_eq!(classify("sbx1", r#"{"state":"running"}"#).unwrap(), ProviderState::Running);
+        assert_eq!(classify("sbx1", r#"{"state":"paused"}"#).unwrap(), ProviderState::Asleep);
+
+        // `Gone` is permission to throw a disk away, and E2B has shipped
+        // intermediate states before. Reading one of those as `Gone` would
+        // replace a machine that was only busy waking up.
+        let Err(ProviderError::Operation(message)) = classify("sbx1", r#"{"state":"restoring"}"#)
+        else {
+            panic!("an unknown state must not classify as anything");
+        };
+        assert!(message.contains("sbx1"), "the operator has to know which machine: {message}");
+        assert!(message.contains("restoring"), "and what it was told: {message}");
+
+        // A 200 whose body is not the object this expects is the same kind of
+        // unknown, and used to read as an empty state string.
+        assert!(matches!(classify("sbx1", "<html>hello</html>"), Err(ProviderError::Operation(_))));
+    }
+
+    #[test]
+    fn every_e2b_failure_crosses_the_boundary_as_the_next_step_it_implies() {
+        // The only route across, and each variant is a different thing for
+        // whoever reads it to do: wait, or look at the message.
+        assert!(matches!(
+            ProviderError::from(E2bError::Transport("connection closed".into())),
+            ProviderError::Unavailable(m) if m == "E2B request failed: connection closed"
+        ));
+        assert!(matches!(
+            ProviderError::from(E2bError::Api { status: 429, message: "slow down".into() }),
+            ProviderError::Operation(m) if m == "E2B rejected the request (429): slow down"
+        ));
+        assert!(matches!(
+            ProviderError::from(E2bError::Protocol("a frame ran past the end".into())),
+            ProviderError::Operation(m) if m.contains("a frame ran past the end")
+        ));
     }
 
     #[test]
