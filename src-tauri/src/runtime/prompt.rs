@@ -94,14 +94,6 @@ pub fn system_prompt(
            anything that changes the screen, because you are always working from the last \
            picture you took rather than from what is there now. This is how you read a page, \
            follow a link, fill a form, or use an app you are already signed into.\n\n\
-         You also keep your own schedule with `schedule`: work you should do later, or keep \
-         doing. When a routine fires you receive its instruction as a new message, so write it \
-         as something you can act on with nothing else in front of you. Use it whenever you are \
-         asked for something recurring, and prefer one routine that does the whole job over \
-         several that each do a piece of it. Never schedule a check for a reply, a result or \
-         anything else you are waiting on: those reach you as new messages by themselves. A \
-         routine that fires to go looking finds nothing, because whatever you were waiting for \
-         would already have arrived.\n\n\
          Never say you have no computer, no browser, or no way to look something up. You have \
          all three. Say what you ran and what it returned rather than presenting a result as \
          something you simply knew.\n",
@@ -184,6 +176,24 @@ pub fn system_prompt(
              do the part that needs it, rather than reporting that it cannot be done.\n",
         );
     }
+
+    // Its own section rather than a paragraph under the computer, where it
+    // spent its first life: a routine is a row in the database and a poll on
+    // the clock, and it fires whether or not a machine was ever started. An
+    // agent looking for how to do something later has no reason to read about
+    // its screen, and the one rule here that protects the budget is the one it
+    // would skim past.
+    out.push_str("\n## Your schedule\n");
+    out.push_str(
+        "`schedule` is your own: work you should do later, or keep doing. When a routine fires \
+         you receive its instruction as a new message, so write it as something you can act on \
+         with nothing else in front of you. Use it whenever you are asked for something \
+         recurring, and prefer one routine that does the whole job over several that each do a \
+         piece of it.\n\n\
+         Never schedule a check for a reply, a result or anything else you are waiting on: those \
+         reach you as new messages by themselves. A routine that fires to go looking finds \
+         nothing, because whatever you were waiting for would already have arrived.\n",
+    );
 
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should colour how it reads everything after.
@@ -431,6 +441,19 @@ mod tests {
         build_messages(card, "", roster, &[], &[], names, notes, history, inbound, mode)
     }
 
+    /// The body of one `##` section, so a test can assert where something is
+    /// said rather than only that it was said somewhere.
+    fn section<'a>(prompt: &'a str, heading: &str) -> &'a str {
+        let start =
+            prompt.find(heading).unwrap_or_else(|| panic!("the prompt has no {heading} section"))
+                + heading.len();
+        let rest = &prompt[start..];
+        match rest.find("\n## ") {
+            Some(end) => &rest[..end],
+            None => rest,
+        }
+    }
+
     /// The text of a user turn, whatever shape it arrived in.
     fn user_text(content: &crate::llm::openrouter::UserContent) -> String {
         use crate::llm::openrouter::{ContentPart, UserContent};
@@ -572,7 +595,6 @@ mod tests {
             prompt.contains("browse"),
             "the browser knows where things are; pixels are the fallback, not the default"
         );
-        assert!(prompt.contains("schedule"), "an agent that does not know it can wait cannot");
         assert!(
             prompt.contains("look"),
             "an agent that does not look first will click from memory of a screen it never saw"
@@ -753,6 +775,26 @@ mod tests {
         assert!(
             !prompt.contains("Call it when you are unsure of a name"),
             "the old framing is what produced the broadcast"
+        );
+    }
+
+    #[test]
+    fn a_schedule_is_not_a_fact_about_the_computer() {
+        // It lived as a trailing paragraph under `## Your computer`, the one
+        // heading a routine has nothing to do with: it is a row in the database
+        // and a poll on the clock, and it fires whether or not a machine was
+        // ever started. An agent that does not know it can wait cannot, and it
+        // was being told so under a heading it had no reason to read.
+        let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        let schedule = section(&prompt, "## Your schedule");
+        assert!(schedule.contains("`schedule`"), "the tool has to be named where it is explained");
+        assert!(
+            schedule.contains("Never schedule a check for a reply"),
+            "the one rule here that protects a budget belongs with the tool it is about"
+        );
+        assert!(
+            !section(&prompt, "## Your computer").contains("schedule"),
+            "the computer section is about the machine"
         );
     }
 
