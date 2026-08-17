@@ -1166,10 +1166,15 @@ button {
   padding: 0.3rem 1.5rem 0.3rem 1.15rem;
 }
 
+/* `min-width` so the bracket survives a row that fills. A burst of four peers
+   is as wide as the column, and rules that shrink to nothing on that row and
+   not on the one above it make two rows of the same kind look like two kinds
+   of row. */
 .wire::before,
 .wire::after {
   content: "";
   flex: 1;
+  min-width: 1.4rem;
   height: 1px;
   background: linear-gradient(to right, transparent, var(--edge), transparent);
 }
@@ -1236,15 +1241,22 @@ button {
   color: var(--pit);
 }
 
-/* A burst: one chip per peer, on one line. Several peers is the common case
-   for a fan-out, and they belong together: it was one moment of the run. */
-.wire--burst {
-  gap: 0.4rem;
+/* A burst: one chip per peer. Several peers is the common case for a fan-out
+   and they belong together, so they wrap among themselves rather than in the
+   row. As flex items of a wrapping `.wire` the two rules joined the wrap flow:
+   the left one was squeezed to a stub on the first line and the right one was
+   stranded beside whichever chip wrapped last, which drew one moment of the
+   run as two ragged rows pointing at nothing. */
+.wire__chips {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: center;
+  gap: 0.4rem;
+  min-width: 0;
 }
 
-.wire--burst .wire__chip {
+.wire__chips .wire__chip {
   max-width: 100%;
 }
 
@@ -1697,7 +1709,19 @@ button {
   opacity: 0.5;
 }
 
+.wire--writing .wire__chip {
+  position: relative;
+}
+
+/* Outside the pill, so the live chip is the exact box of the settled one. As a
+   flex item the dots made it a dozen pixels wider, and a centred row slid
+   sideways the instant the message landed. The thing worth noticing there is
+   the message, not the row moving. */
 .wire__dots {
+  position: absolute;
+  left: 100%;
+  inset-block: 0;
+  margin-left: 0.4rem;
   display: inline-flex;
   gap: 2px;
   align-items: center;

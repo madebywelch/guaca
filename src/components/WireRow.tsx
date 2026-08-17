@@ -37,6 +37,48 @@ function clockTime(ms: number): string {
 }
 
 /**
+ * The inside of a peer chip.
+ *
+ * Shared rather than written twice because a chip is drawn before the message
+ * arrives and again after it has, and the two have to be the same object to the
+ * eye. An avatar a size out or a label in a different place turns one message
+ * landing into two things happening.
+ */
+function PeerFace({ peer, label }: { peer: WirePeer; label: string }) {
+  return (
+    <>
+      <AgentAvatar avatar={peer.avatar} color={peer.color} size="xs" seed={peer.id} />
+      <span className="wire__label">{label}</span>
+    </>
+  );
+}
+
+/** One peer's share of a burst, and the thread behind it. */
+function PeerChip({ summary, onOpen }: { summary: PeerSummary; onOpen: (peer: AgentId) => void }) {
+  const { peer, agentId } = summary;
+  const face = <PeerFace peer={peer} label={summaryLabel(summary)} />;
+  const style = { "--accent": peer.color } as React.CSSProperties;
+
+  // An unresolved name has no thread to open. It still gets a chip: an agent
+  // that wrote to a name nobody can find is worth seeing.
+  return agentId ? (
+    <button
+      type="button"
+      className="wire__chip wire__chip--open"
+      style={style}
+      title={`Read the conversation with ${peer.name}`}
+      onClick={() => onOpen(agentId)}
+    >
+      {face}
+    </button>
+  ) : (
+    <span className="wire__chip" style={style}>
+      {face}
+    </span>
+  );
+}
+
+/**
  * A burst of peer traffic, one chip per peer.
  *
  * Per peer rather than "5 messages with 2 agents", for the same reason a
@@ -44,6 +86,10 @@ function clockTime(ms: number): string {
  * hides the thing the operator opened the channel to find out. It also means
  * every chip has exactly one thread behind it, so a click never has to ask
  * which conversation was meant.
+ *
+ * The chips are one child rather than several, so the rules either side of the
+ * row bracket the group instead of joining it: as siblings in a wrapping row
+ * they were laid out with the chips and ended up inside the burst.
  */
 export function PeerBurstRow({
   peers,
@@ -53,41 +99,12 @@ export function PeerBurstRow({
   onOpen: (peer: AgentId) => void;
 }) {
   return (
-    <div className="wire wire--burst">
-      {peers.map((summary) => {
-        const { agentId } = summary;
-        const face = (
-          <>
-            <AgentAvatar
-              avatar={summary.peer.avatar}
-              color={summary.peer.color}
-              size="xs"
-              seed={summary.peer.id}
-            />
-            <span className="wire__label">{summaryLabel(summary)}</span>
-          </>
-        );
-        const style = { "--accent": summary.peer.color } as React.CSSProperties;
-
-        // An unresolved name has no thread to open. It still gets a chip: an
-        // agent that wrote to a name nobody can find is worth seeing.
-        return agentId ? (
-          <button
-            key={summary.peer.id}
-            type="button"
-            className="wire__chip wire__chip--open"
-            style={style}
-            title={`Read the conversation with ${summary.peer.name}`}
-            onClick={() => onOpen(agentId)}
-          >
-            {face}
-          </button>
-        ) : (
-          <span key={summary.peer.id} className="wire__chip" style={style}>
-            {face}
-          </span>
-        );
-      })}
+    <div className="wire">
+      <div className="wire__chips">
+        {peers.map((summary) => (
+          <PeerChip key={summary.peer.id} summary={summary} onOpen={onOpen} />
+        ))}
+      </div>
     </div>
   );
 }
@@ -224,28 +241,42 @@ export function MessageModal({
 }
 
 /**
- * An agent composing a message to a peer.
+ * A peer composing a message to the agent whose channel this is.
  *
  * Deliberately textless. The finished message collapses into a burst row, so
  * streaming its text into a bubble first means the operator watches a wall of
  * text appear and then vanish, which is worse than never showing it.
+ *
+ * It is the chip that row will draw, with dots, and the words come from the
+ * same function so they cannot drift apart. Written in its own shape instead
+ * (an arrow, a sentence naming both ends) it moved, changed wording and grew an
+ * avatar the instant the message landed, which read as two separate events
+ * rather than one arriving.
+ *
+ * Only the sender is named because only the sender is news: agent-to-agent
+ * traffic is filed under the recipient, so a live peer stream in this channel
+ * is always addressed to the agent whose channel the operator already has open.
  */
-export function WritingRow({ from, to }: { from: WirePeer; to: WirePeer }) {
+export function WritingRow({ peer }: { peer: WirePeer }) {
   return (
     <div className="wire wire--writing">
-      <span className="wire__chip" style={{ "--accent": from.color } as React.CSSProperties}>
-        <span className="wire__arrow" aria-hidden="true">
-          ⇢
+      <div className="wire__chips">
+        <span
+          className="wire__chip"
+          title={`${peer.name} is writing`}
+          style={{ "--accent": peer.color } as React.CSSProperties}
+        >
+          <PeerFace
+            peer={peer}
+            label={summaryLabel({ peer, agentId: null, sent: 0, received: 1 })}
+          />
+          <span className="wire__dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
         </span>
-        <span className="wire__label">
-          {from.name} is writing to {to.name}
-        </span>
-        <span className="wire__dots" aria-hidden="true">
-          <i />
-          <i />
-          <i />
-        </span>
-      </span>
+      </div>
     </div>
   );
 }
