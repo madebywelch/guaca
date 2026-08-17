@@ -121,7 +121,11 @@ export default function App() {
     }
   };
 
-  const needsKey = ready && settings !== null && !settings.apiKeySet;
+  // Only the endpoint the app ships with is known to want a key. A local
+  // server is told to leave it blank, and a banner insisting on one there is
+  // the app contradicting its own README on the operator's first run.
+  const needsKey =
+    ready && settings !== null && !settings.apiKeySet && settings.baseUrl.includes("openrouter.ai");
 
   return (
     <div className="app">

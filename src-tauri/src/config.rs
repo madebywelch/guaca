@@ -67,8 +67,12 @@ impl InferenceConfig {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
+    /// Whether there is somewhere to send a request. A key is not part of it:
+    /// a local llama.cpp or LM Studio server takes none, and the README tells
+    /// the operator to leave it blank. Whether the endpoint wants one is the
+    /// endpoint's answer to give, and a 401 says so in words.
     pub fn is_ready(&self) -> bool {
-        !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
+        !self.base_url.trim().is_empty()
     }
 }
 
@@ -316,6 +320,22 @@ mod tests {
         assert_eq!(cfg.chat_completions_url(), "https://openrouter.ai/api/v1/chat/completions");
         cfg.base_url = "https://openrouter.ai/api/v1/".into();
         assert_eq!(cfg.chat_completions_url(), "https://openrouter.ai/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn a_local_endpoint_is_ready_without_a_key() {
+        // The README tells an operator with a llama.cpp or LM Studio server to
+        // leave the key blank. Ready means there is somewhere to send the
+        // request; whether that place wants a key is its answer to give.
+        let cfg = InferenceConfig {
+            base_url: "http://localhost:8080/v1".into(),
+            api_key: String::new(),
+            ..Default::default()
+        };
+        assert!(cfg.is_ready());
+
+        let blank = InferenceConfig { base_url: "  ".into(), ..Default::default() };
+        assert!(!blank.is_ready(), "nowhere to send it is the one thing that is not ready");
     }
 
     #[test]

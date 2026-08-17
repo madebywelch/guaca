@@ -789,7 +789,7 @@ mod tests {
     fn a_patch_can_supply_a_key_that_was_never_saved() {
         // The Test connection path: the operator has typed a key but not saved.
         let mut config = AppConfig::default();
-        assert!(!config.inference.is_ready(), "no key stored yet");
+        assert!(config.inference.api_key.is_empty(), "no key stored yet");
 
         apply_patch(
             &mut config,
@@ -797,8 +797,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(config.inference.api_key, "sk-typed", "whitespace is trimmed");
-        assert!(config.inference.is_ready(), "the typed key must be usable without saving");
+        assert_eq!(
+            config.inference.api_key, "sk-typed",
+            "whitespace is trimmed, and the typed key is what the probe will send"
+        );
     }
 
     #[test]

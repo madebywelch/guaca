@@ -182,7 +182,7 @@ export function SettingsDialog({ onClose }: Props) {
           />
           <span className="field__hint">
             Stored on this machine in a file only your user account can read. Leave blank to keep
-            the current key.
+            the current key. A local server that takes no key needs none here.
           </span>
         </label>
 
