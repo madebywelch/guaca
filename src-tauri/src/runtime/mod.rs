@@ -873,13 +873,15 @@ impl Runtime {
         self.inner.handle.spawn(async move {
             loop {
                 let now = now_ms();
-                let due = match runtime.inner.store.due_routines(now) {
-                    Ok(due) => due,
-                    Err(err) => {
-                        tracing::warn!(%err, "could not read the schedule");
-                        continue;
-                    }
-                };
+                // A read that fails waits for the next tick like one that
+                // succeeds. Skipping straight to the next attempt turned a
+                // database that stayed broken into a hot loop of synchronous
+                // SQLite calls, with a warning written as fast as the disk
+                // could refuse.
+                let due = runtime.inner.store.due_routines(now).unwrap_or_else(|err| {
+                    tracing::warn!(%err, "could not read the schedule; trying again next tick");
+                    Vec::new()
+                });
 
                 for routine in due {
                     // Recorded as run before it is run. A routine that fails on
