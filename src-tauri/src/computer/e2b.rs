@@ -353,12 +353,7 @@ impl ComputerProvider for E2bProvider {
         // never fire for the command that actually hangs.
         let (status, body) = match tokio::time::timeout(request.timeout, call).await {
             Ok(result) => result?,
-            Err(_) => {
-                return Err(ProviderError::Unavailable(format!(
-                    "the command did not finish within {}s",
-                    request.timeout.as_secs()
-                )))
-            }
+            Err(_) => return Err(timed_out(request.timeout)),
         };
 
         if !status.is_success() {
@@ -493,6 +488,20 @@ fn classify(id: &str, body: &str) -> Result<ProviderState, ProviderError> {
              understand; try again, and if it persists destroy the computer from its pane"
         ))),
     }
+}
+
+/// A command that outran its deadline, said to the model that ran it.
+///
+/// The way forward is in the message because the model is the only one who can
+/// take it: the process is still running on its machine, and a rerun of the
+/// same command gets the same deadline. A refusal that only names the limit is
+/// reworded and tried again.
+fn timed_out(timeout: Duration) -> ProviderError {
+    ProviderError::Unavailable(format!(
+        "the command did not finish within {}s; run long work in the background with nohup or \
+         setsid and poll for its output",
+        timeout.as_secs()
+    ))
 }
 
 /// Where the viewer proxy should connect for one of a sandbox's ports.
@@ -787,6 +796,19 @@ mod tests {
             ProviderError::from(E2bError::Protocol("a frame ran past the end".into())),
             ProviderError::Operation(m) if m.contains("a frame ran past the end")
         ));
+    }
+
+    #[test]
+    fn a_command_that_outran_its_deadline_is_told_how_to_outlive_one() {
+        // Read mid-turn by the model that ran the command, and it is the only
+        // one who can act on it: the same command run again gets the same
+        // deadline, so the message has to name the way past it.
+        let err = timed_out(Duration::from_secs(120));
+        let ProviderError::Unavailable(message) = err else {
+            panic!("a deadline is worth retrying differently, not a permanent failure");
+        };
+        assert!(message.contains("120s"), "{message}");
+        assert!(message.contains("nohup"), "a refusal with no way forward is reworded and retried");
     }
 
     #[test]

@@ -140,6 +140,14 @@ does not turn it into a turn has to release it too: an agent deleted while
 holding queued work used to take the booking with it, and that run never ended.
 Nothing else decrements.
 
+**A woken machine answers to a new name, and every operation on an agent's
+computer runs under that agent's lock.** E2B's resume reply reissues the whole
+handle, the sandbox id included, so `computer/mod.rs` writes all of it back:
+keeping the old id leaves a machine running, unreachable, and invisible to the
+sweep. The startup sweep takes the same per-agent lock and re-reads the row
+under it, because `ensure` holds a `provisioning` row across a create, and a
+sweep that reaped one mid-flight deleted a machine just paid for.
+
 **A file's bytes never travel in an envelope, and never cross IPC.** A message
 carries a `Part::File` naming the digest; the bytes sit once in `files.rs`,
 addressed by content, and a drop hands Rust the *path* rather than the file.

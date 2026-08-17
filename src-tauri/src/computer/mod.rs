@@ -180,6 +180,13 @@ struct Inner {
     /// One lock per agent, so an operator click and an agent tool call cannot
     /// make two machines. Held across the whole `ensure`, including the create.
     locks: Mutex<HashMap<AgentId, Arc<tokio::sync::Mutex<()>>>>,
+    /// The provider last built, with the API key it was built from. Kept
+    /// because the viewer resolves a target per proxied request and one noVNC
+    /// page is fifty of those plus a WebSocket: building a provider there was
+    /// a connection pool made and thrown away per asset, and a provider that
+    /// drives a CLI would be a process per asset. Rebuilt when the key differs,
+    /// which is how a settings change takes effect.
+    e2b_provider: RwLock<Option<(String, Arc<dyn ComputerProvider>)>>,
     /// Loopback port of the viewer proxy. Zero until it is listening.
     viewer_port: AtomicU16,
     #[cfg(test)]
@@ -206,6 +213,7 @@ impl ComputerManager {
                 store,
                 config,
                 locks: Mutex::new(HashMap::new()),
+                e2b_provider: RwLock::new(None),
                 viewer_port: AtomicU16::new(0),
                 #[cfg(test)]
                 injected: None,
@@ -226,6 +234,7 @@ impl ComputerManager {
                 store,
                 config,
                 locks: Mutex::new(HashMap::new()),
+                e2b_provider: RwLock::new(None),
                 viewer_port: AtomicU16::new(0),
                 injected: Some(provider),
             }),
@@ -639,15 +648,30 @@ impl ComputerManager {
     }
 
     /// Whoever runs machines of this kind, if this build can.
+    ///
+    /// The one built last is kept, because this is on the viewer's path: the
+    /// proxy resolves a target for every request a desktop page makes. The key
+    /// it was built from is what the cache is keyed on, so an operator who
+    /// changes it in settings gets a provider that uses it on the next call.
     fn provider(&self, which: Provider) -> Result<Arc<dyn ComputerProvider>, ComputerError> {
         #[cfg(test)]
         if let Some(injected) = &self.inner.injected {
             return Ok(injected.clone());
         }
         match which {
-            Provider::E2b => E2bProvider::new(&self.inner.config.read().e2b.api_key)
-                .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>)
-                .ok_or(ComputerError::Unconfigured),
+            Provider::E2b => {
+                let key = self.inner.config.read().e2b.api_key.trim().to_string();
+                if let Some((built_from, provider)) = self.inner.e2b_provider.read().as_ref() {
+                    if *built_from == key {
+                        return Ok(provider.clone());
+                    }
+                }
+                let provider = E2bProvider::new(&key)
+                    .map(|provider| Arc::new(provider) as Arc<dyn ComputerProvider>)
+                    .ok_or(ComputerError::Unconfigured)?;
+                *self.inner.e2b_provider.write() = Some((key, provider.clone()));
+                Ok(provider)
+            }
         }
     }
 
@@ -1076,6 +1100,29 @@ mod tests {
             ComputerManager::new(store, Arc::new(parking_lot::RwLock::new(AppConfig::default())));
 
         assert!(manager.if_running(card.id).await.unwrap().is_none());
+    }
+
+    #[test]
+    fn one_provider_is_kept_and_rebuilt_only_when_the_key_changes() {
+        // The viewer resolves a target per proxied request, and a single noVNC
+        // page is around fifty of them plus a WebSocket. Building a provider
+        // per call made and dropped an HTTP client, and its connection pool,
+        // for every asset on that page.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let config = Arc::new(parking_lot::RwLock::new(AppConfig::default()));
+        config.write().e2b.api_key = "e2b_first".into();
+        let manager = ComputerManager::new(store, config.clone());
+
+        let first = manager.provider(Provider::E2b).unwrap();
+        let again = manager.provider(Provider::E2b).unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "the same key is the same provider");
+
+        // An operator changing the key in settings is the one thing that must
+        // not be answered from the cache: the kept provider holds the old one.
+        config.write().e2b.api_key = "e2b_second".into();
+        let rebuilt = manager.provider(Provider::E2b).unwrap();
+        assert!(!Arc::ptr_eq(&first, &rebuilt), "a new key is a new provider");
     }
 
     #[tokio::test]

@@ -500,6 +500,13 @@ CREATE INDEX messages_pair
 -- without naming the provider's identifier. E2B's sandbox id and its two
 -- tokens move here; a row recorded before the tokens existed cannot be
 -- reached and is dropped, which is what the runtime already did with it.
+--
+-- A terminated agent is dropped too. Deleting an agent never cleared its
+-- sandbox columns, and the sweep excluded terminated agents from the set of
+-- claimed sandboxes precisely so that whatever survived a failed kill would be
+-- released at the next startup. Copying those rows here would make them
+-- claimed forever, and a paused sandbox nobody can reach bills exactly like
+-- one in use.
 CREATE TABLE computers (
     id             TEXT    PRIMARY KEY,
     agent_id       TEXT    NOT NULL UNIQUE REFERENCES agents(id),
@@ -515,12 +522,14 @@ CREATE TABLE computers (
 );
 
 INSERT INTO computers (id, agent_id, provider, provider_id, control_secret, viewer_secret, image_ref, record_state, last_used_at, created_at, updated_at)
+-- The variant nibble is masked rather than taken modulo: abs(random()) is
+-- i64::MIN once in every 2^64 rows and aborts the whole migration.
 SELECT lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)), 2)
-       || '-' || substr('89ab', abs(random()) % 4 + 1, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))),
+       || '-' || substr('89ab', (random() & 3) + 1, 1) || substr(hex(randomblob(2)), 2) || '-' || hex(randomblob(6))),
        id, 'e2b', sandbox_id, sandbox_envd_token, coalesce(sandbox_traffic_token, ''), '', 'ready',
        updated_at, updated_at, updated_at
   FROM agents
- WHERE sandbox_id IS NOT NULL AND sandbox_envd_token IS NOT NULL;
+ WHERE sandbox_id IS NOT NULL AND sandbox_envd_token IS NOT NULL AND lifecycle <> 'terminated';
 
 -- Dropped rather than the table rebuilt: the columns are unindexed and
 -- unreferenced, SQLite has supported this since 3.35, and a rebuild is where
@@ -870,10 +879,13 @@ mod tests {
 
     #[test]
     fn e2b_sandboxes_move_off_the_agent_and_partial_ones_are_dropped() {
-        // Three agents at version 19: one with a complete sandbox tuple, one
-        // recorded before tokens existed, one that never had a machine. The
-        // first must come out as a computer row; the second is unreachable
-        // and is treated as absent, which is what the runtime already did.
+        // Four agents at version 19: one with a complete sandbox tuple, one
+        // recorded before tokens existed, one that never had a machine, and a
+        // deleted one whose sandbox outlived it. Only the first comes out as a
+        // computer row; the second is unreachable and is treated as absent,
+        // which is what the runtime already did. The fourth is the expensive
+        // one: deleting an agent never cleared these columns, so claiming its
+        // sandbox here would keep a machine nobody can reach billing forever.
         let mut conn = memory();
         let tx = conn.transaction().unwrap();
         for (version, sql) in MIGRATIONS.iter().take(19) {
@@ -885,7 +897,8 @@ mod tests {
             "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token)
              VALUES ('a','Manager','avocado','#000','m','','[]','active',3,10,20,'{g}','sbx-a','envd-a','traffic-a'),
                     ('b','Chef','avocado','#000','m','','[]','active',1,10,20,'{g}','sbx-b',NULL,NULL),
-                    ('c','Scout','avocado','#000','m','','[]','active',1,10,20,'{g}',NULL,NULL,NULL);",
+                    ('c','Scout','avocado','#000','m','','[]','active',1,10,20,'{g}',NULL,NULL,NULL),
+                    ('d','Ghost','avocado','#000','m','','[]','terminated',1,10,20,'{g}','sbx-d','envd-d','traffic-d');",
             g = DEFAULT_GROUP_ID
         ))
         .unwrap();
@@ -908,7 +921,8 @@ mod tests {
                 "envd-a".into(),
                 "traffic-a".into(),
                 "ready".into()
-            )]
+            )],
+            "a deleted agent's sandbox is nobody's; the startup sweep is what releases it"
         );
 
         let id: String = conn.query_row("SELECT id FROM computers", [], |r| r.get(0)).unwrap();
@@ -928,7 +942,7 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(names, vec!["Manager", "Chef", "Scout"]);
+        assert_eq!(names, vec!["Manager", "Chef", "Scout", "Ghost"]);
 
         // And the columns are gone, so nothing can quietly keep reading them.
         assert!(conn.prepare("SELECT sandbox_id FROM agents").is_err());

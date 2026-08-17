@@ -99,13 +99,28 @@ impl Output {
 
 /// Where the viewer proxy should connect for one machine's port, and what to
 /// add to the request head on the way. Backend-only.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ViewerTarget {
     pub tls: bool,
     pub host: String,
     pub port: u16,
-    /// Headers the upstream needs and the webview must never hold.
+    /// Headers the upstream needs and the webview must never hold. Values live
+    /// here and on the wire to the provider and nowhere else; see `Debug`
+    /// below.
     pub headers: Vec<(String, String)>,
+}
+
+impl std::fmt::Debug for ViewerTarget {
+    /// A header value here is the token that reaches a machine's desktop, and
+    /// the proxy logs a target whenever it cannot use one.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ViewerTarget")
+            .field("tls", &self.tls)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("headers", &self.headers.iter().map(|(name, _)| name).collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 /// What a provider is told when asked for a new machine.
@@ -194,6 +209,22 @@ mod tests {
         let printed = format!("{request:?}");
         assert!(printed.contains("GITHUB_TOKEN"), "{printed}");
         assert!(!printed.contains("ghp_sentinel"), "{printed}");
+    }
+
+    #[test]
+    fn a_viewer_target_prints_header_names_but_never_values() {
+        // The traffic token rides in a header here, and the proxy logs the
+        // target it could not reach. A derived Debug would put that token in
+        // the log line for every desktop that failed to answer.
+        let target = ViewerTarget {
+            tls: true,
+            host: "6080-sbx.e2b.app".into(),
+            port: 443,
+            headers: vec![("e2b-traffic-access-token".into(), "tok_sentinel".into())],
+        };
+        let printed = format!("{target:?}");
+        assert!(printed.contains("e2b-traffic-access-token"), "{printed}");
+        assert!(!printed.contains("tok_sentinel"), "{printed}");
     }
 
     #[test]
