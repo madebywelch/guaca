@@ -27,7 +27,21 @@ pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 
-/// Tool definitions offered on every agent turn.
+/// The tools offered on an agent's turn.
+///
+/// The four that need a machine are left off when the workspace has no E2B
+/// key. Offered anyway, an agent spent a model call learning from the error
+/// what the runtime knew before it asked, and a schema on the list is a
+/// standing invitation to try again next turn.
+pub fn offered(has_computer: bool) -> Vec<ToolSpec> {
+    specs().into_iter().filter(|spec| has_computer || !needs_computer(&spec.name)).collect()
+}
+
+fn needs_computer(name: &str) -> bool {
+    matches!(name, RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN | BROWSE)
+}
+
+/// Every tool definition, whether or not this workspace can honour it.
 pub fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
@@ -1124,6 +1138,23 @@ mod tests {
             "the rule is useless without the alternative: {}",
             spec.description
         );
+    }
+
+    #[test]
+    fn without_a_computer_the_tools_that_need_one_are_not_offered() {
+        // Offered anyway, an agent with no machine spends a model call
+        // learning from the error what the runtime knew before it asked, and
+        // a schema on the list is a standing invitation to try again.
+        let without: Vec<String> = offered(false).into_iter().map(|s| s.name).collect();
+        for tool in [RUN_COMMAND, OPEN_ON_DESKTOP, USE_SCREEN, BROWSE] {
+            assert!(!without.contains(&tool.to_string()), "{tool} needs a machine");
+        }
+        for tool in
+            [DIRECTORY, UPDATE_NOTES, SCHEDULE, SEND_MESSAGE, CREATE_AGENT, REQUEST_PERMISSION]
+        {
+            assert!(without.contains(&tool.to_string()), "{tool} works without one");
+        }
+        assert_eq!(offered(true).len(), specs().len(), "with a machine, everything is offered");
     }
 
     #[test]
