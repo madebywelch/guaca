@@ -86,6 +86,7 @@ impl Machine {
             // window through which the wrong profile can be reached.
             install_chrome_shim(self.sandboxed()),
             evict_wrong_profile_browser(),
+            keep_browser_signin_off(),
             daemon(
                 "pgrep -x Xvfb",
                 "Xvfb",
@@ -431,6 +432,49 @@ fn evict_wrong_profile_browser() -> String {
          pkill -f 'google-chrome|chromium' || true; sleep 1; fi"
     )
 }
+
+/// Keeps the browser from signing *itself* in when the operator signs in to a
+/// Google site.
+///
+/// Chromium's account consistency (Dice) turns a Gmail sign-in into a browser
+/// sign-in as well, by fetching a token with the browser's own API keys. The
+/// image runs unbranded Chromium, which has none, so that step fails, and on
+/// the next start Chromium's reconciler resolves "web signed in, browser not"
+/// by deleting every `.google.com` account cookie: the operator was signed out
+/// of Gmail after any close, wake or restart, over a jar that still held the
+/// account. Measured on a live machine, and gone with `signin.allowed=false`.
+/// The image ships the preference in a fresh profile; this puts it on a
+/// profile made before that, and only while no browser is running, because
+/// Chrome rewrites the file on exit and would undo an edit made underneath it.
+/// Google Chrome (E2B) has keys and never hit this, and browser sign-in is not
+/// something an agent's browser should do there either.
+fn keep_browser_signin_off() -> String {
+    let script = base64_encode(SIGNIN_OFF.as_bytes());
+    format!(
+        "if ! pgrep -x chromium >/dev/null && ! pgrep -x chrome >/dev/null; then \
+         mkdir -p {CHROME_PROFILE}/Default && \
+         echo {script} | base64 -d | python3 - {CHROME_PROFILE}/Default/Preferences; fi"
+    )
+}
+
+/// The edit itself, as Python because the file is JSON and a shell has no
+/// safe way to say "set this key and leave everything else". Idempotent: a
+/// profile that already says no is left byte-identical.
+const SIGNIN_OFF: &str = "import json, sys, os\n\
+path = sys.argv[1]\n\
+try:\n\
+    prefs = json.load(open(path))\n\
+except (OSError, ValueError):\n\
+    prefs = {}\n\
+signin = prefs.setdefault('signin', {})\n\
+if signin.get('allowed') is False and signin.get('allowed_on_next_startup') is False:\n\
+    sys.exit(0)\n\
+signin['allowed'] = False\n\
+signin['allowed_on_next_startup'] = False\n\
+prefs.get('google', {}).pop('services', None)\n\
+tmp = path + '.guaca'\n\
+json.dump(prefs, open(tmp, 'w'))\n\
+os.replace(tmp, path)\n";
 
 /// Rewrites a browser invocation so it lands in the one profile that counts.
 ///
@@ -789,6 +833,25 @@ mod tests {
         // so without this every desktop start killed the operator's own
         // browser and their Google session with it.
         assert!(evict.contains("grep -v crashpad"), "the crash handler is not a browser: {evict}");
+    }
+
+    #[test]
+    fn browser_sign_in_is_switched_off_only_when_no_browser_is_running() {
+        // Chrome rewrites Preferences on exit; an edit made under a running
+        // browser is undone by it, so the step is guarded on the process list.
+        let step = keep_browser_signin_off();
+        assert!(step.contains("pgrep -x chromium"), "{step}");
+        assert!(step.contains("pgrep -x chrome "), "{step}");
+        assert!(step.contains(&format!("{CHROME_PROFILE}/Default/Preferences")), "{step}");
+        // What lands on the machine, not what the command looks like.
+        let script = step
+            .split("echo ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .map(|b64| String::from_utf8(decode_bytes(b64)).unwrap())
+            .expect("the edit travels base64");
+        assert!(script.contains("signin['allowed'] = False"), "{script}");
+        assert!(script.contains("os.replace"), "written whole, then swapped in: {script}");
     }
 
     #[test]
