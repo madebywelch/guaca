@@ -32,7 +32,7 @@ with.
 
 | file | what it is |
 | --- | --- |
-| `Dockerfile` | the image. Its final `RUN` asserts every path the app depends on, so a package that moves its files fails the build instead of the desktop |
+| `Dockerfile` | the image. Its final `RUN` asserts every path the app depends on, so a package that moves its files fails the build instead of the desktop. Under 16 KiB, which Apple's builder enforces and `--check` guards |
 | `guaca-init` | PID 1: prepares the home volume, then watches a heartbeat file |
 | `google-chrome` | the wrapper that puts every route to a browser on one profile |
 | `google-chrome.desktop` | the entry the desktop icon and the menu read |
@@ -42,7 +42,11 @@ with.
 | `BASE_DIGEST` | the Debian base, pinned |
 | `IMAGE_REF` | what the app pulls. One line, no comment: `image.rs` includes it verbatim |
 
-## Three things about it that are not obvious
+## What is not obvious about it
+
+The Dockerfile's comments are one or two lines each and name the section here
+that holds the rest. That is Apple's cap talking rather than taste: see "What
+that build taught about Apple's builder".
 
 **PID 1 has to be able to exit.** A container stops when its first process
 returns, and stopping is what this image's watchdog is for: Guaca touches
@@ -98,17 +102,102 @@ an operator signing in to a browser no agent can use, and detection truthfully
 reporting an empty jar. `build.sh --check` compares the flags in this directory
 against the ones in `desktop.rs` and fails when they drift.
 
-**The same argument is why there is one browser and why the system's defaults
-name it.** A wrapper on `PATH` covers a command; it does not cover a link
-clicked in the file manager, an `xdg-open` in a terminal, or XFCE's own "Open
-Link", each of which resolves the browser somewhere else and would have started
-the packaged Chromium on its own profile. So the image sets all three: the
-`x-www-browser` alternative, `mimeapps.list` in the skeleton, and XFCE's
-preferred-application helper, which reads neither of the other two. Firefox is
-not installed for the same reason rather than for its size — the prompt tells
-an agent there is one browser on this machine, and the machine should agree.
-The skeleton's copies are defaults, not policy: `guaca-init` copies with
-`cp -Rpn`, so an agent that changes its own browser keeps the change.
+**One browser, and every click lands in it.** A wrapper on `PATH` covers a
+command; it does not cover a link clicked in the file manager, an `xdg-open` in
+a terminal, or XFCE's own "Open Link", each of which resolves the browser
+somewhere else and would have started the packaged Chromium on its own profile.
+So the image sets all three routes: the `x-www-browser` alternative,
+`mimeapps.list` in the skeleton, and XFCE's preferred-application helper, which
+reads neither of the other two. The alternative is `--set` as well as
+`--install`, which makes the choice manual, so an `apt-get install` an agent
+runs cannot outbid it with a higher priority; `gnome-www-browser` is registered
+only when some package already declares that group, because a group nothing
+reads is a link on the system for a name no program here looks up.
+
+Firefox is not installed, and that is the same point rather than a size one —
+the prompt tells an agent there is one browser on this machine and not to open
+another, so the machine should agree. The skeleton's copies are defaults, not
+policy: `guaca-init` copies with `cp -Rpn`, so an agent that changes its own
+browser keeps the change.
+
+## Why the image is built the way it is
+
+The rest of what the Dockerfile's comments used to say, in the order the
+instructions appear.
+
+### The packages, and why each group is here
+
+`--no-install-recommends` is a behavioural choice before it is a size one. The
+XFCE metapackage recommends `xorg`: a real X server and a set of drivers for
+hardware this machine does not have. The screen here is Xvfb, and a second
+server for the same display is not something to install by accident. What the
+recommendations would otherwise have brought and this image does need is named
+explicitly instead. It is all one layer, because an apt cache in an earlier
+layer is still in the image however thoroughly a later one deletes it.
+
+**The screen** is a framebuffer, a session, a VNC server and the bridge that
+puts it in a browser — `desktop.rs::start_desktop` starts exactly these.
+`python3-websockify` is named although `novnc` reaches it anyway, and the reason
+is worth writing down: Debian's `websockify` package is the C `rebind` helper
+and ships no `websockify` binary at all. The proxy the desktop actually runs is
+in `python3-websockify`, two dependency edges away from `novnc`, and a package
+that stopped depending on it would take the desktop's only bridge with it.
+`dbus-x11` and `x11-xserver-utils` are next to them because `startxfce4`
+launches the session through `dbus-launch` and loads its resources with `xrdb`,
+and both are recommendations of the XFCE packages rather than dependencies.
+
+**Thunar, Mousepad and `xdg-utils`** make the desktop one a person watching over
+an agent's shoulder can also use. **`python3-websocket`** is there because
+`browser.py` speaks the DevTools protocol over a WebSocket: E2B installs that
+client on the first browse, a machine on this Mac may have no network at all,
+and a browse that pauses to fetch a Python package is a browse that fails on an
+aeroplane. **`fonts-dejavu-core`** because text has to have something to be
+drawn in, or every screenshot of a page is a picture of empty boxes.
+**`util-linux`** is named for `setsid`, which detaches every long-lived process
+the desktop starts; it is in the base image already, and named anyway, because a
+base that dropped it would be a desktop that dies with the shell that started
+it. **`iproute2`** is for the spike's network measurements, taken from inside
+the guest.
+
+### The account
+
+The number matters more than the name: the provider asks for uid 1000 by number
+on every `exec`, and PID 1 hands the home volume to that number on every boot,
+so a uid that moved between image versions would lock an agent out of its own
+disk. Passwordless sudo because agents `apt-get install`, which is a thing the
+E2B machines let them do too.
+
+### The noVNC launcher
+
+`/opt/noVNC` is the path `desktop.rs` serves the desktop from, and Debian
+packages the same files at `/usr/share/novnc`, so one is a symlink to the other.
+The launcher itself is Guaca's own, written over whatever the distribution
+shipped: Debian's differs between releases, and one command that behaves the
+same on every image is worth more than the packaged variant. `build.sh --check`
+runs it against a stub and checks the argument order it produces.
+
+### The environment
+
+`HOME` is set rather than inherited: a command session that arrives without one
+resolves `~` somewhere else, and the browser driver that Guaca writes to
+`~/.guac` would land in a directory the session reader does not look in. That
+failure is not an error — it is a machine reporting an empty cookie jar while
+signed in. `DISPLAY` is the screen every graphical command lands on;
+`desktop.rs` names it on each command anyway, so this is for an agent that types
+`xdotool` itself and would otherwise be told there is no display.
+`GUAC_IDLE_SECONDS` is how long a machine nobody is using stays up, which the
+provider overrides per container with the operator's setting; the value here is
+what the image does when somebody runs it by hand.
+
+### The assertions at the end
+
+Everything above assumes something about where a package put its files, or about
+what an earlier instruction left behind. The final `RUN` is where those
+assumptions fail the build rather than the desktop: a moved `vnc.html` is a
+black rectangle in the viewer, a missing `websocket` module is a browse that
+reports the tool is broken, and a skeleton written after the chown is a home
+directory an agent cannot edit — each of them otherwise discovered by an
+operator rather than by CI.
 
 ## The pinned base
 
@@ -154,12 +243,14 @@ final `RUN` passes. That settles the half about where packages put their files �
 is the half that would otherwise have been discovered by an operator looking at
 a black rectangle.
 
-### What that build taught about `Dockerfile.dockerignore`
+### What that build taught about Apple's builder
 
-Three things, all of them enforced by `build.sh --check` rather than remembered,
-and all of them found by building rather than by reading documentation. This is
-where the reasoning lives, because two of the three are about the size of that
-file and the third is what happens when someone writes an explanation into it.
+Four things it does not agree with Docker about, all of them enforced by
+`build.sh --check` rather than remembered, and all of them found by building
+rather than by reading documentation. Three are about
+`Dockerfile.dockerignore`, two of those about its size; the fourth is about the
+size of the Dockerfile itself. This is where the reasoning lives, because the
+size limits are the reason neither file may hold it.
 
 **Apple's builder does read it.** The context transfer drops to 45 B, so the
 per-Dockerfile form — `<dockerfile>.dockerignore`, consulted ahead of any
@@ -195,6 +286,22 @@ in it is in this section instead.
 
 The cost of an exclude list, stated once: a new large directory at the
 repository root is in the context until somebody adds it to that file.
+
+**And the Dockerfile itself must stay under 16 KiB.** This one is stated
+plainly, before anything is transferred and before any instruction runs:
+
+```text
+Error: invalidArgument: "Dockerfile size (17286 bytes) exceeds the maximum allowed size of 16384 bytes. See https://github.com/apple/container/issues/735."
+```
+
+Docker has no such limit, so a Dockerfile that builds everywhere else fails
+here, and it fails on the prose rather than on the build — the Dockerfile was
+17,286 bytes and 11,545 of them were comments. So its comments are a line
+or two apiece naming a reason and pointing at a section above, the reasoning
+lives here where nothing measures it, and `--check` fails the Dockerfile over
+15,000 bytes. The margin is deliberate: the limit that matters is 16,384, and
+finding out you have crossed it at `container build` time means a rebuild
+somebody was waiting on.
 
 What the image does once it boots has been answered: the spike ran on
 2026-08-18 against a live Apple Container 1.2.2 on macOS 26.5, and all ten

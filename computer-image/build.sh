@@ -302,6 +302,27 @@ on a file the context never carried"
   done
 }
 
+# The Dockerfile's own size, which Apple's builder refuses outright before it
+# reads a single instruction. Docker has no such limit, so a Dockerfile that
+# builds everywhere else fails on the one machine this feature exists for, and
+# it fails on the prose rather than on anything the image does: this file was
+# 17,286 bytes with 11,545 of them comment. So the comments name a reason and
+# point at README.md, and this is what keeps them that way.
+#
+# 15,000 rather than the real 16,384 because the margin is the point. Crossing
+# it is discovered here, in a check that needs no runtime, instead of by
+# whoever is waiting on the build.
+check_dockerfile_size() {
+  local size
+  size="$(wc -c < "$IMAGE_DIR/Dockerfile" | tr -d '[:space:]')"
+  [ "$size" -lt 15000 ] || fail "$IMAGE_DIR/Dockerfile is $size bytes, over this check's 15000. \
+The real limit is 16384, and crossing it is not a build that fails late: Apple Container refuses \
+the file before any instruction runs, with 'Dockerfile size (17286 bytes) exceeds the maximum \
+allowed size of 16384 bytes. See https://github.com/apple/container/issues/735.' Docker has no \
+such limit, so nothing else will tell you. Move the explanation into $IMAGE_DIR/README.md and \
+leave a comment naming the reason and the section that holds it"
+}
+
 # One pinned base, named in two files. The Dockerfile's default is what a bare
 # `docker build` uses and `BASE_DIGEST` is what the publishing workflow passes
 # in, so a difference between them is an image built from something other than
@@ -331,8 +352,9 @@ checks() {
   echo "==> checking what the image and desktop.rs both claim"
   check_chrome_agreement
   check_desktop_paths
-  echo "==> checking the build context and the pinned base"
+  echo "==> checking the build context, the Dockerfile's size and the pinned base"
   check_context
+  check_dockerfile_size
   check_base_pin
   # Said as what actually ran. On a machine with no linter installed, "all
   # checks passed" reads as a lint that approved these scripts, when the truth

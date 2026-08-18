@@ -836,6 +836,12 @@ guessed wrong.
   under about 1.9 KB. Patterns get "changes out of order" during context
   transfer; size ends the build with `Stream unexpectedly closed.` before any
   instruction runs. Bisected: 1938 bytes builds, 2230 does not.
+- The Dockerfile itself is capped at 16384 bytes and refused before any
+  instruction runs: `invalidArgument: "Dockerfile size (17286 bytes) exceeds
+  the maximum allowed size of 16384 bytes. See
+  https://github.com/apple/container/issues/735."` Docker has no such limit, so
+  the reasoning lives in `computer-image/README.md` and each comment in the
+  Dockerfile points at it; `build.sh --check` fails the file over 15,000 bytes.
 
 ### Still unmeasured
 
