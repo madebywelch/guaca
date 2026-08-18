@@ -498,6 +498,23 @@ async fn the_desktop_is_watchable_through_the_loopback_viewer() {
         body.chars().take(300).collect::<String>()
     );
 
+    // The page is not the desktop; the WebSocket is. noVNC opens it at the
+    // page's host plus `/` + its `path` setting, so the upgrade is attempted
+    // exactly where the URL tells it to look, through the proxy. A page that
+    // loads over a socket that does not is the "Failed to connect to server"
+    // banner an operator saw over a running desktop.
+    let path = url
+        .split("&path=")
+        .nth(1)
+        .and_then(|rest| rest.split('&').next())
+        .expect("the viewer URL names its websocket path");
+    let upgraded = websocket_upgrade(port, path).await;
+    assert!(
+        upgraded.starts_with("HTTP/1.1 101"),
+        "the proxy must upgrade the socket at /{path}: {upgraded}"
+    );
+    assert!(upgraded.contains("RFB 003."), "and the bytes behind it are VNC's: {upgraded}");
+
     // The parts that had to be there for that to work, named individually so a
     // failure says which one is missing rather than "the desktop did not start".
     for check in [
@@ -824,4 +841,31 @@ async fn one_agent_cannot_reach_another_agents_desktop() {
     for (what, command) in measurements {
         println!("{what}: {}", second.run(&command).await.trim());
     }
+}
+
+/// One WebSocket upgrade through the loopback viewer at `/{path}`, answered
+/// with the response head and whatever the server sends first. Written on a
+/// raw socket because reqwest cannot upgrade and the proxy is a byte relay.
+async fn websocket_upgrade(viewer_port: u16, path: &str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", viewer_port))
+        .await
+        .expect("the viewer is listening");
+    let head = format!(
+        "GET /{path} HTTP/1.1\r\nHost: 127.0.0.1:{viewer_port}\r\nConnection: Upgrade\r\n\
+         Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Protocol: binary\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).await.expect("the request was written");
+    let mut buf = vec![0u8; 4096];
+    let mut got = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < deadline && !String::from_utf8_lossy(&got).contains("RFB") {
+        match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+            Ok(Ok(0)) | Err(_) => break,
+            Ok(Ok(n)) => got.extend_from_slice(&buf[..n]),
+            Ok(Err(_)) => break,
+        }
+    }
+    String::from_utf8_lossy(&got).into_owned()
 }

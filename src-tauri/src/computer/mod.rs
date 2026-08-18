@@ -104,12 +104,20 @@ impl Machine {
         // Through the local viewer, never straight at the provider: E2B
         // refuses public traffic without a header the webview must not hold,
         // and a local guest's address is nobody's business but the proxy's.
+        //
+        // `path` is spelled out because noVNC builds its WebSocket address
+        // from the page's host and `/` + path, not from the page's own
+        // directory: left to its default it asks the proxy for `/websockify`,
+        // which names no computer, and the page draws "Failed to connect to
+        // server" over a desktop that is up. Seen live on the Debian package's
+        // noVNC; explicit is right for every version.
         up.then(|| {
             format!(
-                "http://{VIEWER_HOST}:{}/{}/{}/vnc.html?autoconnect=1&resize=scale&reconnect=1",
-                self.viewer_port,
-                self.handle.computer,
-                desktop::VNC_PORT
+                "http://{VIEWER_HOST}:{port}/{id}/{vnc}/vnc.html\
+                 ?autoconnect=1&resize=scale&reconnect=1&path={id}/{vnc}/websockify",
+                port = self.viewer_port,
+                id = self.handle.computer,
+                vnc = desktop::VNC_PORT
             )
         })
     }
@@ -2474,5 +2482,29 @@ mod tests {
         assert_eq!(execs[0].cwd, "/home/user");
         assert_eq!(execs[0].env.get("TOKEN").map(String::as_str), Some("sentinel"));
         assert!(execs[1].env.is_empty(), "desktop maintenance never carries credentials");
+    }
+
+    #[tokio::test]
+    async fn the_viewer_url_names_the_websocket_path_because_novnc_will_not_infer_it() {
+        // noVNC joins the page's host with `/` + `path`; left to its default it
+        // asked the proxy for `/websockify`, which names no computer, and drew
+        // "Failed to connect to server" over a desktop that was up.
+        let provider = Arc::new(fake::FakeProvider::default());
+        *provider.replies.lock() =
+            vec![Output { stdout: "up\n".into(), stderr: String::new(), exit_code: 0 }];
+        let id = ComputerId::new();
+        let handle = ProviderHandle {
+            computer: id,
+            provider_id: "m".into(),
+            control_secret: Secret::new(""),
+            viewer_secret: Secret::new(""),
+        };
+        let machine = Machine::new(provider, handle, BTreeMap::new(), 4321);
+
+        let url = machine.vnc_url().await.expect("the port answered");
+
+        assert!(url.starts_with(&format!("http://127.0.0.1:4321/{id}/6080/vnc.html?")), "{url}");
+        assert!(url.contains(&format!("&path={id}/6080/websockify")), "{url}");
+        assert!(url.contains("autoconnect=1"), "{url}");
     }
 }
