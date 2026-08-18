@@ -151,21 +151,33 @@ read what it has actually done.
 
 ## Computers
 
-With an [E2B](https://e2b.dev) key configured, an agent can be given a Linux
-machine with a desktop, a browser and a shell. The screen sits at the top of the
-panel beside the conversation: a live picture while you read, and interactive
-when you click it open.
+An agent can be given a Linux machine with a desktop, a browser and a shell —
+on this Mac, or hosted with an [E2B](https://e2b.dev) key. The screen sits at
+the top of the panel beside the conversation: a live picture while you read,
+and interactive when you click it open.
 
 - The machine sleeps after fifteen idle minutes and keeps its disk, so it wakes
   up still signed in to whatever it was signed in to.
-- Sandboxes are private, and the viewer is a loopback proxy that holds the
-  access tokens, so no URL that reaches a machine is ever guessable or exposed
-  to the webview.
+- Machines are private, and the viewer is a loopback proxy that holds whatever
+  reaching one takes — a token, or an address on this Mac — so no URL that
+  reaches a machine is ever guessable or exposed to the webview.
 - A machine that no live agent refers to is released on the next launch. A
-  forgotten sandbox bills exactly like a used one.
+  forgotten one bills, or holds twenty gigabytes, exactly like a used one.
 
-Without an E2B key none of this appears, and the other four tools are not
-offered.
+**Local computers (Apple Container).** On an Apple silicon Mac running macOS 26
+with [Apple Container](https://github.com/apple/container/releases) 1.2.x
+installed, the machines run here instead: one lightweight Linux VM per agent,
+no account and no bill. Settings has a **Computer provider** selector, and
+*Automatic* prefers Apple Container whenever it is installed. Local machines
+cannot see your files, but they may reach services this Mac or your local
+network exposes, so E2B is still the option with an off-device boundary. The
+desktop image is pulled the first time an agent needs a machine; until it is
+published, build it with `computer-image/build.sh` and point
+`GUAC_COMPUTER_IMAGE` at what that made.
+
+With no provider ready — no Apple Container, no E2B key — none of this appears,
+the other four tools are not offered, and the agent is told it has no machine
+rather than discovering it halfway through a command.
 
 ## Connectors
 

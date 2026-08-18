@@ -1,7 +1,8 @@
 # Local agent computers
 
-Status: reviewed against the code on 2026-08-17; PR A (provider extraction)
-open; Apple spike pending
+Status: reviewed against the code on 2026-08-17; PR A open (#14); PR B open;
+Apple spike run 2026-08-18 on macOS 26.5 / Apple Container 1.2.2 — 10/10
+conformance items pass
 
 Date: 2026-08-17
 
@@ -433,6 +434,10 @@ outside that range.
 - Create one standard container, one named volume (`volume create -s 20G`,
   which enforces the quota at creation), and one isolated network per agent.
   Never attach agent containers to the shared default network.
+- Give the container its own `/tmp` with `--tmpfs /tmp`. A stopped container
+  keeps its writable layer, so without this a woken machine boots onto the last
+  boot's `/tmp`: the `/tmp/.X0-lock` left by the first boot made Xvfb refuse
+  the display, which an operator reads as a desktop that never came back.
 - Address resources by deterministic ID and Guaca ownership labels, not by the
   agent's editable name.
 - The viewer proxy connects to the guest IP on port 6080, read from `inspect`'s
@@ -461,8 +466,11 @@ outside that range.
   that prompt.
 - Stop/start the existing standard container for sleep/wake. Do not use
   `--rm`.
-- On deletion, remove the container, its volume, and its network in that order,
-  tolerating “not found” for idempotency.
+- On deletion, remove the container, its volume, and its network in that order.
+  The container's own commands say “not found” and are tolerated on that text;
+  `volume delete` and `network delete` do not — a missing name gets `failed to
+  delete one or more…` and exit 1 — so those two are confirmed with an
+  `inspect` and treated as already gone only when it reports them missing.
 
 Apple's separate networks isolate agents from containers on other networks.
 They do not establish that host or LAN services are unreachable. Guaca must not
@@ -719,6 +727,97 @@ The feature is complete when:
 - A crash during provisioning, deletion, or normal running does not leave an
   untracked Guaca resource.
 - All CI, trajectory, provider conformance, and live prompt evaluations pass.
+
+## Spike results
+
+`scripts/spike-apple.sh` ran on 2026-08-18 against a live Apple Container 1.2.2
+on macOS 26.5, Apple silicon, with the desktop image built by
+`computer-image/build.sh`. All ten smoke items pass. Each is one test in
+`src-tauri/tests/apple.rs`, in the order above, driving the app's own code
+rather than a copy of it.
+
+| Smoke item                 | Result | What the run measured                  |
+| -------------------------- | ------ | -------------------------------------- |
+| 1. Create from the image   | PASS   | container, volume, network; name owned |
+| 2. Streams and exit code   | PASS   | streams apart, exit 3, uid 1000        |
+| 3. A credential, one use   | PASS   | gone from the next command and inspect |
+| 4. A file, byte for byte   | PASS   | 300 KiB in 64 KiB writes, identical    |
+| 5. Desktop via the proxy   | PASS   | noVNC over loopback, x11vnc behind     |
+| 6. Browser, CDP, screen    | PASS   | page read, JPEG at 1280x800, pointer   |
+| 7. Home survives a sleep   | PASS   | file and profile survive a stop        |
+| 8. The idle watchdog       | PASS   | stale heartbeat stopped it, disk kept  |
+| 9. Destroy                 | PASS   | container, volume, network all gone    |
+| 10. The network boundary   | PASS   | the other agent's 6080 refused         |
+
+Two of the ten are asserted harder than the rest, because their failure would
+be silent rather than red. `list_owned` must answer with container *names*: the
+sweep matches what it returns against `provider_id`, so anything else makes
+every live machine look unclaimed and the first sweep after a restart deletes
+all of them. And the second agent's refusal is measured against a port that is
+genuinely serving, with a control probe from inside the first machine, because
+a refusal from a dead port proves nothing at all.
+
+### Network measurements
+
+Taken from inside a second agent's machine, with the first agent's desktop up.
+
+- The Mac is addressable from a guest: it is the default gateway,
+  `192.168.66.1` on this run.
+- **Another agent's guest on 6080: unreachable.** This is the release blocker
+  above, and it is met. Each agent is on its own network, and the first
+  agent reached the same address and port from inside itself.
+- A service bound only to the Mac's loopback: refused.
+- A service on the Mac's LAN address: not measured. It needs a host service
+  bound there; set `GUAC_SPIKE_LAN` and run the suite again.
+- Another LAN address: not measured, for the same reason.
+- Public DNS, HTTP, HTTPS, and arbitrary TCP (`1.1.1.1:53`): all reachable,
+  which is what the first release intends and what the disclosure describes.
+
+### What the runtime actually does (1.2.2)
+
+Read off the binary rather than the documentation. Four of these had been
+guessed wrong.
+
+- `inspect`'s `status` is an object rather than a string: the state is at
+  `status.state`, the guest's address at `status.networks[0].ipv4Address`.
+- That address moves. A container stopped on `192.168.65.2` came back on `.3`,
+  so a viewer target is resolved from a fresh `inspect`, never from a cache
+  that outlived a sleep.
+- `exec` runs as uid 0 whatever the image's `USER` says, which is why every
+  command carries `--uid 1000 --gid 1000`. `--user user` fails with
+  `noPasswdEntries` on an image without that account.
+- `USER` *is* honoured for PID 1, so the image leaves it unset: PID 1 has to be
+  root to hand a fresh volume to uid 1000, and with `USER user` the home stayed
+  root's and three conformance tests failed on `Permission denied` some way
+  past the cause.
+- `volume delete` and `network delete` of a missing name print `failed to
+  delete one or more…` and exit 1. There is no "not found" in it, so the
+  provider confirms those two deletions with an `inspect`.
+- `container ls --all --format json` reports the name at `configuration.id`
+  and the labels at `configuration.labels`. That is what made the sweep
+  possible: ownership is readable without inspecting every container.
+- `exec -e NAME` inherits the value from the CLI's own environment, so a secret
+  never becomes a character in a command line.
+- One `exec` argument is capped at 128 KiB by Linux (`MAX_ARG_STRLEN`), and
+  over it the runtime says only "failed to exec", naming neither the file nor
+  the limit. Files are placed in 64 KiB chunks for that reason.
+- A stopped container keeps its writable layer, which is why `/tmp` is a tmpfs
+  given at create and PID 1 clears the X and Chrome locks on every boot. Both
+  were found as a woken machine whose desktop never came back.
+- `Dockerfile.dockerignore` is read, but it must contain no `*` or `!` and stay
+  under about 1.9 KB. Patterns get "changes out of order" during context
+  transfer; size ends the build with `Stream unexpectedly closed.` before any
+  instruction runs. Bisected: 1938 bytes builds, 2230 does not.
+
+### Still unmeasured
+
+- Whether 3 GiB of memory is enough. The constants stay at 4 GiB until it is
+  measured.
+- First-boot and wake timings, and the size of the built image.
+- Whether `ls --all` lists *stopped* containers. The sweep deletes from that
+  list, so the untested direction is the safe one: a stopped orphan is missed
+  rather than a live machine deleted.
+- LAN reachability, above.
 
 ## Delivery sequence
 

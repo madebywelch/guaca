@@ -149,6 +149,16 @@ per-agent lock and re-reads the row under it, because `ensure` holds a
 `provisioning` row across a create, and a sweep that reaped one mid-flight
 deleted a machine just paid for.
 
+**A local machine's idle is two layers, and the second one is what a crash
+falls back on.** The host's ticker touches `/run/guaca/heartbeat` at least
+twice per idle period and stops the machines nobody is using; the guest's PID 1
+exits when that file goes stale, so a force-quit Guaca leaves a stopped
+container holding its disk rather than a VM holding four gigabytes. Waking one
+re-makes everything a boot needs, because the writable layer survives a stop:
+`/tmp` is a tmpfs and PID 1 clears the X and Chrome locks, each of which read
+as "the desktop never came back". `computer/mod.rs` and
+`computer-image/guaca-init`.
+
 **A file's bytes never travel in an envelope, and never cross IPC.** A message
 carries a `Part::File` naming the digest; the bytes sit once in `files.rs`,
 addressed by content, and a drop hands Rust the *path* rather than the file.
@@ -266,12 +276,18 @@ src-tauri/src/
     desktop.rs       Desktop, browser, screenshots, sign-in reading: all
                      commands.
     e2b.rs           The E2B provider.
+    apple.rs         The Apple Container provider: a Linux VM per agent, on
+                     the operator's own Mac.
+    cli.rs           A local runtime, driven by argv. Never a host shell.
+    image.rs         Which image a machine boots, and the dev override.
   proxy.rs           Loopback viewer for those machines.
   eval.rs            Reads a run and says whether it communicated sensibly.
   trajectory.rs      Reads a run's events and says whether the machinery did.
   files.rs           Attachments, addressed by the SHA-256 of their contents.
   commands.rs        The entire IPC surface.
   app.rs             The only file that knows Tauri exists.
+computer-image/      The desktop image a local machine boots, its PID 1, and
+                     the spike that measured a real one.
 ```
 
 The agent runtime lives in Rust, not the webview. Each agent is a `tokio` task
