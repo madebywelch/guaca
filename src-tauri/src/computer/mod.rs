@@ -1374,6 +1374,10 @@ pub(crate) mod fake {
         pub probe: Mutex<Option<ProviderStatus>>,
         /// Which kind this stands in for. `None` is E2B for the same reason.
         pub kind: Mutex<Option<Provider>>,
+        /// What `browser_keeps_its_sandbox` answers. `false` is E2B, which is
+        /// the machine every Chrome launch was written for before a provider
+        /// could say otherwise.
+        pub browser_sandbox: Mutex<bool>,
     }
 
     impl FakeProvider {
@@ -1381,6 +1385,12 @@ pub(crate) mod fake {
         /// heartbeat, stops at shutdown, and sweeps behind the gate.
         pub fn local() -> Self {
             Self { kind: Mutex::new(Some(Provider::AppleContainer)), ..Self::default() }
+        }
+
+        /// A fake whose machines let Chrome keep its own sandbox, the way an
+        /// Apple Container guest does and a hosted one does not.
+        pub fn keeping_browser_sandbox(keeps: bool) -> Self {
+            Self { browser_sandbox: Mutex::new(keeps), ..Self::default() }
         }
 
         /// The next answer scripted for a command like this one, if any.
@@ -1398,6 +1408,10 @@ pub(crate) mod fake {
     impl ComputerProvider for FakeProvider {
         fn kind(&self) -> Provider {
             self.kind.lock().unwrap_or(Provider::E2b)
+        }
+
+        fn browser_keeps_its_sandbox(&self) -> bool {
+            *self.browser_sandbox.lock()
         }
 
         async fn probe(&self) -> ProviderStatus {

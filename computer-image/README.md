@@ -102,6 +102,17 @@ an operator signing in to a browser no agent can use, and detection truthfully
 reporting an empty jar. `build.sh --check` compares the flags in this directory
 against the ones in `desktop.rs` and fails when they drift.
 
+One flag is deliberately not shared, and the check knows it: `--no-sandbox`.
+Whether Chrome may keep its own sandbox is a fact about the machine, so the
+provider states it — `ComputerProvider::browser_keeps_its_sandbox` — and
+`desktop.rs` writes the flag only for one that says no. E2B's Chrome refuses to
+start without it; a guest here runs sandboxed, measured on 2026-08-18. This
+image only ever boots on a local machine, so its wrapper does not pass the flag,
+and `build.sh --check` compares it against the sandboxed form: absent here, and
+still reachable in `desktop.rs`. Passing it anyway would work and would put
+Chrome's "Stability and security will suffer" bar across the operator's desktop
+for nothing.
+
 **One browser, and every click lands in it.** A wrapper on `PATH` covers a
 command; it does not cover a link clicked in the file manager, an `xdg-open` in
 a terminal, or XFCE's own "Open Link", each of which resolves the browser

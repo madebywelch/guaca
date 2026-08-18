@@ -13,11 +13,18 @@
 # depending on which of the two opened the browser. The two are compared by
 # `computer-image/build.sh --check`.
 #
+# There is no `--no-sandbox` here, and that is not drift. The runtime writes the
+# flag only for a provider whose machines cannot give Chrome its own sandbox,
+# and this image only ever boots on a local one, where it can: on an Apple
+# Container guest unprivileged user namespaces work and Chromium renders
+# sandboxed. The flag would buy nothing but Chrome's "Stability and security
+# will suffer" bar across the operator's desktop.
+#
 # The loop must never name a path this file is installed at: `/usr/local/bin`
 # comes before `/usr/bin` on PATH, so a `/usr/bin/google-chrome-stable` symlink
 # back to this wrapper would be an exec loop rather than a browser.
 for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium /usr/bin/chromium-browser; do
-  [ -x "$real" ] && exec "$real" --no-sandbox --no-first-run --password-store=basic --user-data-dir=/home/user/.guac/chrome --remote-debugging-port=9222 "$@"
+  [ -x "$real" ] && exec "$real" --no-first-run --password-store=basic --user-data-dir=/home/user/.guac/chrome --remote-debugging-port=9222 "$@"
 done
 echo 'no chrome on this machine' >&2
 exit 127

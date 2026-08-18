@@ -228,6 +228,25 @@ pub enum ProviderReadiness {
 pub trait ComputerProvider: Send + Sync {
     fn kind(&self) -> Provider;
 
+    /// Whether Chrome keeps its own sandbox on the machines this provider
+    /// makes.
+    ///
+    /// The provider's to say because it is a fact about the machine and not
+    /// about the browser: `desktop.rs` builds the same launch either way, and
+    /// this is the only thing that decides whether `--no-sandbox` is on it.
+    ///
+    /// E2B's machines do not. Chrome cannot use its own sandbox inside one and
+    /// refuses to start without being told so, which is why every launch used
+    /// to carry the flag unconditionally. Apple Container's do: measured on a
+    /// live guest on 2026-08-18, where unprivileged user namespaces are
+    /// available and Chromium renders without the flag and without complaint.
+    ///
+    /// Both wrong answers are visible. `false` where the sandbox works puts
+    /// Chrome's own "Stability and security will suffer" bar across every
+    /// desktop the operator watches; `true` where it does not is a browser
+    /// that never starts.
+    fn browser_keeps_its_sandbox(&self) -> bool;
+
     /// Whether this provider could make a machine, asked without making one.
     ///
     /// Answered for Settings and for whether an agent is told it has a

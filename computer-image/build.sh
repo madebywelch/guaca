@@ -211,13 +211,32 @@ attributes to the mount point, which is what the chown after it exists to undo"
 # failure once: two Chrome profiles on one machine, and a desktop entry pointing
 # at a wrapper that was not there.
 check_chrome_agreement() {
-  local flag
-  for flag in --no-sandbox --no-first-run --password-store=basic \
+  # Read past the comments. The wrapper explains the one flag it deliberately
+  # does not pass, and a check that read that explanation as the flag would be
+  # a check on prose.
+  local wrapper flag
+  wrapper="$(grep -v '^[[:space:]]*#' "$IMAGE_DIR/google-chrome")"
+  for flag in --no-first-run --password-store=basic \
     --user-data-dir=/home/user/.guac/chrome --remote-debugging-port=9222; do
-    grep -q -- "$flag" "$IMAGE_DIR/google-chrome" \
+    printf '%s\n' "$wrapper" | grep -q -- "$flag" \
       || fail "the image's Chrome wrapper does not pass $flag"
   done
-  grep -q -- '--no-sandbox' "$DESKTOP_RS" || fail "desktop.rs no longer passes --no-sandbox"
+  # The one flag the two are *not* supposed to share, so the wrapper is
+  # compared against the *sandboxed* form of `install_chrome_shim`. The runtime
+  # writes `--no-sandbox` only for a provider whose machines cannot give Chrome
+  # its own sandbox; this image boots on a local machine, which can. Both
+  # halves are checked, because either alone would pass while the pair is
+  # wrong: absent here, and still reachable there for E2B, whose Chrome does
+  # not start without it.
+  ! printf '%s\n' "$wrapper" | grep -q -- '--no-sandbox' \
+    || fail "the image's Chrome wrapper passes --no-sandbox; this image only runs on machines \
+whose Chrome keeps its own sandbox, and the flag costs the operator Chrome's unsupported-flag bar"
+  grep -q -- '--no-sandbox' "$DESKTOP_RS" \
+    || fail "desktop.rs can no longer pass --no-sandbox; Chrome refuses to start in an E2B sandbox \
+without it"
+  grep -q 'browser_keeps_its_sandbox' "$DESKTOP_RS" \
+    || fail "desktop.rs no longer asks the provider whether the machine keeps Chrome's sandbox, so \
+the flag is a constant again and one of the two kinds of machine gets the wrong one"
   grep -q -- '--password-store=basic' "$DESKTOP_RS" \
     || fail "desktop.rs no longer passes --password-store=basic; the image would write a cookie jar it cannot read"
   grep -q '"/home/user/.guac/chrome"' "$DESKTOP_RS" \

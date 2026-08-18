@@ -482,6 +482,15 @@ impl ComputerProvider for AppleContainer {
         Provider::AppleContainer
     }
 
+    /// It does. Measured on a live guest on 2026-08-18: unprivileged user
+    /// namespaces are available (`unshare -U` succeeds,
+    /// `max_user_namespaces=4505`) and Chromium renders `about:blank` without
+    /// `--no-sandbox` and without a word about a sandbox. A VM per agent has
+    /// nothing to gain from turning the browser's own off.
+    fn browser_keeps_its_sandbox(&self) -> bool {
+        true
+    }
+
     async fn probe(&self) -> ProviderStatus {
         // Asked before anything is spawned, because on something that is not a
         // Mac there is nothing to look for and nothing worth a process.

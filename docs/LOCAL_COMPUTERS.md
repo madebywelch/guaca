@@ -829,6 +829,13 @@ guessed wrong.
 - One `exec` argument is capped at 128 KiB by Linux (`MAX_ARG_STRLEN`), and
   over it the runtime says only "failed to exec", naming neither the file nor
   the limit. Files are placed in 64 KiB chunks for that reason.
+- Chromium keeps its own sandbox in a guest: unprivileged user namespaces are
+  available (`unshare -U` succeeds, `max_user_namespaces=4505`) and
+  `chromium --headless=new … about:blank` renders without `--no-sandbox` and
+  without a word about a sandbox. So the flag is E2B-only, where Chrome refuses
+  to start without it, and `ComputerProvider::browser_keeps_its_sandbox` is what
+  each provider answers. It was a constant before, and what the operator saw on
+  every local desktop was Chrome's own "Stability and security will suffer" bar.
 - A stopped container keeps its writable layer, which is why `/tmp` is a tmpfs
   given at create and PID 1 clears the X and Chrome locks on every boot. Both
   were found as a woken machine whose desktop never came back.

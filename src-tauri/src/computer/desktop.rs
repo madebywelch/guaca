@@ -3,6 +3,10 @@
 //! Every one of these is a command, so none of them belongs to a provider: a
 //! machine that can run `xdotool` gets a pointer, and one that can run `python3`
 //! gets a browser. They sit above the boundary and every provider has them.
+//!
+//! One thing is still asked downwards: whether the browser can keep its own
+//! sandbox is a fact about the machine rather than about Chrome, so the
+//! provider states it and every launch here reads the answer.
 
 use std::time::Duration;
 
@@ -61,6 +65,16 @@ const BROWSER_POLL: Duration = Duration::from_millis(500);
 const BROWSER_ATTEMPTS: u32 = (BROWSER_WAIT.as_millis() / BROWSER_POLL.as_millis()) as u32;
 
 impl Machine {
+    /// Whether Chrome on this machine may keep its own sandbox.
+    ///
+    /// Asked of the provider on every launch rather than remembered, because
+    /// it is a fact about the machine underneath and the machine is the
+    /// provider's. Nothing here caches it: the answer is a constant per
+    /// provider and the call is a bool.
+    fn sandboxed(&self) -> bool {
+        self.provider.browser_keeps_its_sandbox()
+    }
+
     /// Brings up the desktop: framebuffer, session, VNC server, noVNC bridge.
     ///
     /// Every step is idempotent by construction, because the pane asks for a
@@ -70,7 +84,7 @@ impl Machine {
         for command in [
             // Before anything can be opened on the screen, so there is no
             // window through which the wrong profile can be reached.
-            install_chrome_shim(),
+            install_chrome_shim(self.sandboxed()),
             evict_wrong_profile_browser(),
             daemon(
                 "pgrep -x Xvfb",
@@ -109,7 +123,7 @@ impl Machine {
     pub async fn open_on_desktop(&self, program: &str) -> Result<Output, ProviderError> {
         self.start_desktop().await?;
 
-        let program = chrome_flags(program);
+        let program = chrome_flags(program, self.sandboxed());
 
         // The agent's own program, so it gets the agent's credentials: a
         // browser opened here is the one an operator signs in with.
@@ -131,10 +145,15 @@ impl Machine {
         self.start_desktop().await?;
 
         let script = base64_encode(BROWSER_DRIVER.as_bytes());
+        // The one launch that spells its own flags out rather than going
+        // through `chrome_flags`, because it names the profile and the port
+        // itself. What it still has to ask is the same question: whether the
+        // machine underneath lets the browser keep its sandbox.
+        let no_sandbox = if self.sandboxed() { "" } else { "--no-sandbox " };
         self.run_plain(&format!(
             "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/browser.py; \
              python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
-             {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 google-chrome --no-sandbox \
+             {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 google-chrome {no_sandbox}\
              --no-first-run --user-data-dir={CHROME_PROFILE} \
              --remote-debugging-port={CDP_PORT} about:blank \
              >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
@@ -413,9 +432,11 @@ fn evict_wrong_profile_browser() -> String {
 /// does not put `~/.local/bin` first. A duplicated flag with the same value is
 /// nothing; a window on the wrong profile is a session no agent can use.
 ///
-/// Chrome also cannot use its own sandbox inside one and refuses to start
-/// without being told so, which is why `--no-sandbox` is here.
-fn chrome_flags(program: &str) -> String {
+/// Whether Chrome may keep its own sandbox is a fact about the machine rather
+/// than about Chrome, so it arrives as an argument: a hosted sandbox refuses to
+/// start a browser that still has one, and a VM per agent has no reason to take
+/// it away. `ComputerProvider::browser_keeps_its_sandbox` is what answers.
+fn chrome_flags(program: &str, sandboxed: bool) -> String {
     let trimmed = program.trim_start();
     let Some(binary) = ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]
         .into_iter()
@@ -432,7 +453,10 @@ fn chrome_flags(program: &str) -> String {
     // written under one store and reopened under another cannot read its own
     // jar, which is a session that silently evaporates. Same flag everywhere,
     // or the profile is only usable by whichever route opened it first.
-    let mut flags = vec!["--no-sandbox", "--no-first-run", "--password-store=basic"];
+    let mut flags = vec!["--no-first-run", "--password-store=basic"];
+    if !sandboxed {
+        flags.insert(0, "--no-sandbox");
+    }
     let profile = format!("--user-data-dir={CHROME_PROFILE}");
     let port = format!("--remote-debugging-port={CDP_PORT}");
     // Without the port, a window opened here would hold the profile with no
@@ -466,7 +490,12 @@ fn chrome_flags(program: &str) -> String {
 /// over the packaged one, which is what the icon and the menu read. Both are
 /// written every time the desktop starts, because the alternative is a machine
 /// that behaves differently depending on when it was made.
-fn install_chrome_shim() -> String {
+///
+/// It carries the same flags as the call site and for the same reasons,
+/// `--no-sandbox` included: a wrapper that dropped it on a machine whose Chrome
+/// needs it would be a browser that starts from one route and not the other.
+fn install_chrome_shim(sandboxed: bool) -> String {
+    let no_sandbox = if sandboxed { "" } else { "--no-sandbox " };
     // Resolved past the shim itself: `/usr/bin/google-chrome` is a symlink to
     // the first of these, and calling by name would find the wrapper again.
     let wrapper = format!(
@@ -474,7 +503,7 @@ fn install_chrome_shim() -> String {
          # Guaca: one profile on this machine, the one agents can use.\n\
          for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
          /usr/bin/chromium /usr/bin/chromium-browser; do\n\
-         \x20 [ -x \"$real\" ] && exec \"$real\" --no-sandbox --no-first-run \
+         \x20 [ -x \"$real\" ] && exec \"$real\" {no_sandbox}--no-first-run \
          --password-store=basic --user-data-dir={CHROME_PROFILE} \
          --remote-debugging-port={CDP_PORT} \"$@\"\n\
          done\n\
@@ -586,6 +615,16 @@ mod tests {
         String::from_utf8_lossy(&decode_bytes(raw)).into_owned()
     }
 
+    /// What a shim command actually puts on the machine, rather than what the
+    /// command looks like: the wrapper and the desktop entry travel base64'd.
+    fn written_by(shim: &str) -> String {
+        shim.split_whitespace()
+            .filter(|token| token.len() > 40)
+            .map(decode)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn the_window_is_allowed_to_frame_the_viewer() {
         // The viewer moved from E2B's own host to a loopback proxy and the CSP
@@ -608,49 +647,123 @@ mod tests {
         // The bug this closes: an operator signs in on the screen, and the
         // session goes to a profile no agent drives. Nothing errors, and
         // detection truthfully reports an empty jar for the browser it reads.
-        for typed in [
-            "google-chrome https://mail.google.com",
-            "google-chrome-stable",
-            "chromium https://example.com",
-        ] {
-            let launched = chrome_flags(typed);
-            assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
-            assert!(
-                launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
-                "a window without the port re-attaches and leaves browse with no interface: \
-                 {launched}"
-            );
-            assert!(launched.contains("--no-sandbox"), "{launched}");
-            // Observed: Chrome opened on the screen, asked to create a system
-            // keyring password, and the agent driving it reported that the
-            // profile was fresh and Gmail unavailable. The flag also fixes how
-            // the cookie jar is encrypted, so a session survives being reopened
-            // by a different route.
-            assert!(
-                launched.contains("--password-store=basic"),
-                "without this Chrome blocks on a keyring prompt: {launched}"
+        //
+        // Asserted on both kinds of machine, because the profile and the port
+        // are the machine's business either way and only the sandbox flag is
+        // allowed to move with it.
+        for sandboxed in [false, true] {
+            for typed in [
+                "google-chrome https://mail.google.com",
+                "google-chrome-stable",
+                "chromium https://example.com",
+            ] {
+                let launched = chrome_flags(typed, sandboxed);
+                assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
+                assert!(
+                    launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
+                    "a window without the port re-attaches and leaves browse with no interface: \
+                     {launched}"
+                );
+                assert_eq!(
+                    launched.matches("--no-sandbox").count(),
+                    usize::from(!sandboxed),
+                    "the flag is on a machine whose Chrome needs it and nowhere else: {launched}"
+                );
+                // Observed: Chrome opened on the screen, asked to create a
+                // system keyring password, and the agent driving it reported
+                // that the profile was fresh and Gmail unavailable. The flag
+                // also fixes how the cookie jar is encrypted, so a session
+                // survives being reopened by a different route.
+                assert!(
+                    launched.contains("--password-store=basic"),
+                    "without this Chrome blocks on a keyring prompt: {launched}"
+                );
+            }
+
+            // The shim covers what the call site cannot see: a name typed into
+            // a shell, and the icon on the desktop.
+            let shim = install_chrome_shim(sandboxed);
+            assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
+            assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
+
+            let written = written_by(&shim);
+            assert!(written.contains("exec"), "the wrapper should have decoded: {written}");
+            // The operator's own click has to land on the same store as an
+            // agent's launch, or one of them writes a cookie jar the other
+            // cannot read.
+            assert!(written.contains("--password-store=basic"), "{written}");
+            assert!(written.contains(CHROME_PROFILE), "{written}");
+            assert_eq!(
+                written.matches("--no-sandbox").count(),
+                usize::from(!sandboxed),
+                "the wrapper and the call site have to agree about this too: {written}"
             );
         }
+    }
 
-        // The shim covers what the call site cannot see: a name typed into a
-        // shell, and the icon on the desktop.
-        let shim = install_chrome_shim();
-        assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
-        assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
+    #[test]
+    fn a_machine_whose_browser_keeps_its_sandbox_is_launched_identically_without_the_flag() {
+        // What this closes: `--no-sandbox` was written as a fact about Chrome,
+        // so it went onto an Apple Container guest too, where the browser's own
+        // sandbox works — and the operator watched every desktop from behind
+        // Chrome's yellow "Stability and security will suffer" bar.
+        //
+        // Compared rather than spelled out twice on purpose: that one flag is
+        // the whole difference, and a profile or a port lost along with it
+        // would be a browser broken on one kind of machine and nowhere else.
+        let hosted = chrome_flags("google-chrome https://example.com", false);
+        let local = chrome_flags("google-chrome https://example.com", true);
+        assert!(hosted.contains("--no-sandbox "), "{hosted}");
+        assert_eq!(hosted.replace("--no-sandbox ", ""), local);
 
-        // What actually lands on the machine, rather than what the command
-        // looks like: the wrapper and the desktop entry travel base64'd.
-        let written: String = shim
-            .split_whitespace()
-            .filter(|token| token.len() > 40)
-            .map(decode)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(written.contains("exec"), "the wrapper should have decoded: {written}");
-        // The operator's own click has to land on the same store as an agent's
-        // launch, or one of them writes a cookie jar the other cannot read.
-        assert!(written.contains("--password-store=basic"), "{written}");
-        assert!(written.contains(CHROME_PROFILE), "{written}");
+        let hosted_shim = written_by(&install_chrome_shim(false));
+        let local_shim = written_by(&install_chrome_shim(true));
+        assert!(hosted_shim.contains("--no-sandbox "), "{hosted_shim}");
+        assert_eq!(hosted_shim.replace("--no-sandbox ", ""), local_shim);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_provider_says_whether_the_browser_keeps_its_sandbox_and_every_launch_follows() {
+        // The machine is the provider's, so this is the provider's to answer.
+        // All three routes onto a screen are read back, because each is written
+        // somewhere else: the wrapper every desktop start installs, the window
+        // an agent opens, and the browser `browse` drives.
+        for sandboxed in [false, true] {
+            let provider = Arc::new(FakeProvider::keeping_browser_sandbox(sandboxed));
+            *provider.matched.lock() = vec![("echo up".to_string(), vec![said("up")])];
+
+            let computer = machine(provider.clone());
+            computer
+                .open_on_desktop("google-chrome https://example.com")
+                .await
+                .expect("the desktop came up and a window was opened on it");
+            computer.ensure_browser().await.expect("the browser answered on its port");
+
+            let commands: Vec<String> =
+                provider.execs.lock().iter().map(|request| request.argv.join(" ")).collect();
+            let found = |needle: &str| {
+                commands
+                    .iter()
+                    .find(|command| command.contains(needle))
+                    .unwrap_or_else(|| panic!("no command containing {needle:?} in {commands:#?}"))
+                    .clone()
+            };
+            let shim = found("chmod +x /home/user/.local/bin/google-chrome");
+            // Named by what each launch is for rather than by the binary: both
+            // of them run `google-chrome` on the display.
+            let opened = found("https://example.com");
+            let driven = found("about:blank");
+
+            for command in [&written_by(&shim), &opened, &driven] {
+                assert_eq!(
+                    command.contains("--no-sandbox"),
+                    !sandboxed,
+                    "sandboxed={sandboxed}: {command}"
+                );
+                // The rest of the launch does not move with the flag.
+                assert!(command.contains(CHROME_PROFILE), "{command}");
+            }
+        }
     }
 
     #[test]
@@ -668,7 +781,7 @@ mod tests {
 
     #[test]
     fn a_flag_the_caller_already_set_is_not_set_twice() {
-        let once = chrome_flags("google-chrome --no-sandbox --user-data-dir=/tmp/x");
+        let once = chrome_flags("google-chrome --no-sandbox --user-data-dir=/tmp/x", false);
         assert_eq!(once.matches("--no-sandbox").count(), 1, "{once}");
         assert_eq!(once.matches("--user-data-dir").count(), 1, "{once}");
         // And a caller that named its own profile keeps it: only `browse` does
@@ -678,11 +791,13 @@ mod tests {
 
     #[test]
     fn a_program_that_is_not_a_browser_is_left_alone() {
-        assert_eq!(
-            chrome_flags("xdg-open /home/user/report.pdf"),
-            "xdg-open /home/user/report.pdf"
-        );
-        assert_eq!(chrome_flags("thunar"), "thunar");
+        for sandboxed in [false, true] {
+            assert_eq!(
+                chrome_flags("xdg-open /home/user/report.pdf", sandboxed),
+                "xdg-open /home/user/report.pdf"
+            );
+            assert_eq!(chrome_flags("thunar", sandboxed), "thunar");
+        }
     }
 
     #[test]

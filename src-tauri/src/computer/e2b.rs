@@ -162,6 +162,13 @@ impl ComputerProvider for E2bProvider {
         Provider::E2b
     }
 
+    /// It does not. Chrome cannot use its own sandbox inside one of these and
+    /// refuses to start without being told to drop it, so every launch on one
+    /// carries `--no-sandbox`, and Chrome's unsupported-flag bar with it.
+    fn browser_keeps_its_sandbox(&self) -> bool {
+        false
+    }
+
     /// Always ready, because this type is only ever built from a key: there is
     /// nothing on this Mac to install or start, and whether the key works is a
     /// question only a request can answer. `new` returning `None` is what "not
