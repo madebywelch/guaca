@@ -836,6 +836,11 @@ guessed wrong.
   to start without it, and `ComputerProvider::browser_keeps_its_sandbox` is what
   each provider answers. It was a constant before, and what the operator saw on
   every local desktop was Chrome's own "Stability and security will suffer" bar.
+- Unbranded Chromium's *browser* sign-in cannot complete without Google API
+  keys, and its account reconciler deletes every `.google.com` account cookie
+  at the next start to resolve that, so the image ships the profile with
+  browser sign-in disabled. `computer-image/README.md`, "Why browser sign-in is
+  off".
 - A stopped container keeps its writable layer, which is why `/tmp` is a tmpfs
   given at create and PID 1 clears the X and Chrome locks on every boot. Both
   were found as a woken machine whose desktop never came back.

@@ -131,6 +131,32 @@ another, so the machine should agree. The skeleton's copies are defaults, not
 policy: `guaca-init` copies with `cp -Rpn`, so an agent that changes its own
 browser keeps the change.
 
+**Why browser sign-in is off.** The profile the skeleton ships holds exactly
+one preference — `{"signin":{"allowed":false,"allowed_on_next_startup":false}}`
+in `.guac/chrome/Default/Preferences` — and without it the operator cannot stay
+signed in to Gmail. Debian's Chromium is unbranded and carries no Google API
+keys, so when a sign-in happens on a Google page the browser also tries to sign
+*itself* in: Chromium's account consistency, the "Dice" flow. That half fails,
+and says so in the profile — `Missing authorization code due to OAuth outage in
+Dice`, under `google.services.signin.REFRESH_TOKEN_RECEIVED`. The next Chrome
+start then finds an account it can get no token for, and the account reconciler
+resolves the inconsistency the only way it knows how: it deletes every
+`.google.com` account cookie, `SID`, `HSID`, `SSID`, `APISID` and `SIDCC` among
+them. The operator is signed out of Gmail after any close and reopen, any sleep
+and wake, and any Guaca restart, with nothing anywhere reporting an error.
+
+Measured live, both ways: with `signin.allowed=false` in the profile and Chrome
+relaunched, a Gmail sign-in survives a clean close and reopen — inbox before,
+inbox after. E2B runs Google Chrome, which has the keys, completes that flow
+and never loses the cookies, so this is a fix for this image rather than for
+the app.
+
+What is switched off is the *browser* signing itself in. Signing in to a
+website is untouched: it is cookies in the jar, which is what a machine sleeps
+in order to keep and what `sessions.py` reads. And it is a default rather than
+a policy, like the rest of the skeleton — `cp -Rpn` never overwrites, so a
+profile that already exists keeps its own `Preferences`.
+
 ## Why the image is built the way it is
 
 The rest of what the Dockerfile's comments used to say, in the order the

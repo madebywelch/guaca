@@ -249,6 +249,27 @@ the flag is a constant again and one of the two kinds of machine gets the wrong 
     || fail "the image's desktop entry does not launch the shim"
 }
 
+# The one preference the image writes into the browser profile, read out of the
+# Dockerfile and parsed rather than grepped. What breaks this is not a missing
+# line but a file Chromium cannot read: it discards an unparseable `Preferences`
+# and starts the profile on every default, browser sign-in among them, and the
+# symptom arrives much later as an operator signed out of Gmail by a restart,
+# with nothing reporting an error. README, "Why browser sign-in is off".
+check_signin_disabled() {
+  local prefs json
+  prefs=/opt/guaca/home/.guac/chrome/Default/Preferences
+  grep -q "> $prefs\$" "$IMAGE_DIR/Dockerfile" \
+    || fail "the image no longer writes $prefs, so a fresh profile allows Chromium's browser \
+sign-in; unbranded Chromium cannot finish one, and its account reconciler deletes every \
+.google.com account cookie on the next start"
+  json="$(grep -o '{"signin".*}' "$IMAGE_DIR/Dockerfile")"
+  printf '%s' "$json" \
+    | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin)["signin"]["allowed"] is False else 1)' \
+      2>/dev/null \
+    || fail "what the Dockerfile writes to $prefs is not JSON with signin.allowed false. It reads: \
+${json:-nothing}"
+}
+
 # Every command `start_desktop` runs names a path, and a path is a thing this
 # image either has or does not. The Dockerfile asserts them again at build time
 # on the real filesystem; this catches the case where the two files drifted
@@ -371,6 +392,8 @@ checks() {
   echo "==> checking what the image and desktop.rs both claim"
   check_chrome_agreement
   check_desktop_paths
+  echo "==> checking the browser profile the image ships"
+  check_signin_disabled
   echo "==> checking the build context, the Dockerfile's size and the pinned base"
   check_context
   check_dockerfile_size

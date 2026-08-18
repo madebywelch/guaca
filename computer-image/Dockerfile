@@ -137,6 +137,15 @@ RUN mkdir -p /opt/guaca/home/.config/xfce4 \
        'Icon=google-chrome' \
        > /opt/guaca/home/.local/share/xfce4/helpers/google-chrome.desktop
 
+# The browser is not asked to sign itself in. Unbranded Chromium has no Google
+# API keys, its half of a Gmail sign-in fails, and the next start deletes the
+# cookies to resolve that. A profile that already exists keeps its own
+# Preferences, since `guaca-init` copies with `cp -Rpn`. README, "Why browser
+# sign-in is off".
+RUN mkdir -p /opt/guaca/home/.guac/chrome/Default \
+    && printf '%s\n' '{"signin":{"allowed":false,"allowed_on_next_startup":false}}' \
+       > /opt/guaca/home/.guac/chrome/Default/Preferences
+
 # The skeleton belongs to the account it is copied for, and this must be the
 # last thing that writes into it: `cp -Rpn` applies the source directory's own
 # attributes to the mount point, so a root-owned skeleton hands /home/user back
@@ -191,7 +200,8 @@ RUN set -eu; \
     grep -q 'WebBrowser=google-chrome' /opt/guaca/home/.config/xfce4/helpers.rc; \
     grep -q '^X-XFCE-Commands=/usr/local/bin/google-chrome$' \
       /opt/guaca/home/.local/share/xfce4/helpers/google-chrome.desktop; \
-    test "$(stat -c %u /opt/guaca/home/.config/mimeapps.list)" = 1000
+    test "$(stat -c %u /opt/guaca/home/.config/mimeapps.list)" = 1000; \
+    test "$(stat -c %u /opt/guaca/home/.guac/chrome/Default/Preferences)" = 1000
 
 # Set rather than inherited. A session that arrives without `HOME` resolves `~`
 # somewhere the session reader does not look, which reads as an empty cookie jar
