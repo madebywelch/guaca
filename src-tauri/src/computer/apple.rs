@@ -280,9 +280,14 @@ impl AppleContainer {
         // would abandon it a minute in and leave the operator to start again.
         let pulled = self.cli.run(&pull_argv(&self.image), &BTreeMap::new(), PULL_TIMEOUT).await?;
         if !pulled.ok() {
+            // Named, because the ref decides the remedy: the unpublished
+            // placeholder cannot be pulled by anyone, and an operator who set
+            // the override in one shell and launched from another reads
+            // "check your network" as a lie.
             return Err(ProviderError::Image(format!(
-                "the desktop image could not be pulled: {}; check your network, or set {} to a \
-                 locally built image",
+                "the desktop image {} could not be pulled: {}; check your network, or build one \
+                 with computer-image/build.sh and launch with {}=<that tag>",
+                self.image,
                 detail(&pulled),
                 image::IMAGE_ENV
             )));
@@ -2255,6 +2260,9 @@ mod fake_runtime {
         assert!(matches!(err, ProviderError::Image(_)), "{err:?}");
         assert!(err.to_string().contains("no such host"), "{err}");
         assert!(err.to_string().contains("GUAC_COMPUTER_IMAGE"), "the way through: {err}");
+        // Named, because an operator who set the override in one shell and
+        // launched from another needs to see the placeholder was what it tried.
+        assert!(err.to_string().contains("img:1"), "the image it tried: {err}");
         assert!(
             !log_lines(&log).iter().any(|line| line.starts_with("network create")),
             "nothing is made before there is something to boot"

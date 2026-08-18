@@ -172,8 +172,16 @@ no account and no bill. Settings has a **Computer provider** selector, and
 cannot see your files, but they may reach services this Mac or your local
 network exposes, so E2B is still the option with an off-device boundary. The
 desktop image is pulled the first time an agent needs a machine; until it is
-published, build it with `computer-image/build.sh` and point
-`GUAC_COMPUTER_IMAGE` at what that made.
+published, build it with `computer-image/build.sh` and launch with the tag it
+printed on the same command line, since the variable is read by the app
+process itself:
+
+```sh
+GUAC_COMPUTER_IMAGE=guaca-computer:dev pnpm app
+```
+
+The Apple Container status line in Settings says when the override is in
+effect; if it does not, the app was started without it.
 
 With no provider ready — no Apple Container, no E2B key — none of this appears,
 the other four tools are not offered, and the agent is told it has no machine
