@@ -416,10 +416,18 @@ pub(super) fn port_open(port: u16) -> String {
 /// would read the app's own browser as a stray and close it mid-task. Only the
 /// main processes are considered, and only when one of them is on a profile
 /// that is not ours.
+///
+/// The crash handler is excluded by name. `chrome_crashpad_handler` lives in
+/// the browser's directory, carries neither `--type=` nor `--user-data-dir=`,
+/// and matched the pattern on the Debian build: every desktop start then read
+/// it as a stray browser and killed the real one under the operator, which is
+/// how a Google sign-in went stale — Chrome flushes rotated session cookies
+/// lazily, and a browser killed before the flush comes back with the old
+/// ones and is told it is signed out.
 fn evict_wrong_profile_browser() -> String {
     format!(
         "if pgrep -af 'google-chrome|chromium' | grep -v -- '--type=' | \
-         grep -v -- '--user-data-dir={CHROME_PROFILE}' | grep -q .; then \
+         grep -v crashpad | grep -v -- '--user-data-dir={CHROME_PROFILE}' | grep -q .; then \
          pkill -f 'google-chrome|chromium' || true; sleep 1; fi"
     )
 }
@@ -777,6 +785,10 @@ mod tests {
         assert!(evict.contains(&format!("--user-data-dir={CHROME_PROFILE}")), "{evict}");
         assert!(evict.contains("--type="), "helper processes must be excluded: {evict}");
         assert!(evict.contains("pkill"), "{evict}");
+        // Seen live: the crash handler has no `--type=` and no profile flag,
+        // so without this every desktop start killed the operator's own
+        // browser and their Google session with it.
+        assert!(evict.contains("grep -v crashpad"), "the crash handler is not a browser: {evict}");
     }
 
     #[test]
