@@ -283,6 +283,25 @@ fn usable(status: &ProviderStatus) -> bool {
     }
 }
 
+/// Whether "or choose Apple Container" is a way out worth telling an operator
+/// about: a runtime that could make a machine now, or one that is simply not
+/// installed yet. Never on a Mac that cannot run what is installed, where
+/// installing it is the one remedy that cannot work.
+fn worth_choosing(status: &ProviderStatus) -> bool {
+    usable(status) || status.state == ProviderReadiness::NotInstalled
+}
+
+/// Nothing here can make a machine, in the providers' own words.
+///
+/// "No computer provider is ready" on its own is a dead end: what the operator
+/// does next depends on which provider they are closest to having, and only
+/// that provider's own sentence says. One detail or two, because an operator
+/// who named a provider and one who named none are owed the same shape of
+/// answer — the named one just has a shorter list.
+fn nothing_ready(details: &[String]) -> ComputerError {
+    ComputerError::Unconfigured(format!("no computer provider is ready. {}", details.join(" ")))
+}
+
 struct Inner {
     store: Store,
     config: Arc<RwLock<AppConfig>>,
@@ -485,25 +504,59 @@ impl ComputerManager {
     /// not for a model quoting it into a chat.
     async fn refusal(&self) -> ComputerAccess {
         let choice = self.inner.config.read().computer.provider;
+        // One read, and a cache hit on every path that gets here: whatever just
+        // refused to make a machine asked this same question moments ago. Every
+        // branch needs it, because the local runtime is the half that varies —
+        // the hosted one answers `ready` on nothing but a key being present.
+        let apple = self.status(Provider::AppleContainer).await;
         match choice {
             // Reached only when `E2bProvider::new` refused the key, and it
             // refuses exactly one thing: an empty one.
             ProviderChoice::Provider(Provider::E2b) => ComputerAccess::unavailable(
                 "E2B is the chosen provider and it has no API key",
-                "adding one in Settings, or choosing Apple Container, would give you one",
+                if worth_choosing(&apple) {
+                    "adding one in Settings, or choosing Apple Container, would give you one"
+                } else {
+                    "adding one in Settings would give you one"
+                },
             ),
-            // And here only when `discover` found no binary, which is the one
-            // thing a probe cannot be asked about afterwards.
-            ProviderChoice::Provider(Provider::AppleContainer) => ComputerAccess::unavailable(
-                "Apple Container is the chosen provider and it is not installed",
-                "installing it, or choosing E2B and adding a key in Settings, would give you one",
-            ),
+            ProviderChoice::Provider(Provider::AppleContainer) => match apple.state {
+                // `discover` found no binary, which is also the one thing a
+                // probe cannot be asked about afterwards.
+                ProviderReadiness::NotInstalled => ComputerAccess::unavailable(
+                    "Apple Container is the chosen provider and it is not installed",
+                    "installing it, or choosing E2B and adding a key in Settings, would give you \
+                     one",
+                ),
+                // Installed and out of the range this build drives, or on a
+                // machine that will never run it. Telling this operator to
+                // install it is the one answer that cannot work.
+                ProviderReadiness::Unsupported => ComputerAccess::unavailable(
+                    "Apple Container is the chosen provider and this Mac cannot run the installed \
+                     version",
+                    "choosing E2B and adding a key in Settings would give you one",
+                ),
+                // Installed, and something between it and a machine that this
+                // app cannot clear on its own: a service that would not answer,
+                // or one it has no way to start. What that is belongs in
+                // Settings, where the operator can act on it — not in a
+                // sentence a model reads out, which is why this points at the
+                // status rather than quoting it.
+                _ => ComputerAccess::unavailable(
+                    "Apple Container is the chosen provider and it is not ready to make one",
+                    "its status in Settings says what it needs; choosing E2B and adding a key \
+                     there would also give you one",
+                ),
+            },
             // Nothing was usable, which for the hosted half means there is no
             // key: a provider built from one answers `ready` without being
             // asked anything else. So the local half is what varies.
-            ProviderChoice::Automatic => match self.status(Provider::AppleContainer).await.state {
+            ProviderChoice::Automatic => match apple.state {
+                // Said of the runtime rather than of the Mac, because it is
+                // both cases: a machine that will never run Apple Container,
+                // and one running a version this build refuses.
                 ProviderReadiness::Unsupported => ComputerAccess::unavailable(
-                    "this Mac cannot run Apple Container and no E2B key is set",
+                    "Apple Container is unsupported here and no E2B key is set",
                     "adding an E2B key in Settings would give you one",
                 ),
                 ProviderReadiness::Error => ComputerAccess::unavailable(
@@ -550,36 +603,51 @@ impl ComputerManager {
         };
         let idle_ms = i64::from(self.idle_seconds()) * 1000;
 
-        for listed in listed.into_iter().filter(|record| is_local(record.provider)) {
-            let lock = self.lock_for(listed.agent_id);
-            let _held = lock.lock().await;
-            let Some((record, provider, handle)) = self.running_local(listed.id).await else {
-                continue;
-            };
+        // Side by side, for the same reason the shutdown is: each one is a
+        // command to a runtime, and one machine that is slow to answer must not
+        // hold back the heartbeat of every machine behind it — the guest's own
+        // watchdog stops a machine whose heartbeat goes stale, so a tick that
+        // queues is a machine that stops while an agent is working on it. Each
+        // waits on its own agent's lock, and an agent has at most one computer,
+        // so no two of these want the same lock.
+        let ticks = listed
+            .into_iter()
+            .filter(|record| is_local(record.provider))
+            .map(|record| self.tick_one(record.agent_id, record.id, now, idle_ms));
+        futures_util::future::join_all(ticks).await;
+    }
 
-            if now - record.last_used_at > idle_ms {
-                match provider.stop(&handle).await {
-                    Ok(()) => tracing::info!(
-                        computer = %record.id,
-                        "stopped a computer nobody has used lately; its disk is kept"
-                    ),
-                    Err(err) => {
-                        tracing::warn!(%err, computer = %record.id, "could not stop an idle computer")
-                    }
-                }
-                continue;
-            }
+    /// One machine: stopped if nobody has used it lately, touched if they have,
+    /// under its agent's lock either way.
+    async fn tick_one(&self, agent: AgentId, id: ComputerId, now: i64, idle_ms: i64) {
+        let lock = self.lock_for(agent);
+        let _held = lock.lock().await;
+        let Some((record, provider, handle)) = self.running_local(id).await else {
+            return;
+        };
 
-            // The other half of the watchdog. The guest's PID 1 exits when this
-            // file goes stale, which is what stops a machine when this app is
-            // force-quit and there is nothing left to stop it.
-            if let Err(err) = provider.exec(&handle, heartbeat()).await {
-                tracing::debug!(
-                    %err,
+        if now - record.last_used_at > idle_ms {
+            match provider.stop(&handle).await {
+                Ok(()) => tracing::info!(
                     computer = %record.id,
-                    "could not touch a computer's heartbeat"
-                );
+                    "stopped a computer nobody has used lately; its disk is kept"
+                ),
+                Err(err) => {
+                    tracing::warn!(%err, computer = %record.id, "could not stop an idle computer")
+                }
             }
+            return;
+        }
+
+        // The other half of the watchdog. The guest's PID 1 exits when this
+        // file goes stale, which is what stops a machine when this app is
+        // force-quit and there is nothing left to stop it.
+        if let Err(err) = provider.exec(&handle, heartbeat()).await {
+            tracing::debug!(
+                %err,
+                computer = %record.id,
+                "could not touch a computer's heartbeat"
+            );
         }
     }
 
@@ -1188,7 +1256,20 @@ impl ComputerManager {
         // cross threads.
         let choice = self.inner.config.read().computer.provider;
         if let ProviderChoice::Provider(which) = choice {
-            return self.provider(which);
+            // Built first, because a provider that cannot be built at all has a
+            // sentence of its own: no key, or no binary to ask anything of.
+            let provider = self.provider(which)?;
+            // And then asked the same question the automatic half asks, because
+            // being buildable is not being ready. For a local runtime it means
+            // only "the binary is there", which is true of a Mac whose version
+            // this build refuses and of one whose service will not answer. The
+            // pane offers a computer on `ready || canStart`, and an agent told
+            // it has one that nothing can make spends a turn finding out.
+            let status = self.status(which).await;
+            if !usable(&status) {
+                return Err(nothing_ready(&[status.detail]));
+            }
+            return Ok(provider);
         }
 
         let mut refusals = Vec::new();
@@ -1201,13 +1282,7 @@ impl ComputerManager {
             }
             refusals.push(status.detail);
         }
-        // Every provider's own sentence, because "nothing is ready" on its own
-        // is a dead end: what the operator does next depends on which of them
-        // they are closer to having, and only they can tell.
-        Err(ComputerError::Unconfigured(format!(
-            "no computer provider is ready. {}",
-            refusals.join(" ")
-        )))
+        Err(nothing_ready(&refusals))
     }
 
     /// How long a machine may sit unused. Pushed back on every use, so what
@@ -1631,6 +1706,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_provider_named_in_settings_still_has_to_be_able_to_make_one() {
+        // Being buildable is not being ready. For the local runtime, building
+        // one means only that the binary is on this Mac, which is as true of a
+        // version this build refuses as of one it drives — and the pane offers
+        // a computer on whether the provider could make one, so an agent was
+        // told it had a machine that nothing here could make.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() =
+            Some(says(ProviderReadiness::Unsupported, false, "fake: not this version."));
+        let (manager, store, card, config, _dir) = setup_with(vec![local.clone()]);
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+
+        let Err(err) = manager.ensure(&card, BTreeMap::new()).await else {
+            panic!("a runtime this build cannot drive makes nothing");
+        };
+        assert!(matches!(err, ComputerError::Unconfigured(_)), "{err}");
+        assert!(err.to_string().contains("fake: not this version."), "its own words: {err}");
+        assert_eq!(*local.creates.lock(), 0);
+        assert!(store.list_computers().unwrap().is_empty(), "a claim on nothing is a leak");
+
+        // And the agent hears the same answer the runtime gave, rather than
+        // being handed four tools with nothing behind them.
+        let access = manager.availability(&card).await;
+        assert!(!access.is_available());
+        let offered = crate::llm::tools::offered(access.is_available());
+        for needs_a_machine in [
+            crate::llm::tools::RUN_COMMAND,
+            crate::llm::tools::OPEN_ON_DESKTOP,
+            crate::llm::tools::USE_SCREEN,
+            crate::llm::tools::BROWSE,
+        ] {
+            assert!(
+                !offered.iter().any(|spec| spec.name == needs_a_machine),
+                "{needs_a_machine} was offered with no machine to run it on"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_named_runtime_that_is_only_stopped_is_still_a_provider() {
+        // The other side of the gate, and the state Apple Container is actually
+        // in most mornings: installed, its service down, and one click from a
+        // machine. Refusing this one would be the fix overshooting.
+        let local = Arc::new(fake::FakeProvider::local());
+        *local.probe.lock() = Some(says(ProviderReadiness::NotRunning, true, "stopped"));
+        let (manager, store, card, config, _dir) = setup_with(vec![local.clone()]);
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+
+        assert!(manager.availability(&card).await.is_available());
+        manager.ensure(&card, BTreeMap::new()).await.unwrap();
+
+        assert_eq!(*local.prepares.lock(), 1, "the service was started before anything was made");
+        assert_eq!(provider_of(&store, card.id), Provider::AppleContainer);
+    }
+
+    #[tokio::test]
     async fn a_computer_keeps_the_provider_that_made_it_when_the_setting_changes() {
         let local = Arc::new(fake::FakeProvider::local());
         let hosted = Arc::new(fake::FakeProvider::default());
@@ -1716,19 +1847,59 @@ mod tests {
         assert_eq!(because, "Apple Container is the chosen provider and it is not installed");
         assert!(remedy.contains("choosing E2B"), "{remedy}");
 
-        // A Mac the local runtime cannot run on at all. Telling this operator
-        // to install it is the one answer that cannot work.
+        // A local runtime that cannot be driven here: a Mac that will never run
+        // it, or a version outside this build's range. Telling this operator to
+        // install it is the one answer that cannot work, and "this Mac cannot
+        // run it" is not quite true of the second case either.
         let unsupported = Arc::new(fake::FakeProvider::local());
         *unsupported.probe.lock() = Some(ProviderStatus {
             state: ProviderReadiness::Unsupported,
             can_start: false,
             detail: "fake: not on this Mac".into(),
         });
-        let (manager, _store, card, _config, _dir) = setup_with(vec![unsupported]);
+        let (manager, _store, card, config, _dir) = setup_with(vec![unsupported]);
         let (because, remedy) = reason(manager.availability(&card).await);
-        assert_eq!(because, "this Mac cannot run Apple Container and no E2B key is set");
+        assert_eq!(because, "Apple Container is unsupported here and no E2B key is set");
         assert!(!remedy.contains("installing Apple Container"), "it cannot be: {remedy}");
         assert_eq!(remedy, "adding an E2B key in Settings would give you one");
+
+        // The same Mac with E2B named. The remedy used to offer the local
+        // runtime as the other way out, on a machine where choosing it would
+        // have changed nothing.
+        config.write().computer.provider = ProviderChoice::Provider(Provider::E2b);
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(because, "E2B is the chosen provider and it has no API key");
+        assert_eq!(remedy, "adding one in Settings would give you one");
+
+        // And with the local runtime named on that same Mac: it is installed,
+        // so "install it" is wrong in the other direction.
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(
+            because,
+            "Apple Container is the chosen provider and this Mac cannot run the installed version"
+        );
+        assert_eq!(remedy, "choosing E2B and adding a key in Settings would give you one");
+        assert!(!remedy.contains("installing"), "there is nothing left to install: {remedy}");
+
+        // Installed, answering nothing this build can use, and not startable.
+        // What it needs is a sentence for Settings, so the agent is pointed at
+        // it rather than reciting a terminal command into a chat.
+        let wedged = Arc::new(fake::FakeProvider::local());
+        *wedged.probe.lock() = Some(says(
+            ProviderReadiness::Error,
+            false,
+            "run `container system status` in Terminal.",
+        ));
+        let (manager, _store, card, config, _dir) = setup_with(vec![wedged]);
+        config.write().computer.provider = ProviderChoice::Provider(Provider::AppleContainer);
+        let (because, remedy) = reason(manager.availability(&card).await);
+        assert_eq!(
+            because,
+            "Apple Container is the chosen provider and it is not ready to make one"
+        );
+        assert!(remedy.contains("its status in Settings"), "{remedy}");
+        assert!(!remedy.contains("container system status"), "not for a model to quote: {remedy}");
     }
 
     #[tokio::test]

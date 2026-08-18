@@ -7,11 +7,12 @@
 #
 # It builds the desktop image, runs the conformance suite in
 # `src-tauri/tests/apple.rs`, and then prints the handful of things a test
-# cannot assert because nobody knows yet what the answer looks like — the raw
-# text of `container --version`, where labels land in `container ls --format
-# json`, what the runtime says when a name is taken. Those are printed for a
-# person to read against the comments in `src-tauri/src/computer/apple.rs`,
-# which is where the guesses are marked.
+# cannot assert without asserting its own answer — the raw text of `container
+# --version`, where labels land in `container ls --format json`, what the
+# runtime says when a name is taken. All of those were measured against a live
+# 1.2.2 on 2026-08-18 and written into the comments in
+# `src-tauri/src/computer/apple.rs`; they are printed here so a person can read
+# them against that file again on a runtime release this build has not seen.
 #
 # Nothing here runs in CI. It needs Apple Container, which installs on nothing
 # but macOS 26 on Apple silicon, and it makes real VMs.
@@ -98,8 +99,26 @@ set -e
 
 step "CONFIRM THESE AGAINST computer/apple.rs COMMENTS"
 cat <<'WHY'
-Everything below is a guess in apple.rs marked as one. The tests cannot assert
-them because the assertion would be the guess. Read each against the file.
+Everything below was measured against a live Apple Container 1.2.2 on macOS 26.5
+on 2026-08-18, and what it said is written into the comments in apple.rs. The
+tests cannot assert any of it: a parser and its fixture would agree with each
+other whatever the runtime does, which is how four of these were wrong before
+the measurement.
+
+So this is the re-confirmation pass, and it is worth running on a runtime
+release this build has not seen. What to check, in the order printed:
+
+  - `--version` still prints three dotted numbers parse_version can find, and
+    the version is in the range supported() allows;
+  - `system status` still exits 0 when the service is up;
+  - a taken name still says something already_exists() matches, and labels are
+    still at configuration.labels where left_by() reads them;
+  - `inspect` on nothing still says something missing() matches;
+  - **configuration.id is still the container's name** — read_owned() returns
+    this field and the sweep deletes what no row claims, so an id of any other
+    shape makes every live machine look unclaimed;
+  - status.state still carries the words read_state knows, and the address is
+    still at status.networks[0].ipv4Address for read_address.
 WHY
 
 probe() {
@@ -156,9 +175,12 @@ probe "configuration.id and configuration.labels, which read_owned() reads" \
   ls --all --format json
 
 # `read_state` maps the words here onto running/asleep and refuses anything it
-# does not know; `read_address` reads networks[0].address for the viewer.
+# does not know; `read_address` reads status.networks[0].ipv4Address for the
+# viewer, which is where 1.2.2 put it on 2026-08-18 — as `192.168.65.2/24`, and
+# the address moved across a stop, which is why nothing caches it.
 probe "the status word and the address of a started container" start "$PROBE"
-probe "inspect on a running container: status, networks[0].address" inspect "$PROBE"
+probe "inspect on a running container: status.state, status.networks[0].ipv4Address" \
+  inspect "$PROBE"
 probe "stop with a grace period, which is the browser's chance to save" \
   stop --time 10 "$PROBE"
 probe "inspect on a stopped container: the word read_state must know" inspect "$PROBE"

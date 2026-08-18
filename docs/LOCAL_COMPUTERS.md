@@ -351,6 +351,12 @@ E2B retains its server-side idle timeout. Local providers need two layers:
   configured idle period, which leaves the container stopped with its disk
   intact. That is the whole watchdog: a loop and a file, not an init
   framework.
+- The guest's period is `GUAC_IDLE_SECONDS`, given as an environment variable
+  when the container is created and fixed for that container's life: a changed
+  idle setting reaches the guest only when the machine is remade, not when it
+  is woken. The host's ticker reads the current setting on every tick, so the
+  layer that stops an idle machine follows the setting immediately and the
+  crash-only fallback follows it a machine later.
 
 A graceful app shutdown also stops every running local computer. It does not
 stop hosted E2B computers early; their existing timeout remains authoritative.
@@ -366,9 +372,12 @@ a fork: the repository has no hosted CI today, and the digest has to live under
 a registry namespace the maintainer owns (`ghcr.io/madebywelch/…`). Until it
 is published, nothing here is testable, so the image reference the app uses is
 a single constant with one documented development override,
-`GUAC_COMPUTER_IMAGE`, read at startup and shown in Settings when set. The
-override exists so a reviewer can build the image locally and try the feature;
-it is not a user setting.
+`GUAC_COMPUTER_IMAGE`, read at startup. When it is set, the Apple Container
+status line in Settings says so — "Using the image named by
+GUAC_COMPUTER_IMAGE, not the released one" — on the two states that end in a
+machine, so an operator debugging one knows it is not the image the release was
+tested with. The override exists so a reviewer can build the image locally and
+try the feature; it is not a user setting.
 
 The initial image should use a pinned Debian stable base and contain:
 
@@ -624,7 +633,20 @@ its exact installation label. It reconciles them with `computers`:
 - an unknown provider or ambiguous ownership is reported and preserved, never
   guessed at or deleted.
 
-Volumes and networks are swept with the same installation and computer labels.
+This pull request sweeps containers. A container carries its volume and its
+network with it — all three share one name, and deleting the container deletes
+the other two — so every orphan the sweep finds is released whole. What is not
+implemented is a sweep of volumes and networks *by label*: `list_owned` asks
+`container ls --all` and gets containers, and nothing enumerates the other two
+kinds. The case that leaves behind is narrow and real: a create that made the
+network and the volume, failed before the container, and whose rollback also
+failed. That leaves a labelled volume and network under a name no later create
+will reuse, because the name carries a fresh computer UUID. Both are invisible
+from inside the app, and the volume is the one that matters: it was created with
+the home quota and nothing refers to it. `container volume ls` and `container
+network ls` show them, and `container volume delete` clears them. A label-scoped
+sweep of both kinds is deferred to a follow-up.
+
 Legacy E2B resources already recorded in the database remain manageable by
 their exact IDs. An unclaimed resource carrying only the old `guac=true` label
 must not be deleted after installation scoping lands, because two installations

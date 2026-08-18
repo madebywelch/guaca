@@ -21,10 +21,12 @@ export GUAC_COMPUTER_IMAGE=guaca-computer:dev
 directory, because the image ships `browser.py` and `sessions.py` from
 `src-tauri/src/computer/` — the same two files the app compiles into itself.
 
-`GUAC_COMPUTER_IMAGE` is read at startup and shown in Settings when it is set.
-It exists so a reviewer can try the feature before the image is published; it is
-not a user setting, and an app running one is running something other than the
-image the release was tested with.
+`GUAC_COMPUTER_IMAGE` is read at startup, and when it is set the Apple Container
+status line in Settings ends with "Using the image named by
+GUAC_COMPUTER_IMAGE, not the released one". It exists so a reviewer can try the
+feature before the image is published; it is not a user setting, and an app
+running one is running something other than the image the release was tested
+with.
 
 ## What is in here
 
@@ -182,8 +184,9 @@ in it is in this section instead.
 The cost of an exclude list, stated once: a new large directory at the
 repository root is in the context until somebody adds it to that file.
 
-What the image does once it boots is still the spike's question, and the
-answers to it are:
+What the image does once it boots has been answered: the spike ran on
+2026-08-18 against a live Apple Container 1.2.2 on macOS 26.5, and all ten
+smoke items pass. The three things that keep answering it are:
 
 - the Dockerfile's own assertions, which fail the build if a path the app uses
   is not where this file thinks it is;
@@ -200,6 +203,16 @@ answers to it are:
 
 That script also prints what the tests cannot assert — the raw text of
 `container --version`, where labels land in `container ls --format json`, what
-the runtime says when a name is already taken — because those are the guesses
-marked in `src-tauri/src/computer/apple.rs`, and asserting a guess only proves
-it was guessed twice.
+the runtime says when a name is already taken. Those were measured on the same
+run and written into `src-tauri/src/computer/apple.rs`; a test of them would be
+a parser agreeing with its own fixture, which is how four of them were wrong
+before the measurement. They are printed for a person to read against that file
+again on a runtime release this build has not seen.
+
+What the run did not measure, and what `docs/LOCAL_COMPUTERS.md` lists under
+"Still unmeasured": whether 3 GiB of memory would do in place of 4, first-boot
+and wake timings, the size of the built image, whether `container ls --all`
+lists *stopped* containers, and reachability of the Mac's LAN address from a
+guest. The memory constant stays at 4 GiB until the first is measured, and the
+sweep's untested direction is the safe one — a stopped orphan is missed rather
+than a live machine deleted.

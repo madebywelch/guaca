@@ -42,7 +42,7 @@ const WELL_KNOWN: &[&str] = &["/usr/local/bin/container"];
 
 /// The first release this was tested against, and the first major nothing here
 /// promises anything about.
-pub const MIN_VERSION: (u32, u32, u32) = (1, 2, 2);
+const MIN_VERSION: (u32, u32, u32) = (1, 2, 2);
 const UNSUPPORTED_MAJOR: u32 = 2;
 
 /// Whether this build could drive Apple Container at all. The operating system
@@ -123,6 +123,14 @@ pub struct AppleContainer {
     /// is never swept up as this one's orphan.
     installation: String,
     image: String,
+    /// Whether that image is the operator's own rather than the released one,
+    /// which the status says out loud: somebody debugging a machine needs to
+    /// know it is not the image the release was tested with.
+    ///
+    /// Held rather than asked at the site, for the same reason as `platform`
+    /// below: it is a process-wide environment variable, and a test that had to
+    /// set one would be a test racing every other test in the process.
+    overridden_image: bool,
     /// Whether this build could drive the runtime at all: `SUPPORTED_PLATFORM`
     /// for anything `discover` made. Held rather than read from the constant at
     /// each site so that both answers are testable wherever the suite runs,
@@ -135,12 +143,30 @@ impl AppleContainer {
     /// tells "not installed" from "installed and refusing".
     pub fn discover(installation: &str) -> Option<AppleContainer> {
         Cli::discover("container", WELL_KNOWN).map(|cli| {
-            AppleContainer::with_cli(cli, installation, image::image_ref(), SUPPORTED_PLATFORM)
+            AppleContainer::with_cli(
+                cli,
+                installation,
+                image::image_ref(),
+                image::is_overridden(),
+                SUPPORTED_PLATFORM,
+            )
         })
     }
 
-    pub fn with_cli(cli: Cli, installation: &str, image: String, platform: bool) -> AppleContainer {
-        AppleContainer { cli, installation: installation.to_string(), image, platform }
+    pub fn with_cli(
+        cli: Cli,
+        installation: &str,
+        image: String,
+        overridden_image: bool,
+        platform: bool,
+    ) -> AppleContainer {
+        AppleContainer {
+            cli,
+            installation: installation.to_string(),
+            image,
+            overridden_image,
+            platform,
+        }
     }
 
     /// Starts the service if it is not running.
@@ -446,7 +472,7 @@ impl ComputerProvider for AppleContainer {
         if !self.platform {
             return unsupported_platform();
         }
-        self.probe_runtime().await
+        with_image_note(self.probe_runtime().await, self.overridden_image)
     }
 
     /// The service, started, because somebody asked for a computer.
@@ -1137,6 +1163,28 @@ fn version_out_of_range(found: (u32, u32, u32)) -> ProviderStatus {
              {min_major}.{min_minor}.{min_patch} up to but not including {UNSUPPORTED_MAJOR}.0.0. \
              Install a version in that range from github.com/apple/container/releases."
         ),
+    }
+}
+
+/// Says which image the machines this runtime makes would boot, when it is not
+/// the released one.
+///
+/// Only on the two states that end in a machine. On a runtime that is missing,
+/// unreadable or out of range, which image it would have pulled is not the
+/// operator's problem and pushes the one that is further down the row.
+fn with_image_note(status: ProviderStatus, overridden: bool) -> ProviderStatus {
+    if !overridden
+        || !matches!(status.state, ProviderReadiness::Ready | ProviderReadiness::NotRunning)
+    {
+        return status;
+    }
+    ProviderStatus {
+        detail: format!(
+            "{} Using the image named by {}, not the released one.",
+            status.detail,
+            image::IMAGE_ENV
+        ),
+        ..status
     }
 }
 
@@ -1856,12 +1904,20 @@ mod fake_runtime {
     /// are about the other case. Asserted rather than read from
     /// `SUPPORTED_PLATFORM`, so these run identically wherever the suite does.
     fn provider(cli: Cli) -> AppleContainer {
-        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), true)
+        provider_on_image(cli, false)
+    }
+
+    /// The same, told whether the image it would boot is the operator's own
+    /// rather than the released one. A parameter rather than
+    /// `GUAC_COMPUTER_IMAGE`, because that variable is process-wide and a test
+    /// that set it would race every other test in this binary.
+    fn provider_on_image(cli: Cli, overridden: bool) -> AppleContainer {
+        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), overridden, true)
     }
 
     /// On something that is not a Mac.
     fn provider_off_platform(cli: Cli) -> AppleContainer {
-        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), false)
+        AppleContainer::with_cli(cli, "inst-7", "img:1".into(), false, false)
     }
 
     fn log_lines(log: &Path) -> Vec<String> {
@@ -1949,6 +2005,51 @@ mod fake_runtime {
         assert_eq!(status.state, ProviderReadiness::NotRunning);
         assert!(status.can_start, "starting a computer is what starts the service");
         assert!(status.detail.contains("stopped"), "{}", status.detail);
+    }
+
+    #[tokio::test]
+    async fn a_status_says_when_the_machines_it_would_make_boot_a_built_image() {
+        // The override exists so the feature can be tried before the image is
+        // published, and an operator looking at a machine that behaves oddly
+        // has to know it is not the image the release was tested with. Settings
+        // draws this line, so this is the line that has to carry it.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let up = &[("--version", VERSION_1_2_2), ("system status", "exit 0")];
+
+        let ready = provider_on_image(fake_container(dir.path(), &log, up), true).probe().await;
+        assert_eq!(ready.state, ProviderReadiness::Ready, "{}", ready.detail);
+        assert!(ready.detail.contains("installed and running"), "still itself: {}", ready.detail);
+        assert!(ready.detail.contains("GUAC_COMPUTER_IMAGE"), "{}", ready.detail);
+
+        let released = provider_on_image(fake_container(dir.path(), &log, up), false).probe().await;
+        assert!(!released.detail.contains("GUAC_COMPUTER_IMAGE"), "{}", released.detail);
+
+        // The other state that ends in a machine. A runtime that is merely
+        // stopped still boots whatever image it is pointed at.
+        let stopped_dir = tempfile::tempdir().unwrap();
+        let stopped = provider_on_image(
+            fake_container(
+                stopped_dir.path(),
+                &stopped_dir.path().join("invocations"),
+                &[("--version", VERSION_1_2_2), ("system status", "exit 1")],
+            ),
+            true,
+        )
+        .probe()
+        .await;
+        assert_eq!(stopped.state, ProviderReadiness::NotRunning);
+        assert!(stopped.can_start, "a note about an image is not a reason not to start");
+        assert!(stopped.detail.contains("GUAC_COMPUTER_IMAGE"), "{}", stopped.detail);
+
+        // And not on the states that end in no machine at all: which image it
+        // would have pulled is not what that operator has to act on, and it
+        // pushes the sentence that is further down the row.
+        let absent = tempfile::tempdir().unwrap();
+        let missing =
+            provider_on_image(Cli::at(absent.path().join("container")), true).probe().await;
+        assert_eq!(missing.state, ProviderReadiness::NotInstalled);
+        assert!(!missing.detail.contains("GUAC_COMPUTER_IMAGE"), "{}", missing.detail);
     }
 
     #[tokio::test]

@@ -25,8 +25,7 @@ use tokio::process::Command;
 /// `LC_*` or `XDG_*`. Everything else is cleared: this is an allow-list rather
 /// than a deny-list because the operator's shell is full of variables nobody
 /// here can enumerate.
-pub const HOST_ENV_ALLOWLIST: &[&str] =
-    &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "SHELL"];
+const HOST_ENV_ALLOWLIST: &[&str] = &["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "LANG", "SHELL"];
 
 /// One local executable, found once and run many times.
 #[derive(Debug)]
@@ -100,7 +99,11 @@ impl Cli {
         Cli { path }
     }
 
-    pub fn path(&self) -> &Path {
+    /// Where it was found, which only the tests about discovery order ask:
+    /// nothing in the app has any business knowing which of the two places the
+    /// binary came from.
+    #[cfg(test)]
+    fn path(&self) -> &Path {
         &self.path
     }
 

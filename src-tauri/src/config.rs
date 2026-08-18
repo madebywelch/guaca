@@ -178,8 +178,17 @@ pub fn default_idle_minutes() -> u32 {
 /// versions behind gets both in order and one a single version behind is not
 /// put through a step that already ran against it.
 pub fn migrate(config: &mut AppConfig) -> bool {
+    // Ahead of the version gate, because this one is a repair rather than a
+    // step. A config can carry the current version and no installation id: the
+    // first run mints one and writes it, and a config directory that could not
+    // be written that day leaves the version stored and the id not. Every local
+    // resource is labelled with that id, and an install labelling its
+    // containers with an empty string is one whose sweep cannot tell its own
+    // machines from another copy's.
+    let minted = mint_installation_id(config);
+
     if config.version >= CURRENT_VERSION {
-        return false;
+        return minted;
     }
 
     if config.version < 1 {
@@ -202,9 +211,6 @@ pub fn migrate(config: &mut AppConfig) -> bool {
     }
 
     if config.version < 2 {
-        if config.computer.installation_id.is_empty() {
-            config.computer.installation_id = uuid::Uuid::new_v4().to_string();
-        }
         // An install that has an E2B key is pinned to E2B rather than left to
         // choose: automatic would pick a local provider on a Mac that supports
         // one, and an operator who paid for a hosted sandbox did not ask to
@@ -223,6 +229,17 @@ pub fn migrate(config: &mut AppConfig) -> bool {
     // Always worth persisting even when nothing else moved: recording the
     // version is what stops this running again on every launch.
     config.version = CURRENT_VERSION;
+    true
+}
+
+/// The id every local resource this install makes is labelled with, minted if
+/// there is none. Generated in one place, so a second launch cannot mint a
+/// second one and orphan everything the first made.
+fn mint_installation_id(config: &mut AppConfig) -> bool {
+    if !config.computer.installation_id.is_empty() {
+        return false;
+    }
+    config.computer.installation_id = uuid::Uuid::new_v4().to_string();
     true
 }
 
@@ -562,12 +579,36 @@ mod tests {
     }
 
     #[test]
+    fn a_current_config_with_no_installation_id_is_repaired_rather_than_left() {
+        // A first run mints the id and writes it; a config directory that could
+        // not be written that day leaves the version stored and the id not.
+        // Gated behind `version < 2`, that install labelled every container it
+        // ever made with an empty string, and a sweep reading that label cannot
+        // tell its own machines from another copy of Guac's.
+        let mut config = AppConfig { version: CURRENT_VERSION, ..Default::default() };
+        assert!(config.computer.installation_id.is_empty());
+
+        assert!(migrate(&mut config), "worth saving: there is now something to save");
+        let minted = config.computer.installation_id.clone();
+        assert!(uuid::Uuid::parse_str(&minted).is_ok(), "{minted}");
+
+        // And once is once. A second launch that minted another would orphan
+        // every resource the first one made.
+        assert!(!migrate(&mut config));
+        assert_eq!(config.computer.installation_id, minted);
+    }
+
+    #[test]
     fn a_v2_file_naming_a_provider_is_never_re_migrated_to_e2b() {
         // The operator moved a keyed install to a local provider on purpose.
         let mut config = AppConfig {
             version: CURRENT_VERSION,
             computer: ComputerConfig {
                 provider: ProviderChoice::Provider(Provider::AppleContainer),
+                // An install that has run once has one, and this test is about
+                // the provider: with none, `migrate` has a repair to make and
+                // says so.
+                installation_id: "inst-7".into(),
                 ..Default::default()
             },
             ..Default::default()
@@ -629,6 +670,10 @@ mod tests {
         let mut cfg = AppConfig { version: CURRENT_VERSION, ..Default::default() };
         cfg.inference.api_key = "sk-test".into();
         cfg.limits.max_hops = 7;
+        // Part of being current: an install that has been through `migrate`
+        // once has an id, and one written without it is repaired on the way
+        // back in rather than reloaded as it was.
+        cfg.computer.installation_id = "inst-7".into();
 
         save(&path, &cfg).unwrap();
         assert_eq!(load(&path).unwrap(), cfg, "a current config round trips untouched");
