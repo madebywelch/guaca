@@ -280,13 +280,24 @@ impl AppleContainer {
         // would abandon it a minute in and leave the operator to start again.
         let pulled = self.cli.run(&pull_argv(&self.image), &BTreeMap::new(), PULL_TIMEOUT).await?;
         if !pulled.ok() {
-            // Named, because the ref decides the remedy: the unpublished
-            // placeholder cannot be pulled by anyone, and an operator who set
-            // the override in one shell and launched from another reads
-            // "check your network" as a lie.
+            // Named, because the ref decides the remedy. The placeholder this
+            // build ships with cannot be pulled by anyone, and telling an
+            // operator to check their network for it is a lie; a real ref that
+            // will not pull is a network or a registry, and an operator who set
+            // the override in one shell and launched from another needs to see
+            // which ref was tried.
+            if image::is_unpublished(&self.image) {
+                return Err(ProviderError::Image(format!(
+                    "the desktop image has not been published yet ({}); build one with \
+                     computer-image/build.sh and launch with {}=<the tag it printed>, or ask the \
+                     maintainer to publish it",
+                    self.image,
+                    image::IMAGE_ENV
+                )));
+            }
             return Err(ProviderError::Image(format!(
-                "the desktop image {} could not be pulled: {}; check your network, or build one \
-                 with computer-image/build.sh and launch with {}=<that tag>",
+                "the desktop image {} could not be pulled: {}; check your network and the \
+                 registry, or build one with computer-image/build.sh and launch with {}=<that tag>",
                 self.image,
                 detail(&pulled),
                 image::IMAGE_ENV
@@ -2263,6 +2274,36 @@ mod fake_runtime {
         // Named, because an operator who set the override in one shell and
         // launched from another needs to see the placeholder was what it tried.
         assert!(err.to_string().contains("img:1"), "the image it tried: {err}");
+        assert!(err.to_string().contains("check your network"), "a real ref: {err}");
+    }
+
+    #[tokio::test]
+    async fn the_placeholder_image_says_it_is_unpublished_rather_than_blaming_the_network() {
+        // The message every operator reads until the maintainer publishes:
+        // it must name the actual next step, not a network that is fine.
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("invocations");
+        let cli = fake_container(
+            dir.path(),
+            &log,
+            &[("image inspect", "exit 1"), ("image pull", "echo 'not found' >&2; exit 1")],
+        );
+        let provider = AppleContainer::with_cli(
+            cli,
+            "install-1",
+            "ghcr.io/madebywelch/guaca-computer:0.1.0-unpublished".into(),
+            false,
+            true,
+        );
+
+        let err = provider.create(&creation(900)).await.expect_err("nothing to pull");
+
+        assert!(matches!(err, ProviderError::Image(_)), "{err:?}");
+        let text = err.to_string();
+        assert!(text.contains("has not been published yet"), "{text}");
+        assert!(text.contains("build.sh"), "{text}");
+        assert!(text.contains("publish it"), "{text}");
+        assert!(!text.contains("check your network"), "the network is not the problem: {text}");
         assert!(
             !log_lines(&log).iter().any(|line| line.starts_with("network create")),
             "nothing is made before there is something to boot"

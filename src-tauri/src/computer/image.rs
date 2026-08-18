@@ -29,6 +29,14 @@ pub fn is_overridden() -> bool {
     from_env(std::env::var(IMAGE_ENV).ok().as_deref()).is_some()
 }
 
+/// Whether `image` is the placeholder this build ships with rather than
+/// anything a registry has. The placeholder is spelled to say so, and the
+/// pull that fails on it should say so too: "check your network" is wrong
+/// advice for an image nobody has published yet.
+pub fn is_unpublished(image: &str) -> bool {
+    image.ends_with("-unpublished")
+}
+
 /// Taken apart from the environment so both halves can be tested without two
 /// tests racing over one process-wide variable.
 fn image_ref_from(raw: Option<&str>) -> String {
@@ -46,6 +54,13 @@ fn from_env(raw: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_placeholder_is_recognised_as_unpublished_and_a_real_ref_is_not() {
+        assert!(is_unpublished(PINNED.trim()), "the shipped file is the placeholder: {PINNED}");
+        assert!(!is_unpublished("ghcr.io/madebywelch/guaca-computer@sha256:abc"));
+        assert!(!is_unpublished("guaca-computer:dev"));
+    }
 
     #[test]
     fn the_published_reference_is_one_line_and_names_a_tag() {
