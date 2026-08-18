@@ -388,15 +388,21 @@ The initial image should use a pinned Debian stable base and contain:
   `start_desktop` already uses, so the shared desktop code does not fork per
   provider;
 - native Chromium plus a `google-chrome` compatibility wrapper on `PATH`, so
-  `browser.py`, `chrome_flags`, and the shim all keep working unchanged;
-- Firefox ESR, a file manager, and a text editor;
+  `browser.py`, `chrome_flags`, and the shim all keep working unchanged. It is
+  the only browser in the image, because the prompt already tells an agent
+  there is one on this machine, and a second one is a browser `browse` cannot
+  drive and sign-in detection cannot read;
+- a file manager and a text editor;
 - Python 3 with `websocket-client` already installed (E2B installs it on
   first browse; the image should not need the network for that), `curl`, Git,
   CA certificates, `scrot`, FFmpeg, and `xdotool`;
 - Guaca's `browser.py` and `sessions.py`, the Chrome wrapper, and the desktop
   entry;
 - one Chrome profile at `/home/user/.guac/chrome`, regardless of whether the
-  browser was opened from a tool, desktop icon, or file association.
+  browser was opened from a tool, desktop icon, or file association. Every
+  route a click can take names the wrapper: the `x-www-browser` alternative,
+  `mimeapps.list` for `text/html` and the `http`, `https` and `about` schemes,
+  and XFCE's preferred web browser, which reads none of the others.
 
 It must not contain an SSH server, Docker socket, host credential, baked API
 key, or provider token. noVNC listens inside the guest; it is not published to

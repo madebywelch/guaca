@@ -98,6 +98,18 @@ an operator signing in to a browser no agent can use, and detection truthfully
 reporting an empty jar. `build.sh --check` compares the flags in this directory
 against the ones in `desktop.rs` and fails when they drift.
 
+**The same argument is why there is one browser and why the system's defaults
+name it.** A wrapper on `PATH` covers a command; it does not cover a link
+clicked in the file manager, an `xdg-open` in a terminal, or XFCE's own "Open
+Link", each of which resolves the browser somewhere else and would have started
+the packaged Chromium on its own profile. So the image sets all three: the
+`x-www-browser` alternative, `mimeapps.list` in the skeleton, and XFCE's
+preferred-application helper, which reads neither of the other two. Firefox is
+not installed for the same reason rather than for its size — the prompt tells
+an agent there is one browser on this machine, and the machine should agree.
+The skeleton's copies are defaults, not policy: `guaca-init` copies with
+`cp -Rpn`, so an agent that changes its own browser keeps the change.
+
 ## The pinned base
 
 `BASE_DIGEST` and the Dockerfile's `ARG BASE_IMAGE` both name

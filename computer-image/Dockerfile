@@ -52,9 +52,13 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       # what it loads the session's resources with. Both are recommendations of
       # the XFCE packages rather than dependencies.
       dbus-x11 x11-xserver-utils \
-      # The browsers. Chromium is the one Guaca drives; Firefox is there because
-      # an agent asked to check a page in another browser should be able to.
-      chromium firefox-esr \
+      # The browser, singular, and that is the whole design. Everything that
+      # opens a page — `browse`, the desktop icon, a link clicked in the file
+      # manager — is shimmed onto one Chromium profile, because that profile is
+      # the only one `browse` can drive and the only one sign-in detection
+      # reads. The prompt tells agents the same thing in words. A second browser
+      # is 250 MB whose only use is a sign-in nobody can see.
+      chromium \
       # A file manager and an editor, so the desktop is one a person watching
       # over an agent's shoulder can also use.
       thunar mousepad xdg-utils \
@@ -108,6 +112,26 @@ COPY computer-image/google-chrome /usr/local/bin/google-chrome
 RUN chmod 0755 /usr/local/bin/google-chrome \
     && ln -sf /usr/local/bin/google-chrome /usr/local/bin/google-chrome-stable
 
+# The system's answer to "open this in a browser". `x-www-browser` is what
+# Debian's own tools and `sensible-browser` follow, and Chromium claims it when
+# it is installed; left alone it points at `/usr/bin/chromium`, which is the
+# real browser without the flags, so a link opened that way starts a second
+# profile on the machine — the failure `install_chrome_shim` exists to prevent,
+# arriving through a path that file does not cover.
+#
+# `--set` as well as `--install`, so the choice is manual: an `apt-get install`
+# an agent runs cannot outbid it with a higher priority. `gnome-www-browser`
+# only if some package already declares it, because registering a group nothing
+# reads would put a link on the system for a name no program here looks up.
+RUN update-alternatives --install /usr/bin/x-www-browser x-www-browser \
+      /usr/local/bin/google-chrome 200 \
+    && update-alternatives --set x-www-browser /usr/local/bin/google-chrome \
+    && if update-alternatives --list gnome-www-browser >/dev/null 2>&1; then \
+         update-alternatives --install /usr/bin/gnome-www-browser gnome-www-browser \
+           /usr/local/bin/google-chrome 200 \
+         && update-alternatives --set gnome-www-browser /usr/local/bin/google-chrome; \
+       fi
+
 # The home directory the volume gets on its first boot. It cannot be built at
 # `/home/user`, because the volume mounted there hides everything the image put
 # underneath it; `guaca-init` copies this in without overwriting.
@@ -130,6 +154,46 @@ RUN mkdir -p /opt/guaca/home/.local/bin \
 # XDG directory takes precedence over the packaged browser's.
 COPY computer-image/google-chrome.desktop \
      /opt/guaca/home/.local/share/applications/google-chrome.desktop
+
+# And the desktop's own answer to the same question, in the two places a click
+# is resolved. `x-www-browser` above covers a program that asks the system;
+# these cover a person and an agent using the session: `xdg-open` and Thunar
+# read `mimeapps.list`, and XFCE's menu, terminal and "Open Link" read its
+# preferred-application helper, which consults neither. Each route that is not
+# named here opens the packaged Chromium on its own profile, and a sign-in
+# performed there is invisible to `browse` and to detection, with nothing
+# reporting an error — the reasoning in `desktop.rs::install_chrome_shim`,
+# applied to the routes a wrapper on PATH does not intercept.
+#
+# `google-chrome.desktop` is the entry beside this one, in the user's own XDG
+# directory, so the association resolves to the shim rather than to the browser.
+# The helper names the image's copy of the wrapper, which is on every machine
+# whether or not a desktop has ever started.
+#
+# `guaca-init` copies the skeleton with `cp -Rpn`, so these are defaults on a
+# first boot and an agent that changes its own browser keeps the change.
+RUN mkdir -p /opt/guaca/home/.config/xfce4 \
+             /opt/guaca/home/.local/share/xfce4/helpers \
+    && printf '%s\n' \
+       '[Default Applications]' \
+       'text/html=google-chrome.desktop' \
+       'x-scheme-handler/http=google-chrome.desktop' \
+       'x-scheme-handler/https=google-chrome.desktop' \
+       'x-scheme-handler/about=google-chrome.desktop' \
+       'x-scheme-handler/unknown=google-chrome.desktop' \
+       > /opt/guaca/home/.config/mimeapps.list \
+    && printf '%s\n' 'WebBrowser=google-chrome' \
+       > /opt/guaca/home/.config/xfce4/helpers.rc \
+    && printf '%s\n' \
+       '[Desktop Entry]' \
+       'Version=1.0' \
+       'Type=X-XFCE-Helper' \
+       'X-XFCE-Category=WebBrowser' \
+       'X-XFCE-CommandsWithParameter=/usr/local/bin/google-chrome "%s"' \
+       'X-XFCE-Commands=/usr/local/bin/google-chrome' \
+       'Name=Google Chrome' \
+       'Icon=google-chrome' \
+       > /opt/guaca/home/.local/share/xfce4/helpers/google-chrome.desktop
 
 # The skeleton belongs to the account it is copied for, and this must be the
 # last thing that writes into it.
@@ -179,6 +243,8 @@ RUN set -eu; \
     test -x /usr/local/bin/guaca-init; \
     test -x /usr/local/bin/google-chrome; \
     test "$(readlink -f /usr/local/bin/google-chrome-stable)" = /usr/local/bin/google-chrome; \
+    test "$(readlink -f /etc/alternatives/x-www-browser)" = /usr/local/bin/google-chrome; \
+    ! test -x /usr/bin/firefox-esr; \
     python3 -c 'import websocket'; \
     python3 -c 'import sqlite3'; \
     sh -n /usr/local/bin/guaca-init; \
@@ -186,7 +252,12 @@ RUN set -eu; \
     test "$(stat -c %u /opt/guaca/home)" = 1000; \
     test "$(stat -c %u /opt/guaca/home/.local/bin/google-chrome)" = 1000; \
     grep -q 'user-data-dir=/home/user/.guac/chrome' /usr/local/bin/google-chrome; \
-    grep -q '.local/bin' /opt/guaca/home/.profile
+    grep -q '.local/bin' /opt/guaca/home/.profile; \
+    grep -q 'x-scheme-handler/https=google-chrome.desktop' /opt/guaca/home/.config/mimeapps.list; \
+    grep -q 'WebBrowser=google-chrome' /opt/guaca/home/.config/xfce4/helpers.rc; \
+    grep -q '^X-XFCE-Commands=/usr/local/bin/google-chrome$' \
+      /opt/guaca/home/.local/share/xfce4/helpers/google-chrome.desktop; \
+    test "$(stat -c %u /opt/guaca/home/.config/mimeapps.list)" = 1000
 
 # `HOME` is set rather than inherited: a command session that arrives without
 # one resolves `~` somewhere else, and the browser driver that Guaca writes to
