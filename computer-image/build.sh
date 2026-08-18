@@ -112,22 +112,29 @@ stat_field() {
   stat -c "%$1" "$2" 2>/dev/null || stat -f "%$1" "$2"
 }
 
-# `guaca-init` actually run, against a scratch home, with the one thing that
+# `guaca-init` actually run, against a scratch home, with the two things that
 # broke a live machine asserted at the end.
 #
-# The bug: `cp -Rpn "$SKELETON/." "$HOME_DIR/"` applies the *source directory's*
-# own attributes to the destination directory, so a skeleton owned by root hands
-# the volume's mount point back to root — undoing a chown made before the copy,
-# with every command in the boot reporting success. /home/user stayed root's on
-# a real machine and three conformance tests failed on `Permission denied`, none
-# of them anywhere near the cause.
+# The first: `cp -Rpn "$SKELETON/." "$HOME_DIR/"` applies the *source
+# directory's* own attributes to the destination directory, so a skeleton owned
+# by root hands the volume's mount point back to root — undoing a chown made
+# before the copy, with every command in the boot reporting success.
+# /home/user stayed root's on a real machine and three conformance tests failed
+# on `Permission denied`, none of them anywhere near the cause.
 #
 # Ownership needs root to demonstrate, and this rarely runs as root, so the
 # check uses the *group* instead: the same `-p` copies it by the same rule, and
 # an account can change a file's group to any group it belongs to. A machine
 # whose account has only one group cannot show it either, and says so rather
 # than passing quietly.
-check_home_handover() {
+#
+# The second: a stopped container keeps its writable layer, so the X server's
+# lock file outlives a stop. The second boot found it, Xvfb refused the display,
+# and the browser died on a missing one. Those paths are variables in
+# `guaca-init` precisely so that this can point them at the scratch directory —
+# a check that removed the real `/tmp/.X11-unix` would take a running display
+# with it.
+check_boot() {
   local work home skel script other group
 
   other=""
@@ -141,13 +148,16 @@ check_home_handover() {
   work="$(mktemp -d "${TMPDIR:-/tmp}/guaca-boot.XXXXXX")"
   home="$work/home"
   skel="$work/skeleton"
-  mkdir -p "$skel/.local/bin" "$skel/.guac/chrome" "$home/.guac/chrome" "$work/run"
+  mkdir -p "$skel/.local/bin" "$skel/.guac/chrome" "$home/.guac/chrome" "$work/run" \
+    "$work/tmp/.X11-unix"
   printf '%s\n' 'PATH="$HOME/.local/bin:$PATH"' > "$skel/.profile"
   printf '#!/bin/sh\nexit 0\n' > "$skel/.local/bin/google-chrome"
   chmod 0755 "$skel/.local/bin/google-chrome"
-  # What an agent edited on an earlier boot, and what a stopped container left.
+  # What an agent edited on an earlier boot, and what a stopped container left:
+  # a browser lock, a display lock, and the socket beside it.
   printf '%s\n' 'edited by the agent' > "$home/.profile"
   touch "$home/.guac/chrome/SingletonLock"
+  touch "$work/tmp/.X0-lock" "$work/tmp/.X11-unix/X0"
   [ -n "$other" ] && chgrp "$other" "$skel" 2>/dev/null
 
   # The real file, with the guest's absolute paths pointed at the scratch
@@ -157,6 +167,8 @@ check_home_handover() {
   sed -e "s#^HOME_DIR=/home/user#HOME_DIR=$home#" \
     -e "s#^SKELETON=/opt/guaca/home#SKELETON=$skel#" \
     -e "s#^BEAT_DIR=/run/guaca#BEAT_DIR=$work/run#" \
+    -e "s#^X_LOCK=/tmp/.X0-lock#X_LOCK=$work/tmp/.X0-lock#" \
+    -e "s#^X_SOCKETS=/tmp/.X11-unix#X_SOCKETS=$work/tmp/.X11-unix#" \
     -e "s#^GUEST_UID=1000#GUEST_UID=$(id -u)#" \
     -e "s#^GUEST_GID=1000#GUEST_GID=$(id -g)#" \
     -e 's#sleep 30 &#sleep 1 \&#' \
@@ -175,6 +187,12 @@ check_home_handover() {
     || fail "the boot overwrote a file the agent had already edited"
   [ ! -e "$home/.guac/chrome/SingletonLock" ] \
     || fail "the boot left Chrome's SingletonLock behind; the next browser refuses the profile"
+  [ ! -e "$work/tmp/.X0-lock" ] \
+    || fail "the boot left the X display lock behind; Xvfb refuses a display that is already \
+locked, so a machine that has been stopped and started never gets its desktop back"
+  [ ! -e "$work/tmp/.X11-unix" ] \
+    || fail "the boot left the X socket directory behind; a socket in it is the display lock by \
+another name"
 
   if [ -n "$other" ] && [ "$(stat_field g "$skel")" = "$other" ]; then
     group="$(stat_field g "$home")"
@@ -309,7 +327,7 @@ checks() {
   echo "==> checking the image's scripts"
   check_shell
   check_novnc_launcher
-  check_home_handover
+  check_boot
   echo "==> checking what the image and desktop.rs both claim"
   check_chrome_agreement
   check_desktop_paths

@@ -212,6 +212,11 @@ computer-image/README.md because each was found the hard way:
     `Error: unavailable: "Stream unexpectedly closed."`, which says nothing
     about ignore files. Bisected and content-independent: 1938 B builds, 2230 B
     does not. Hence entries and a pointer, with the prose in the README.
+  - A stopped container keeps its writable layer: a file written to /tmp
+    survives a stop and a start, and /tmp is not a separate mount. So a stale
+    /tmp/.X0-lock stopped Xvfb on the second boot and the desktop never came
+    back. PID 1 clears it and the socket directory beside it on every boot, and
+    the provider mounts a tmpfs at /tmp as well.
 CHECKLIST
 
 if [ "$suite" -ne 0 ]; then

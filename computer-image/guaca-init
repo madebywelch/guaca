@@ -29,6 +29,11 @@ SKELETON=/opt/guaca/home
 BEAT_DIR=/run/guaca
 BEAT=$BEAT_DIR/heartbeat
 CHROME_PROFILE=$HOME_DIR/.guac/chrome
+# What the X server leaves behind, spelled here rather than at the one place
+# they are removed so that `build.sh --check` can point them somewhere else and
+# exercise the removal without deleting a real display's socket.
+X_LOCK=/tmp/.X0-lock
+X_SOCKETS=/tmp/.X11-unix
 
 # Who ends up owning the home. Numbers rather than the `user` account, because
 # the number is what the provider asks for: `container exec --uid 1000 --gid
@@ -145,6 +150,22 @@ done
 rm -f "$CHROME_PROFILE/SingletonLock" \
   || echo "guaca-init: $CHROME_PROFILE/SingletonLock is still there; the browser will refuse this \
 profile as in use" >&2
+
+# The same shape of problem one directory over, and the one that made a woken
+# machine useless. Xvfb refuses to start on a display whose lock file already
+# exists, and a stopped container keeps its writable layer: measured on 1.2.2, a
+# file written to /tmp survives a stop and a start. So the second boot found
+# /tmp/.X0-lock from the first, no X server came up, and the browser died with
+# "Missing X server or $DISPLAY" — a desktop that never comes back after a wake,
+# reported as a machine that lost its session.
+#
+# The provider also gives the container a tmpfs at /tmp, which makes this moot
+# there. It is here as well because the image is not only run by that provider,
+# and because a desktop that cannot start is worth two lines in two places.
+rm -f "$X_LOCK"
+# The whole directory: Xvfb makes it again, and a socket left inside it is the
+# same lock by another name.
+rm -rf "$X_SOCKETS"
 
 echo "guaca-init: ready; stopping this machine after ${IDLE}s without a heartbeat" >&2
 

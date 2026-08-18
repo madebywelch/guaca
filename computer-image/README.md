@@ -59,6 +59,18 @@ anything already there. The same boot chowns what it copied, and removes
 Chrome's `SingletonLock`, which a stopped container leaves behind and which
 would otherwise make the next Chrome refuse the profile as "in use".
 
+**A stopped container keeps its writable layer, and two locks in it will stop a
+machine coming back.** That is measured on 1.2.2, not assumed: a file written to
+`/tmp` survives a stop and a start. `SingletonLock` is one; the other is
+`/tmp/.X0-lock`, which Xvfb refuses to start over, so the second boot of a
+machine had no display at all and the browser died on "Missing X server or
+$DISPLAY" — a desktop that never comes back after a wake, which reads as a
+machine that lost its session rather than as a lock file. `guaca-init` removes
+both on every boot, and the socket directory beside the display lock, which is
+the same lock by another name. The provider also gives the container a tmpfs at
+`/tmp`, which makes the X half moot there; the image clears it anyway, because
+the image is not only ever run by that provider.
+
 **PID 1 is root, and that is not a statement about who agents are.** The image
 sets no `USER`, so the init process is root and can hand a freshly created
 volume — an empty filesystem owned by root — to uid 1000 before anything else
