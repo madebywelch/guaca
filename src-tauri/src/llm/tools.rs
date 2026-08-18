@@ -28,8 +28,27 @@ pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 
-/// Tool definitions offered on every agent turn.
-pub fn specs() -> Vec<ToolSpec> {
+/// The tools offered on an agent's turn.
+///
+/// The four that need a machine are left off when no provider can make one and
+/// the agent owns none. Offered anyway, an agent spent a model call learning
+/// from the error what the runtime knew before it asked, and a schema on the
+/// list is a standing invitation to try again next turn. Whether there is a
+/// machine is `ComputerManager::availability`; by here it is one bool, so the
+/// prompt and this list cannot disagree about it.
+pub fn offered(has_computer: bool) -> Vec<ToolSpec> {
+    specs(has_computer)
+        .into_iter()
+        .filter(|spec| has_computer || !needs_computer(&spec.name))
+        .collect()
+}
+
+fn needs_computer(name: &str) -> bool {
+    matches!(name, RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN | BROWSE)
+}
+
+/// Every tool definition, whether or not this workspace can honour it.
+fn specs(has_computer: bool) -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
@@ -264,17 +283,22 @@ pub fn specs() -> Vec<ToolSpec> {
             // for one afternoon's task, a refusal treated as an obstacle to
             // route around, and a crew created and then left waiting because
             // nobody realised a new agent does nothing until it is spoken to.
-            description: "Add an agent to this workspace: a new colleague with its own \
-                          instructions, its own computer and its own memory, which you and \
-                          everyone else can then reach by name with `send_message`. It joins your \
-                          own group and can only ever talk to the agents you can. Create one for a \
-                          role the operator will still need next week; work that ends with this \
-                          conversation belongs to you or to an agent that already exists. The \
-                          operator has to approve it, so this waits for their answer, and their \
-                          answer is final: if they decline, say what you would have created and \
-                          carry on without it. A new agent starts idle and does nothing at all \
-                          until somebody messages it, so send it its first piece of work yourself."
-                .to_string(),
+            description: format!(
+                "Add an agent to this workspace: a new colleague with its own \
+                 instructions, {computer}its own memory, which you and \
+                 everyone else can then reach by name with `send_message`. It joins your \
+                 own group and can only ever talk to the agents you can. Create one for a \
+                 role the operator will still need next week; work that ends with this \
+                 conversation belongs to you or to an agent that already exists. The \
+                 operator has to approve it, so this waits for their answer, and their \
+                 answer is final: if they decline, say what you would have created and \
+                 carry on without it. A new agent starts idle and does nothing at all \
+                 until somebody messages it, so send it its first piece of work yourself.",
+                // The workspace has one answer to this, so an agent with no
+                // machine cannot create a colleague with one. Promised anyway,
+                // the operator gets an agent whose own prompt says otherwise.
+                computer = if has_computer { "its own computer and " } else { "" },
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1052,13 +1076,13 @@ mod tests {
     fn the_desktop_tool_names_a_browser_so_the_agent_knows_it_has_one() {
         // The failure this exists to stop: an agent with a working desktop
         // replying that it has no graphical browser.
-        let spec = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
         assert!(spec.description.contains("google-chrome"), "{}", spec.description);
     }
 
     /// The one description under test, by name.
     fn description(name: &str) -> String {
-        specs().into_iter().find(|s| s.name == name).unwrap().description
+        offered(true).into_iter().find(|s| s.name == name).unwrap().description
     }
 
     #[test]
@@ -1088,7 +1112,7 @@ mod tests {
             "an announcement is legitimate, so the rule has to leave room for one: {spec}"
         );
 
-        let to = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap().parameters
+        let to = offered(true).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap().parameters
             ["properties"]["to"]["description"]
             .as_str()
             .unwrap()
@@ -1215,7 +1239,7 @@ mod tests {
         // Chrome the whole time. It then reported the account missing. Only
         // Chrome is on the profile the accounts live on and the only one
         // `browse` can drive, so it is the only one worth naming.
-        let desktop = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        let desktop = offered(true).into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
         assert!(!desktop.description.contains("firefox"), "{}", desktop.description);
         assert!(desktop.description.contains("google-chrome"), "{}", desktop.description);
         assert!(
@@ -1224,7 +1248,7 @@ mod tests {
             desktop.description
         );
 
-        let browse = specs().into_iter().find(|s| s.name == BROWSE).unwrap();
+        let browse = offered(true).into_iter().find(|s| s.name == BROWSE).unwrap();
         assert!(
             browse.description.contains("drives\n                          Chrome")
                 || browse.description.contains("drives Chrome"),
@@ -1241,7 +1265,7 @@ mod tests {
         // asker could not take, and the grant landed on the wrong agent. A
         // permission obtained and then relayed is a peer's claim again, which
         // is the thing the agent holding the account was right to refuse.
-        let spec = specs().into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
         assert!(spec.description.contains("what you will do yourself"), "{}", spec.description);
         assert!(
             spec.description.contains("send it the work and let it ask"),
@@ -1251,8 +1275,48 @@ mod tests {
     }
 
     #[test]
+    fn without_a_computer_the_tools_that_need_one_are_not_offered() {
+        // Offered anyway, an agent with no machine spends a model call
+        // learning from the error what the runtime knew before it asked, and
+        // a schema on the list is a standing invitation to try again next
+        // turn. Which providers are missing is the manager's business; by here
+        // the answer is only whether there is a machine.
+        let without: Vec<String> = offered(false).into_iter().map(|s| s.name).collect();
+        for tool in [RUN_COMMAND, OPEN_ON_DESKTOP, USE_SCREEN, BROWSE] {
+            assert!(!without.contains(&tool.to_string()), "{tool} needs a machine");
+        }
+        for tool in
+            [DIRECTORY, UPDATE_NOTES, SCHEDULE, SEND_MESSAGE, CREATE_AGENT, REQUEST_PERMISSION]
+        {
+            assert!(without.contains(&tool.to_string()), "{tool} works without one");
+        }
+        assert_eq!(offered(true).len(), 10, "with a machine, everything is offered");
+    }
+
+    #[test]
+    fn a_new_colleague_is_promised_a_computer_only_where_there_are_computers() {
+        // The workspace has one answer to this, so an agent that has no machine
+        // cannot create one that does. Promising it hands the operator a
+        // colleague that reads its own prompt and finds the opposite.
+        let promise = |has_computer| {
+            offered(has_computer)
+                .into_iter()
+                .find(|s| s.name == CREATE_AGENT)
+                .expect("create_agent is offered either way")
+                .description
+        };
+        assert!(promise(true).contains("its own computer"));
+        assert!(!promise(false).contains("its own computer"), "{}", promise(false));
+        assert!(
+            promise(false).contains("its own memory"),
+            "the rest of the sentence still stands: {}",
+            promise(false)
+        );
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
-        let specs = specs();
+        let specs = offered(true);
         assert_eq!(
             specs.len(),
             10,
@@ -1275,7 +1339,7 @@ mod tests {
 
     #[test]
     fn send_message_description_tells_the_model_not_to_block() {
-        let spec = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
         let text = spec.description.to_lowercase();
         assert!(text.contains("non-blocking") || text.contains("asynchronous"));
         assert!(text.contains("do not wait"), "blocking on a reply is the failure mode to prevent");
@@ -1352,7 +1416,7 @@ mod tests {
 
     #[test]
     fn the_send_message_schema_offers_intent_as_a_closed_choice() {
-        let spec = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
         let intent = &spec.parameters["properties"]["intent"];
         assert_eq!(intent["enum"], serde_json::json!(["work", "courtesy"]));
         assert!(
@@ -1556,7 +1620,7 @@ mod tests {
     fn the_memory_tool_asks_for_durable_things_and_forbids_a_transcript_dump() {
         // The description is the only control over what an agent writes, so the
         // selective-write instruction has to survive edits.
-        let spec = specs().into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
         let text = spec.description.to_lowercase();
         // Both words, because the tool is named for one of them and asked for
         // in the other: an agent reading only "notes" here has to guess that
@@ -1657,7 +1721,7 @@ mod tests {
     fn creating_an_agent_offers_no_choice_of_model() {
         // What a new agent costs to run is the operator's call, not a field a
         // model can set on its own behalf.
-        let spec = specs().into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
+        let spec = offered(true).into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
         let properties = spec.parameters["properties"].as_object().unwrap();
         assert!(!properties.contains_key("model"), "{properties:?}");
         assert!(!properties.contains_key("group_id"), "an agent must not place one elsewhere");

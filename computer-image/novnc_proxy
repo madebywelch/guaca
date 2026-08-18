@@ -1,0 +1,38 @@
+#!/bin/sh
+# noVNC's launcher, as `desktop.rs::start_desktop` invokes it:
+#
+#   /opt/noVNC/utils/novnc_proxy --vnc localhost:5900 --listen 6080 --web /opt/noVNC
+#
+# Debian's `novnc` package ships the web assets and `websockify` but its own
+# launcher differs between releases — in some it is a bash script that looks for
+# a certificate and picks its own port. Guaca installs this one over it so that
+# one command works the same on every image it builds, and so the flags above
+# never have to be discovered from whatever the distribution shipped.
+#
+# Defaults match the call site rather than noVNC's, because a launcher invoked
+# with no arguments here should still serve the desktop the app expects.
+set -eu
+
+VNC=localhost:5900
+LISTEN=6080
+WEB=/opt/noVNC
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --vnc) VNC="$2"; shift 2 ;;
+    --listen) LISTEN="$2"; shift 2 ;;
+    --web) WEB="$2"; shift 2 ;;
+    # Anything else is refused rather than skipped. A flag added at the call
+    # site and silently dropped here — with its value then read as another flag
+    # — is a desktop that starts, serves, and is pointed somewhere nobody
+    # asked for. A desktop that does not start at all is the better failure:
+    # `start_desktop` reports it, and this message names the flag.
+    *)
+      echo "novnc_proxy: $1 is not a flag this launcher understands; it takes only" \
+        "--vnc, --listen and --web (see desktop.rs::start_desktop)" >&2
+      exit 2
+      ;;
+  esac
+done
+
+exec websockify --web "$WEB" "$LISTEN" "$VNC"

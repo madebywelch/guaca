@@ -7,7 +7,7 @@ function card(id: string, name: string): AgentCard {
   return {
     id,
     groupId: "g1",
-    sandboxId: null,
+    computerId: null,
     name,
     avatar: "plain",
     color: "#c7d96b",

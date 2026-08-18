@@ -2,10 +2,57 @@ import { useEffect, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import { errorMessage, type GuardLimits } from "../lib/types";
+import {
+  type ComputerProvider,
+  type ComputerProviderStatus,
+  errorMessage,
+  type GuardLimits,
+  type Provider,
+  type ProviderReadiness,
+} from "../lib/types";
 
 interface Props {
   onClose: () => void;
+}
+
+/** What each choice is called, and what it costs to read in one line. */
+const PROVIDERS: { value: ComputerProvider; label: string }[] = [
+  { value: "automatic", label: "Automatic (recommended)" },
+  { value: "appleContainer", label: "Apple Container — local" },
+  { value: "e2b", label: "E2B — hosted" },
+];
+
+const PROVIDER_NAMES: Record<Provider, string> = {
+  appleContainer: "Apple Container",
+  e2b: "E2B",
+};
+
+/** The state as a word. The detail says what to do; this says where it stands. */
+const READINESS: Record<ProviderReadiness, string> = {
+  ready: "ready",
+  notInstalled: "not installed",
+  notRunning: "not running",
+  unsupported: "unsupported",
+  error: "error",
+};
+
+/** Whether a provider could make a machine now, or start something and then. */
+function usable(status: ComputerProviderStatus): boolean {
+  return status.state === "ready" || status.canStart;
+}
+
+/**
+ * Whether the next computer would run on this Mac.
+ *
+ * Named directly, or picked by `automatic` because the local provider is the
+ * first thing it tries and it is ready. An operator who leaves the setting
+ * alone on a Mac with Apple Container installed is choosing local, and should
+ * read the same disclosure as one who said so.
+ */
+function runsLocally(choice: ComputerProvider, statuses: ComputerProviderStatus[]): boolean {
+  if (choice === "appleContainer") return true;
+  if (choice !== "automatic") return false;
+  return statuses.some((status) => status.provider === "appleContainer" && usable(status));
 }
 
 interface LimitField {
@@ -57,12 +104,17 @@ const LIMITS: LimitField[] = [
 export function SettingsDialog({ onClose }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
+  const statuses = useStore((s) => s.computerStatuses);
+  const refreshStatuses = useStore((s) => s.refreshComputerStatuses);
 
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
   const [apiKey, setApiKey] = useState("");
   const [e2bKey, setE2bKey] = useState("");
+  const [provider, setProvider] = useState<ComputerProvider>(
+    settings?.computerProvider ?? "automatic",
+  );
   const [idleMinutes, setIdleMinutes] = useState("");
   const [limits, setLimits] = useState<GuardLimits>(
     settings?.limits ?? {
@@ -86,6 +138,13 @@ export function SettingsDialog({ onClose }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Asked when the dialog opens rather than only at startup: a runtime the
+  // operator installed or started since then answers differently, and this is
+  // the screen they came to to find that out.
+  useEffect(() => {
+    void refreshStatuses();
+  }, [refreshStatuses]);
+
   const save = async () => {
     setBusy(true);
     setStatus(null);
@@ -95,6 +154,7 @@ export function SettingsDialog({ onClose }: Props) {
         baseUrl,
         defaultModel: model,
         limits,
+        computerProvider: provider,
         // Omitted when blank, so saving without retyping keeps the stored key.
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
@@ -102,6 +162,9 @@ export function SettingsDialog({ onClose }: Props) {
       });
       setSettings(next);
       setApiKey("");
+      // A key just added is a provider that can suddenly make a machine, and
+      // the lines below say the opposite until somebody asks again.
+      void refreshStatuses();
       setStatus({ tone: "ok", text: "Saved." });
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -187,6 +250,73 @@ export function SettingsDialog({ onClose }: Props) {
         </label>
 
         <label className="field">
+          <span className="field__label">Default model</span>
+          <input
+            className="input input--mono"
+            value={model}
+            placeholder="anthropic/claude-sonnet-4.5"
+            onChange={(event) => setModel(event.target.value)}
+          />
+          <span className="field__hint">Used for new agents. Each agent can override it.</span>
+        </label>
+
+        <hr className="divider" />
+
+        <h3 className="dialog__title" style={{ fontSize: "0.85rem" }}>
+          Computers
+        </h3>
+        <p className="dialog__lede">
+          An agent's computer is a Linux machine with a desktop, a browser and a shell, shown in the
+          corner of its channel. It can run here on this Mac or in a hosted sandbox.
+        </p>
+
+        <label className="field">
+          <span className="field__label">Computer provider</span>
+          <select
+            className="select"
+            value={provider}
+            onChange={(event) => setProvider(event.target.value as ComputerProvider)}
+          >
+            {PROVIDERS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <span className="field__hint">
+            Who runs computers made from now on. Automatic takes the first one below that is ready.
+          </span>
+        </label>
+
+        <ul className="providers">
+          {statuses.map((status) => (
+            <li className="provider" key={status.provider}>
+              <span className="provider__name">{PROVIDER_NAMES[status.provider]}</span>
+              <span className="provider__state" data-state={status.state}>
+                {READINESS[status.state]}
+              </span>
+              {/* The provider's own words. It knows what is missing on this
+                  Mac; this dialog would be guessing. */}
+              <span className="provider__detail">{status.detail}</span>
+            </li>
+          ))}
+        </ul>
+
+        {runsLocally(provider, statuses) && (
+          <blockquote className="disclosure">
+            Local computers run untrusted agent commands on this Mac. They cannot see host files
+            unless shared, but they may reach services exposed by this Mac or its local network. Use
+            E2B when you need an off-device network boundary.
+          </blockquote>
+        )}
+
+        {provider !== (settings?.computerProvider ?? "automatic") && (
+          <p className="field__hint" style={{ margin: "0 0 0.95rem" }}>
+            Existing computers keep their current provider until you destroy them.
+          </p>
+        )}
+
+        <label className="field">
           <span className="field__label">E2B API key</span>
           <input
             className="input input--mono"
@@ -197,8 +327,7 @@ export function SettingsDialog({ onClose }: Props) {
             onChange={(event) => setE2bKey(event.target.value)}
           />
           <span className="field__hint">
-            Gives every agent its own computer: a desktop and a terminal in a sandbox, shown in the
-            corner of its channel. Without a key that pane stays closed.
+            What the hosted provider runs on. Not needed for a local computer.
           </span>
         </label>
 
@@ -213,19 +342,9 @@ export function SettingsDialog({ onClose }: Props) {
           />
           <span className="field__hint">
             Idle minutes before a machine sleeps. Sleeping keeps its disk, so a browser stays signed
-            in and wakes where it left off. Only the running time is billed.
+            in and wakes where it left off. A hosted machine is only billed while it runs; a local
+            one only takes this Mac's memory while it runs.
           </span>
-        </label>
-
-        <label className="field">
-          <span className="field__label">Default model</span>
-          <input
-            className="input input--mono"
-            value={model}
-            placeholder="anthropic/claude-sonnet-4.5"
-            onChange={(event) => setModel(event.target.value)}
-          />
-          <span className="field__hint">Used for new agents. Each agent can override it.</span>
         </label>
 
         <hr className="divider" />

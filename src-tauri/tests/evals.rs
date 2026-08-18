@@ -563,10 +563,12 @@ mod live {
         Some((h, eval))
     }
 
-    /// Every sandbox this account holds, by id.
+    use guac_lib::computer::provider::ComputerProvider;
+
+    /// Every machine this account holds, by provider id.
     async fn machines_now(config: &guac_lib::config::AppConfig) -> Vec<String> {
-        match guac_lib::e2b::E2bClient::new(&config.e2b.api_key) {
-            Some(client) => client.list_ours().await.unwrap_or_default(),
+        match guac_lib::computer::e2b::E2bProvider::new(&config.e2b.api_key) {
+            Some(provider) => provider.list_owned().await.unwrap_or_default(),
             None => Vec::new(),
         }
     }
@@ -579,21 +581,29 @@ mod live {
     /// leave behind; seventeen survived a cleanup written that way.
     ///
     /// It is also why `Runtime::sweep_computers` cannot be borrowed for this.
-    /// That kills every Guac sandbox its own store does not claim, so run from
+    /// That kills every Guac machine its own store does not claim, so run from
     /// a throwaway store it would spare this crew's machines and take the
     /// operator's running app apart instead.
     async fn release_machines(config: &guac_lib::config::AppConfig, before: Vec<String>) {
-        let Some(client) = guac_lib::e2b::E2bClient::new(&config.e2b.api_key) else {
+        let Some(provider) = guac_lib::computer::e2b::E2bProvider::new(&config.e2b.api_key) else {
             return;
         };
         let existing: std::collections::HashSet<String> = before.into_iter().collect();
-        for sandbox in client.list_ours().await.unwrap_or_default() {
-            if existing.contains(&sandbox) {
+        for machine in provider.list_owned().await.unwrap_or_default() {
+            if existing.contains(&machine) {
                 continue;
             }
-            match client.kill(&sandbox).await {
-                Ok(()) => println!("released {sandbox}"),
-                Err(err) => eprintln!("could not release {sandbox}: {err}"),
+            // The id is the whole address a delete needs; the tokens on a
+            // handle reach *into* a machine and this only removes one.
+            let handle = guac_lib::computer::provider::ProviderHandle {
+                computer: guac_lib::domain::ids::ComputerId::new(),
+                provider_id: machine.clone(),
+                control_secret: guac_lib::domain::computer::Secret::default(),
+                viewer_secret: guac_lib::domain::computer::Secret::default(),
+            };
+            match provider.delete(&handle).await {
+                Ok(()) => println!("released {machine}"),
+                Err(err) => eprintln!("could not release {machine}: {err}"),
             }
         }
     }

@@ -2216,6 +2216,65 @@ button {
   border: 0;
 }
 
+/* One line per provider, under the selector that chooses between them. */
+.providers {
+  list-style: none;
+  margin: -0.35rem 0 0.95rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.provider {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  align-items: baseline;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.provider__name {
+  color: var(--text);
+}
+
+.provider__state {
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Only "ready" is coloured. Every other state is something to read rather
+   than something to worry about, and five colours is a traffic light nobody
+   asked for. */
+.provider__state[data-state="ready"] {
+  color: var(--mint);
+}
+
+.provider__state[data-state="error"],
+.provider__state[data-state="unsupported"] {
+  color: var(--alarm);
+}
+
+.provider__detail {
+  color: var(--faint);
+}
+
+/* What a local computer can reach. Set apart from the hints because it is the
+   one thing on this screen the operator is being asked to accept. */
+.disclosure {
+  margin: 0 0 0.95rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 2px solid color-mix(in oklab, var(--pit) 45%, transparent);
+  background: var(--pit-soft);
+  color: var(--pit);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
 /* The animation is charm; someone who has asked the OS to stop moving things
    should still get a usable app. */
 @media (prefers-reduced-motion: reduce) {

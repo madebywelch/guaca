@@ -11,9 +11,12 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::computer::provider::{ProviderError, ProviderReadiness, ProviderStatus};
+use crate::computer::{Computer, ComputerError};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
+use crate::domain::computer::{Provider, ProviderChoice};
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
@@ -23,7 +26,6 @@ use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
-use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -55,6 +57,7 @@ impl From<crate::db::StoreError> for CommandError {
         match err {
             StoreError::DuplicateName(_) => CommandError::new("duplicateName", err.to_string()),
             StoreError::AgentNotFound(_)
+            | StoreError::ComputerNotFound(_)
             | StoreError::GroupNotFound(_)
             | StoreError::ApprovalNotFound(_)
             | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
@@ -85,6 +88,7 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
+            RuntimeError::Computer(inner) => inner.into(),
         }
     }
 }
@@ -107,14 +111,20 @@ impl From<crate::domain::connector::ConnectorError> for CommandError {
     }
 }
 
-impl From<E2bError> for CommandError {
-    fn from(err: E2bError) -> Self {
-        match err {
-            // Its own kind so the UI can offer to open settings rather than
-            // showing a failure for something that was simply never set up.
-            E2bError::NoKey => CommandError::new("computerUnconfigured", err.to_string()),
-            other => CommandError::new("computer", other.to_string()),
-        }
+impl From<ComputerError> for CommandError {
+    fn from(err: ComputerError) -> Self {
+        // Its own kind so the UI can offer to open settings rather than
+        // showing a failure for something that was simply never set up. Both
+        // shapes count: the manager having no provider to build, and a provider
+        // that exists refusing because there is nothing on this Mac to drive.
+        // The second arrives from inside a provider and used to read as a
+        // machine that broke.
+        let code = match err {
+            ComputerError::Unconfigured(_)
+            | ComputerError::Provider(ProviderError::Unconfigured(_)) => "computerUnconfigured",
+            _ => "computer",
+        };
+        CommandError::new(code, err.to_string())
     }
 }
 
@@ -127,11 +137,6 @@ impl From<config::ConfigError> for CommandError {
 type Reply<T> = Result<T, CommandError>;
 
 // ---- computers -----------------------------------------------------------
-
-/// The E2B client, or a clear reason there is not one.
-fn computers(state: &State<'_, AppState>) -> Reply<E2bClient> {
-    E2bClient::new(&state.runtime.config().e2b.api_key).ok_or_else(|| E2bError::NoKey.into())
-}
 
 fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
     state
@@ -147,31 +152,21 @@ fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::
 /// rather than as an error.
 #[tauri::command]
 pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
-    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
-        return Ok(None);
-    };
-    let client = computers(&state)?;
-
-    if client.state(&sandbox).await? == crate::e2b::SandboxState::Gone {
-        // A reclaimed sandbox leaves a dangling id. Clearing it turns a dead
-        // end into an offer to make a new one. A sleeping one is left alone:
-        // it still holds the disk, and waking it is the operator's call.
-        state.runtime.store().set_agent_sandbox(id, None)?;
-        return Ok(None);
-    }
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(state.runtime.computers().describe(id).await?)
 }
 
 /// Gives an agent a computer, or brings the desktop up on the one it has.
 #[tauri::command]
 pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
     let card = agent_card(&state, id)?;
-    let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
+    let machine = state.runtime.ensure_computer(&card).await?;
 
-    client.start_desktop(&sandbox.id, &sandbox.envd_token).await?;
-    let computer =
-        client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
+    machine.start_desktop().await.map_err(ComputerError::from)?;
+    // Asked again rather than assumed: what the pane draws is where the desktop
+    // is actually serving, and that is only true once it answers.
+    let computer = state.runtime.computers().describe(id).await?.ok_or_else(|| {
+        CommandError::new("computer", "the computer was started but cannot be found; try again")
+    })?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(computer)
 }
@@ -186,26 +181,50 @@ pub async fn stop_agent_computer(
     state: State<'_, AppState>,
     id: AgentId,
 ) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
-    let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
-        return Ok(None);
-    };
-    let client = computers(&state)?;
-    client.pause(&sandbox).await?;
+    let shown = state.runtime.computers().sleep(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(shown)
 }
 
-/// Destroys the sandbox and everything on its disk.
+/// Destroys the machine and everything on its disk.
 #[tauri::command]
 pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
-        return Ok(());
-    };
-    computers(&state)?.kill(&sandbox).await?;
-    state.runtime.store().set_agent_sandbox(id, None)?;
+    state.runtime.computers().destroy(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
+}
+
+/// What one provider would say about itself if asked for a machine now.
+///
+/// The provider's own words, and nothing else it knows: no key, no guest
+/// address, no port and no external id. A `detail` may name where something is
+/// installed, because that is what the operator has to go and change.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerProviderStatus {
+    pub provider: Provider,
+    pub state: ProviderReadiness,
+    /// Whether asking for a computer would start whatever is stopped. The
+    /// `detail` already says so in words; this is for the UI to act on.
+    pub can_start: bool,
+    pub detail: String,
+}
+
+impl From<(Provider, ProviderStatus)> for ComputerProviderStatus {
+    fn from((provider, status): (Provider, ProviderStatus)) -> Self {
+        Self { provider, state: status.state, can_start: status.can_start, detail: status.detail }
+    }
+}
+
+/// Every provider this build knows, in the order `automatic` tries them.
+///
+/// Settings draws one line each. Answered from the manager's cached probes, so
+/// opening the dialog does not spawn a process per provider per render.
+#[tauri::command]
+pub async fn computer_provider_statuses(
+    state: State<'_, AppState>,
+) -> Reply<Vec<ComputerProviderStatus>> {
+    Ok(state.runtime.computers().statuses().await.into_iter().map(Into::into).collect())
 }
 
 // ---- connectors ----------------------------------------------------------
@@ -364,16 +383,14 @@ pub fn update_agent(
 /// that had nothing to do with this agent.
 #[tauri::command]
 pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    // The machine goes first. A deleted agent cannot be asked to tidy up after
-    // itself, and a sandbox nobody holds a reference to keeps billing.
-    let card = agent_card(&state, id)?;
-    // A missing key means no machine was ever made through this build, so there
-    // is nothing to release.
-    if let (Some(sandbox), Ok(client)) = (card.sandbox_id, computers(&state)) {
-        if let Err(err) = client.kill(&sandbox).await {
-            tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
-        }
-    }
+    // Looked up first, so a bad id reads as "no such agent" rather than as a
+    // deletion that quietly did nothing.
+    agent_card(&state, id)?;
+    // The machine goes next. A deleted agent cannot be asked to tidy up after
+    // itself, and a machine nobody holds a reference to keeps billing. A
+    // failure here is written down and retried at startup rather than left to
+    // block the deletion.
+    state.runtime.computers().release(id).await;
 
     state.runtime.store().set_lifecycle(id, Lifecycle::Terminated)?;
     state.runtime.stop_agent(id);
@@ -815,6 +832,7 @@ pub struct SettingsPatch {
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
+    pub computer_provider: Option<ProviderChoice>,
     pub computer_idle_minutes: Option<u32>,
 }
 
@@ -835,10 +853,15 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
     if let Some(key) = patch.e2b_api_key {
         config.e2b.api_key = key.trim().to_string();
     }
+    if let Some(provider) = patch.computer_provider {
+        // Only what a new computer is made with: the ones that exist keep
+        // whoever made them until they are destroyed.
+        config.computer.provider = provider;
+    }
     if let Some(minutes) = patch.computer_idle_minutes {
         // A machine that sleeps after zero minutes can never be used, and one
         // that never sleeps is a bill nobody chose.
-        config.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
+        config.computer.idle_minutes = minutes.clamp(1, 24 * 60);
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();
@@ -893,6 +916,7 @@ pub async fn test_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::computer::Provider;
 
     #[test]
     fn a_duplicate_name_is_distinguishable_from_a_disk_failure() {
@@ -901,6 +925,54 @@ mod tests {
 
         let corrupt: CommandError = crate::db::StoreError::Corrupt("bad row".into()).into();
         assert_eq!(corrupt.kind, "storage");
+    }
+
+    #[test]
+    fn a_provider_that_is_not_installed_is_a_settings_problem_however_it_says_so() {
+        // Two paths reach the window with the same meaning: the manager has no
+        // provider to build, and a provider that exists refuses because there
+        // is nothing on this Mac to drive. Both are "open Settings", and only
+        // the first used to be told apart from a machine that broke.
+        let none: CommandError = ComputerError::Unconfigured("no E2B API key is set".into()).into();
+        assert_eq!(none.kind, "computerUnconfigured");
+
+        let refused: CommandError =
+            ComputerError::Provider(ProviderError::Unconfigured("install the package".into()))
+                .into();
+        assert_eq!(refused.kind, "computerUnconfigured");
+        assert_eq!(refused.message, "install the package", "in the provider's own words");
+
+        // A machine that would not answer is not one of those: offering to open
+        // Settings for it sends the operator to change something that is right.
+        let broken: CommandError =
+            ComputerError::Provider(ProviderError::Unavailable("the runtime hung".into())).into();
+        assert_eq!(broken.kind, "computer");
+    }
+
+    #[test]
+    fn a_provider_status_crosses_ipc_in_camel_case_and_says_nothing_about_a_machine() {
+        // Four fields, and the test names all of them: this is the one type in
+        // the feature that carries a provider's own words to the webview, and
+        // what must never ride along with them is a key, a host path to
+        // anything but an installer, a guest address or an external id.
+        let row = ComputerProviderStatus::from((
+            Provider::AppleContainer,
+            ProviderStatus {
+                state: ProviderReadiness::NotRunning,
+                can_start: true,
+                detail: "Apple Container is installed but stopped. Starting a computer will \
+                         start its service."
+                    .into(),
+            },
+        ));
+        let json = serde_json::to_value(&row).unwrap();
+        let mut keys: Vec<&str> = json.as_object().unwrap().keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["canStart", "detail", "provider", "state"]);
+        assert_eq!(json["provider"], "appleContainer");
+        assert_eq!(json["state"], "notRunning", "the state is one token the UI can switch on");
+        assert_eq!(json["canStart"], true);
+        assert!(json["detail"].as_str().unwrap().contains("Starting a computer"));
     }
 
     #[test]
@@ -949,6 +1021,23 @@ mod tests {
 
         assert_eq!(config.inference.api_key, "sk-typed", "whitespace is trimmed");
         assert!(config.inference.is_ready(), "the typed key must be usable without saving");
+    }
+
+    #[test]
+    fn a_patch_writes_the_computer_settings_where_the_runtime_reads_them() {
+        let mut config = AppConfig::default();
+
+        apply_patch(
+            &mut config,
+            serde_json::from_str(
+                r#"{"computerProvider":"appleContainer","computerIdleMinutes":0}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(config.computer.provider, ProviderChoice::Provider(Provider::AppleContainer));
+        assert_eq!(config.computer.idle_minutes, 1, "a machine that never wakes is unusable");
     }
 
     #[test]

@@ -15,8 +15,10 @@
 
 use std::collections::BTreeMap;
 
+use guac_lib::computer::e2b::E2bProvider;
+use guac_lib::computer::provider::{ComputerProvider, CreateComputer, ExecRequest, ProviderHandle};
 use guac_lib::db::Store;
-use guac_lib::e2b::E2bClient;
+use guac_lib::domain::ids::{AgentId, ComputerId};
 
 /// Two real documents, and something in each that OCR has to come back with.
 ///
@@ -78,22 +80,40 @@ fn credentials_holding(var: &str) -> Option<BTreeMap<String, String>> {
 
 /// A machine with the group's credentials in its environment.
 struct Machine {
-    client: E2bClient,
-    id: String,
-    token: String,
+    provider: E2bProvider,
+    handle: ProviderHandle,
+    /// Carried rather than baked into the provider: credentials belong to the
+    /// command, which is how the runtime hands them over too.
+    env: BTreeMap<String, String>,
 }
 
 impl Machine {
     async fn start(env: BTreeMap<String, String>, key: &str) -> Machine {
-        let client = E2bClient::new(key).expect("an E2B key is configured").with_env(env);
-        let sandbox = client.create("connector-test", 300).await.expect("a machine to work on");
-        Machine { client, id: sandbox.id, token: sandbox.envd_token }
+        let provider = E2bProvider::new(key).expect("an E2B key is configured");
+        let handle = provider
+            .create(&CreateComputer {
+                computer: ComputerId::new(),
+                agent: AgentId::new(),
+                agent_name: "connector-test".into(),
+                idle_seconds: 300,
+            })
+            .await
+            .expect("a machine to work on");
+        Machine { provider, handle, env }
     }
 
     async fn run(&self, command: &str) -> String {
         let out = self
-            .client
-            .run(&self.id, &self.token, command)
+            .provider
+            .exec(
+                &self.handle,
+                ExecRequest {
+                    argv: vec!["/bin/bash".into(), "-l".into(), "-c".into(), command.to_string()],
+                    env: self.env.clone(),
+                    cwd: "/home/user".into(),
+                    timeout: std::time::Duration::from_secs(120),
+                },
+            )
             .await
             .unwrap_or_else(|err| panic!("could not run on the machine: {err}"));
         assert_eq!(
@@ -104,12 +124,12 @@ impl Machine {
         out.stdout
     }
 
-    /// Never left running. A sandbox nobody holds a reference to bills exactly
+    /// Never left running. A machine nobody holds a reference to bills exactly
     /// like a used one, and a failing assertion takes the rest of the test with
     /// it, so this is called before anything that can panic.
     async fn release(&self) {
-        if let Err(err) = self.client.kill(&self.id).await {
-            eprintln!("could not release {}: {err}", self.id);
+        if let Err(err) = self.provider.delete(&self.handle).await {
+            eprintln!("could not release {}: {err}", self.handle.provider_id);
         }
     }
 }

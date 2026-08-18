@@ -1,0 +1,21 @@
+# What the desktop image's build context leaves out.
+#
+# Two things about this file break the build outright if they change: its
+# pattern style and its size. Both are explained in computer-image/README.md,
+# and both are checked by computer-image/build.sh --check. Keep it terse.
+#
+# `src-tauri/src` is deliberately absent: the image copies two files out of it.
+.git
+.github
+.superpowers
+.claude
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+src-tauri/icons
+src-tauri/capabilities
+src-tauri/tests
+docs
+src
+scripts
