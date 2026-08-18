@@ -57,19 +57,26 @@ mod tests {
 
     #[test]
     fn the_placeholder_is_recognised_as_unpublished_and_a_real_ref_is_not() {
-        assert!(is_unpublished(PINNED.trim()), "the shipped file is the placeholder: {PINNED}");
+        // The literal, not `PINNED`: the file is a placeholder until the
+        // maintainer's workflow rewrites it to a digest, and this test must
+        // keep passing on the day it does.
+        assert!(is_unpublished("ghcr.io/madebywelch/guaca-computer:0.1.0-unpublished"));
         assert!(!is_unpublished("ghcr.io/madebywelch/guaca-computer@sha256:abc"));
         assert!(!is_unpublished("guaca-computer:dev"));
     }
 
     #[test]
-    fn the_published_reference_is_one_line_and_names_a_tag() {
+    fn the_published_reference_is_one_line_and_names_a_tag_or_a_digest() {
         // `include_str!` takes the file exactly as it is, so a comment or a
         // second line in it becomes part of the image reference and every pull
-        // fails on a name nobody typed.
+        // fails on a name nobody typed. Before publication the line is a tag;
+        // after it, a digest, which is what the runtime is meant to pull.
         let published = image_ref_from(None);
         assert_eq!(published.lines().count(), 1, "the file is included verbatim: {published:?}");
-        assert!(published.contains("guaca-computer:"), "{published}");
+        assert!(
+            published.contains("guaca-computer:") || published.contains("guaca-computer@sha256:"),
+            "{published}"
+        );
         assert!(!published.contains('#'), "no comment survives the include: {published}");
         assert_eq!(published.trim(), published, "the trim is the only cleaning that happens");
     }
