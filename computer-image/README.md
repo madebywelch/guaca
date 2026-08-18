@@ -36,7 +36,7 @@ image the release was tested with.
 | `google-chrome.desktop` | the entry the desktop icon and the menu read |
 | `novnc_proxy` | the launcher `desktop.rs` calls, installed over Debian's |
 | `build.sh` | build, and the checks that need no builder |
-| `Dockerfile.dockerignore` | what the build context leaves out. An exclude list, never `*` plus `!`: Apple's builder refuses that outright |
+| `Dockerfile.dockerignore` | what the build context leaves out. A short exclude list, never `*` plus `!` and never over ~1.9 KB: Apple's builder refuses both, unhelpfully |
 | `BASE_DIGEST` | the Debian base, pinned |
 | `IMAGE_REF` | what the app pulls. One line, no comment: `image.rs` includes it verbatim |
 
@@ -128,16 +128,47 @@ final `RUN` passes. That settles the half about where packages put their files �
 is the half that would otherwise have been discovered by an operator looking at
 a black rectangle.
 
-Two things that build taught, both now enforced rather than remembered:
+### What that build taught about `Dockerfile.dockerignore`
 
-- Apple's builder **does** read `Dockerfile.dockerignore`. The context transfer
-  drops to 45 B, so the per-Dockerfile form was the right choice over a root
-  one that would have starved `Dockerfile.ci`.
-- It **does not** accept the `*`-then-`!` idiom Docker's own documentation
-  uses. The build fails during context transfer with `changes out of order:
-  "computer-image/google-chrome" ""` — a message naming a file that was let
-  back in rather than the pattern that let it, before any instruction runs.
-  Hence the plain exclude list, and the check in `build.sh` that keeps it one.
+Three things, all of them enforced by `build.sh --check` rather than remembered,
+and all of them found by building rather than by reading documentation. This is
+where the reasoning lives, because two of the three are about the size of that
+file and the third is what happens when someone writes an explanation into it.
+
+**Apple's builder does read it.** The context transfer drops to 45 B, so the
+per-Dockerfile form — `<dockerfile>.dockerignore`, consulted ahead of any
+`.dockerignore` at the context root — was the right choice. A root one is not
+merely redundant here: `Dockerfile.ci` does `COPY . .` and needs the whole
+checkout, so a root ignore file excluding everything would starve it.
+
+**It does not accept `*` plus `!` re-inclusions**, which is the idiom Docker's
+own documentation uses and what this file was first written as. The build fails
+during context transfer with
+
+```text
+#4 ERROR: changes out of order: "computer-image/google-chrome" ""
+```
+
+before any instruction runs, naming a file that was let back in rather than the
+pattern that let it. So the file excludes and never re-includes — which is why
+`src-tauri/src` is absent from it, since the image copies `browser.py` and
+`sessions.py` out of that directory and there is no way to name them back in.
+
+**It must stay under about 1.9 KB.** Above that, `container build` ends
+immediately with
+
+```text
+Error: unavailable: "Stream unexpectedly closed."
+```
+
+which says nothing about ignore files at all. Bisected on a live runtime and
+content-independent: 1938 bytes builds, 2230 bytes does not. Apple's builder
+shim appears to cap that transfer around 2 KB. So the file holds its entries and
+a pointer here, `--check` fails it over 1500 bytes, and every reason for what is
+in it is in this section instead.
+
+The cost of an exclude list, stated once: a new large directory at the
+repository root is in the context until somebody adds it to that file.
 
 What the image does once it boots is still the spike's question, and the
 answers to it are:

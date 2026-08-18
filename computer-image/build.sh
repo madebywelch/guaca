@@ -239,7 +239,7 @@ check_desktop_paths() {
 # context transfer, naming a file rather than the pattern, before any
 # instruction runs.
 check_context() {
-  local ignore copied excluded path rule
+  local ignore copied excluded path rule size
   ignore="$IMAGE_DIR/Dockerfile.dockerignore"
   [ -f "$ignore" ] || fail "the image has no $ignore, so its context is the whole repository"
 
@@ -247,6 +247,16 @@ check_context() {
     fail "$ignore must be a plain exclude list: Apple Container 1.2.2 refuses \`*\` and \`!\` here \
 with \"changes out of order\" during context transfer"
   fi
+
+  # Its size is a build failure too, and a mystifying one: Apple Container 1.2.2
+  # ends the build immediately with `Error: unavailable: "Stream unexpectedly
+  # closed."` when this file is larger than about 1.9 KB. Bisected on a live
+  # runtime, content-independent: 1938 bytes builds, 2230 bytes does not. So the
+  # reasoning about this file lives in the README and the file stays a list.
+  size="$(wc -c < "$ignore" | tr -d '[:space:]')"
+  [ "$size" -lt 1500 ] || fail "$ignore is $size bytes. Apple Container 1.2.2 fails with \
+\"Stream unexpectedly closed.\" above about 1.9 KB, so this file holds entries and a pointer, and \
+the prose belongs in $IMAGE_DIR/README.md"
 
   # Comments and blank lines out; what is left is what the builder will skip.
   excluded="$(grep -vE '^[[:space:]]*(#|$)' "$ignore")"

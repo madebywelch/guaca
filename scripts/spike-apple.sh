@@ -199,6 +199,19 @@ Also worth recording, because constants in the code depend on them:
     must measure this before the constants are committed);
   - how long a first boot takes, and a wake from stopped;
   - what the image weighs, pulled and on disk.
+
+What this spike has already settled about the builder itself, kept in
+computer-image/README.md because each was found the hard way:
+
+  - `container build` does read computer-image/Dockerfile.dockerignore: the
+    context transfer drops to 45 B.
+  - It refuses `*` plus `!` re-inclusions, failing with
+    `changes out of order: "computer-image/google-chrome" ""` before any
+    instruction runs. Hence a plain exclude list.
+  - It refuses that file at all above about 1.9 KB, failing with
+    `Error: unavailable: "Stream unexpectedly closed."`, which says nothing
+    about ignore files. Bisected and content-independent: 1938 B builds, 2230 B
+    does not. Hence entries and a pointer, with the prose in the README.
 CHECKLIST
 
 if [ "$suite" -ne 0 ]; then
