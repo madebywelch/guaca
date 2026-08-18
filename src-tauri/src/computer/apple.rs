@@ -64,6 +64,10 @@ const GUEST_HOME: &str = "/home/user";
 const GUEST_UID: &str = "1000";
 const GUEST_GID: &str = "1000";
 
+/// Mounted fresh on every boot rather than left in the writable layer. See
+/// `container_create_argv` for what a surviving `/tmp` did to the desktop.
+const GUEST_TMP: &str = "/tmp";
+
 /// Long enough for a runtime that is busy with another container, short enough
 /// that an operator's click is not held indefinitely.
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -703,18 +707,25 @@ fn container_create_argv(request: &CreateComputer, installation: &str, image: &s
     // Its own network, never the shared default one: agents on one network can
     // reach each other's desktops, and nothing about that is asked for.
     parts.extend(argv(&["--network", &name]));
-    // The only mount there is. A named volume rather than a bind mount, so
-    // nothing of this Mac's filesystem is inside an agent's machine.
-    parts.extend(argv(&[
-        "--mount",
-        &format!("type=volume,source={name},target={GUEST_HOME}"),
-        "--cpus",
-        CPUS,
-        "--memory",
-        MEMORY,
-        "--shm-size",
-        SHM_SIZE,
-    ]));
+    // The only mount from this Mac. A named volume rather than a bind mount, so
+    // nothing of the host's filesystem is inside an agent's machine.
+    parts.extend(argv(&["--mount", &format!("type=volume,source={name},target={GUEST_HOME}")]));
+    // And a fresh `/tmp` on every boot, which a container does not otherwise
+    // get: stopping one keeps its writable layer, `/tmp` lives in that layer,
+    // so a woken machine starts with the last boot's leftovers still in it.
+    // Measured — a file written to `/tmp` was still there after a stop and a
+    // start, and `/tmp/.X0-lock` from the first boot made Xvfb refuse to start
+    // on the second, which the operator sees as a desktop that never appears
+    // and Chrome saying "Missing X server or $DISPLAY". A real machine clears
+    // `/tmp` at boot; so does this now.
+    //
+    // Two consequences to know about. The desktop's own `/tmp/guac-*.log` files
+    // do not survive a sleep, which is correct: they describe the boot that
+    // wrote them. And `/tmp` is now memory rather than disk, so an agent that
+    // downloads something enormous there spends RAM — its home volume, which is
+    // disk and has a quota, is the place for anything being kept.
+    parts.extend(argv(&["--tmpfs", GUEST_TMP]));
+    parts.extend(argv(&["--cpus", CPUS, "--memory", MEMORY, "--shm-size", SHM_SIZE]));
     for capability in DROPPED_CAPABILITIES {
         parts.extend(argv(&["--cap-drop", capability]));
     }
@@ -1381,10 +1392,18 @@ mod tests {
                 // one network can reach each other's desktops.
                 "--network",
                 name.as_str(),
-                // The home that survives sleeping, and the only mount there is.
-                // No bind mount, so nothing of the Mac's filesystem is in here.
+                // The home that survives sleeping, and the only mount from this
+                // Mac. No bind mount, so nothing of the host's filesystem is in
+                // here.
                 "--mount",
                 mount.as_str(),
+                // And a `/tmp` that does *not* survive sleeping. A container
+                // keeps its writable layer across a stop, so without this a
+                // woken machine still holds the last boot's `/tmp/.X0-lock` and
+                // Xvfb refuses to start on it: no desktop, and Chrome saying
+                // "Missing X server or $DISPLAY".
+                "--tmpfs",
+                "/tmp",
                 "--cpus",
                 "4",
                 "--memory",
