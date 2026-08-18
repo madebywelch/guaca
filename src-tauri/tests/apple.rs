@@ -43,6 +43,9 @@ use guac_lib::computer::provider::{
 use guac_lib::computer::Machine;
 use guac_lib::domain::ids::{AgentId, ComputerId};
 use guac_lib::proxy::ViewerResolver;
+// The real thing rather than a copy of it: a suite that carried its own idea of
+// how big a write is passed while the app failed on the same guest.
+use guac_lib::runtime::{place_command, INBOX, MAX_GUEST_ARG, PLACE_CHUNK};
 
 /// The installation label everything this suite makes carries. Its own, so
 /// `list_owned` here answers about this suite and never about a machine the app
@@ -53,11 +56,6 @@ const INSTALLATION: &str = "apple-spike";
 /// `desktop::VNC_PORT` is crate-internal, and because this is the number the
 /// isolation test asks a second machine to fail to reach.
 const VNC_PORT: u16 = 6080;
-
-/// Base64 characters per write when placing a file, matching `runtime::place`.
-/// The point of the number is that a real attachment takes several of them, and
-/// a test that sends one chunk never exercises the append.
-const PLACE_CHUNK: usize = 192 * 1024;
 
 /// Long enough for a first boot with an XFCE session in it.
 const SETTLE: Duration = Duration::from_secs(180);
@@ -442,16 +440,19 @@ async fn a_binary_file_arrives_on_a_machine_byte_for_byte() {
     let encoded = encode(&bytes);
     assert!(encoded.len() > PLACE_CHUNK, "the sample must take more than one write");
 
-    let path = "/home/user/inbox/spike.bin";
+    let path = format!("{INBOX}/spike.bin");
     let mut first = true;
     for chunk in encoded.as_bytes().chunks(PLACE_CHUNK) {
         let chunk = String::from_utf8_lossy(chunk);
         let redirect = if first { ">" } else { ">>" };
-        spike
-            .run(&format!(
-                "mkdir -p /home/user/inbox && printf %s '{chunk}' | base64 -d {redirect} '{path}'"
-            ))
-            .await;
+        let command = place_command(&chunk, redirect, &path);
+        // The live failure this closes: the whole write travels as one argv
+        // string, Linux caps that at 128 KiB, and what comes back from over the
+        // line is "failed to exec" — which names neither the file nor the
+        // limit. Asserted here as well as in the unit test because this is the
+        // one place a real kernel is on the other end.
+        assert!(command.len() < MAX_GUEST_ARG, "one write is {} bytes", command.len());
+        spike.run(&command).await;
         first = false;
     }
 

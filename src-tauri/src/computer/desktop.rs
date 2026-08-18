@@ -42,6 +42,24 @@ const CHROME_PROFILE: &str = "/home/user/.guac/chrome";
 /// hold an agent's turn open indefinitely.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// How long the browser gets to open its remote interface, and how often it is
+/// asked.
+///
+/// A budget rather than a count of tries, because what varies is the machine
+/// and not the number of questions. This was ten back-to-back checks, which on
+/// a local machine is about three seconds of asking: enough for a browser on a
+/// warm machine, and not enough after a wake, where Xvfb, the session, the VNC
+/// server and Chromium all start together on a VM that has just booted. Timed
+/// by hand there, the port opens about a second after Chromium itself is up,
+/// so what ran out was the budget rather than the browser — and what an agent
+/// saw was a tool that said the browser had no remote interface.
+const BROWSER_WAIT: Duration = Duration::from_secs(20);
+const BROWSER_POLL: Duration = Duration::from_millis(500);
+
+/// The budget, in questions. One is asked immediately and the rest are a poll
+/// apart, so the whole wait is what `BROWSER_WAIT` says it is.
+const BROWSER_ATTEMPTS: u32 = (BROWSER_WAIT.as_millis() / BROWSER_POLL.as_millis()) as u32;
+
 impl Machine {
     /// Brings up the desktop: framebuffer, session, VNC server, noVNC bridge.
     ///
@@ -126,7 +144,13 @@ impl Machine {
 
         // Chrome takes a moment to open the port, and a browse that arrives
         // first fails in a way that reads as the tool being broken.
-        for _ in 0..10 {
+        for attempt in 0..BROWSER_ATTEMPTS {
+            if attempt > 0 {
+                // Waited out on the host. A `sleep` inside the command would
+                // spend the exec's own deadline and hold a connection open for
+                // the whole of it.
+                tokio::time::sleep(BROWSER_POLL).await;
+            }
             let up = self
                 .run_plain(&format!("{} 2>/dev/null && echo up || echo down", port_open(CDP_PORT)))
                 .await?;
@@ -483,7 +507,77 @@ fn install_chrome_shim() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::computer::fake::FakeProvider;
+    use crate::computer::provider::ProviderHandle;
     use crate::computer::VIEWER_HOST;
+    use crate::domain::computer::Secret;
+    use crate::domain::ids::ComputerId;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    fn machine(provider: Arc<FakeProvider>) -> Machine {
+        let handle = ProviderHandle {
+            computer: ComputerId::new(),
+            provider_id: "m".into(),
+            control_secret: Secret::default(),
+            viewer_secret: Secret::default(),
+        };
+        Machine::new(provider, handle, BTreeMap::new(), 0)
+    }
+
+    fn said(what: &str) -> Output {
+        Output { stdout: what.into(), stderr: String::new(), exit_code: 0 }
+    }
+
+    /// How many times the port was asked whether the browser is listening.
+    fn port_checks(provider: &FakeProvider) -> usize {
+        provider
+            .execs
+            .lock()
+            .iter()
+            .filter(|request| request.argv.join(" ").contains("echo up"))
+            .count()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_browser_is_given_time_rather_than_a_number_of_questions() {
+        // What this closes: after a wake, Xvfb, the session, the VNC server and
+        // Chromium all start together on a VM that has just booted, and ten
+        // back-to-back checks are about three seconds of asking. The browser
+        // was fine; the budget was not, and what the agent read was that its
+        // browser had no remote interface.
+        let provider = Arc::new(FakeProvider::default());
+        *provider.matched.lock() =
+            vec![("echo up".to_string(), vec![said("down"), said("down"), said("up")])];
+
+        let started = tokio::time::Instant::now();
+        machine(provider.clone())
+            .ensure_browser()
+            .await
+            .expect("the port opened while there was still budget");
+
+        assert_eq!(port_checks(&provider), 3, "it stopped asking the moment the port answered");
+        assert!(
+            started.elapsed() >= BROWSER_POLL * 2,
+            "the questions were a poll apart rather than back to back"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_browser_that_never_opens_its_port_is_reported_once_the_budget_is_spent() {
+        let provider = Arc::new(FakeProvider::default());
+        *provider.matched.lock() = vec![("echo up".to_string(), vec![said("down")])];
+
+        let err =
+            machine(provider.clone()).ensure_browser().await.expect_err("the port never opened");
+
+        assert!(err.to_string().contains("did not open its remote interface"), "{err}");
+        assert_eq!(
+            port_checks(&provider),
+            BROWSER_ATTEMPTS as usize,
+            "the whole budget was spent before giving up"
+        );
+    }
 
     /// Connect's JSON mapping sends `bytes` as base64, and the encoder above is
     /// the one that has to survive it, so the pair is asserted rather than

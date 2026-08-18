@@ -1279,6 +1279,12 @@ pub(crate) mod fake {
         stopping: Mutex<u32>,
         /// What every exec answers with, in order; the last one repeats.
         pub replies: Mutex<Vec<Output>>,
+        /// What a command containing this needle answers with, in order, with
+        /// the last one repeating. Read before `replies`, so a test that cares
+        /// about one command in a long sequence does not have to count the ones
+        /// it does not care about — and does not break when a step is added to
+        /// a sequence it never mentioned.
+        pub matched: Mutex<Vec<(String, Vec<Output>)>>,
         /// What `probe` answers. `None` is ready: a fake that had to be told it
         /// works before it would work is one every existing test would have to
         /// set up.
@@ -1292,6 +1298,16 @@ pub(crate) mod fake {
         /// heartbeat, stops at shutdown, and sweeps behind the gate.
         pub fn local() -> Self {
             Self { kind: Mutex::new(Some(Provider::AppleContainer)), ..Self::default() }
+        }
+
+        /// The next answer scripted for a command like this one, if any.
+        fn scripted(&self, command: &str) -> Option<Output> {
+            let mut matched = self.matched.lock();
+            let (_, answers) =
+                matched.iter_mut().find(|(needle, _)| command.contains(needle.as_str()))?;
+            // The last one stays: "down, down, up" means up from then on, which
+            // is how a port that opens behaves.
+            Some(if answers.len() > 1 { answers.remove(0) } else { answers.first()?.clone() })
         }
     }
 
@@ -1405,7 +1421,11 @@ pub(crate) mod fake {
             _handle: &ProviderHandle,
             request: ExecRequest,
         ) -> Result<Output, ProviderError> {
+            let command = request.argv.join(" ");
             self.execs.lock().push(request);
+            if let Some(scripted) = self.scripted(&command) {
+                return Ok(scripted);
+            }
             let replies = self.replies.lock();
             let n = self.execs.lock().len();
             Ok(replies.get(n - 1).or(replies.last()).cloned().unwrap_or(Output {
