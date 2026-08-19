@@ -1217,7 +1217,12 @@ impl Runtime {
         let mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
-            None if assigned => ReplyMode::Assigned,
+            // A routine coming due is the other way an agent is handed work
+            // with nobody waiting on its words: the instruction arrives from
+            // the system, so it matched neither arm above and landed in the
+            // mode that says nothing is being asked and silence is usually
+            // right. Every routine a real model kept was answered that way.
+            _ if assigned => ReplyMode::Assigned,
             _ => ReplyMode::NoteOnly,
         };
 
