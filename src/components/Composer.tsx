@@ -1,20 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { onFileDrop } from "../lib/ipc";
+import { fileUrl, previewKind, readableSize } from "../lib/files";
+import { api, onFileDrop } from "../lib/ipc";
 import { applyMention, matchMentions, mentionAt } from "../lib/mentions";
 import { useLiveAgents } from "../lib/store";
+import { type Attachment, errorMessage } from "../lib/types";
 
 interface Props {
   placeholder: string;
   disabled?: boolean;
   disabledReason?: string;
-  onSend: (text: string, files: string[]) => Promise<void>;
-}
-
-/** The last segment of a path, which is what a person calls the file. */
-function basename(path: string): string {
-  return path.split(/[/\\]/).pop() || path;
+  onSend: (text: string, files: Attachment[]) => Promise<void>;
 }
 
 export function Composer({ placeholder, disabled, disabledReason, onSend }: Props) {
@@ -23,21 +20,40 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
   const [caret, setCaret] = useState(0);
   const [highlighted, setHighlighted] = useState(0);
   const [dismissed, setDismissed] = useState(false);
-  const [files, setFiles] = useState<string[]>([]);
+  const [files, setFiles] = useState<Attachment[]>([]);
+  /** What was dropped and could not be taken, in the words the runtime used. */
+  const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
 
   // Dropping anywhere on the window attaches to whatever channel is open,
   // because the alternative is a small target the operator has to aim at while
   // holding a file.
+  //
+  // The file is taken into the store on the drop rather than on the send, so a
+  // document too big to go is refused while they are still holding it and a
+  // picture can be shown back to them before it goes.
   useEffect(() => {
     if (disabled) return;
     const stopping = onFileDrop({
       over: setDragging,
-      dropped: (paths) =>
-        // Same file twice is one attachment: a second drop of the same
-        // document is a person making sure, not a request to send it twice.
-        setFiles((held) => [...held, ...paths.filter((p) => !held.includes(p))]),
+      dropped: (paths) => {
+        void api
+          .stageFiles(paths)
+          .then((staged) => {
+            // The same file twice is one attachment, by content rather than by
+            // path: a second drop is a person making sure, and one document
+            // saved in two places is still one document.
+            setFiles((held) => [
+              ...held,
+              ...staged.attached.filter(
+                (file) => !held.some((have) => have.digest === file.digest),
+              ),
+            ]);
+            setRefused(staged.refused);
+          })
+          .catch((error) => setRefused([errorMessage(error)]));
+      },
     });
     return () => {
       void stopping.then((stop) => stop());
@@ -89,6 +105,7 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
     // leaving the draft in place makes it look like nothing happened.
     setText("");
     setFiles([]);
+    setRefused([]);
     try {
       await onSend(body, files);
     } catch {
@@ -140,14 +157,43 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
     <div className="composer" data-dragging={dragging || undefined}>
       {files.length > 0 && (
         <ul className="composer__files" aria-label="Attached files">
-          {files.map((path) => (
-            <li key={path} className="chip">
-              <span className="chip__name">{basename(path)}</span>
+          {files.map((file) => (
+            <li key={file.digest} className="chip">
+              {previewKind(file.mime) === "image" && (
+                // The picture rather than its name: an operator who has dropped
+                // three screenshots cannot tell them apart from
+                // `Screenshot 2026-08-17 at 14.02.11.png` three times over.
+                <img className="chip__thumb" src={fileUrl(file)} alt="" />
+              )}
+              <span className="chip__name">{file.name}</span>
+              <span className="chip__size">{readableSize(file.bytes)}</span>
               <button
                 type="button"
                 className="chip__remove"
-                aria-label={`Remove ${basename(path)}`}
-                onClick={() => setFiles((held) => held.filter((p) => p !== path))}
+                aria-label={`Remove ${file.name}`}
+                onClick={() =>
+                  setFiles((held) => held.filter((have) => have.digest !== file.digest))
+                }
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {refused.length > 0 && (
+        // Said where the attachments are, not as a banner over the app: the
+        // operator is looking at what they just dropped, and the one that did
+        // not arrive belongs beside the ones that did.
+        <ul className="composer__refused" aria-label="Files that could not be attached">
+          {refused.map((why) => (
+            <li key={why} className="chip chip--error">
+              <span className="chip__text">{why}</span>
+              <button
+                type="button"
+                className="chip__remove"
+                aria-label={`Dismiss: ${why}`}
+                onClick={() => setRefused((held) => held.filter((line) => line !== why))}
               >
                 ×
               </button>

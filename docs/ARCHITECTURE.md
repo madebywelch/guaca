@@ -267,6 +267,41 @@ which is where an agent that *produced* a document has it. The operator's end is
 the same pipe: `dragDropEnabled` hands Rust the dropped paths, so the bytes are
 read on the Rust side and never enter the webview.
 
+**A drop is taken into the store before anything is sent.** `stage_files` runs
+on the drop, which is what lets the app refuse a 40 MB archive while the
+operator is still holding it rather than failing the message they went on to
+write, and lets it show a picture back to them, since by then it has an address.
+One file failing does not refuse the rest of the drop. What the send then
+carries is a digest and a name, and the runtime resolves both against its own
+store: the size and the type on the message are read off the disk, not taken
+from the webview.
+
+**The webview reads a file over a URL, not over IPC.** `guacfile://localhost/
+{digest}/{name}` is answered out of the file store by `app.rs`, so a preview is
+fetched once, by the one element drawing it, only while that element is on
+screen, and the webview caches and ranges it. Handing the same bytes back over
+IPC would give up exactly what content-addressing them bought: IPC is where the
+transcript travels, in bulk. The scheme is also narrower than Tauri's asset
+protocol, which opens a scoped part of the disk; nothing is addressable here but
+a digest this app stored, and a digest that is not 64 hex characters is refused
+before it is ever joined onto a path. The name in the URL decides the type of
+the answer and nothing else.
+
+A transcript draws what it can of a file rather than naming it: a picture, a
+document's first page in the webview's own viewer, the first lines of anything
+textual, and for the rest a row saying what it is. Each opens a full view, and
+each offers a copy into the downloads folder, whose path is said out loud
+because a file saved somewhere the operator has to go looking for has not really
+been saved.
+
+One exception, and it is WebKit's. A custom scheme is allowed in an `img` and a
+`fetch` if the CSP names it, and refused in a frame however it is named, with no
+violation event and no console line to say so. A PDF is drawn by the webview's
+own viewer and that viewer only runs in a frame, so a document is fetched over
+the scheme like everything else and handed to the frame as a `blob:` URL. That
+is the one place a file's bytes sit in the renderer: the copy is made when the
+frame comes near the viewport and revoked when it leaves.
+
 Two limits worth knowing: 25 MB in, and 8 MB onto a machine, because bytes reach
 a sandbox as base64 inside a shell command. A real upload endpoint is the fix
 for the second.

@@ -14,6 +14,7 @@ use tauri::State;
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
+use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft};
@@ -31,6 +32,10 @@ use crate::runtime::Runtime;
 pub struct AppState {
     pub runtime: Runtime,
     pub config_path: PathBuf,
+    /// Where a saved copy of an attachment lands. Resolved once at startup:
+    /// the operating system's own downloads folder is the one place a person
+    /// already knows to look.
+    pub downloads: PathBuf,
 }
 
 /// A structured error the UI can render as more than a toast.
@@ -552,37 +557,99 @@ pub fn search(state: State<'_, AppState>, query: String, limit: Option<u32>) -> 
     Ok(state.runtime.store().search(query.trim(), limit.unwrap_or(20).min(100))?)
 }
 
-/// Sends the operator's message, with anything they dropped on the window.
+/// What became of a drop.
+#[derive(Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Staged {
+    pub attached: Vec<Attachment>,
+    /// One line per file that could not be taken, saying which and why.
+    pub refused: Vec<String>,
+}
+
+/// Takes what the operator dropped on the window into the store, there and then.
 ///
-/// `files` are paths on the operator's own disk, never bytes: the webview hands
-/// over what was dropped and this side reads it, so a document never crosses
-/// IPC and never sits in the renderer's memory.
+/// On the drop rather than on the send, for two reasons they feel. A file too
+/// big to send is refused while they are still holding it, instead of failing a
+/// message they have since written; and a picture that is already stored has an
+/// address, so it can be shown back to them before it goes. What is staged and
+/// never sent is the same leftover as a file whose message was deleted, and the
+/// store has always kept those.
+///
+/// `paths` are on the operator's own disk, never bytes: this side reads them,
+/// so a document never crosses IPC and never sits in the renderer's memory.
+#[tauri::command]
+pub fn stage_files(state: State<'_, AppState>, paths: Vec<String>) -> Reply<Staged> {
+    let mut staged = Staged::default();
+    for path in &paths {
+        match state.runtime.files().take(std::path::Path::new(path)) {
+            Ok(file) => staged.attached.push(file),
+            // One file out of five failing does not refuse the other four. The
+            // operator picked all of them deliberately, and the one that cannot
+            // go is named so they know which it was.
+            Err(err) => staged.refused.push(err.to_string()),
+        }
+    }
+    Ok(staged)
+}
+
+/// A file the operator has already dropped, as the webview refers to it.
+///
+/// Two fields and no more: which bytes, and what to call them. Everything else
+/// about an attachment is worked out on this side.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileRef {
+    pub digest: String,
+    pub name: String,
+}
+
+/// Sends the operator's message, with anything they attached to it.
+///
+/// The files are already in the store by now: `stage_files` put them there when
+/// they were dropped. This resolves each one again rather than trusting what
+/// came back over IPC, so a message carries a file the operator actually has.
 #[tauri::command]
 pub fn send_message(
     state: State<'_, AppState>,
     agent_id: AgentId,
     text: String,
-    files: Option<Vec<String>>,
+    files: Option<Vec<FileRef>>,
 ) -> Reply<RunId> {
     let trimmed = text.trim();
-    let paths = files.unwrap_or_default();
+    let files = files.unwrap_or_default();
     // A file on its own is a message. "Here, read this" with the document
     // attached is the most natural way to send one, and rejecting it as empty
     // would be the app arguing with the operator.
-    if trimmed.is_empty() && paths.is_empty() {
+    if trimmed.is_empty() && files.is_empty() {
         return Err(CommandError::new("validation", "message must not be empty"));
     }
 
     let mut attached = Vec::new();
-    for path in &paths {
-        match state.runtime.files().take(std::path::Path::new(path)) {
+    for file in &files {
+        match state.runtime.files().reference(&file.digest, &file.name) {
             Ok(file) => attached.push(file),
-            // Named, because the operator picked this file deliberately and a
+            // Named, because the operator attached this file deliberately and a
             // message that quietly went without it is worse than an error.
             Err(err) => return Err(CommandError::new("file", err.to_string())),
         }
     }
     Ok(state.runtime.send_from_human_with(agent_id, trimmed, attached)?)
+}
+
+/// Puts a copy of a stored file where a person can get at it, and says where.
+///
+/// The downloads folder, not a save dialog: the operator asked for the file,
+/// not for a conversation about where to put it. The path goes back so the app
+/// can say where to look, since a copy that lands somewhere unannounced is a
+/// copy they have to go and find.
+#[tauri::command]
+pub fn save_file(state: State<'_, AppState>, digest: String, name: String) -> Reply<String> {
+    let saved = state
+        .runtime
+        .files()
+        .save_copy(&digest, &name, &state.downloads)
+        .map_err(|err| CommandError::new("file", err.to_string()))?;
+    Ok(saved.display().to_string())
 }
 
 /// Sends a failed turn's message again, as a new run.
