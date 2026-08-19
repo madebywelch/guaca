@@ -33,7 +33,19 @@ and expects no reply, and reading the first as the second put that turn in the
 mode that says nothing is being asked of it and silence is usually right. A real
 send to the operator's own address died there: the agent spent a call, said
 nothing, and looked like it had stopped. `ReplyMode::Assigned` is that
-combination, and its output is still a note.
+combination, and its output is still a note. A routine coming due is the other
+way in, and it arrives from neither the operator nor a peer: it matched no arm
+of that match and fell through to the silent mode, so every schedule an agent
+kept was answered by an agent that had just been told nothing was being asked of
+it. Anything carrying work is `Assigned`, whoever sent it.
+
+**A pipeline spends two hops per phase, so the hop limit is four phases, not
+eight.** A coordinator working through specialists in sequence is one hop out
+and one hop back each time, and the next instruction starts from where the last
+answer landed rather than from the operator. Eight hops of honest depth is
+therefore four rounds of delegate-and-read, which is the arithmetic to do before
+raising or lowering `max_hops`. The eval suite holds both halves: three phases
+at hop six, and a fifth phase refused with the depth it had reached.
 
 **Whether a send is "answering" is a question about the run, not the batch.**
 Replies land milliseconds apart and an actor drains whatever is in its inbox, so
@@ -71,6 +83,18 @@ for. `pair_messages` reads both directions from the messages themselves; the
 channel only summarises, in `lib/transcript.ts`. A refusal never folds into that
 summary: it is the runtime stopping a message rather than a message. See
 `docs/ARCHITECTURE.md`.
+
+**A channel names nobody, and that is not a missing feature.** It has two
+participants: the agent it is named after, at the top of the pane, and the
+person reading it. A name and a clock over every message is two lines of chrome
+carrying one fact, and four replies written inside the same minute drew four of
+them. The portrait says which agent and the side of the column says whether the
+words are yours. `named` is how the pair's own thread asks for the names back,
+because there both participants are agents and neither is the reader. The clock
+went with them: it is a hover on the row, and `transcriptRows` draws one line
+where the silence ran past half an hour, which is the only place a time ever
+changed what the operator understood. That line also ends whatever burst was
+open, because two exchanges three hours apart are two things that happened.
 
 **A repeat is a shape, not a number of seconds.** `every weekday` and `every
 month` cannot be gaps, and `every day` should not be one: a day is 23 or 25

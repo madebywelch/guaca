@@ -675,6 +675,42 @@ button {
   margin: 0;
 }
 
+/* An agent that will not answer, said once. It replaces a Pause button whose
+   label was the only place this was written down, which meant reading a
+   control to find out a state. */
+.pane__flag {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--pit);
+  background: var(--pit-soft);
+  border-radius: 99px;
+  padding: 0.14rem 0.45rem;
+  flex: none;
+}
+
+/* Everything you can do to this agent, behind one glyph. Three text buttons
+   over the transcript competed with the title for a row that is read once. */
+.pane__more {
+  margin-left: auto;
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.pane__more:hover,
+.pane__more:focus-visible {
+  color: var(--text);
+  background: var(--sunken);
+}
+
 .pane__scroll {
   flex: 1;
   overflow-y: auto;
@@ -687,11 +723,26 @@ button {
   padding: 1.1rem 0 0.6rem;
 }
 
+/* ==========================================================================
+   Messages
+
+   An agent's words are paper: full measure, a portrait in the gutter, nothing
+   over the top of them. Yours are a bubble against the right edge. That is the
+   whole of the attribution in a channel, and it is enough, because a channel
+   has exactly two participants and one of them is you. What it replaces was a
+   name and a clock over every message, which in a run of four replies written
+   in the same minute is four headers carrying one fact between them.
+
+   The pair's own thread still writes the names out: both participants there
+   are agents, and neither of them is the person reading.
+   ========================================================================== */
+
 .msg {
+  position: relative;
   display: grid;
   grid-template-columns: 2.1rem 1fr;
   gap: 0.75rem;
-  padding: 0.35rem 1.5rem 0.35rem 1.15rem;
+  padding: 0.3rem 1.5rem 0.3rem 1.15rem;
 }
 
 .msg:hover {
@@ -700,6 +751,45 @@ button {
 
 .msg--continued {
   padding-top: 0;
+}
+
+.msg__gutter {
+  grid-column: 1;
+}
+
+/* A measure, not the width of the window. Nothing else in the transcript
+   constrains these now that the names and clocks are gone, and on a wide window
+   a paragraph ran a hundred and twenty characters to the line, which is a line
+   the eye loses its place on coming back to the left margin. */
+.msg__body {
+  grid-column: 2;
+  min-width: 0;
+  max-width: 42rem;
+}
+
+/* Yours: no portrait, no gutter, and held off the right edge. Nothing in the
+   log has to say who wrote it, because the side it is on already has. */
+.msg[data-operator="true"] {
+  grid-template-columns: 1fr;
+  justify-items: end;
+  padding-left: 4rem;
+}
+
+.msg[data-operator="true"] .msg__body {
+  grid-column: 1;
+  /* Shorter than an agent's. What you type is a question or an instruction,
+     and a bubble is the wrong shape for anything longer than a few lines. */
+  max-width: min(32rem, 100%);
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--flesh-soft);
+}
+
+/* Two of your own in a row are two bubbles with air between them. No tail on
+   either: which one a tail belongs on is a question about the end of a run,
+   and a transcript row does not know it is the last of one. */
+.msg--continued[data-operator="true"] .msg__body {
+  margin-top: 0.15rem;
 }
 
 .msg__head {
@@ -717,17 +807,41 @@ button {
   letter-spacing: -0.003em;
 }
 
-/* Your own messages sit quieter than the agents'. No portrait, and the name
-   recedes: in your own log you are context, not a participant to identify. */
-.msg[data-operator="true"] .msg__author {
-  font-weight: 500;
-  opacity: 0.72;
+/* Out of the flow entirely, so revealing it moves nothing. Every message has a
+   time; almost none of them are worth a line of their own, and the transcript
+   already draws a line wherever the gap was long enough to notice. */
+.msg__at {
+  position: absolute;
+  top: 0.42rem;
+  right: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
 }
 
-.msg__time {
+.msg[data-operator="true"] .msg__at {
+  right: auto;
+  left: 1.15rem;
+}
+
+.msg:hover .msg__at {
+  opacity: 1;
+}
+
+/* When a conversation picked up again. The only clock a transcript draws
+   unasked, and it is drawn where the answer changed. */
+.when-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.75rem 1.5rem 0.45rem;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
-  font-variant-numeric: tabular-nums;
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
   color: var(--faint);
 }
 
@@ -1185,26 +1299,29 @@ button {
    `.pane__scroll` computes its `overflow-x` to `auto` because `overflow-y` is
    set, so the whole transcript earned a horizontal scrollbar. It showed up the
    day the column got narrower for the panel beside it. */
+/* Deliberately not a pill. A burst is the quietest thing a channel draws: it
+   says traffic happened and holds the content one click away. Bordered and
+   filled, two of these in a row read as two cards the operator is meant to
+   study, which is the opposite of what collapsing them was for. */
 .wire__chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.42rem;
+  gap: 0.4rem;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 45%;
-  padding: 0.24rem 0.6rem;
+  padding: 0.1rem 0.2rem;
   border-radius: 99px;
-  border: 1px solid var(--edge);
-  background: var(--raised);
+  border: 1px solid transparent;
+  background: none;
   font-family: var(--font-mono);
   font-size: 0.66rem;
   letter-spacing: 0.01em;
-  color: var(--muted);
+  color: var(--faint);
   transition: border-color 130ms ease, color 130ms ease;
 }
 
 .wire__chip:hover {
-  border-color: color-mix(in oklab, var(--accent, var(--flesh)) 55%, var(--edge));
   color: var(--text);
 }
 
@@ -1236,7 +1353,12 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* Louder than ordinary traffic, and on purpose: this is the runtime stopping a
+   message rather than a message, and the reason is on the row rather than
+   behind the click. */
 .wire[data-refused="true"] .wire__chip {
+  padding: 0.24rem 0.6rem;
+  background: var(--raised);
   border-color: color-mix(in oklab, var(--pit) 40%, transparent);
   color: var(--pit);
 }
@@ -1260,9 +1382,12 @@ button {
   max-width: 100%;
 }
 
-/* There is a conversation behind this one. The chip lifts on hover rather
-   than only recolouring, because "click me" is the thing it has to say. */
+/* There is a conversation behind this one. The chip takes on its pill under
+   the pointer rather than wearing one permanently, because "click me" is only
+   worth saying to somebody already pointing at it. */
 .wire__chip--open:hover {
+  padding: 0.1rem 0.5rem;
+  margin: 0 -0.3rem;
   background: color-mix(in oklab, var(--accent, var(--flesh)) 8%, var(--raised));
   border-color: color-mix(in oklab, var(--accent, var(--flesh)) 55%, var(--edge));
   color: var(--text);
@@ -1687,6 +1812,13 @@ button {
   max-width: 100%;
 }
 
+/* The margin is space from the words above, and a file handed over with
+   nothing typed has none: that message is a bubble whose only content is this
+   card, and the gap left it sitting off-centre inside its own padding. */
+.file:first-child {
+  margin-top: 0;
+}
+
 .file__view {
   display: block;
   width: 100%;
@@ -1924,8 +2056,19 @@ button {
   50% { opacity: 1; transform: translateY(-1.5px); }
 }
 
+/* One row: the box and the one control it needs. The box used to be a stack,
+   with a permanent line of instructions and a Send button under it, which is
+   two rows of chrome under every message anybody types. */
+.composer__row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.4rem;
+  padding: 0.3rem 0.35rem 0.3rem 0;
+}
+
 .composer__input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   resize: none;
   border: 0;
   background: none;
@@ -1933,7 +2076,7 @@ button {
   font: inherit;
   font-size: 0.925rem;
   line-height: 1.55;
-  padding: 0.72rem 0.85rem 0.25rem;
+  padding: 0.28rem 0.2rem 0.28rem 0.85rem;
   outline: none;
   max-height: 12rem;
 }
@@ -1942,11 +2085,38 @@ button {
   color: var(--faint);
 }
 
+/* Round, in the accent, and the size of the line it sits beside. A word-width
+   button is a label for something nothing else in the row could be. */
+.composer__send {
+  flex: none;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin-bottom: 0.12rem;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: var(--flesh);
+  color: var(--ground);
+  font-size: 0.85rem;
+  line-height: 1;
+  transition: background 120ms ease, opacity 120ms ease;
+}
+
+.composer__send:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--flesh) 86%, var(--text));
+}
+
+.composer__send:disabled {
+  background: var(--edge);
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
 .composer__foot {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0.15rem 0.5rem 0.45rem 0.85rem;
+  padding: 0 0.85rem 0.4rem;
 }
 
 .hint {
@@ -2920,6 +3090,33 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Which model is answering. It used to sit under the agent's name over every
+   message; here it is where somebody goes when a reply looks wrong. */
+.menu__model {
+  display: block;
+  margin-top: 0.1rem;
+  text-transform: none;
+  letter-spacing: 0.02em;
+  opacity: 0.8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.menu__rule {
+  border: 0;
+  border-top: 1px solid var(--edge);
+  margin: 0.25rem 0;
+}
+
+.menu__item[data-tone="danger"] {
+  color: var(--alarm);
+}
+
+.menu__item[data-tone="danger"]:hover,
+.menu__item[data-tone="danger"]:focus-visible {
+  background: color-mix(in oklab, var(--alarm) 10%, transparent);
 }
 
 .menu__item {

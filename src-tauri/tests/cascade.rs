@@ -582,6 +582,50 @@ async fn an_agent_asked_for_its_memory_writes_the_same_file_as_its_notes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn what_one_agent_remembers_is_never_shown_to_another() {
+    // A memory is written by an agent for itself, in whatever shorthand suits
+    // it, and it holds whatever the operator has told that one agent in
+    // confidence. It is also the only thing that survives a conversation, so a
+    // crew that pooled memories would grow a shared file nobody wrote and every
+    // agent acts on. One file per agent, and the boundary is the prompt.
+    let stub = serve(|body| {
+        if speaker(body) != "Manager" {
+            return Script::Say("Nothing to add.".into());
+        }
+        if has_tool_result(body) {
+            Script::Say("Kept.".into())
+        } else {
+            Script::Notes("The operator's home address is 12 Rowan Street.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let written = h.runtime.send_from_human(h.id("Manager"), "remember where I live").unwrap();
+    h.settle(written).await;
+    // A second turn, so the Manager's own prompt is one built after the write.
+    let again = h.runtime.send_from_human(h.id("Manager"), "still there?").unwrap();
+    h.settle(again).await;
+    let asked = h.runtime.send_from_human(h.id("Chef"), "anything I should know?").unwrap();
+    h.settle(asked).await;
+
+    let prompts = prompts_by_agent(&stub);
+    assert!(
+        prompts.get("Manager").expect("the Manager ran").contains("12 Rowan Street"),
+        "the agent that wrote it has to be able to read it back, or this proves nothing"
+    );
+    assert!(
+        !prompts.get("Chef").expect("Chef ran").contains("Rowan Street"),
+        "one agent's memory reached another's prompt: {}",
+        prompts["Chef"]
+    );
+    assert!(
+        h.runtime.workspace().read(h.id("Chef")).is_empty(),
+        "and nothing was written to the file of an agent that wrote nothing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn deleting_an_agent_takes_its_memory_with_it() {
     let stub = serve(|_| Script::Notes("private".into())).await;
     let h = harness(&stub, &["Manager"], GuardLimits::default());
@@ -1298,6 +1342,187 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
     assert_eq!(history[0].kind, RunKind::Test);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
+    // A fired routine arrives from the system, and nobody is waiting on the
+    // agent's words: the answer goes into its own channel. That combination is
+    // the one that used to mean "nothing is being asked of you, and silence is
+    // usually right", because the instruction came from neither the operator
+    // nor a peer and so matched neither arm. A model that reads its prompt then
+    // does exactly what it was told, and the operator watches a schedule they
+    // set produce nothing at all, which is indistinguishable from a broken one.
+    let stub = serve(|body| {
+        let prompt = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if prompt.contains("Nothing here needs an answer") {
+            Script::Say(String::new())
+        } else {
+            Script::Say("Swept the listings: three new ones.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the listings and say what is new.",
+            Trigger::Daily,
+            now_ms() - 1000,
+        )
+        .unwrap();
+
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    // The mode itself, which is the claim: a routine hands over work.
+    let prompt = prompts_by_agent(&stub).remove("Watcher").expect("the Watcher ran");
+    assert!(
+        prompt.contains("You have been given something to do"),
+        "a routine coming due is work, and the turn has to be told so: {prompt}"
+    );
+    assert!(
+        !prompt.contains("Saying nothing is allowed here"),
+        "the silence permission belongs to the mode where nothing was asked: {prompt}"
+    );
+    assert!(
+        h.channel_texts("Watcher").iter().any(|t| t.contains("three new ones")),
+        "the routine fired and the agent said nothing:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_routine_can_hand_its_work_to_the_specialist_it_belongs_to() {
+    // A standing job in a crew is rarely one agent's to do alone: the schedule
+    // belongs to whoever owns the outcome, and the work belongs to whoever has
+    // the skill. This is the whole delegation path with nobody typing anything,
+    // and it runs under a budget of its own because a fired routine is a fresh
+    // run.
+    let stub = serve(|body| {
+        let who = speaker(body);
+        if who == "Researcher" {
+            return Script::Say("Two new filings this week.".into());
+        }
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+        if text.contains("Two new filings") {
+            Script::Say("This week: two new filings.".into())
+        } else if has_tool_result(body) {
+            Script::Say(String::new())
+        } else {
+            Script::Instruct {
+                recipients: vec!["Researcher".into()],
+                text: "Check this week's filings.".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Manager"),
+            "Weekly filings",
+            "Have the filings checked and report what is new.",
+            Trigger::Weekly,
+            now_ms() - 1000,
+        )
+        .unwrap();
+
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Researcher").iter().any(|t| t.contains("this week's filings")),
+        "the routine's work never reached the agent it belongs to:\n{}",
+        h.transcript()
+    );
+    assert!(
+        h.channel_texts("Manager").iter().any(|t| t.contains("two new filings")),
+        "and the answer never came back to the channel the operator reads:\n{}",
+        h.transcript()
+    );
+    h.expect_normal(run, "a routine that delegates");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires() {
+    // The whole loop an operator asks for when they say "every weekday": the
+    // agent books it, what it booked is what it was asked for, and the thing
+    // that fires later is something it can act on with nothing else in front of
+    // it.
+    let stub = serve(|body| {
+        let woken_by_the_schedule = body["messages"]
+            .as_array()
+            .and_then(|m| m.last())
+            .and_then(|m| m["content"].as_str())
+            .unwrap_or_default()
+            .contains("[SYSTEM]");
+
+        if woken_by_the_schedule {
+            Script::Say("Three new listings this morning.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Booked for every weekday.".into())
+        } else {
+            Script::Book {
+                name: "Listings sweep".into(),
+                what: "Check the listings and say what is new.".into(),
+                repeat: "weekdays".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let asked = h
+        .runtime
+        .send_from_human(
+            h.id("Watcher"),
+            "Check the listings every weekday and tell me what's new.",
+        )
+        .unwrap();
+    h.settle(asked).await;
+
+    let booked = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(booked.len(), 1, "one standing job is one routine, got {booked:?}");
+    assert_eq!(
+        booked[0].trigger,
+        Trigger::Weekdays,
+        "a weekday repeat is a shape on the calendar, not a gap in seconds"
+    );
+    assert_eq!(
+        booked[0].title(),
+        "Listings sweep",
+        "and the operator's list shows the name it chose rather than the whole instruction"
+    );
+    assert!(
+        tool_results(&stub).iter().any(|r| r.contains("Scheduled:") && r.contains("weekday")),
+        "the agent has to be told what it set, because the reply is its only record of it: {:?}",
+        tool_results(&stub)
+    );
+
+    // And what it booked works: the same delivery the scheduler makes.
+    let fired = h.runtime.test_routine(&booked[0]).unwrap();
+    h.settle(fired).await;
+    assert!(
+        h.channel_texts("Watcher").iter().any(|t| t.contains("Three new listings")),
+        "the routine fired and did nothing:\n{}",
+        h.transcript()
+    );
+    assert_eq!(
+        h.runtime.store().agent_routines(h.id("Watcher")).unwrap()[0].next_run_at,
+        booked[0].next_run_at,
+        "trying a routine out must not spend the slot it was holding"
+    );
+}
+
 #[tokio::test]
 async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked() {
     let stub = serve(|_| Script::Say("checked".into())).await;
@@ -1358,18 +1583,6 @@ fn a_schedule_that_cannot_be_read_does_not_starve_the_runtime() {
         "the scheduler kept the runtime to itself: a schedule it cannot read has to wait for \
          the next tick like a schedule it can"
     );
-}
-
-/// The system prompt each agent was actually sent, by name.
-fn prompts_by_agent(stub: &harness::Stub) -> HashMap<String, String> {
-    let mut out = HashMap::new();
-    for body in stub.transcript.lock().iter() {
-        out.insert(
-            speaker(body),
-            body["messages"][0]["content"].as_str().unwrap_or_default().to_string(),
-        );
-    }
-    out
 }
 
 fn signin_on(agent: guac_lib::domain::ids::AgentId, service: &str) -> Signin {
