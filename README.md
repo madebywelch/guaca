@@ -4,7 +4,7 @@ A local desktop app where you talk to LLM agents and those agents talk to each
 other. Slack-shaped: a rail of agents on the left, a conversation on the right,
 and an activity view showing every message they send between themselves.
 
-![Guaca, showing four agents working on one errand with one agent's computer open over the transcript](docs/img/guaca.png)
+![Guaca, showing a crew of eleven agents, with the Manager's own computer open beside the transcript as it works through a Craigslist search](docs/img/guaca.png)
 
 Ask the Manager for something. It works out who on its team can help, sends
 them each a message, and they think at once rather than in turn. You watch it
