@@ -6,19 +6,20 @@ import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import { type Activity, type AgentCard, type AgentId, errorMessage } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
-import { MessageItem, StreamingMessage } from "./MessageItem";
+import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 
 interface Props {
   channel: ChannelKey;
-  onEditAgent: (agent: AgentCard) => void;
+  /** Where the operator asked for an agent's actions, and on whom. */
+  onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
 
 /** How long a message arrived at from search stays marked. */
 const FLASH_MS = 1800;
 
-export function ChannelView({ channel, onEditAgent }: Props) {
+export function ChannelView({ channel, onOpenMenu }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
@@ -26,8 +27,6 @@ export function ChannelView({ channel, onEditAgent }: Props) {
   const focused = useStore((s) => s.focused);
   const clearFocus = useStore((s) => s.clearFocus);
 
-  const loadChannel = useStore((s) => s.loadChannel);
-  const [confirmClear, setConfirmClear] = useState(false);
   /** The peer whose thread is open over this channel, if any. */
   const [reading, setReading] = useState<AgentId | null>(null);
 
@@ -72,11 +71,9 @@ export function ChannelView({ channel, onEditAgent }: Props) {
     if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
   }, [messages]);
 
-  // A channel switch abandons any half-confirmed destructive action, and any
-  // thread opened off the old channel: a conversation between two other agents
-  // is not what you asked for by clicking a third.
+  // A channel switch abandons any thread opened off the old one: a conversation
+  // between two other agents is not what you asked for by clicking a third.
   useLayoutEffect(() => {
-    setConfirmClear(false);
     setReading(null);
   }, [channel]);
 
@@ -156,64 +153,24 @@ export function ChannelView({ channel, onEditAgent }: Props) {
               size="sm"
             />
             <h1 className="pane__title">{agent.name}</h1>
-            <p className="pane__subtitle">
-              {agent.model}
-              {agent.skills.length > 0 && ` · ${agent.skills.join(", ")}`}
-            </p>
-            <div style={{ marginLeft: "auto", display: "flex", gap: "0.25rem" }}>
-              {confirmClear ? (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn--danger"
-                    onClick={() => {
-                      setConfirmClear(false);
-                      void api
-                        .clearChannel(agent.id)
-                        .then(() => loadChannel(agent.id))
-                        .catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
-                    }}
-                  >
-                    Delete this history
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--ghost"
-                    onClick={() => setConfirmClear(false)}
-                  >
-                    Keep
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn--ghost"
-                    onClick={() => {
-                      void api
-                        .setAgentPaused(agent.id, !paused)
-                        .catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
-                    }}
-                  >
-                    {paused ? "Resume" : "Pause"}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--ghost"
-                    onClick={() => setConfirmClear(true)}
-                  >
-                    Clear
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--ghost"
-                    onClick={() => onEditAgent(agent)}
-                  >
-                    Edit
-                  </button>
-                </>
-              )}
-            </div>
+            {/* The one thing about an agent that changes what this pane does.
+                Everything else it is set up with is edited rarely and read
+                behind the menu, rather than sitting over every message. */}
+            {paused && <span className="pane__flag">Paused</span>}
+            <button
+              type="button"
+              className="pane__more"
+              aria-label={`Actions for ${agent.name}`}
+              title={`Actions for ${agent.name}`}
+              onClick={(event) => {
+                // Under the button it came from. The menu measures itself and
+                // slides back inside the window if it does not fit there.
+                const box = event.currentTarget.getBoundingClientRect();
+                onOpenMenu(agent, { x: box.left, y: box.bottom + 4 });
+              }}
+            >
+              ⋯
+            </button>
           </>
         ) : (
           <h1 className="pane__title">Channel unavailable</h1>
@@ -250,11 +207,17 @@ export function ChannelView({ channel, onEditAgent }: Props) {
                     <PeerBurstRow peers={row.peers} onOpen={setReading} />
                   ) : row.kind === "refused" ? (
                     <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                  ) : row.kind === "when" ? (
+                    <WhenRow at={row.at} />
                   ) : (
+                    // Two participants, one of them named at the top of the
+                    // pane and the other reading this. Nothing here needs
+                    // telling whose words it is looking at.
                     <MessageItem
                       message={row.message}
                       lookups={lookups}
                       continued={row.continued}
+                      named={false}
                     />
                   )}
                 </div>

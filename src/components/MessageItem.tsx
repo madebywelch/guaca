@@ -3,6 +3,7 @@ import { memo } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
+import { whenLabel } from "../lib/time";
 import { type Lookups, toPeer } from "../lib/transcript";
 import {
   type AgentCard,
@@ -22,6 +23,18 @@ interface Props {
   lookups: Lookups;
   /** Hides the avatar and header when the previous message had the same author. */
   continued: boolean;
+  /**
+   * Whether the author has to be written out.
+   *
+   * False in an agent's own channel, where there are exactly two participants:
+   * the channel is named after one of them and the operator is the other, so a
+   * name over every message is the loudest thing on the page and the one that
+   * says least. The portrait and the side of the column it sits on carry it.
+   *
+   * True in a pair's thread, where both participants are agents and look alike
+   * in a list.
+   */
+  named?: boolean;
 }
 
 const HUMAN = { id: "human", name: "You", color: "#5b665e", avatar: "plain" };
@@ -38,6 +51,21 @@ function identity(participant: Participant, byId: Lookups["byId"]) {
 
 function clockTime(ms: number): string {
   return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * When a stretch of conversation started, drawn between two of them.
+ *
+ * The transcript's clock, moved off every message and onto the few places it
+ * changes anything. What it replaces was a time above four consecutive
+ * messages written in the same minute.
+ */
+export function WhenRow({ at }: { at: number }) {
+  return (
+    <div className="when-row">
+      <time dateTime={new Date(at).toISOString()}>{whenLabel(at, Date.now())}</time>
+    </div>
+  );
 }
 
 /** Keys tied to the message id. A persisted message is immutable. */
@@ -76,7 +104,12 @@ function onRetry(agentId: AgentId, messageId: MessageId) {
  * themselves never change, so an entry that is already on screen is already
  * correct.
  */
-export const MessageItem = memo(function MessageItem({ message, lookups, continued }: Props) {
+export const MessageItem = memo(function MessageItem({
+  message,
+  lookups,
+  continued,
+  named = true,
+}: Props) {
   const { from, to } = message;
 
   // Ahead of everything else: a request for permission is addressed to the
@@ -92,7 +125,7 @@ export const MessageItem = memo(function MessageItem({ message, lookups, continu
     return <ActivityRecord message={message} lookups={lookups} />;
   }
 
-  return <ChatBubble message={message} byId={lookups.byId} continued={continued} />;
+  return <ChatBubble message={message} byId={lookups.byId} continued={continued} named={named} />;
 });
 
 /**
@@ -152,10 +185,12 @@ function ChatBubble({
   message,
   byId,
   continued,
+  named,
 }: {
   message: Envelope;
   byId: Lookups["byId"];
   continued: boolean;
+  named: boolean;
 }) {
   const author = identity(message.from, byId);
   // The operator does not need a portrait of themselves in their own log; the
@@ -178,27 +213,26 @@ function ChatBubble({
       className={continued ? "msg msg--continued" : "msg"}
       data-operator={isOperator ? "true" : undefined}
     >
-      <div>
-        {!continued && !isOperator && (
-          <AgentAvatar
-            avatar={author.avatar}
-            color={author.color}
-            size="sm"
-            seed={author.id}
-            title={author.name}
-          />
-        )}
-      </div>
+      {!isOperator && (
+        <div className="msg__gutter">
+          {!continued && (
+            <AgentAvatar
+              avatar={author.avatar}
+              color={author.color}
+              size="sm"
+              seed={author.id}
+              title={author.name}
+            />
+          )}
+        </div>
+      )}
 
-      <div style={{ minWidth: 0 }}>
-        {!continued && (
+      <div className="msg__body">
+        {named && !continued && (
           <div className="msg__head">
             <span className="msg__author" style={{ color: author.color }}>
               {author.name}
             </span>
-            <time className="msg__time" dateTime={new Date(message.createdAt).toISOString()}>
-              {clockTime(message.createdAt)}
-            </time>
           </div>
         )}
 
@@ -225,6 +259,14 @@ function ChatBubble({
           <FileRow key={key} file={part} />
         ))}
       </div>
+
+      {/* Out of the flow, and revealed by the pointer. Every message has a time
+          and almost none of them are worth a line: four in a row are usually
+          the same minute. Asking for one is a hover; noticing that an hour
+          passed is the line the transcript draws by itself. */}
+      <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
+        {clockTime(message.createdAt)}
+      </time>
     </article>
   );
 }
@@ -251,29 +293,28 @@ function FileRow({ file }: { file: Extract<Part, { type: "file" }> }) {
   );
 }
 
-/** The in-progress bubble shown while an agent is composing. */
+/**
+ * The in-progress bubble shown while an agent is composing.
+ *
+ * Only ever drawn in that agent's own channel, so it carries no name and no
+ * clock: the caret is what says this one is still being written, and it will
+ * settle into a bubble of exactly this shape.
+ */
 export function StreamingMessage({ agent, text }: { agent: AgentCard | undefined; text: string }) {
   return (
     <article className="msg">
-      <div>
+      <div className="msg__gutter">
         <AgentAvatar
           avatar={agent?.avatar ?? "plain"}
           color={agent?.color ?? "#c7d96b"}
           size="sm"
           seed={agent?.id}
           activity={{ state: "thinking" }}
+          title={agent?.name}
         />
       </div>
-      <div style={{ minWidth: 0 }}>
-        <div className="msg__head">
-          <span className="msg__author" style={{ color: agent?.color }}>
-            {agent?.name ?? "Agent"}
-          </span>
-          <span className="msg__time">now</span>
-        </div>
-        <div className="md--streaming">
-          <Markdown>{text}</Markdown>
-        </div>
+      <div className="msg__body md--streaming">
+        <Markdown>{text}</Markdown>
       </div>
     </article>
   );

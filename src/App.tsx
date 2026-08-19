@@ -66,6 +66,7 @@ export default function App() {
   const applyEvent = useStore((s) => s.applyEvent);
   const refreshAgents = useStore((s) => s.refreshAgents);
   const select = useStore((s) => s.select);
+  const loadChannel = useStore((s) => s.loadChannel);
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
@@ -223,7 +224,7 @@ export default function App() {
         ) : (
           <ChannelView
             channel={selected ?? ACTIVITY_CHANNEL}
-            onEditAgent={(agent) => setEditing(agent)}
+            onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
           />
         )}
       </main>
@@ -238,11 +239,23 @@ export default function App() {
           onClose={() => setMenu(null)}
           onEditProfile={(agent) => setEditing(agent)}
           onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
+          onTogglePause={(agent) =>
+            void onAgent(() => api.setAgentPaused(agent.id, agent.lifecycle !== "paused"))
+          }
           onDuplicate={(agent) =>
             void onAgent(async () => {
               const copy = await api.duplicateAgent(agent.id);
               await refreshAgents();
               await select(copy.id);
+            })
+          }
+          // The runtime announces the clear and the store re-reads whatever is
+          // open, but only once the event has been round-tripped. Reading here
+          // as well is what makes the click look like it did something.
+          onClearHistory={(agent) =>
+            void onAgent(async () => {
+              await api.clearChannel(agent.id);
+              await loadChannel(agent.id);
             })
           }
         />

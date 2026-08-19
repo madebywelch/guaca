@@ -110,8 +110,16 @@ export function TokenMeter({ groupId }: Props) {
           />
         ))}
       </span>
-      <span className="meter__count">{compact(spent)}</span>
-      {total?.cost != null && <span className="meter__cost">{money(total.cost)}</span>}
+      {/* One number, not two. A group header already carries a name, a
+          sparkline, a headcount and a gear, and tokens and dollars are the
+          same fact twice: the price is the one an operator acts on. The count
+          is what is left when a provider prices nothing, and then it is the
+          only signal there is. Both are in the tooltip either way. */}
+      {total?.cost != null ? (
+        <span className="meter__cost">{money(total.cost)}</span>
+      ) : (
+        <span className="meter__count">{compact(spent)}</span>
+      )}
     </span>
   );
 }

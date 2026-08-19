@@ -84,6 +84,18 @@ channel only summarises, in `lib/transcript.ts`. A refusal never folds into that
 summary: it is the runtime stopping a message rather than a message. See
 `docs/ARCHITECTURE.md`.
 
+**A channel names nobody, and that is not a missing feature.** It has two
+participants: the agent it is named after, at the top of the pane, and the
+person reading it. A name and a clock over every message is two lines of chrome
+carrying one fact, and four replies written inside the same minute drew four of
+them. The portrait says which agent and the side of the column says whether the
+words are yours. `named` is how the pair's own thread asks for the names back,
+because there both participants are agents and neither is the reader. The clock
+went with them: it is a hover on the row, and `transcriptRows` draws one line
+where the silence ran past half an hour, which is the only place a time ever
+changed what the operator understood. That line also ends whatever burst was
+open, because two exchanges three hours apart are two things that happened.
+
 **A repeat is a shape, not a number of seconds.** `every weekday` and `every
 month` cannot be gaps, and `every day` should not be one: a day is 23 or 25
 hours twice a year, so a daily nine o'clock routine stored as 86400 seconds

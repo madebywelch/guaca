@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { relativeTime } from "./time";
+import { relativeTime, whenLabel } from "./time";
 
 const NOW = 1_700_000_000_000;
 const ago = (ms: number) => relativeTime(NOW - ms, NOW);
@@ -31,5 +31,39 @@ describe("relativeTime", () => {
 
   it("does not go negative when a clock skews forward", () => {
     expect(relativeTime(NOW + 5_000, NOW)).toBe("now");
+  });
+});
+
+describe("whenLabel", () => {
+  /** 2pm on a Wednesday, local, so "yesterday" and "last week" are unambiguous. */
+  const wednesday = new Date(2024, 4, 15, 14, 0).getTime();
+  const day = 86_400_000;
+
+  it("names today and yesterday rather than dating them", () => {
+    expect(whenLabel(wednesday, wednesday)).toMatch(/^Today /);
+    expect(whenLabel(wednesday - day, wednesday)).toMatch(/^Yesterday /);
+  });
+
+  it("names the weekday while the name still means one day", () => {
+    expect(whenLabel(wednesday - 3 * day, wednesday)).toMatch(/^Sunday /);
+  });
+
+  it("dates anything a weekday name would be ambiguous about", () => {
+    // "Tuesday" three weeks back is four different Tuesdays.
+    expect(whenLabel(wednesday - 21 * day, wednesday)).not.toMatch(/day /);
+    expect(whenLabel(wednesday - 21 * day, wednesday)).toMatch(/24/);
+  });
+
+  it("counts calendar days, not multiples of 24 hours", () => {
+    // Eleven at night and one in the morning are two hours apart and two
+    // different days, and an hour ago is never "yesterday".
+    const lateWednesday = new Date(2024, 4, 15, 23, 0).getTime();
+    const earlyThursday = new Date(2024, 4, 16, 1, 0).getTime();
+    expect(whenLabel(lateWednesday, earlyThursday)).toMatch(/^Yesterday /);
+    expect(whenLabel(new Date(2024, 4, 16, 0, 30).getTime(), earlyThursday)).toMatch(/^Today /);
+  });
+
+  it("carries the clock, because a day on its own does not place a message", () => {
+    expect(whenLabel(wednesday, wednesday)).toMatch(/\d{1,2}[:.]\d\d/);
   });
 });

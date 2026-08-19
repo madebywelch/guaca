@@ -116,7 +116,7 @@ describe("ChannelView under streaming load", () => {
   });
 
   function draw() {
-    render(<ChannelView channel={AGENT} onEditAgent={() => {}} />);
+    render(<ChannelView channel={AGENT} onOpenMenu={() => {}} />);
     rendersOfMessages = 0;
   }
 

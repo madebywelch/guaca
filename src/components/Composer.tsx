@@ -134,6 +134,8 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
     setCaret(event.currentTarget.selectionStart ?? 0);
   };
 
+  const hint = showing ? "↑↓ to choose · Enter to insert" : dragging ? "Drop to attach" : null;
+
   return (
     <div className="composer" data-dragging={dragging || undefined}>
       {files.length > 0 && (
@@ -196,45 +198,50 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
         </div>
       )}
 
-      <textarea
-        ref={ref}
-        className="composer__input"
-        rows={1}
-        value={text}
-        placeholder={disabled ? (disabledReason ?? placeholder) : placeholder}
-        disabled={disabled}
-        onChange={(event) => {
-          setText(event.target.value);
-          setCaret(event.target.selectionStart ?? 0);
-          setDismissed(false);
-          setHighlighted(0);
-        }}
-        onKeyUp={track}
-        onClick={track}
-        onKeyDown={onKeyDown}
-        role="combobox"
-        aria-expanded={showing}
-        aria-controls={showing ? "mention-list" : undefined}
-        aria-activedescendant={showing ? `mention-${selected}` : undefined}
-        aria-autocomplete="list"
-      />
-      <div className="composer__foot">
-        <span className="hint">
-          {showing
-            ? "↑↓ to choose · Enter to insert"
-            : dragging
-              ? "Drop to attach"
-              : "Enter to send · @ to tag an agent · drop a file to attach it"}
-        </span>
+      <div className="composer__row">
+        <textarea
+          ref={ref}
+          className="composer__input"
+          rows={1}
+          value={text}
+          placeholder={disabled ? (disabledReason ?? placeholder) : placeholder}
+          disabled={disabled}
+          onChange={(event) => {
+            setText(event.target.value);
+            setCaret(event.target.selectionStart ?? 0);
+            setDismissed(false);
+            setHighlighted(0);
+          }}
+          onKeyUp={track}
+          onClick={track}
+          onKeyDown={onKeyDown}
+          role="combobox"
+          aria-expanded={showing}
+          aria-controls={showing ? "mention-list" : undefined}
+          aria-activedescendant={showing ? `mention-${selected}` : undefined}
+          aria-autocomplete="list"
+        />
         <button
           type="button"
-          className="btn btn--primary"
+          className="composer__send"
+          aria-label="Send"
+          title="Send"
           onClick={() => void submit()}
           disabled={disabled || sending || (text.trim().length === 0 && files.length === 0)}
         >
-          Send
+          <span aria-hidden="true">↑</span>
         </button>
       </div>
+
+      {/* Only when there is something to say. What used to live here
+          permanently was three facts that announce themselves: the typeahead
+          appears when you type @, the drop target says so while a file is over
+          the window, and Enter sends in every chat box ever written. */}
+      {hint && (
+        <div className="composer__foot">
+          <span className="hint">{hint}</span>
+        </div>
+      )}
     </div>
   );
 }
