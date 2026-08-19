@@ -101,7 +101,7 @@ function open(messages: Envelope[]) {
     lastActive: {},
     banner: null,
   });
-  return render(<ChannelView channel={MANAGER} onEditAgent={() => {}} />);
+  return render(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
 }
 
 beforeEach(() => {
@@ -182,6 +182,41 @@ describe("peer traffic in a channel", () => {
 
     expect(screen.getByText(/Not delivered to Chef/)).toBeTruthy();
     expect(screen.getByText("you already sent Chef this exact message in this run")).toBeTruthy();
+  });
+});
+
+describe("who said what", () => {
+  it("does not write the agent's name over every message it sent", () => {
+    // A channel has two participants: the one named at the top of the pane and
+    // the operator reading it. A name and a clock over each of four replies
+    // written in the same minute is eight lines carrying two facts.
+    open([
+      envelope({ parts: [{ type: "text", text: "what is the status" }] }),
+      envelope({
+        from: { kind: "agent", id: MANAGER },
+        to: { kind: "human" },
+        parts: [{ type: "text", text: "all clear" }],
+      }),
+    ]);
+
+    expect(screen.getByText("all clear")).toBeTruthy();
+    // Once, at the top of the pane, and nowhere in the transcript.
+    expect(screen.getAllByText("Manager")).toHaveLength(1);
+    expect(screen.queryByText("You")).toBeNull();
+  });
+
+  it("says when the conversation picked up again, where it did", () => {
+    const morning = envelope({ parts: [{ type: "text", text: "first thing" }] });
+    const afternoon = envelope({
+      createdAt: morning.createdAt + 5 * 60 * 60 * 1000,
+      parts: [{ type: "text", text: "back again" }],
+    });
+
+    const { container } = open([morning, afternoon]);
+    const line = container.querySelector(".when-row time");
+    expect(line?.getAttribute("datetime")).toBe(new Date(afternoon.createdAt).toISOString());
+    // One line for the gap, not one clock per message.
+    expect(container.querySelectorAll(".when-row")).toHaveLength(1);
   });
 });
 

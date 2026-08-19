@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Lookups, type Row, summaryLabel, transcriptRows } from "./transcript";
+import { type Lookups, type Row, rowStandsFor, summaryLabel, transcriptRows } from "./transcript";
 import type { AgentCard, Envelope, Part } from "./types";
 
 function card(id: string, name: string): AgentCard {
@@ -271,6 +271,65 @@ describe("merging consecutive messages under one header", () => {
     const first = envelope({});
     const second = envelope({ createdAt: first.createdAt + 5 * 60 * 1000 });
     expect(transcriptRows([first, second], lookups)[1]).toMatchObject({ continued: false });
+  });
+});
+
+describe("saying when a conversation picked up again", () => {
+  const hour = 60 * 60 * 1000;
+
+  it("draws nothing between messages of the same sitting", () => {
+    // The clock a transcript used to print over every message. Four replies in
+    // the same minute is four headers carrying one fact between them.
+    const first = envelope({});
+    const rows = transcriptRows(
+      [first, envelope({ createdAt: first.createdAt + 5 * 60 * 1000 })],
+      lookups,
+    );
+    expect(rows.map((row) => row.kind)).toEqual(["message", "message"]);
+  });
+
+  it("draws a line where the silence was long enough to notice", () => {
+    const first = envelope({});
+    const later = envelope({ createdAt: first.createdAt + 3 * hour });
+    const rows = transcriptRows([first, later], lookups);
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "when", "message"]);
+    // The time it started again, not the time it stopped: the line belongs to
+    // what is under it.
+    expect(rows[1]).toMatchObject({ kind: "when", at: later.createdAt });
+  });
+
+  it("ends the burst it interrupts", () => {
+    // Two exchanges three hours apart are two things that happened. Counted as
+    // one burst they read as a single conversation the operator missed.
+    const first = inbound("chef");
+    const later = inbound("chef");
+    later.createdAt = first.createdAt + 3 * hour;
+
+    const rows = transcriptRows([first, later], lookups);
+    expect(rows.map((row) => row.kind)).toEqual(["peers", "when", "peers"]);
+  });
+
+  it("never trails a transcript with a line nothing follows", () => {
+    // A turn whose every part folded into a burst leaves no row of its own, so
+    // a line pushed the moment the gap is spotted can end up hanging off the
+    // bottom pointing at nothing.
+    const first = envelope({});
+    const quiet = record(send(["Chef"], { status: "ok", summary: "sent" }));
+    quiet.createdAt = first.createdAt + 3 * hour;
+    const rows = transcriptRows([first, quiet], lookups);
+
+    expect(rows[rows.length - 1]?.kind).not.toBe("when");
+    expect(rows.map((row) => row.kind)).toEqual(["message", "when", "peers"]);
+  });
+
+  it("stands for no message, so search never lands on one", () => {
+    const first = envelope({});
+    const rows = transcriptRows(
+      [first, envelope({ createdAt: first.createdAt + 3 * hour })],
+      lookups,
+    );
+    expect(rowStandsFor(rows[1]!)).toEqual([]);
   });
 });
 

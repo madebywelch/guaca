@@ -93,10 +93,25 @@ export type Row =
       at: number;
       body: string;
       reason: string;
-    };
+    }
+  /**
+   * When the conversation picked up again, after a gap long enough that the
+   * messages either side of it are not the same sitting.
+   */
+  | { kind: "when"; key: string; at: number };
 
 /** How long a gap can be before a second message from the same author gets its own header. */
 const CONTINUATION_MS = 4 * 60 * 1000;
+
+/**
+ * How long a silence has to be before the transcript says when it ended.
+ *
+ * This is what a per-message clock was for, and a clock on every message is a
+ * column of near-identical numbers down a transcript where four in a row were
+ * written in the same minute. The gaps are the part worth reading: the exact
+ * time of any one message is still a hover away.
+ */
+const QUIET_MS = 30 * 60 * 1000;
 
 /** True when consecutive messages should merge under one header. */
 export function continues(previous: Envelope | undefined, current: Envelope): boolean {
@@ -128,6 +143,23 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
   let burst: Extract<Row, { kind: "peers" }> | null = null;
   /** The last bubble, for merging a follow-up under one header. */
   let spoken: Envelope | undefined;
+  /** When the last message was, for spotting the silence after it. */
+  let lastAt: number | null = null;
+  /**
+   * A gap that has been earned but not yet drawn.
+   *
+   * Held rather than pushed on sight, because a message does not always produce
+   * a row: a turn whose every part was folded into a burst leaves none. Emitted
+   * immediately before whatever row does come, so the line always has something
+   * underneath it and never trails the transcript.
+   */
+  let gap: { at: number; key: string } | null = null;
+
+  const mark = () => {
+    if (!gap) return;
+    rows.push({ kind: "when", key: `when:${gap.key}`, at: gap.at });
+    gap = null;
+  };
 
   const count = (
     peer: WirePeer,
@@ -143,6 +175,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
   ) => {
     let open = burst;
     if (!open) {
+      mark();
       open = { kind: "peers", key: `peers:${key}`, peers: [], folded: [] };
       rows.push(open);
       burst = open;
@@ -159,12 +192,21 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
 
   /** Anything that is not peer traffic. Ends the burst it interrupts. */
   const interrupt = (row: Row) => {
+    mark();
     rows.push(row);
     burst = null;
   };
 
   for (const message of messages) {
     const { from, to } = message;
+
+    // A silence long enough to be a break also ends whatever burst was open:
+    // two exchanges three hours apart are two things that happened, not one.
+    if (lastAt !== null && message.createdAt - lastAt >= QUIET_MS) {
+      gap = { at: message.createdAt, key: message.id };
+      burst = null;
+    }
+    lastAt = message.createdAt;
 
     // Ahead of everything else: a permission request is addressed to the
     // operator whoever the envelope says it is from, and it is the one thing
@@ -249,7 +291,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
  */
 export function rowStandsFor(row: Row): MessageId[] {
   if (row.kind === "peers") return row.folded;
-  if (row.kind === "refused") return [];
+  if (row.kind === "refused" || row.kind === "when") return [];
   return [row.message.id];
 }
 
