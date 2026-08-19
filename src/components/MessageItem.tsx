@@ -14,6 +14,7 @@ import {
   type Participant,
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
+import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
 import { NoticeRow } from "./WireRow";
 
@@ -222,32 +223,10 @@ function ChatBubble({
         ))}
 
         {files.map(({ part, key }) => (
-          <FileRow key={key} file={part} />
+          <FileCard key={key} file={part} />
         ))}
       </div>
     </article>
-  );
-}
-
-/** Sizes the way a person says them, matching what the agent is told. */
-function readableSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
-  return `${bytes} bytes`;
-}
-
-/**
- * A file on a message.
- *
- * Named and sized, and that is all: the operator dropped it or watched an agent
- * send it, so what matters here is that it went, not a preview of it.
- */
-function FileRow({ file }: { file: Extract<Part, { type: "file" }> }) {
-  return (
-    <div className="file" title={file.mime}>
-      <span className="file__name">{file.name}</span>
-      <span className="file__size">{readableSize(file.bytes)}</span>
-    </div>
   );
 }
 

@@ -18,6 +18,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  Attachment,
   Computer,
   Connector,
   ConnectorDraft,
@@ -41,6 +42,7 @@ import type {
   Settings,
   SettingsPatch,
   Signin,
+  Staged,
   UiEvent,
 } from "./types";
 
@@ -164,9 +166,32 @@ export const api = {
    */
   search: (query: string, limit?: number) => invoke<SearchHits>("search", { query, limit }),
 
-  /** `files` are absolute paths from a drop; the bytes never cross IPC. */
-  sendMessage: (agentId: AgentId, text: string, files: string[] = []) =>
-    invoke<RunId>("send_message", { agentId, text, files }),
+  /**
+   * Takes dropped files into the store, before anything is sent.
+   *
+   * `paths` are absolute paths from a drop; the bytes never cross IPC, and what
+   * comes back is what a message would carry. A file that could not be taken is
+   * named in `refused` rather than failing the drop, so one document over the
+   * limit does not cost the operator the four beside it.
+   */
+  stageFiles: (paths: string[]) => invoke<Staged>("stage_files", { paths }),
+
+  /** Copies a file out to the downloads folder, and says where it landed. */
+  saveFile: (digest: string, name: string) => invoke<string>("save_file", { digest, name }),
+
+  /**
+   * Sends what the operator typed, with the files they attached.
+   *
+   * Only the digest and the name go over: the runtime resolves both against
+   * its own store, so the size and the type on the message are read off the
+   * disk rather than taken from here.
+   */
+  sendMessage: (agentId: AgentId, text: string, files: Attachment[] = []) =>
+    invoke<RunId>("send_message", {
+      agentId,
+      text,
+      files: files.map(({ digest, name }) => ({ digest, name })),
+    }),
 
   clearChannel: (channelId: AgentId) => invoke<number>("clear_channel", { channelId }),
 
