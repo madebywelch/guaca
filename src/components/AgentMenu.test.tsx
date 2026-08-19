@@ -29,18 +29,32 @@ function open(agent: AgentCard, at = { x: 40, y: 40 }) {
     onClose: vi.fn(),
     onEditProfile: vi.fn(),
     onTogglePin: vi.fn(),
+    onTogglePause: vi.fn(),
     onDuplicate: vi.fn(),
+    onClearHistory: vi.fn(),
   };
   render(<AgentMenu target={{ agent, ...at }} {...handlers} />);
   return handlers;
 }
 
 describe("AgentMenu", () => {
-  it("offers the three things you do to an agent without opening it", () => {
+  it("offers everything you do to an agent, from either place it opens", () => {
     open(card());
-    expect(screen.getByRole("button", { name: "Edit profile" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Pin to top" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Duplicate" })).toBeTruthy();
+    for (const name of ["Pause", "Edit profile", "Pin to top", "Duplicate", "Clear history…"]) {
+      expect(screen.getByRole("button", { name })).toBeTruthy();
+    }
+  });
+
+  it("says resume on an agent that is already paused", () => {
+    open(card({ lifecycle: "paused" }));
+    expect(screen.getByRole("button", { name: "Resume" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Pause" })).toBeNull();
+  });
+
+  it("names the model, which is what you come here to check", () => {
+    // It used to sit under the agent's name over every message it ever wrote.
+    open(card({ model: "openai/gpt-5.6-terra" }));
+    expect(screen.getByText("openai/gpt-5.6-terra")).toBeTruthy();
   });
 
   it("says unpin on an agent that is already pinned", () => {
@@ -67,6 +81,20 @@ describe("AgentMenu", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
     expect(handlers.onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks twice before deleting a history, without closing in between", () => {
+    // The first click is the operator finding the item, not deciding anything.
+    // Closing on it would mean the decision is taken in a menu they have to
+    // open again, having already seen the word "clear" act like a button.
+    const handlers = open(card());
+    fireEvent.click(screen.getByRole("button", { name: "Clear history…" }));
+    expect(handlers.onClearHistory).not.toHaveBeenCalled();
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete this history" }));
+    expect(handlers.onClearHistory).toHaveBeenCalledTimes(1);
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("stays inside the window when opened near an edge", () => {

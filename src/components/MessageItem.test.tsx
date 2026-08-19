@@ -65,7 +65,6 @@ describe("messages addressed to the operator", () => {
   it("renders what you said as a bubble, with no avatar", () => {
     const { container } = show(envelope({}));
     expect(screen.getByText("hello there")).toBeTruthy();
-    expect(screen.getByText("You")).toBeTruthy();
     // You know who you are; the avatars exist to tell the agents apart.
     expect(container.querySelector(".avatar")).toBeNull();
   });
@@ -80,6 +79,55 @@ describe("messages addressed to the operator", () => {
     );
     expect(screen.getByText("on it")).toBeTruthy();
     expect(container.querySelector(".avatar")).toBeTruthy();
+  });
+});
+
+describe("naming the author", () => {
+  const reply = envelope({
+    from: { kind: "agent", id: "manager" },
+    to: { kind: "human" },
+    parts: [{ type: "text", text: "on it" }],
+  });
+
+  it("writes it out where two agents look alike in a list", () => {
+    // The pair's own thread. Neither participant is the person reading, and
+    // one column of text with two authors in it is unreadable without names.
+    render(<MessageItem message={reply} lookups={lookups} continued={false} named />);
+    expect(screen.getByText("Manager")).toBeTruthy();
+  });
+
+  it("leaves it out where the channel has already answered the question", () => {
+    // An agent's own channel has two participants: the one named at the top of
+    // the pane, and the operator. A name over every message is the loudest
+    // thing on the page and the one that says least.
+    const { container } = render(
+      <MessageItem message={reply} lookups={lookups} continued={false} named={false} />,
+    );
+    expect(screen.queryByText("Manager")).toBeNull();
+    // The portrait still says which agent, and it is one glyph rather than a
+    // line of display type over every paragraph.
+    expect(container.querySelector(".avatar")).toBeTruthy();
+  });
+
+  it("keeps your own message unmistakable without naming you either", () => {
+    const { container } = render(
+      <MessageItem message={envelope({})} lookups={lookups} continued={false} named={false} />,
+    );
+    expect(screen.queryByText("You")).toBeNull();
+    expect(container.querySelector(".msg[data-operator='true']")).toBeTruthy();
+    expect(container.querySelector(".avatar")).toBeNull();
+  });
+
+  it("still carries the time, out of the way", () => {
+    // Off the header and onto the row itself: every message has one and almost
+    // none of them are worth a line. It is a hover, and the transcript draws a
+    // line of its own wherever the gap was long enough to matter.
+    const { container } = render(
+      <MessageItem message={reply} lookups={lookups} continued={false} named={false} />,
+    );
+    const at = container.querySelector("time.msg__at");
+    expect(at).toBeTruthy();
+    expect(at?.getAttribute("datetime")).toBe(new Date(reply.createdAt).toISOString());
   });
 });
 
