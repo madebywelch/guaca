@@ -23,7 +23,7 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, Lifecycle};
-use guac_lib::domain::envelope::Envelope;
+use guac_lib::domain::envelope::{Envelope, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::files::FileStore;
@@ -58,6 +58,8 @@ pub enum Script {
     Memory(String),
     /// Emit a `create_agent` tool call.
     Hire { name: String, instructions: String, notes: String },
+    /// Emit a `schedule` tool call that books a repeat on the calendar.
+    Book { name: String, what: String, repeat: String },
     /// Emit a `request_permission` tool call.
     AskOperator { action: String, because: String },
     /// Answer with a 503.
@@ -142,6 +144,18 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_ask","type":"function",
                  "function":{"name":"request_permission","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Book { name, what, repeat } => {
+            let args =
+                serde_json::json!({ "action": "add", "name": name, "what": what, "repeat": repeat })
+                    .to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_book","type":"function",
+                 "function":{"name":"schedule","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
@@ -278,6 +292,32 @@ pub fn draft(name: &str, skills: &[&str]) -> CleanDraft {
     }
 }
 
+/// One agent in a scripted crew.
+///
+/// Skills are here because who a piece of work belongs to is not a question a
+/// crew of identically-described agents can be asked: the roster is what a
+/// coordinator chooses from, so a scenario about choosing has to build one.
+#[derive(Debug, Clone, Copy)]
+pub struct Member<'a> {
+    pub name: &'a str,
+    pub skills: &'a [&'a str],
+    /// `None` is the default group, where everybody can reach everybody.
+    pub group: Option<&'a str>,
+    /// The card's own standing instructions. Empty takes the default.
+    pub prompt: &'a str,
+}
+
+impl<'a> Member<'a> {
+    pub fn new(name: &'a str, skills: &'a [&'a str]) -> Self {
+        Member { name, skills, group: None, prompt: "" }
+    }
+
+    /// The same, carrying the standing instruction an operator would type.
+    pub fn told(name: &'a str, skills: &'a [&'a str], prompt: &'a str) -> Self {
+        Member { name, skills, group: None, prompt }
+    }
+}
+
 pub fn harness(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
     // No group named, so every agent lands in the default one and can reach
     // every other. This is the control for the isolation tests below.
@@ -292,17 +332,27 @@ pub fn harness_in_groups(
     placed: &[(&str, Option<&str>)],
     limits: GuardLimits,
 ) -> Harness {
+    let crew: Vec<Member> = placed
+        .iter()
+        .map(|(name, group)| Member { name, skills: &["testing"], group: *group, prompt: "" })
+        .collect();
+    harness_of(stub, &crew, limits)
+}
+
+/// A crew whose agents differ from each other, which is what a scenario about
+/// delegation needs.
+pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
     let mut groups: HashMap<&str, guac_lib::domain::ids::GroupId> = HashMap::new();
     let mut ids = HashMap::new();
-    for (name, group) in placed {
-        let group_id = group.map(|label| {
+    for member in crew {
+        let group_id = member.group.map(|label| {
             *groups.entry(label).or_insert_with(|| {
                 store
                     .create_group(&CleanGroup {
-                        name: (*label).to_string(),
+                        name: label.to_string(),
                         base_url: None,
                         default_model: None,
                         api_key: None,
@@ -311,10 +361,13 @@ pub fn harness_in_groups(
                     .id
             })
         });
-        let mut d = draft(name, &["testing"]);
+        let mut d = draft(member.name, member.skills);
         d.group_id = group_id;
+        if !member.prompt.is_empty() {
+            d.system_prompt = member.prompt.to_string();
+        }
         let card = store.create_agent(&d).unwrap();
-        ids.insert(name.to_string(), card.id);
+        ids.insert(member.name.to_string(), card.id);
     }
 
     let config = AppConfig {
@@ -380,6 +433,57 @@ pub fn tool_results(stub: &Stub) -> Vec<String> {
         .collect()
 }
 
+fn who(participant: Participant) -> String {
+    match participant {
+        Participant::Human => "operator".to_string(),
+        Participant::System => "Guaca".to_string(),
+        Participant::Agent { id } => id.short(),
+    }
+}
+
+/// One message rendered so that nothing in it is invisible.
+fn parts_of(envelope: &Envelope) -> String {
+    use guac_lib::domain::envelope::Part;
+    envelope
+        .parts
+        .iter()
+        .map(|part| match part {
+            Part::Text { text } => text.clone(),
+            Part::Notice { kind, text } => format!("[{kind:?}] {text}"),
+            Part::ToolCall { name, outcome, .. } => format!("[{name} -> {outcome:?}]"),
+            Part::File(file) => format!("[file {}]", file.name),
+            Part::Approval { summary, .. } => format!("[asks: {summary}]"),
+            Part::Json { name, .. } => format!("[{name}]"),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The system prompt each agent was actually sent, by name.
+pub fn prompts_by_agent(stub: &Stub) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for body in stub.transcript.lock().iter() {
+        out.insert(
+            speaker(body),
+            body["messages"][0]["content"].as_str().unwrap_or_default().to_string(),
+        );
+    }
+    out
+}
+
+/// How many model calls each agent made, by name.
+///
+/// The unit a crew costs its operator. An agent that was never involved in a
+/// task should not appear here at all, which is the whole argument for
+/// delegating to one peer rather than to everybody.
+pub fn calls_by_agent(stub: &Stub) -> HashMap<String, usize> {
+    let mut out: HashMap<String, usize> = HashMap::new();
+    for body in stub.transcript.lock().iter() {
+        *out.entry(speaker(body)).or_default() += 1;
+    }
+    out
+}
+
 impl Harness {
     pub fn id(&self, name: &str) -> AgentId {
         *self.ids.get(name).unwrap_or_else(|| panic!("no agent named {name}"))
@@ -392,6 +496,53 @@ impl Harness {
             .unwrap()
             .iter()
             .map(Envelope::plain_text)
+            .filter(|t| !t.is_empty())
+            .collect()
+    }
+
+    /// Which peers were sent something, by name, with a count each.
+    ///
+    /// Who a message went to is the question a delegation scenario asks, and
+    /// counting traffic cannot answer it: one message to the right agent and
+    /// one to the wrong agent are the same number.
+    pub fn messaged(&self) -> Vec<(String, usize)> {
+        self.tally(self.feed())
+    }
+
+    /// The same, for what one agent sent.
+    ///
+    /// A coordinator's delegations and the answers coming back to it are both
+    /// traffic at that agent, and only the first is the decision under test.
+    pub fn messaged_by(&self, from: &str) -> Vec<(String, usize)> {
+        let sender = Participant::Agent { id: self.id(from) };
+        self.tally(self.feed().into_iter().filter(|e| e.from == sender).collect::<Vec<_>>())
+    }
+
+    fn tally(&self, envelopes: Vec<Envelope>) -> Vec<(String, usize)> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for envelope in envelopes {
+            if let Some(id) = envelope.to.agent_id() {
+                if let Some((name, _)) = self.ids.iter().find(|(_, known)| **known == id) {
+                    *counts.entry(name.clone()).or_default() += 1;
+                }
+            }
+        }
+        let mut out: Vec<(String, usize)> = counts.into_iter().collect();
+        out.sort();
+        out
+    }
+
+    /// Everything one agent said to a peer, wherever it was filed.
+    ///
+    /// Not `channel_texts`: a send is filed under the recipient and an answer
+    /// under the sender, so an agent's own channel holds what it was asked and
+    /// not always what it answered.
+    pub fn said_to_peers(&self, name: &str) -> Vec<String> {
+        let sender = Participant::Agent { id: self.id(name) };
+        self.feed()
+            .into_iter()
+            .filter(|e| e.from == sender)
+            .map(|e| e.plain_text())
             .filter(|t| !t.is_empty())
             .collect()
     }
@@ -527,11 +678,16 @@ impl Harness {
     }
 
     /// Everything said so far, for a failure that has to be actionable.
+    ///
+    /// Every part, not `plain_text`: a guard refusal and a failed call are
+    /// `Notice` parts with no text in them, so a run that stopped because of one
+    /// used to print a blank line where its reason was. The two failures worth
+    /// having a transcript for are exactly those.
     pub fn transcript(&self) -> String {
         self.sink
             .appended_messages()
             .iter()
-            .map(|m| format!("  {:?} -> {:?}: {}", m.from, m.to, m.plain_text()))
+            .map(|m| format!("  {} -> {}: {}", who(m.from), who(m.to), parts_of(m)))
             .collect::<Vec<_>>()
             .join("\n")
     }
