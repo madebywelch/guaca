@@ -1741,6 +1741,33 @@ button {
   max-width: 16rem;
 }
 
+.chip__size {
+  color: var(--faint);
+  flex: none;
+}
+
+/* The picture, not its name. Three screenshots dropped together are three
+   copies of `Screenshot 2026-08-17 at 14.02.11.png` and nothing else. */
+.chip__thumb {
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 0.2rem;
+  object-fit: cover;
+  flex: none;
+}
+
+/* What could not be attached, beside what could. The operator is looking at
+   the drop they just made, not at the top of the window. */
+.composer__refused {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0.55rem 0.65rem 0;
+}
+
 .chip__remove {
   border: none;
   background: none;
@@ -1757,32 +1784,192 @@ button {
   color: var(--alarm);
 }
 
-/* A file on a message. Named and sized: it is a record of what went, not a
-   preview of it. */
+/* ==========================================================================
+   A file on a message
+
+   Shown, not just named. A document that arrives as a filename is a document
+   the operator has to open something else to read, and the thing they wanted
+   was usually one glance. The strip is bounded in height on purpose: a
+   transcript is a conversation, and a preview that takes the pane has stopped
+   being a message and become a reader. The full view is one click away.
+   ========================================================================== */
+
 .file {
   display: inline-flex;
-  align-items: baseline;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: stretch;
   margin-top: 0.35rem;
-  padding: 0.35rem 0.6rem;
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--sunken);
+  overflow: hidden;
+  max-width: min(28rem, 100%);
+}
+
+/* Nothing to draw: the row is the whole card, so it keeps the shape the
+   transcript had before previews existed. */
+.file[data-kind="none"] {
   max-width: 100%;
 }
 
+/* The margin is space from the words above, and a file handed over with
+   nothing typed has none: that message is a bubble whose only content is this
+   card, and the gap left it sitting off-centre inside its own padding. */
+.file:first-child {
+  margin-top: 0;
+}
+
+.file__view {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--edge);
+  background: var(--raised);
+  cursor: zoom-in;
+  text-align: left;
+}
+
+.file__image {
+  display: block;
+  max-width: 100%;
+  max-height: 17rem;
+  object-fit: contain;
+  margin: 0 auto;
+}
+
+/* The frame is inert. The button behind it is what opens the document, and a
+   frame that took the click would leave the one obvious way in doing nothing. */
+.file__page {
+  height: 15rem;
+  overflow: hidden;
+  background: var(--raised);
+}
+
+.file__frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+}
+
+/* Cut by height rather than by character count, and faded at the cut so the
+   eye reads "there is more" without a line of prose saying it. */
+.file__text {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  max-height: 9rem;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.file__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.6rem;
+  min-width: 0;
+}
+
 .file__name {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: inherit;
   font-family: var(--font-mono);
   font-size: 0.72rem;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+}
+
+.file__name:hover {
+  text-decoration: underline;
 }
 
 .file__size {
   font-size: 0.66rem;
   color: var(--muted);
   flex: none;
+}
+
+.file__foot .btn {
+  margin-left: auto;
+  flex: none;
+}
+
+/* The full view. Wider than an ordinary dialog because the whole point of it
+   is that the bounds are off. */
+.dialog--file {
+  width: min(64rem, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+}
+
+.file-view__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  min-width: 0;
+}
+
+.file-view__head .dialog__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-view__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  flex: none;
+}
+
+.file-view__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: auto;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--ground);
+}
+
+.file-view__body[data-kind="text"] {
+  flex-direction: column;
+  padding: 0.35rem 0.5rem;
+}
+
+/* No mask and no height cap in here: this is the reading view. */
+.file-view__body .file__text {
+  max-height: none;
+  mask-image: none;
+  font-size: 0.75rem;
+}
+
+.file-view__image {
+  margin: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 12rem);
+  object-fit: contain;
+}
+
+.file-view__frame {
+  width: 100%;
+  height: calc(100vh - 12rem);
+  border: 0;
 }
 
 /* The typeahead sits above the box it belongs to, so a long list grows away

@@ -6,7 +6,8 @@
 
 use std::sync::Arc;
 
-use tauri::{Emitter, Manager};
+use tauri::http::{Request, Response};
+use tauri::{Emitter, Manager, UriSchemeContext};
 
 use crate::commands::{self, AppState};
 use crate::config;
@@ -33,6 +34,76 @@ impl EventSink for TauriSink {
     }
 }
 
+/// The scheme a preview is addressed on: `guacfile://localhost/{digest}/{name}`.
+///
+/// Its own scheme rather than a command returning bytes. A transcript crosses
+/// IPC in bulk, forty messages into a prompt and hundreds into the activity
+/// view, which is the whole reason a document is a digest in an envelope rather
+/// than the document; handing those same bytes back over the same channel to
+/// draw a thumbnail would give it up. A URL is fetched once, by one element,
+/// only while it is on screen, and the webview caches and ranges it.
+///
+/// It is also narrower than the asset protocol, which would open a scoped part
+/// of the disk. Nothing is addressable here but a digest this app stored.
+const FILE_SCHEME: &str = "guacfile";
+
+/// Serves one stored file to the webview.
+fn serve_file(
+    context: UriSchemeContext<'_, tauri::Wry>,
+    request: Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let refuse = |status: u16, why: &str| {
+        Response::builder()
+            .status(status)
+            .header("content-type", "text/plain; charset=utf-8")
+            .body(why.as_bytes().to_vec())
+            .expect("a refusal is a valid response")
+    };
+
+    // A request can in principle arrive before `setup` has managed the state,
+    // and a window that asks too early should be told to come back rather than
+    // take the app down with it.
+    let Some(state) = context.app_handle().try_state::<AppState>() else {
+        return refuse(503, "The file store is not open yet.");
+    };
+
+    let range = request.headers().get("range").and_then(|value| value.to_str().ok());
+    let target = request.uri().path().trim_start_matches('/');
+    match state.runtime.files().serve(target, range) {
+        Ok(served) => {
+            // A preview that comes up blank is either a request that never
+            // happened, which means the CSP, or one that was answered wrongly.
+            // The two look identical on screen and nowhere else.
+            tracing::debug!(
+                target,
+                range,
+                served.status,
+                bytes = served.body.len(),
+                "served a file"
+            );
+            let mut response = Response::builder()
+                .status(served.status)
+                .header("content-type", served.mime)
+                // Said even on a whole-file answer: a PDF viewer asks for the
+                // tail first, and one that is told ranges are unavailable
+                // re-reads the document from the start for every page.
+                .header("accept-ranges", "bytes")
+                // The bytes are on this machine already and addressed by their
+                // own content, so nothing they could be revalidated against
+                // will ever have changed.
+                .header("cache-control", "private, max-age=31536000, immutable");
+            if let Some(content_range) = served.content_range {
+                response = response.header("content-range", content_range);
+            }
+            response.body(served.body).expect("a stored file is a valid response")
+        }
+        Err(err) => {
+            tracing::debug!(%err, target, "refused a file the webview asked for");
+            refuse(404, "No file here with that content.")
+        }
+    }
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -51,6 +122,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .register_uri_scheme_protocol(FILE_SCHEME, serve_file)
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             let config_dir = app.path().app_config_dir()?;
@@ -128,7 +200,18 @@ pub fn run() {
                 "guac ready"
             );
 
-            app.manage(AppState { runtime, config_path });
+            // Where a saved attachment lands. The operating system's own
+            // downloads folder is the one place a person already knows to look;
+            // the home directory is the fallback for a machine that has no such
+            // folder, and the app's own data directory is where a copy goes
+            // rather than nowhere.
+            let downloads = app
+                .path()
+                .download_dir()
+                .or_else(|_| app.path().home_dir())
+                .unwrap_or_else(|_| data_dir.clone());
+
+            app.manage(AppState { runtime, config_path, downloads });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -164,6 +247,8 @@ pub fn run() {
             commands::pair_messages,
             commands::conversation_flow,
             commands::search,
+            commands::stage_files,
+            commands::save_file,
             commands::send_message,
             commands::retry_turn,
             commands::clear_channel,

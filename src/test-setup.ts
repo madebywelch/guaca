@@ -20,6 +20,38 @@ if (typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = function scrollIntoView() {};
 }
 
+// For the same reason nothing is ever on screen here, so anything that waits to
+// be scrolled to would wait forever. Everything is reported visible, which is
+// as true as anything else in a window with no dimensions.
+if (!("IntersectionObserver" in globalThis)) {
+  class IntersectionObserverStub {
+    constructor(private readonly notify: IntersectionObserverCallback) {}
+    observe(target: Element) {
+      this.notify(
+        [{ target, isIntersecting: true } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver,
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+    takeRecords(): IntersectionObserverEntry[] {
+      return [];
+    }
+  }
+  (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver =
+    IntersectionObserverStub;
+}
+
+// Tauri injects this into the real webview before the app loads. Only the URL
+// builder is needed: `lib/files.ts` addresses a stored file with it, and every
+// command goes through a mock.
+if (!("__TAURI_INTERNALS__" in globalThis)) {
+  (globalThis as unknown as { __TAURI_INTERNALS__: unknown }).__TAURI_INTERNALS__ = {
+    convertFileSrc: (path: string, protocol: string) =>
+      `${protocol}://localhost/${encodeURIComponent(path)}`,
+  };
+}
+
 // jsdom hands back a `localStorage` object with no methods on it here, so a
 // component that stores a preference throws rather than storing one. Real
 // WKWebView has the whole thing; this is enough of it to assert against.

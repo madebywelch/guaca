@@ -30,17 +30,34 @@ export type ToolOutcome =
 /** Whether a message carries work or is a courtesy. */
 export type Intent = "work" | "courtesy";
 
+/**
+ * A file, as everything that refers to one refers to it.
+ *
+ * The bytes are not here and never cross IPC. They sit once in the runtime's
+ * file store addressed by `digest`, which is the SHA-256 of the contents, and
+ * the webview reads them over the `guacfile:` scheme when it has to draw one.
+ * See `lib/files.ts`.
+ */
+export interface Attachment {
+  digest: string;
+  name: string;
+  mime: string;
+  bytes: number;
+}
+
+/** What became of a drop: what was taken, and what could not be. */
+export interface Staged {
+  attached: Attachment[];
+  /** One line per refused file, saying which it was and why. */
+  refused: string[];
+}
+
 export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
   | { type: "notice"; kind: NoticeKind; text: string }
   | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
-  /**
-   * A file the message carries. The bytes stay in the runtime's file store and
-   * are addressed by `digest`; a transcript is read in bulk, so a document is
-   * never inlined into one.
-   */
-  | { type: "file"; digest: string; name: string; mime: string; bytes: number }
+  | ({ type: "file" } & Attachment)
   /**
    * An agent asking the operator for permission. Carries its own wording, so an
    * old channel still says what was asked; what came of it is read from
@@ -413,7 +430,7 @@ export interface MessageHit {
 
 /** One attachment, and the message that carried it. Unique by digest. */
 export interface FileHit {
-  file: { digest: string; name: string; mime: string; bytes: number };
+  file: Attachment;
   messageId: MessageId;
   channelId: AgentId;
   from: Participant;

@@ -175,6 +175,39 @@ file formats than this runtime ever will. When placing fails the model is told
 so in words, since an agent that hears nothing describes a document it never
 read.
 
+**A preview reads the bytes over a URL, which is the exception that keeps the
+rule.** The webview has to draw a file to show one, and the reason bytes stay
+out of IPC is that IPC is where the transcript travels in bulk. So they do not
+go that way: `guacfile://localhost/{digest}/{name}` is answered out of the store
+by `app.rs`, fetched once by the one element drawing it and only while that
+element is on screen. A digest arrives from the webview there and is joined onto
+a path, so anything that is not 64 hex characters is refused before the join,
+not after. The name in the URL picks the type of the answer and nothing else:
+the bytes are found by content, and renaming a file cannot turn it into another
+one. If you add a way for the renderer to get at a file, it goes through this
+scheme, and the CSP has to name it or the element silently draws nothing.
+
+**WebKit will not take a custom scheme in a frame, so a document is copied into
+one.** An `img` and a `fetch` on `guacfile:` are allowed by naming the scheme in
+the CSP; a frame is refused whatever you write there, as a scheme source, as a
+host, or through `default-src`, and it is refused silently: no violation event,
+no console line, just a frame that never asks for anything. A PDF is drawn by
+the webview's own viewer and that viewer only runs in a frame, so `localCopy`
+fetches the document over the scheme as usual and hands the frame a `blob:` URL
+instead. That is the only place in this app where a file's bytes sit in the
+renderer, which is why the copy is made when the frame is near the viewport and
+revoked when it goes. Do not "simplify" it back to a direct `src`: it will pass
+every test in this repo and draw an empty rectangle.
+
+**A dropped file is stored before it is sent, and the send carries a
+reference.** `stage_files` runs on the drop. That is what refuses a 40 MB
+archive while the operator is still holding it rather than failing the message
+they went on to write, and what lets a picture be shown back to them, since by
+then it has an address. One file failing does not refuse the four beside it.
+`send_message` then resolves each digest and name against the store again: the
+size and the type on a message are read off the disk, never taken from the
+webview. A staged file that is never sent stays, like every other file here.
+
 **Every event is an IPC hop and a render, so tokens are coalesced before they
 leave.** A model writes faster than a screen refreshes. One event per token
 spent the operator's main thread on work no eye could resolve, and with five

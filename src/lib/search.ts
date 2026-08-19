@@ -10,6 +10,7 @@
  * everything is scored by the same function.
  */
 
+import { readableSize } from "./files";
 import { describeTrigger, routineTitle } from "./routine";
 import { relativeTime } from "./time";
 import type {
@@ -142,13 +143,6 @@ function bestOf(query: string, fields: [text: string, weight: number][]): number
 function firstLine(text: string, cap = 120): string {
   const line = text.replace(/\s+/g, " ").trim();
   return line.length > cap ? `${line.slice(0, cap - 1)}…` : line;
-}
-
-/** Sizes the way a person says them, matching what the transcript shows. */
-export function readableSize(bytes: number): string {
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes >= 1024) return `${Math.ceil(bytes / 1024)} KB`;
-  return `${bytes} bytes`;
 }
 
 /**
