@@ -264,6 +264,7 @@ pub fn run() {
             commands::usage_for_runs,
             commands::get_settings,
             commands::update_settings,
+            commands::fetch_models,
             commands::test_connection,
         ])
         .run(tauri::generate_context!())

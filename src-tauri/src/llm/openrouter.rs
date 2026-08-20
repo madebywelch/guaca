@@ -6,7 +6,7 @@
 //! the bugs worth catching here (chunk boundaries, tool-call assembly, error
 //! classification) all live in the wire handling.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -224,6 +224,16 @@ pub struct Usage {
     pub cost: Option<f64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
 impl Completion {
     pub fn to_wire_tool_calls(&self) -> Vec<WireToolCall> {
         self.tool_calls
@@ -262,7 +272,7 @@ pub enum LlmError {
     },
     #[error("inference request timed out after {secs}s")]
     Timeout { secs: u64 },
-    #[error("could not decode the response stream: {0}")]
+    #[error("could not decode the inference response: {0}")]
     Decode(String),
     #[error("the response stream ended mid-message")]
     Truncated,
@@ -328,17 +338,25 @@ fn extract_message(body: &str) -> String {
     }
 }
 
-fn classify_status(status: u16, body: &str, model: &str, retry_after: Option<u64>) -> LlmError {
+fn classify_status(
+    status: u16,
+    body: &str,
+    model: Option<&str>,
+    retry_after: Option<u64>,
+) -> LlmError {
     let message = extract_message(body);
+    // OpenRouter reports an unknown or unavailable model as a 400 or 404.
+    // Surfacing that as a generic upstream error sends the operator hunting
+    // for a network problem that is not there. A catalogue request has no
+    // chosen model, so the same status remains an endpoint error there.
+    if matches!(status, 400 | 404) && message.to_lowercase().contains("model") {
+        if let Some(model) = model {
+            return LlmError::ModelRejected { model: model.to_string(), message };
+        }
+    }
     match status {
         401 | 403 => LlmError::Auth { status, message },
         429 => LlmError::RateLimited { message, retry_after_secs: retry_after },
-        // OpenRouter reports an unknown or unavailable model as a 400 or 404.
-        // Surfacing that as a generic upstream error sends the operator hunting
-        // for a network problem that is not there.
-        400 | 404 if message.to_lowercase().contains("model") => {
-            LlmError::ModelRejected { model: model.to_string(), message }
-        }
         _ => LlmError::Upstream { status, message },
     }
 }
@@ -459,6 +477,68 @@ impl LlmClient {
         Ok(Self { http })
     }
 
+    /// Reads the model IDs exposed by the configured OpenAI-compatible base.
+    ///
+    /// The URL is derived from the validated inference base rather than taken
+    /// independently, so this is a catalogue lookup rather than a credentialed
+    /// network proxy for the webview.
+    pub async fn list_models(&self, cfg: &InferenceConfig) -> Result<Vec<String>, LlmError> {
+        if !cfg.is_ready() {
+            return Err(LlmError::NotConfigured);
+        }
+
+        let url = cfg.models_url();
+        let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(cfg.api_key.trim())
+            .header("HTTP-Referer", &cfg.referer)
+            .header("X-Title", &cfg.title)
+            .header("Accept", "application/json")
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(|source| {
+                if source.is_timeout() {
+                    LlmError::Timeout { secs: timeout.as_secs() }
+                } else {
+                    LlmError::Transport { url: url.clone(), source }
+                }
+            })?;
+
+        let status = response.status();
+        let retry_after = response
+            .headers()
+            .get("retry-after")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok());
+        let text = response.text().await.map_err(|source| {
+            if source.is_timeout() {
+                LlmError::Timeout { secs: timeout.as_secs() }
+            } else {
+                LlmError::Transport { url: url.clone(), source }
+            }
+        })?;
+
+        if !status.is_success() {
+            return Err(classify_status(status.as_u16(), &text, None, retry_after));
+        }
+
+        let response: ModelsResponse = serde_json::from_str(&text)
+            .map_err(|err| LlmError::Decode(format!("model list from {url}: {err}")))?;
+        Ok(response
+            .data
+            .into_iter()
+            .filter_map(|model| {
+                let id = model.id.trim();
+                (!id.is_empty()).then(|| id.to_string())
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect())
+    }
+
     /// Streams a completion, calling `on_token` for each text fragment.
     ///
     /// `on_token` runs on the caller's task and must not block; it exists so
@@ -518,7 +598,7 @@ impl LlmClient {
                 .and_then(|v| v.to_str().ok())
                 .and_then(|v| v.parse::<u64>().ok());
             let text = response.text().await.unwrap_or_default();
-            return Err(classify_status(status.as_u16(), &text, &request.model, retry_after));
+            return Err(classify_status(status.as_u16(), &text, Some(&request.model), retry_after));
         }
 
         self.consume_stream(response, &url, timeout, &mut on_token).await
@@ -629,7 +709,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use axum::response::IntoResponse;
-    use axum::routing::post;
+    use axum::routing::{get, post};
     use axum::Router;
 
     /// Spins a stub server and returns its base URL plus the bodies it saw.
@@ -658,6 +738,35 @@ mod tests {
         });
 
         (format!("http://{addr}/v1"), seen)
+    }
+
+    /// A real `/v1/models` route that records the request authorization.
+    async fn models_stub(body: serde_json::Value) -> (String, Arc<Mutex<Vec<String>>>) {
+        let auth = Arc::new(Mutex::new(Vec::new()));
+        let recorder = auth.clone();
+        let app = Router::new().route(
+            "/v1/models",
+            get(move |headers: axum::http::HeaderMap| {
+                let body = body.clone();
+                let recorder = recorder.clone();
+                async move {
+                    let value = headers
+                        .get(axum::http::header::AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    recorder.lock().unwrap().push(value);
+                    axum::Json(body)
+                }
+            }),
+        );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (format!("http://{addr}/v1"), auth)
     }
 
     fn sse(frames: &[&str]) -> axum::response::Response {
@@ -692,6 +801,35 @@ mod tests {
 
     fn text_frame(content: &str) -> String {
         serde_json::json!({ "choices": [{ "delta": { "content": content } }] }).to_string()
+    }
+
+    #[tokio::test]
+    async fn a_malformed_model_catalogue_is_reported() {
+        let (base, _) = models_stub(serde_json::json!({"models": []})).await;
+        let client = LlmClient::new().unwrap();
+        let err = client.list_models(&cfg(base)).await.unwrap_err();
+        assert!(matches!(err, LlmError::Decode(_)), "got {err:?}");
+        assert!(err.to_string().contains("model list"));
+    }
+
+    #[tokio::test]
+    async fn lists_model_ids_from_the_versioned_endpoint_using_the_key() {
+        let (base, auth) = models_stub(serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "zeta/model"},
+                {"id": " alpha/model "},
+                {"id": ""},
+                {"id": "zeta/model"}
+            ]
+        }))
+        .await;
+        let client = LlmClient::new().unwrap();
+
+        let models = client.list_models(&cfg(base)).await.unwrap();
+
+        assert_eq!(models, vec!["alpha/model", "zeta/model"]);
+        assert_eq!(auth.lock().unwrap().as_slice(), ["Bearer sk-test"]);
     }
 
     #[tokio::test]

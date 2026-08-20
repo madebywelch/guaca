@@ -227,6 +227,10 @@ export const api = {
 
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
 
+  /** Uses on-screen settings or a group's resolved endpoint/key without exposing stored keys. */
+  fetchModels: (options: { patch?: SettingsPatch; groupId?: GroupId } = {}) =>
+    invoke<string[]>("fetch_models", options),
+
   /**
    * Tests what is currently on screen, not what was last saved. Testing the
    * saved config while the operator is looking at an unsaved key reports "no

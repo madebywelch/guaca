@@ -67,6 +67,11 @@ impl InferenceConfig {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
+    /// Full URL for the OpenAI-compatible model catalogue.
+    pub fn models_url(&self) -> String {
+        format!("{}/models", self.base_url.trim_end_matches('/'))
+    }
+
     pub fn is_ready(&self) -> bool {
         !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
     }
@@ -316,6 +321,14 @@ mod tests {
         assert_eq!(cfg.chat_completions_url(), "https://openrouter.ai/api/v1/chat/completions");
         cfg.base_url = "https://openrouter.ai/api/v1/".into();
         assert_eq!(cfg.chat_completions_url(), "https://openrouter.ai/api/v1/chat/completions");
+    }
+
+    #[test]
+    fn models_url_uses_the_same_versioned_base() {
+        let mut cfg = InferenceConfig::default();
+        assert_eq!(cfg.models_url(), "https://openrouter.ai/api/v1/models");
+        cfg.base_url = "http://localhost:1234/v1/".into();
+        assert_eq!(cfg.models_url(), "http://localhost:1234/v1/models");
     }
 
     #[test]
