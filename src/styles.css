@@ -2551,8 +2551,13 @@ button {
 }
 
 /* The full view. Wider than an ordinary dialog because the whole point of it
-   is that the bounds are off. */
-.dialog--file {
+   is that the bounds are off.
+
+   `.dialog` is declared further down this file, so a one-class modifier here
+   loses `width` to it on source order alone and the reading view came out at
+   the ordinary 38rem. Doubled rather than moved, because the rest of the full
+   view's rules belong beside the card they enlarge. */
+.dialog.dialog--file {
   width: min(64rem, 100%);
   display: flex;
   flex-direction: column;
@@ -2640,24 +2645,37 @@ button {
   padding: 0.35rem 0.5rem;
 }
 
-/* No mask and no height cap in here: this is the reading view. */
-.file-view__body .file__text {
-  max-height: none;
-  mask-image: none;
-  font-size: 0.75rem;
-}
+/* No mask, no height cap and no clip in here: this is the reading view, and
+   the body above is the one thing in it that scrolls.
 
+   `overflow` is the load-bearing one and is the least obvious. A clipping flex
+   item has an automatic minimum size of zero, so the card's `overflow: hidden`
+   left the document free to shrink to whatever room was going and swallow the
+   rest of itself. Nothing overflowed the body, so nothing scrolled, and a
+   brief opened for reading stopped at the height of the window with no
+   scrollbar and no way down. */
+.file-view__body .file__text,
 .file-view__body .file__doc {
   max-height: none;
+  overflow: visible;
   mask-image: none;
+}
+
+.file-view__body .file__text {
+  font-size: 0.75rem;
 }
 
 /* The one place in the app where a document is read rather than glanced at, so
    the measure is capped the way prose is set. Full width, a heading two lines
-   long crosses the whole window and the eye loses the return. */
+   long crosses the whole window and the eye loses the return.
+
+   Centred, because the cap is narrower than the dialog: left-aligned, the
+   column sits against one edge with the rest of a 64rem window empty beside
+   it, which reads as a layout that ran out rather than one that chose. */
 .file-view__body .file__doc .md {
   font-size: 0.85rem;
   max-width: 44rem;
+  margin-inline: auto;
 }
 
 .file-view__image {
