@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -90,10 +90,14 @@ describe("a request for permission", () => {
     expect(screen.getByText(/Manager is waiting on you/)).toBeTruthy();
   });
 
-  it("sends the answer the operator chose", () => {
+  it("sends the answer the operator chose, and holds the buttons until it lands", async () => {
     draw("pending");
-    fireEvent.click(screen.getByRole("button", { name: "Always allow" }));
+    const always = screen.getByRole("button", { name: "Always allow" }) as HTMLButtonElement;
+    fireEvent.click(always);
     expect(decideApproval).toHaveBeenCalledWith("ap1", "alwaysAllow");
+    // Two clicks in flight would be two answers to one question.
+    expect(always.disabled).toBe(true);
+    await waitFor(() => expect(always.disabled).toBe(false));
   });
 
   it("says who a standing allow is for", () => {

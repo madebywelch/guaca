@@ -1,12 +1,14 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Envelope } from "../lib/types";
+import type { AgentCard, Envelope, RunId, RunUsage } from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
+
+const usageForRuns = vi.fn<(runs: RunId[]) => Promise<RunUsage[]>>(async () => []);
 
 vi.mock("../lib/ipc", () => ({
   openExternal: vi.fn(),
-  api: { usageForRuns: async () => [] },
+  api: { usageForRuns: (runs: RunId[]) => usageForRuns(runs) },
 }));
 
 function card(id: string, name: string, color = "#c7d96b"): AgentCard {
@@ -75,35 +77,52 @@ const CONVERSATION = [
   msg(agent("researcher"), agent("manager"), "findings", 4),
 ];
 
+/**
+ * Renders the board and lets the usage fetch land. The board asks what each
+ * run cost as soon as it mounts, and the answer arrives after the render
+ * returns; a test that has already moved on by then is warned about a state
+ * update it never waited for.
+ */
+async function draw(messages: Envelope[], lookup: (id: string) => AgentCard | undefined = byId) {
+  const rendered = render(<ActivityFlow messages={messages} byId={lookup} />);
+  await act(async () => {});
+  return rendered;
+}
+
 describe("ActivityFlow", () => {
-  it("gives every participant a lane, the operator included", () => {
+  beforeEach(() => {
+    usageForRuns.mockReset();
+    usageForRuns.mockResolvedValue([]);
+  });
+
+  it("gives every participant a lane, the operator included", async () => {
     // A flow that starts at the first agent-to-agent message hides who set it
     // off, so "You" has to be on the board.
-    render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+    await draw(CONVERSATION);
     for (const name of ["You", "Manager", "Critic", "Researcher"]) {
       expect(screen.getByText(name)).toBeTruthy();
     }
   });
 
-  it("orders lanes by when each participant joined", () => {
-    const { container } = render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+  it("orders lanes by when each participant joined", async () => {
+    const { container } = await draw(CONVERSATION);
     const names = [...container.querySelectorAll(".flow__name")].map((n) => n.textContent);
     expect(names).toEqual(["You", "Manager", "Critic", "Researcher"]);
   });
 
-  it("draws one arrow per message, in order", () => {
-    const { container } = render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+  it("draws one arrow per message, in order", async () => {
+    const { container } = await draw(CONVERSATION);
     expect(container.querySelectorAll(".flow__row")).toHaveLength(CONVERSATION.length);
   });
 
-  it("labels each arrow with who sent it and to whom", () => {
-    render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+  it("labels each arrow with who sent it and to whom", async () => {
+    await draw(CONVERSATION);
     expect(screen.getByLabelText(/Manager to Critic/)).toBeTruthy();
     expect(screen.getByLabelText(/Critic to Researcher/)).toBeTruthy();
   });
 
-  it("opens the message when an arrow is clicked", () => {
-    render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+  it("opens the message when an arrow is clicked", async () => {
+    await draw(CONVERSATION);
     fireEvent.click(screen.getByLabelText(/Manager to Critic/));
     const dialog = screen.getByRole("dialog");
     // Scoped to the dialog: the hovered arrow keeps its excerpt behind it.
@@ -111,10 +130,10 @@ describe("ActivityFlow", () => {
     expect(within(dialog).getByText(/Manager → Critic/)).toBeTruthy();
   });
 
-  it("is reachable from the keyboard", () => {
+  it("is reachable from the keyboard", async () => {
     // Each row is a real button, so focus and Enter come from the platform
     // rather than from a tabindex and a key handler on an SVG group.
-    render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+    await draw(CONVERSATION);
     const node = screen.getByLabelText(/Critic to Manager/);
     expect(node.tagName).toBe("BUTTON");
     node.focus();
@@ -123,17 +142,12 @@ describe("ActivityFlow", () => {
     expect(within(screen.getByRole("dialog")).getByText("here are the holes")).toBeTruthy();
   });
 
-  it("gives each run its own board, newest first", () => {
-    const { container } = render(
-      <ActivityFlow
-        messages={[
-          msg(human, agent("manager"), "first task", 0, "r1"),
-          msg(agent("manager"), agent("critic"), "relay", 1, "r1"),
-          msg(human, agent("manager"), "second task", 0, "r2"),
-        ]}
-        byId={byId}
-      />,
-    );
+  it("gives each run its own board, newest first", async () => {
+    const { container } = await draw([
+      msg(human, agent("manager"), "first task", 0, "r1"),
+      msg(agent("manager"), agent("critic"), "relay", 1, "r1"),
+      msg(human, agent("manager"), "second task", 0, "r2"),
+    ]);
     const runs = container.querySelectorAll(".run");
     expect(runs).toHaveLength(2);
     // What just happened is what an operator came here for, so it is at the
@@ -143,26 +157,21 @@ describe("ActivityFlow", () => {
     expect(runs[1]!.getAttribute("data-open")).toBeNull();
   });
 
-  it("does not widen a run with participants that were not in it", () => {
+  it("does not widen a run with participants that were not in it", async () => {
     // Lanes used to be global, so every agent that ever spoke held a column
     // forever and each new one pushed the arrows further right.
-    const { container } = render(
-      <ActivityFlow
-        messages={[
-          msg(human, agent("manager"), "first task", 0, "r1"),
-          msg(agent("manager"), agent("critic"), "relay", 1, "r1"),
-          msg(human, agent("manager"), "second task", 0, "r2"),
-        ]}
-        byId={byId}
-      />,
-    );
+    const { container } = await draw([
+      msg(human, agent("manager"), "first task", 0, "r1"),
+      msg(agent("manager"), agent("critic"), "relay", 1, "r1"),
+      msg(human, agent("manager"), "second task", 0, "r2"),
+    ]);
     // The open board is the second run: You and Manager, not Critic.
     const lanes = container.querySelectorAll(".run[data-open] .flow__lane");
     expect(lanes).toHaveLength(2);
     expect([...lanes].map((l) => l.textContent)).not.toContain("Critic");
   });
 
-  it("marks an agent that has been deleted, so two of a name are not confused", () => {
+  it("marks an agent that has been deleted, so two of a name are not confused", async () => {
     const gone = {
       id: "ghost",
       name: "Researcher",
@@ -170,35 +179,41 @@ describe("ActivityFlow", () => {
       avatar: "plain",
       lifecycle: "terminated",
     };
-    render(
-      <ActivityFlow
-        messages={[msg(human, agent("ghost"), "who are you", 0, "r1")]}
-        byId={(id) => (id === "ghost" ? (gone as never) : byId(id))}
-      />,
+    await draw([msg(human, agent("ghost"), "who are you", 0, "r1")], (id) =>
+      id === "ghost" ? (gone as never) : byId(id),
     );
     expect(screen.getByText("deleted")).toBeTruthy();
   });
 
-  it("shows what was said without needing a click", () => {
+  it("shows what was said without needing a click", async () => {
     // The whole reason the board was turned upright: an arrow with no room for
     // a word meant reading a conversation one click at a time.
-    render(<ActivityFlow messages={CONVERSATION} byId={byId} />);
+    await draw(CONVERSATION);
     expect(screen.getByText(/please review/)).toBeTruthy();
     expect(screen.getByText(/here are the holes/)).toBeTruthy();
   });
 
-  it("invites a first message when nothing has happened", () => {
-    render(<ActivityFlow messages={[]} byId={byId} />);
+  it("invites a first message when nothing has happened", async () => {
+    await draw([]);
     expect(screen.getByText(/Nothing has happened yet/)).toBeTruthy();
+    expect(usageForRuns).not.toHaveBeenCalled();
   });
 
-  it("still draws a lane for an agent that has been deleted", () => {
-    render(
-      <ActivityFlow
-        messages={[msg(agent("ghost"), agent("manager"), "from beyond", 1)]}
-        byId={byId}
-      />,
-    );
+  it("still draws a lane for an agent that has been deleted", async () => {
+    await draw([msg(agent("ghost"), agent("manager"), "from beyond", 1)]);
     expect(screen.getByText("Deleted agent")).toBeTruthy();
+  });
+
+  it("shows what each run cost once the usage arrives", async () => {
+    // Asked for once per set of runs, not carried on every message; the answer
+    // lands after the board is drawn and the run header fills in.
+    usageForRuns.mockResolvedValue([
+      { runId: "r1", prompt: 1200, completion: 300, cost: 0.0123, calls: 3 },
+    ]);
+    await draw(CONVERSATION);
+    expect(usageForRuns).toHaveBeenCalledWith(["r1"]);
+    expect(screen.getByText("1.5k")).toBeTruthy();
+    expect(screen.getByText("$0.012")).toBeTruthy();
+    expect(screen.getByTitle(/1,200 in, 300 out, over 3 model call/)).toBeTruthy();
   });
 });
