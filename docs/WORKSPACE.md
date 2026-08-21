@@ -21,6 +21,89 @@ open, because two exchanges three hours apart are two things that happened.
 What a channel folds and what it must never fold is in *A channel says an
 exchange happened; the pair's thread is what it said*, in `ARCHITECTURE.md`.
 
+## A turn's own work is chips, not a line per call
+
+The third thing in a channel, after the operator's conversation and the peer
+traffic. It had the least design and by volume it was the most of it: a turn may
+make two dozen tool calls, because the round limit is twenty-four and a browsing
+turn legitimately spends most of it, and every one of those was a line reading
+`Chef used browse`. That is the same burial peer traffic was collapsed to fix,
+arriving from the other direction, and it sat between the operator's question
+and the answer to it.
+
+So a run of calls is one row of chips, one per kind of work, and the calls
+themselves open underneath it. `lib/trail.ts` holds the rules as pure functions
+over a list, the way `lib/rail.ts` does for the rail, so what folds can be read
+and tested without a DOM.
+
+Grouped by tool across the run rather than only where calls are adjacent. The
+order a model happens to interleave `browse` and `run_command` in is not
+something anybody asked about; "4 steps on cnn.com, ran 2 commands" is.
+
+**Two things never fold, and they are the two the row exists to be right
+about.** A call the runtime refused or that failed keeps its own chip with its
+reason on it, for the reason a refused send never joins a burst: it is the
+runtime stopping something rather than something happening. And a command that
+spent one of the operator's credentials keeps its own chip with the credential
+named on it, because that is their audit trail for their own tokens and it is
+not a thing to put behind a click. The value is not there and there is no field
+it could arrive in; the name and the variable are, which is what tells two
+tokens apart. `readSpent` mirrors `credentials_named_in` in `runtime/mod.rs` and
+the two have to agree: `lib/trail.test.ts` holds this side to that wording, so
+a change there is noticed here rather than quietly costing the operator the
+trail.
+
+**One call still says exactly what it was.** `Opened cnn.com` and `Ran a
+command` are what the operator wanted to know; `used browse` is the name of a
+function in a file they do not have. A count only replaces that where there are
+several of a kind, and it names what it can even then: a browsing turn that
+stayed on one site says which site, for the reason a burst draws one chip per
+peer rather than "5 messages with 2 agents".
+
+**What came back is on the chip in two cases and no others.** Most of these
+summaries are the line above read back in the runtime's words: `browse` answers
+`read in the browser`, `update_notes` answers with a character count printed
+directly over the characters. Nine of those turned a row into a paragraph of
+grey monospace. So the summary earns its place when the call went wrong, or when
+the call has nothing else to show and the summary is the whole of what came
+back: `2 agents: Chef, Scribe` is the answer to a directory lookup, not a
+restatement of it. Everything else is one click away, where an exit code is
+worth reading and a byte count can be ignored in peace.
+
+**A chip that opens nothing is not a button.** A directory lookup is one call
+whose whole content is the sentence already on it. A control that does nothing
+is one the operator stops trusting the rest of.
+
+Nobody is named on any of it. There is exactly one agent whose own work this can
+be, its portrait and name are at the top of the pane, and the rows this replaced
+put that name in front of every line. Same argument as *A channel names nobody*
+above, applied to the last place it had not reached.
+
+## A transcript is a log, and says one thing out loud
+
+Waiting for a reply is the shape of using this app, and a reader who cannot see
+the column arrive has no way of knowing one did. So `.pane__scroll` is
+`role="log"` and a message addressed to the operator is announced once, when it
+settles.
+
+The announcing is a region of its own rather than the log's own politeness, and
+each half of that is deliberate. A live transcript would read three hundred rows
+aloud when a channel is opened, which is the whole history recited for the crime
+of clicking a name. And it would read a bubble being typed a dozen times before
+it was finished, so the streams are `aria-live="off"` and `WorkingNote` already
+says the turn is alive.
+
+What is announced is exactly what is drawn as a full bubble, and that symmetry
+is the rule. Peer traffic and tool trails are collapsed on screen precisely
+because reading them line by line buries the conversation; read aloud they would
+bury it more thoroughly, because there is no glancing past a sentence being
+spoken. A permission request goes ahead of the text, as it does everywhere else:
+it is the one thing in a transcript the operator is expected to act on.
+
+The region sits outside the log. Inside it, the sentence is a second copy of the
+newest message for anybody reading the transcript itself, which is the cost of
+announcing it to everybody else.
+
 ## The rail is arranged by hand, and lends the top of a section out
 
 Two orders, not one. `railOrder` on the card is the arrangement: the operator

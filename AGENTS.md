@@ -14,6 +14,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/search.ts       One ranking over hits from SQLite and from the store.
+  lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/ipc.ts          Every call into Rust.
   components/         One file per surface.
@@ -60,6 +61,8 @@ repo: the frontend renders state and forwards intent.
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
 | Sandboxes, the browser, sign-ins, credentials | `docs/MACHINES.md`, then *Connectors* in `docs/PROTOCOL.md` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
+| A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
+| Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
@@ -149,6 +152,11 @@ the source rather than at the end.
 ./scripts/ci.sh rust     # Rust only
 GUAC_LOG=guac=debug pnpm app
 ```
+
+Getting a change on screen has its own file: `.claude/skills/run-guaca`. It
+holds the harness that draws a component in seconds without a Rust build, a key
+or any spend; what to do when the app refuses to start; and the rule about the
+operator's own workspace, which every workspace on the machine shares.
 
 Three suites ask three different questions, and a change can pass one while
 failing the next. *Three test suites, asking different questions* in

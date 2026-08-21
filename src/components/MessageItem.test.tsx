@@ -174,7 +174,12 @@ describe("an agent's own record of what it did", () => {
         outcome: { status: "ok", summary: "2 agent(s): Chef, Scribe" },
       }),
     );
-    expect(screen.getByText(/checked who is available/)).toBeTruthy();
+    // Sentence-cased and unnamed: there is exactly one agent whose own work
+    // this can be, and its name is at the top of the pane. The row this
+    // replaced put that name in front of every line of it.
+    expect(screen.getByText("Checked who is available")).toBeTruthy();
+    // Nothing behind it, so nothing to press. A control that opens nothing is
+    // one the operator stops trusting the rest of.
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -190,7 +195,12 @@ describe("an agent's own record of what it did", () => {
       }),
     );
     expect(screen.queryByText(/no one/)).toBeNull();
-    expect(screen.getByText(/updated its memory/)).toBeTruthy();
+    expect(screen.getByText("Updated its memory")).toBeTruthy();
+
+    // And what it wrote is one click away, which is the whole of what an
+    // operator wants from this row and the one thing it never showed.
+    fireEvent.click(screen.getByRole("button", { name: /Updated its memory/ }));
+    expect(screen.getByText("Smith handles verification.")).toBeTruthy();
   });
 
   it("names an unrecognised tool rather than guessing it was a send", () => {
@@ -203,7 +213,7 @@ describe("an agent's own record of what it did", () => {
       }),
     );
     expect(screen.queryByText(/no one/)).toBeNull();
-    expect(screen.getByText(/used run_code/)).toBeTruthy();
+    expect(screen.getByText("Used run_code")).toBeTruthy();
   });
 
   it("says why a tool call failed, not just that it happened", () => {
@@ -303,8 +313,74 @@ describe("a command that used a credential", () => {
       <MessageItem message={used} lookups={lookups} continued={false} />,
     );
 
-    expect(container.textContent).toContain("used Mistral ($MISTRAL_API_KEY)");
-    expect(container.textContent).toContain("Manager used run_command");
+    // On the row itself, never behind a click and never folded into a count:
+    // this is the operator's audit trail for their own tokens.
+    expect(screen.getByText("Mistral ($MISTRAL_API_KEY)")).toBeTruthy();
+    // The exit code and the command are behind the click, which is where an
+    // exit code is worth reading. The credential is not, which is the whole
+    // point of it.
+    expect(container.textContent).not.toContain("exit 0, 812 bytes out");
+    expect(container.textContent).not.toContain("curl -H");
+
+    fireEvent.click(screen.getByRole("button", { name: /Ran a command/ }));
+    expect(container.textContent).toContain("exit 0, 812 bytes out");
+    expect(screen.getByText(/Authorization: Bearer \$MISTRAL_API_KEY/)).toBeTruthy();
+  });
+});
+
+describe("a turn that used its computer two dozen times", () => {
+  /** What the runtime writes for one turn: every call in one envelope. */
+  function browsing(): Envelope {
+    return envelope({
+      from: { kind: "agent", id: "manager" },
+      to: { kind: "system" },
+      trust: "system",
+      parts: [
+        {
+          type: "toolCall",
+          name: "browse",
+          arguments: { action: "open", url: "https://cnn.com" },
+          outcome: { status: "ok", summary: "open in the browser" },
+        },
+        {
+          type: "toolCall",
+          name: "browse",
+          arguments: { action: "read" },
+          outcome: { status: "ok", summary: "read in the browser" },
+        },
+        {
+          type: "toolCall",
+          name: "browse",
+          arguments: { action: "click", id: 12 },
+          outcome: { status: "ok", summary: "click in the browser" },
+        },
+      ],
+    });
+  }
+
+  it("draws one line for the run of them, naming where it went", () => {
+    // Twenty-four rounds is the limit and a browsing turn spends most of it.
+    // A line apiece is the same burial peer traffic was collapsed to fix.
+    const { container } = render(
+      <MessageItem message={browsing()} lookups={lookups} continued={false} />,
+    );
+    expect(screen.getByRole("button", { name: /3 steps on cnn.com/ })).toBeTruthy();
+    expect(container.querySelectorAll(".trail__chip")).toHaveLength(1);
+  });
+
+  it("opens the calls behind it, in order, and closes again", () => {
+    render(<MessageItem message={browsing()} lookups={lookups} continued={false} />);
+    const chip = screen.getByRole("button", { name: /3 steps on cnn.com/ });
+    expect(chip.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.click(chip);
+    expect(chip.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByText("Opened cnn.com")).toBeTruthy();
+    expect(screen.getByText("Read the page")).toBeTruthy();
+    expect(screen.getByText("Clicked on the page")).toBeTruthy();
+
+    fireEvent.click(chip);
+    expect(screen.queryByText("Read the page")).toBeNull();
   });
 });
 
