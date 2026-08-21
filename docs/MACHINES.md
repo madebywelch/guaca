@@ -36,6 +36,23 @@ sign-in there is one no agent can ever use.
 If you add a way to open a browser it goes through `as_chrome`, and the port
 goes with the profile or `browse` loses its remote interface.
 
+## The route an agent actually takes names no browser
+
+Every shim above matches on a browser's name, and that is why they all missed
+the button on the dock, which has none: it runs `exo-open --launch
+WebBrowser`, and which browser that is sits three files away in `helpers.rc`,
+whose shipped answer walks `debian-sensible-browser` to `sensible-browser` to
+the `x-www-browser` alternative, which the template points at Firefox. An
+agent that reads the screen and sees a browser icon clicks it, so this was the
+commonest route on the machine and the only unshimmed one, and the operator
+watched Chrome, then Firefox, then Chrome again as the next tool call evicted
+it. `web_browser_helper` is that shim, and its command is an absolute path
+rather than a name, because the process reading it is a panel belonging to a
+session whose `PATH` was fixed when it started: these machines sleep and wake
+for weeks, so a desktop that came up before a shim existed is reachable by a
+file and never by `PATH`. `helpers.rc` is edited rather than written, since
+the same file says which terminal and which file manager the desktop opens.
+
 ## An agent that named another browser is told which one opened
 
 The rewrite is silent on the machine and must not be silent in the turn:

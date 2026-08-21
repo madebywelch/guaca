@@ -77,6 +77,12 @@ const LOCAL_BIN: &str = "/home/user/.local/bin";
 /// a browser that is installed on the machine stops being reachable from it.
 const LOCAL_APPS: &str = "/home/user/.local/share/applications";
 
+/// Where the desktop keeps its own answer to "a web browser", and the file that
+/// picks which answer is used. Neither names a browser, which is why shadowing
+/// entries by the browser they run cannot reach them.
+const LOCAL_HELPERS: &str = "/home/user/.local/share/xfce4/helpers";
+const XFCE_CONFIG: &str = "/home/user/.config/xfce4";
+
 /// The one browser on a machine. Every other name is rewritten to this, and the
 /// wrapper resolves it to whichever browser is actually installed.
 const BROWSER: &str = "google-chrome";
@@ -1040,6 +1046,41 @@ fn start_browser(driver: &str) -> String {
     )
 }
 
+/// The desktop's own name for a web browser, pointed at ours.
+///
+/// This is the route that names no browser, and it is the one an agent looking
+/// at the screen is most likely to take: the dock along the bottom has a
+/// browser button on it, and the entry behind that button runs `exo-open
+/// --launch WebBrowser`. Which browser that is lives in `helpers.rc`, three
+/// indirections away and in a different file: the shipped answer is
+/// `debian-sensible-browser`, which runs `sensible-browser`, which runs the
+/// `x-www-browser` alternative, which the template points at Firefox. Nothing
+/// in that chain is a browser's name until the last link, so shadowing entries
+/// by what they run walks straight past it. `xdg-open` on a URL arrives here
+/// too, by the same call.
+///
+/// The command is absolute rather than a name found on PATH, and that is the
+/// point of fixing it here rather than trusting the wrapper. Every other shim
+/// wins by being earlier on PATH, and the process reading this one is the panel
+/// belonging to a session whose PATH was fixed when it started: these machines
+/// sleep and wake for weeks, so a desktop that came up before the shims existed
+/// can be corrected by a file and can never be corrected by PATH.
+fn web_browser_helper() -> String {
+    format!(
+        "[Desktop Entry]\n\
+         NoDisplay=true\n\
+         Version=1.0\n\
+         Encoding=UTF-8\n\
+         Type=X-XFCE-Helper\n\
+         Name=Google Chrome\n\
+         Icon=google-chrome\n\
+         X-XFCE-Category=WebBrowser\n\
+         X-XFCE-Binaries={LOCAL_BIN}/{BROWSER};\n\
+         X-XFCE-Commands={LOCAL_BIN}/{BROWSER};\n\
+         X-XFCE-CommandsWithParameter={LOCAL_BIN}/{BROWSER} \"%s\";\n"
+    )
+}
+
 /// Puts one browser on the machine, and makes every route to a browser that
 /// one.
 ///
@@ -1053,14 +1094,19 @@ fn start_browser(driver: &str) -> String {
 ///
 /// So the name is shadowed rather than the callers being trusted to remember,
 /// and every other browser's name is shadowed the same way, because the machine
-/// ships one and an agent that finds it uses it. Four routes, four shims: a
+/// ships one and an agent that finds it uses it. Five routes, five shims: a
 /// wrapper earlier on PATH takes the flags with it wherever it is invoked from,
 /// symlinks put every other name on that wrapper, a desktop entry in the user's
 /// own XDG directory takes precedence over the packaged one of the same name,
-/// and a launcher sitting on the desktop is rewritten in place, because it is a
-/// file rather than an entry anything looks up. All of it is written every time
+/// a launcher sitting on the desktop is rewritten in place, because it is a
+/// file rather than an entry anything looks up, and `web_browser_helper` takes
+/// the one route that names no browser at all. All of it is written every time
 /// the desktop starts, because the alternative is a machine that behaves
 /// differently depending on when it was made.
+///
+/// `helpers.rc` is the one file here edited rather than written. It also says
+/// which terminal and which file manager the desktop opens, and this app is
+/// neither of those.
 ///
 /// The entries to shadow are read off the machine rather than listed here. A
 /// name guessed wrong is a browser still on the menu with nothing reporting it,
@@ -1108,7 +1154,7 @@ fn install_browser_shims() -> String {
     let stems = [CHROME_PROCESSES.as_slice(), OTHER_PROCESSES.as_slice()].concat().join("|");
 
     format!(
-        "mkdir -p {LOCAL_BIN} {LOCAL_APPS}; \
+        "mkdir -p {LOCAL_BIN} {LOCAL_APPS} {LOCAL_HELPERS} {XFCE_CONFIG}; \
          echo {wrapper} | base64 -d > {LOCAL_BIN}/{BROWSER} && chmod +x {LOCAL_BIN}/{BROWSER}; \
          for name in {others}; do ln -sf {LOCAL_BIN}/{BROWSER} {LOCAL_BIN}/$name; done; \
          grep -lriE '^Exec=.*({stems})' /usr/share/applications /usr/local/share/applications \
@@ -1118,6 +1164,11 @@ fn install_browser_shims() -> String {
          for icon in /home/user/Desktop/*.desktop; do \
          grep -qiE '^Exec=.*({stems})' \"$icon\" 2>/dev/null && \
          cp {LOCAL_APPS}/{BROWSER}.desktop \"$icon\"; done; \
+         echo {helper} | base64 -d > {LOCAL_HELPERS}/custom-WebBrowser.desktop; \
+         touch {XFCE_CONFIG}/helpers.rc; \
+         grep -v '^WebBrowser=' {XFCE_CONFIG}/helpers.rc > {XFCE_CONFIG}/helpers.rc.guac; \
+         echo 'WebBrowser=custom-WebBrowser' >> {XFCE_CONFIG}/helpers.rc.guac; \
+         mv {XFCE_CONFIG}/helpers.rc.guac {XFCE_CONFIG}/helpers.rc; \
          grep -q '.local/bin' ~/.profile 2>/dev/null || \
          echo 'PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.profile; \
          ! [ -f ~/.bash_profile ] || grep -q '.local/bin' ~/.bash_profile || \
@@ -1125,6 +1176,7 @@ fn install_browser_shims() -> String {
         wrapper = base64_encode(wrapper.as_bytes()),
         entry = base64_encode(entry.as_bytes()),
         shadow = base64_encode(shadow.as_bytes()),
+        helper = base64_encode(web_browser_helper().as_bytes()),
         others = others.join(" "),
     )
 }
@@ -1361,6 +1413,39 @@ mod tests {
         // so the screen offers one browser and a link still opens.
         assert!(written.contains("NoDisplay=true"), "{written}");
         assert!(written.contains(&format!("Exec={LOCAL_BIN}/{BROWSER}")), "{written}");
+    }
+
+    #[test]
+    fn the_browser_button_on_the_dock_is_shimmed_although_it_names_no_browser() {
+        // Observed: an agent read the screen, clicked the browser button on the
+        // dock, and Firefox opened on a machine where every browser was
+        // supposedly shimmed. That button runs `exo-open --launch WebBrowser`,
+        // and no shim looked at it, because every shim here matches on a
+        // browser's name and there is not one in that entry. The operator saw
+        // Chrome, then Firefox, then Chrome again, the last of those being the
+        // eviction pass on the next tool call.
+        let helper = web_browser_helper();
+        assert!(helper.contains("X-XFCE-Category=WebBrowser"), "{helper}");
+        // Absolute. This is read by a session process, and a session that came
+        // up before the shims existed has a PATH nothing can now change.
+        for key in ["X-XFCE-Commands", "X-XFCE-CommandsWithParameter"] {
+            assert!(helper.contains(&format!("{key}={LOCAL_BIN}/{BROWSER}")), "{key}: {helper}");
+        }
+        assert!(!helper.contains("%B"), "no binary to look up on PATH: {helper}");
+
+        let shim = install_browser_shims();
+        assert!(shim.contains(&base64_encode(helper.as_bytes())), "and it is put on the machine");
+        assert!(shim.contains(&format!("{LOCAL_HELPERS}/custom-WebBrowser.desktop")), "{shim}");
+        // Written where the desktop looks for the answer, and only that answer:
+        // the same file says which terminal and which file manager to open, and
+        // a machine with no terminal is a worse machine than one with two
+        // browsers.
+        assert!(shim.contains("WebBrowser=custom-WebBrowser"), "{shim}");
+        assert!(shim.contains(&format!("{XFCE_CONFIG}/helpers.rc")), "{shim}");
+        assert!(
+            shim.contains(&format!("grep -v '^WebBrowser=' {XFCE_CONFIG}/helpers.rc")),
+            "every other key in that file survives being rewritten: {shim}"
+        );
     }
 
     #[test]
