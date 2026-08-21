@@ -1,7 +1,9 @@
+import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { PULSE_WINDOW_MS } from "../lib/store";
-import { bars, compact, money } from "./TokenMeter";
+import { PULSE_WINDOW_MS, useStore } from "../lib/store";
+import type { Tokens } from "../lib/types";
+import { bars, compact, money, priced, TokenMeter } from "./TokenMeter";
 
 describe("compact", () => {
   it("is exact while the numbers are small", () => {
@@ -62,5 +64,76 @@ describe("bars", () => {
 
   it("keeps a fixed width whatever it is given", () => {
     expect(bars([], now)).toHaveLength(bars([{ at: now, tokens: 1 }], now).length);
+  });
+});
+
+describe("priced", () => {
+  it("says no to the two ways a provider reports no charge", () => {
+    // A local server prices nothing and reports null. A free model prices every
+    // call at a real zero. Neither has anything to say in a narrow rail.
+    expect(priced(null)).toBe(false);
+    expect(priced(undefined)).toBe(false);
+    expect(priced(0)).toBe(false);
+  });
+
+  it("says no to a price that would draw as zeros anyway", () => {
+    // money() pads to four places, so anything under a ten-thousandth of a
+    // dollar is $0.0000: the same nothing, at more precision.
+    expect(priced(0.000_02)).toBe(false);
+    expect(money(0.000_02)).toBe("$0.0000");
+  });
+
+  it("says yes as soon as there is a digit to draw", () => {
+    expect(priced(0.0001)).toBe(true);
+    expect(priced(4.2)).toBe(true);
+  });
+});
+
+describe("TokenMeter", () => {
+  const GROUP = "00000000-0000-4000-8000-000000000001";
+
+  function draw(total: Tokens | undefined, points: { at: number; tokens: number }[] = []) {
+    useStore.setState({
+      usage: total ? { [GROUP]: total } : {},
+      pulse: { [GROUP]: points },
+    });
+    return render(<TokenMeter groupId={GROUP} />);
+  }
+
+  function spent(over: Partial<Tokens> = {}): Tokens {
+    return { prompt: 1200, completion: 300, cost: null, calls: 4, ...over };
+  }
+
+  // The count is the invariant: it is the one figure every provider produces
+  // and the one that climbs while a crew works.
+  it.each<[string, number | null]>([
+    ["a paid model", 0.0234],
+    ["a free model", 0],
+    ["a local server", null],
+  ])("draws the count under %s", (_what, cost) => {
+    const { container } = draw(spent({ cost }));
+    expect(container.querySelector(".meter__count")?.textContent).toBe("1.5k");
+  });
+
+  it("drops the price a free model reports, and keeps the count", () => {
+    // The whole complaint: free inference charged a real zero, the price won
+    // the one slot, and the rail spent seven characters on $0.0000 while the
+    // only figure going anywhere was not drawn at all.
+    const { container } = draw(spent({ cost: 0 }));
+    expect(container.textContent).toContain("1.5k");
+    expect(container.textContent).not.toContain("$");
+    expect(container.querySelector(".meter")?.getAttribute("title")).not.toContain("$");
+  });
+
+  it("draws the price beside the count once there is one", () => {
+    const { container } = draw(spent({ cost: 0.0234 }));
+    expect(container.textContent).toContain("$0.023");
+    expect(container.querySelector(".meter")?.getAttribute("title")).toContain("$0.023");
+  });
+
+  it("draws nothing at all for a group that has never spent anything", () => {
+    // An idle rail is not a column of zeros.
+    const { container } = draw(undefined);
+    expect(container.textContent).toBe("");
   });
 });

@@ -24,7 +24,7 @@ import {
   type RoutineId,
   type RoutineRun,
 } from "../lib/types";
-import { compact, money } from "./TokenMeter";
+import { compact, money, priced } from "./TokenMeter";
 
 interface Props {
   agentId: AgentId;
@@ -499,7 +499,7 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
                   title={`${entry.spent.prompt.toLocaleString()} in, ${entry.spent.completion.toLocaleString()} out, over ${entry.spent.calls} model call(s)`}
                 >
                   {compact(entry.spent.prompt + entry.spent.completion)}
-                  {entry.spent.cost !== null && (
+                  {priced(entry.spent.cost) && (
                     <span className="history__cost">{money(entry.spent.cost)}</span>
                   )}
                 </span>
