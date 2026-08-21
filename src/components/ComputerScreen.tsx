@@ -40,6 +40,7 @@ export function ComputerScreen({ agent }: Props) {
   // agent's machine into the new panel, so an agent with no computer showed
   // the previous one's screen.
   const showing = useRef(agent.id);
+  const frame = useRef<HTMLIFrameElement>(null);
 
   // Nothing at all until there is a key. Offering to give an agent a computer
   // that cannot be made is worse than not mentioning computers.
@@ -82,6 +83,20 @@ export function ComputerScreen({ agent }: Props) {
     const timer = setInterval(() => void look(), 15000);
     return () => clearInterval(timer);
   }, [configured, look]);
+
+  /**
+   * Hands the keyboard to the desktop.
+   *
+   * A cross-origin frame receives key events only while it holds focus, and
+   * clicking the veil focuses the veil, which is an element in this document.
+   * The mouse works throughout, which is what makes this read as a broken
+   * keyboard rather than as a focus problem.
+   *
+   * Called from inside the click handler rather than from an effect afterwards,
+   * because this webview is WebKit and WebKit honours a focus change only as
+   * part of a user gesture. An effect on the next render is not one.
+   */
+  const grabKeyboard = () => frame.current?.focus();
 
   // Escape shrinks it again. On the window rather than on the frame, because
   // the desktop swallows key presses the moment it has focus, and the operator
@@ -199,9 +214,11 @@ export function ComputerScreen({ agent }: Props) {
             </>
           )}
 
-          <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-            Close
-          </button>
+          <div className="screen__actions">
+            <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
 
@@ -216,6 +233,7 @@ export function ComputerScreen({ agent }: Props) {
             // reconnecting. The veil below does that job instead, without
             // touching the connection.
             key={computer.sandboxId}
+            ref={frame}
             title={`${agent.name}'s computer`}
             src={computer.vncUrl ?? ""}
           />
@@ -226,7 +244,10 @@ export function ComputerScreen({ agent }: Props) {
             <button
               type="button"
               className="screen__veil"
-              onClick={() => setFull(true)}
+              onClick={() => {
+                setFull(true);
+                grabKeyboard();
+              }}
               title={`Open ${agent.name}'s screen and take over`}
               aria-label={`Open ${agent.name}'s screen and take over`}
             />

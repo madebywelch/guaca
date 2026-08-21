@@ -2775,14 +2775,27 @@ button {
 
 /* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
    above mounted and the VNC session alive across the change. */
+/* Grown to fill the window, but not to the edges of it.
+   The title bar is an overlay, so the macOS window controls float over whatever
+   is drawn in the top-left corner: at `inset: 0` they landed on the title in
+   this bar and on the picture below it. Insetting the panel leaves that corner
+   showing the app, which is where those buttons belong, and has the side
+   benefit of keeping the conversation visible around the edge so a maximised
+   screen reads as something being worked on rather than as a new window. The
+   top inset matches the rail's own, which is how the rest of the app already
+   clears those controls. */
 .screen[data-full="true"] {
   position: fixed;
-  inset: 0;
+  inset: 2.75rem 1rem 1rem;
   z-index: 40;
   margin: 0;
   display: flex;
   flex-direction: column;
   background: var(--rail-ground);
+  border: 1px solid var(--rail-edge);
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
+  overflow: hidden;
 }
 
 .screen[data-full="true"] .screen__frame {
@@ -2797,10 +2810,23 @@ button {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  padding: 0.45rem 0.6rem;
+  padding: 0.5rem 0.55rem 0.5rem 0.85rem;
   background: var(--rail-ground);
   border-bottom: 1px solid var(--rail-edge);
   color: var(--rail-text);
+}
+
+/* The actions, as one group rather than a row of equally-weighted buttons.
+   What ends the session and what only closes the panel sit on either side of a
+   divider, because the two were adjacent and identical and one of them cannot
+   be undone. */
+.screen__actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding-left: 0.55rem;
+  margin-left: 0.2rem;
+  border-left: 1px solid var(--rail-edge);
 }
 
 .screen__bar .screen__state {

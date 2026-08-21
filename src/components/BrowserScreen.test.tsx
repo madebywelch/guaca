@@ -139,6 +139,22 @@ describe("BrowserScreen", () => {
     expect(screen.getByTitle("Cook's browser")).toBe(before);
   });
 
+  it("hands the keyboard to the live view when the operator takes over", async () => {
+    // The bug this closes: the mouse worked and the keyboard did not, which
+    // read as a broken live view. A cross-origin frame gets key events only
+    // while it holds focus, and clicking the veil focuses the veil. It has to
+    // happen inside the click handler, because this webview is WebKit and
+    // WebKit honours a focus change only as part of a user gesture.
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+
+    const frame = await screen.findByTitle("Cook's browser");
+    const focused = vi.spyOn(frame as HTMLIFrameElement, "focus");
+
+    fireEvent.click(screen.getByRole("button", { name: /take over/i }));
+    expect(focused).toHaveBeenCalled();
+  });
+
   it("lets a paste reach the page, because signing in means pasting a password", async () => {
     // Without the clipboard permission on the frame the paste silently does
     // nothing, which reads as a password manager that will not fill.

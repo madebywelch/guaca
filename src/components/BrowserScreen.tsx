@@ -39,6 +39,7 @@ export function BrowserScreen({ agent }: Props) {
   // landing after the operator switched would paint the previous agent's
   // browser into the new panel.
   const showing = useRef(agent.id);
+  const frame = useRef<HTMLIFrameElement>(null);
 
   // Nothing at all until there is a key. Offering to give an agent a browser
   // that cannot be made is worse than not mentioning browsers, and asked from
@@ -80,6 +81,21 @@ export function BrowserScreen({ agent }: Props) {
     const timer = setInterval(() => void look(), 20000);
     return () => clearInterval(timer);
   }, [configured, look]);
+
+  /**
+   * Hands the keyboard to the live view.
+   *
+   * A cross-origin iframe receives key events only while it holds focus, and
+   * nothing gives it focus on its own: the operator clicked the veil, which is
+   * an element in this document, so the keyboard stayed here. The mouse worked
+   * throughout, which is what made this look like a broken keyboard rather than
+   * a focus problem.
+   *
+   * Called from inside the click handler rather than from an effect afterwards,
+   * because this webview is WebKit and WebKit only honours a focus change that
+   * is part of a user gesture. An effect running on the next render is not.
+   */
+  const grabKeyboard = () => frame.current?.focus();
 
   // Escape shrinks it again. On the window rather than the frame, because the
   // live view swallows key presses once it has focus.
@@ -145,7 +161,10 @@ export function BrowserScreen({ agent }: Props) {
               <button
                 type="button"
                 className="btn btn--small btn--ghost"
-                onClick={() => setConfirming(false)}
+                onClick={() => {
+                  setConfirming(false);
+                  grabKeyboard();
+                }}
               >
                 Keep it open
               </button>
@@ -162,9 +181,11 @@ export function BrowserScreen({ agent }: Props) {
             </button>
           )}
 
-          <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-            Done
-          </button>
+          <div className="screen__actions">
+            <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+              Done
+            </button>
+          </div>
         </div>
       )}
 
@@ -176,6 +197,7 @@ export function BrowserScreen({ agent }: Props) {
             // because signing in means pasting a password out of a manager, and
             // without it the paste silently does nothing.
             key={browser.sessionId}
+            ref={frame}
             title={`${agent.name}'s browser`}
             src={browser.liveViewUrl ?? ""}
             allow="autoplay; clipboard-read; clipboard-write"
@@ -184,7 +206,10 @@ export function BrowserScreen({ agent }: Props) {
             <button
               type="button"
               className="screen__veil"
-              onClick={() => setFull(true)}
+              onClick={() => {
+                setFull(true);
+                grabKeyboard();
+              }}
               title={`Open ${agent.name}'s browser and take over`}
               aria-label={`Open ${agent.name}'s browser and take over`}
             />
