@@ -88,6 +88,7 @@ vi.mock("./lib/ipc", () => ({
     },
   },
   onRuntimeEvent: async () => () => {},
+  onRevealRequest: async () => () => {},
   onFileDrop: async () => () => {},
 }));
 

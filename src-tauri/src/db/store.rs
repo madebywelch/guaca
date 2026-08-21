@@ -926,6 +926,31 @@ impl Store {
         Ok(out)
     }
 
+    /// Every request still waiting on the operator, oldest first.
+    ///
+    /// Read whole rather than as ids, because the caller is the menu bar and
+    /// what it needs is the wording: a row that says only that something is
+    /// pending is a row that cannot be answered without opening the window.
+    ///
+    /// Oldest first so the request that has least of its ten minutes left is
+    /// the one at the top, and bounded for the same reason as
+    /// [`Self::approval_states`].
+    pub fn pending_approvals(&self, limit: u32) -> Result<Vec<Approval>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at
+               FROM approvals WHERE state='pending'
+              ORDER BY created_at ASC, id ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], row_to_approval)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
     /// Expires everything still waiting. Called at startup.
     ///
     /// The turn that raised a request is holding a channel in memory, so a
@@ -3830,6 +3855,41 @@ mod tests {
             ApprovalState::Deny,
             "a decision the operator made is not a casualty of a restart"
         );
+    }
+
+    #[test]
+    fn what_is_still_waiting_is_read_whole_and_oldest_first() {
+        // The menu bar reads this to offer an answer without the window. Whole,
+        // because a row that says only that something is pending cannot be
+        // answered from a menu; oldest first, because the request with least of
+        // its ten minutes left is the one worth putting at the top.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+
+        let first = ask(&f.store, &manager);
+        // `created_at` is milliseconds, and two rows written in the same
+        // millisecond would make the order the tiebreak rather than the clock.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let second = ask(&f.store, &manager);
+        let answered = ask(&f.store, &manager);
+        f.store.settle_approval(answered.id, ApprovalState::Allow).unwrap();
+
+        let waiting = f.store.pending_approvals(50).unwrap();
+        assert_eq!(
+            waiting.iter().map(|a| a.id).collect::<Vec<_>>(),
+            vec![first.id, second.id],
+            "an answered request is not waiting on anybody"
+        );
+        assert_eq!(
+            waiting[0].summary, "Manager wants to create an agent called Scout",
+            "the wording is the whole reason this is read as rows and not ids"
+        );
+        assert_eq!(waiting[0].detail, vec![DetailField::new("Name", "Scout")]);
+
+        assert_eq!(f.store.pending_approvals(1).unwrap().len(), 1, "and it is bounded");
+
+        f.store.expire_pending_approvals().unwrap();
+        assert!(f.store.pending_approvals(50).unwrap().is_empty());
     }
 
     #[test]

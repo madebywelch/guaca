@@ -1320,6 +1320,31 @@ impl Runtime {
         true
     }
 
+    /// How many conversations are in flight.
+    ///
+    /// The count rather than the ids, because the one caller is a surface that
+    /// says how many there are and offers to end them. Handing out the ids
+    /// would invite a caller to hold them, and a run id outlives the run.
+    pub fn live_runs(&self) -> usize {
+        self.inner.runs.lock().outstanding.len()
+    }
+
+    /// Ends every conversation in flight, and says how many that was.
+    ///
+    /// The counterpart to closing the window without quitting. Agents keep
+    /// their own appointments, so a window that is gone is not a workspace that
+    /// has stopped: a routine can fire, spend money and reach a peer with
+    /// nobody watching. This is the one lever that needs no window.
+    ///
+    /// A snapshot and then a stop each, rather than one pass under the lock.
+    /// [`Self::stop_run`] takes the same lock and wakes every inbox, and a run
+    /// that settles on its own between the two is a `false` this deliberately
+    /// does not count.
+    pub fn stop_everything(&self) -> usize {
+        let live: Vec<RunId> = self.inner.runs.lock().outstanding.keys().copied().collect();
+        live.into_iter().filter(|run| self.stop_run(*run)).count()
+    }
+
     /// Closes, on the operator's behalf, every permission request a stopped run
     /// is holding.
     ///
