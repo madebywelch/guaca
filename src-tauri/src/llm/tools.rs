@@ -106,10 +106,11 @@ pub fn specs() -> Vec<ToolSpec> {
                           whenever you are asked to visit a site, look at a page, or do anything \
                           a person would do in a window: `run_command` fetches text, this shows \
                           the real thing on screen. The program keeps running after this \
-                          returns. For the web, open `google-chrome` and nothing else. It is the \
-                          one browser `browse` drives and the one holding whatever accounts you \
-                          are signed in to, so another browser on the screen is a window that \
-                          knows none of your accounts and that your other tools cannot see."
+                          returns. For the web, that is `google-chrome`: the one browser on this \
+                          machine, the one `browse` drives, and the one holding whatever \
+                          accounts you are signed in to. Any other browser you name opens it \
+                          instead, because a second browser is a window that knows none of your \
+                          accounts and that your other tools cannot see."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1221,6 +1222,14 @@ mod tests {
         assert!(
             desktop.description.contains("knows none of your accounts"),
             "the reason has to travel with the rule: {}",
+            desktop.description
+        );
+        // And what the machine does about it. The rule is enforced there now,
+        // so a description that only forbade the other browser would leave an
+        // agent that named one reading a result it could not account for.
+        assert!(
+            desktop.description.contains("Any other browser you name opens it instead"),
+            "{}",
             desktop.description
         );
 

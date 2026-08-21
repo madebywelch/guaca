@@ -226,17 +226,35 @@ lands on one side fails the build rather than at runtime.
 **`Store::open` has two SQLite lessons encoded in comments.** Do not reorder the
 pragmas or simplify the migration transaction without reading them.
 
-**There is one Chrome profile on every machine, and keeping it that way is
-deliberate.** Chrome ignores `--remote-debugging-port` when it re-attaches to an
-existing profile, so `browse` needs a profile it controls. There used to be a
-second, default one behind `open_on_desktop` and the desktop icon, and a
-sign-in performed there was invisible to every agent with nothing reporting an
-error. Now every route is shimmed onto `/home/user/.guac/chrome`: a wrapper
-first on `PATH`, a `.desktop` entry in the user's own XDG directory, the flags
-added again at the call site, and a browser found on any other profile is
-closed when the desktop starts. If you add a way to open a browser, it goes
-through `chrome_flags`, and the port goes with the profile or `browse` loses its
-remote interface.
+**There is one browser on every machine, and one profile in it.** Chrome
+ignores `--remote-debugging-port` when it re-attaches to an existing profile, so
+`browse` needs a profile it controls, and a sign-in performed on the default one
+was invisible to every agent with nothing reporting an error. The other half is
+the same failure wearing a different name: the template ships a second browser,
+with a binary on `PATH`, a menu entry and an icon on the desktop, and an agent
+told to send mail opened it, drove it by coordinates, and read the page with
+`browse`, which was on Chrome the whole time. Neither is something an agent can
+be asked to remember. A prompt saying "use Chrome" was already there.
+
+So every route is shimmed onto `google-chrome` and `/home/user/.guac/chrome`: a
+wrapper first on `PATH` with every other browser's name symlinked to it, a
+`.desktop` entry in the user's own XDG directory shadowing each packaged one, a
+launcher on the desktop rewritten in place because it is a file rather than an
+entry anything looks up, and `as_chrome` at the call site, which replaces the
+browser's name as well as adding the flags. The session is started with that
+directory first on `PATH`, since every icon, menu entry and terminal on the
+screen inherits it. Anything still running on another profile or of another kind
+is closed when the desktop starts, the operator's own window included, because a
+sign-in there is one no agent can ever use. If you add a way to open a browser it
+goes through `as_chrome`, and the port goes with the profile or `browse` loses
+its remote interface.
+
+**An agent that named another browser is told which one opened.** The rewrite
+is silent on the machine and must not be silent in the turn: handing an agent
+back the name it asked for leaves it describing a window nobody can see and
+reaching for that name again. The flags do not travel with it either, in the
+result or in the transcript, because a model reads its own tool results back and
+copies them.
 
 **Sign-ins are detected, never declared.** The browser is holding the cookies,
 so `domain/signin.rs` asks it rather than asking the operator to keep a list.
