@@ -402,6 +402,7 @@ pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness 
         },
         limits,
         e2b: Default::default(),
+        kernel: Default::default(),
     };
 
     let sink = RecordingSink::new();

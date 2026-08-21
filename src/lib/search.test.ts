@@ -12,6 +12,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     id: `id-${name}`,
     groupId: GROUP,
     sandboxId: null,
+    browserId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

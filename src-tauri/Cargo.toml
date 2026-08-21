@@ -38,6 +38,18 @@ reqwest = { version = "0.12", default-features = false, features = [
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 webpki-roots = "0.26"
 
+# A browser is driven over the DevTools protocol, which is JSON-RPC on a
+# WebSocket, and this is the client end of it. Not hand-rolled like the Connect
+# framing in `e2b.rs`: that is a length prefix and a byte, whereas this is
+# masking, fragmentation, continuation and control frames, on the connection
+# that carries an agent's logged-in browser. A protocol bug there is a hang or a
+# truncated page rather than an error, so it is worth one maintained dependency.
+tokio-tungstenite = { version = "0.30", default-features = false, features = [
+  "connect",
+  "handshake",
+  "rustls-tls-webpki-roots",
+] }
+
 rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"

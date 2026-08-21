@@ -21,6 +21,25 @@
 //! sandboxes have no internet access below the Tier 3 plan. An agent that
 //! cannot reach the network cannot look anything up, which is most of the point
 //! of giving it a computer.
+//!
+//! ## A computer is looked at, never asked
+//!
+//! There used to be a second way to use the web on one of these machines:
+//! Chrome was started with its remote debugging port open and driven over the
+//! DevTools protocol, which knows where every element is and needs no pointer.
+//! Exact when it worked, and it did not work here often enough to keep. The
+//! port belongs to a profile, so it was lost every time anything re-attached to
+//! that profile; a page had to be read, numbered, and then acted on by a number
+//! that a re-render had already invalidated; and an agent reading the screen
+//! and an agent asking the page disagreed about which window was in front. Each
+//! of those was fixed once and came back wearing another name.
+//!
+//! So a computer is now exactly what it looks like: a screen, a pointer and a
+//! keyboard. `screenshot` and `act_on_desktop` are the whole interface, and
+//! there is no privileged channel into the browser for anything to fall out of
+//! sync with. An agent that wants a page asked rather than looked at gets a
+//! browser instead, which is a different thing on a different provider:
+//! `kernel.rs`.
 
 use std::time::Duration;
 
@@ -38,16 +57,29 @@ const RAW_VNC_PORT: u16 = 5900;
 /// a blocked iframe that looks identical to a desktop that failed to start.
 pub const VIEWER_HOST: &str = "127.0.0.1";
 
-/// Chrome's remote interface, used to drive pages exactly rather than by
-/// aiming a pointer at pixels.
-const CDP_PORT: u16 = 9222;
-
-/// The driver Guac runs inside the sandbox. Kept as a file so it can be read
-/// and tested as Python rather than as a Rust string.
-const BROWSER_DRIVER: &str = include_str!("browser.py");
+/// The screen every machine gets, and the coordinate space every click is in.
+///
+/// 1024x768 rather than something roomier, and the reason is accuracy rather
+/// than bandwidth. A model aiming a pointer is reading pixels off a picture,
+/// and both vendors who ship a computer-use tool train and evaluate it at about
+/// this size: above it the image is resized somewhere out of Guaca's control
+/// and every coordinate that comes back is in a space nothing here can name.
+///
+/// The alternative is to keep a larger screen and scale the picture on the way
+/// out, which is what most harnesses do and what this deliberately does not.
+/// Scaling means two coordinate spaces and a conversion between them at every
+/// call site, and a conversion that is wrong is a click that lands near the
+/// button. One space, chosen so nothing downstream wants to resize it, has no
+/// such failure.
+///
+/// A machine made before this line changed keeps whatever screen it started
+/// with: Xvfb is already running there and the guard finds it. That is safe,
+/// because the screenshot reports the geometry it actually captured and clicks
+/// are always in true screen pixels.
+const SCREEN_WIDTH: u16 = 1024;
+const SCREEN_HEIGHT: u16 = 768;
 
 /// Reads what the browser is signed in to, from its own files on disk.
-/// Separate from the driver because it deliberately does not need a browser.
 const SESSION_READER: &str = include_str!("sessions.py");
 
 /// envd, the agent daemon inside every sandbox.
@@ -90,14 +122,14 @@ const BROWSER: &str = "google-chrome";
 /// Every name a browser is launched by on these machines.
 ///
 /// Rewriting the ones that are not Chrome is not pedantry about brands. Only
-/// Chrome is on the profile holding the accounts, only Chrome serves the
-/// debugging port `browse` drives, and a second browser is a window an agent
-/// reads while the rest of its tools look somewhere else: told to send mail,
-/// an agent opened the browser whose icon was on the desktop, drove it by
-/// coordinates, and read the page with `browse`, which was on Chrome the whole
-/// time. The template ships that other browser, with an icon, a menu entry and
-/// a name on PATH, so declining to use it has to be a property of the machine
-/// rather than a line in a prompt.
+/// Chrome is on the profile holding the accounts, and only that profile is read
+/// when Guaca asks the machine what it is signed in to. A sign-in performed in
+/// any other window is one nothing can see: the operator signs in on the
+/// screen, the roster keeps saying the agent has no account, and the crew
+/// routes work to a machine that will hit a login wall. The template ships that
+/// other browser, with an icon, a menu entry and a name on PATH, so declining
+/// to use it has to be a property of the machine rather than a line in a
+/// prompt.
 ///
 /// The last four are what the *system* reaches for when something asks for a
 /// browser without naming one, which is how a link in any other app opens.
@@ -507,7 +539,10 @@ impl E2bClient {
             daemon(
                 "pgrep -x Xvfb",
                 "Xvfb",
-                "Xvfb :0 -ac -screen 0 1280x800x24 -dpi 96 -nolisten tcp",
+                &format!(
+                    "Xvfb :0 -ac -screen 0 {SCREEN_WIDTH}x{SCREEN_HEIGHT}x24 -dpi 96 \
+                     -nolisten tcp"
+                ),
             ),
             // The session's PATH is inherited by every icon, menu entry and
             // terminal on that screen, so it is where the shims either shadow
@@ -565,122 +600,59 @@ impl E2bClient {
         .await
     }
 
-    /// Makes sure the browser is running with its remote interface open, and
-    /// that the driver script is on the machine.
+    /// Does one thing to the screen and photographs the result.
     ///
-    /// Chrome ignores `--remote-debugging-port` when it re-attaches to an
-    /// existing profile, so the browser Guac drives gets a profile of its own.
-    /// Everything here is idempotent; an agent should be able to browse without
-    /// knowing any of it happened.
-    async fn ensure_browser(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
-        self.start_desktop(sandbox, envd_token).await?;
-
-        self.run(sandbox, envd_token, &start_browser(&base64_encode(BROWSER_DRIVER.as_bytes())))
-            .await?;
-
-        // Chrome takes a moment to open the port, and a browse that arrives
-        // first fails in a way that reads as the tool being broken.
-        for _ in 0..10 {
-            let up = self
-                .run(
-                    sandbox,
-                    envd_token,
-                    &format!("{} 2>/dev/null && echo up || echo down", port_open(CDP_PORT)),
-                )
-                .await?;
-            if up.stdout.trim() == "up" {
-                return Ok(());
-            }
-        }
-        Err(E2bError::Protocol("the browser did not open its remote interface".into()))
-    }
-
-    /// One browser action, answered as the driver's JSON.
-    pub async fn browse(
+    /// One method rather than an act and a look, because it is one round trip
+    /// rather than two. Every screen action answers with a picture now, so the
+    /// pair would be two commands over envd for every click, and the desktop
+    /// guard would run twice for each of them: four requests where one does.
+    /// The settle between them belongs on the machine for the same reason, and
+    /// because a sleep on this side is time spent by a process that is not the
+    /// one waiting.
+    ///
+    /// `action` is `None` for a plain look.
+    pub async fn look_at_screen(
         &self,
         sandbox: &str,
         envd_token: &str,
-        action: &str,
-        args: &serde_json::Value,
-    ) -> Result<String, E2bError> {
-        self.ensure_browser(sandbox, envd_token).await?;
+        action: Option<&DesktopAction>,
+    ) -> Result<Screen, E2bError> {
+        self.start_desktop(sandbox, envd_token).await?;
+
+        // Sequenced with `;` rather than `&&`, so a failed action is still
+        // photographed. Whatever went wrong is on the screen, and a model told
+        // only that its click failed does it again; shown the modal that
+        // swallowed it, it deals with the modal.
+        let acted = match action {
+            Some(action) => format!(
+                "DISPLAY=:0 {} ; echo \"{ACTED}$?\" ; {}",
+                action.command(),
+                settle_for(action)
+            ),
+            None => format!("echo \"{ACTED}0\""),
+        };
 
         let out = self
             .run(
                 sandbox,
                 envd_token,
                 &format!(
-                    "python3 {GUAC_DIR}/browser.py {action} {}",
-                    quote(&serde_json::to_string(args).unwrap_or_else(|_| "{}".into()))
+                    "{acted} ; DISPLAY=:0 scrot --pointer -o /tmp/guac-screen.png \
+                     && ffmpeg -y -loglevel error -i /tmp/guac-screen.png -q:v 5 \
+                        /tmp/guac-screen.jpg \
+                     && echo -n {SIZED} \
+                     && (DISPLAY=:0 xdotool getdisplaygeometry | tr ' ' 'x') \
+                     && base64 -w0 /tmp/guac-screen.jpg"
                 ),
             )
             .await?;
 
-        if out.exit_code != 0 || out.stdout.trim().is_empty() {
-            // The driver reports what went wrong on stderr in words meant for
-            // the model, so it is passed through rather than summarised.
-            let why = if out.stderr.trim().is_empty() {
-                out.stdout.trim().to_string()
-            } else {
-                out.stderr.trim().to_string()
-            };
-            return Err(E2bError::Protocol(why.chars().take(300).collect()));
-        }
-        Ok(out.stdout)
-    }
-
-    /// A picture of the screen, as a `data:` URL ready to hand to a model.
-    ///
-    /// Sent at the display's own resolution on purpose. Scaling it down would
-    /// shrink the payload, but every coordinate the model then gives back would
-    /// be in a different space from the one clicks land in, and a click that is
-    /// subtly wrong is worse than a larger image.
-    ///
-    /// JPEG rather than PNG: a desktop screenshot is a photograph-like image,
-    /// and PNG costs about four times as much for no benefit a model can use.
-    pub async fn screenshot(
-        &self,
-        sandbox: &str,
-        envd_token: &str,
-    ) -> Result<(String, String), E2bError> {
-        self.start_desktop(sandbox, envd_token).await?;
-
-        let out = self
-            .run(
-                sandbox,
-                envd_token,
-                "DISPLAY=:0 scrot -o /tmp/guac-screen.png \
-                 && ffmpeg -y -loglevel error -i /tmp/guac-screen.png -q:v 5 /tmp/guac-screen.jpg \
-                 && echo -n SIZE: && (DISPLAY=:0 xdotool getdisplaygeometry | tr ' ' 'x') \
-                 && base64 -w0 /tmp/guac-screen.jpg",
-            )
-            .await?;
-
-        let (geometry, encoded) = out
-            .stdout
-            .split_once('\n')
-            .map(|(head, rest)| (head.trim_start_matches("SIZE:").trim().to_string(), rest.trim()))
-            .unwrap_or_default();
-
-        if encoded.is_empty() {
-            return Err(E2bError::Protocol(format!(
+        read_screen(&out).ok_or_else(|| {
+            E2bError::Protocol(format!(
                 "the screen could not be captured ({})",
-                out.stderr.trim()
-            )));
-        }
-
-        Ok((format!("data:image/jpeg;base64,{encoded}"), geometry))
-    }
-
-    /// Drives the mouse and keyboard, the same way E2B's own desktop SDK does.
-    pub async fn act_on_desktop(
-        &self,
-        sandbox: &str,
-        envd_token: &str,
-        action: &DesktopAction,
-    ) -> Result<Output, E2bError> {
-        self.start_desktop(sandbox, envd_token).await?;
-        self.run(sandbox, envd_token, &format!("DISPLAY=:0 {}", action.command())).await
+                out.stderr.trim().chars().take(200).collect::<String>()
+            ))
+        })
     }
 
     /// State plus, once the desktop answers, somewhere to watch it.
@@ -794,15 +766,14 @@ fn process_body(
 
 /// Asks a machine what its browser is signed in to.
 ///
-/// Reads the profile `browse` drives, which is the one that matters: Chrome
-/// ignores `--remote-debugging-port` when it re-attaches to an existing
-/// profile, so Guaca's browser keeps a profile of its own and a session in any
-/// other window is one no agent can use.
+/// Reads the one profile every route on the machine is pinned to, which is the
+/// only one that matters: a session in any other window is one no agent can
+/// reach, because no agent can reach that window.
 ///
-/// Deliberately not routed through `browse`. Connecting to the browser would
-/// start it if it were closed, so merely asking the question would boot Chrome
-/// on every machine; and `ensure_browser` costs several seconds it does not
-/// need to spend here. Cookies are on disk, so this is one command.
+/// Reads the files rather than the browser. Cookies are on disk, so a machine
+/// that has just woken can be asked without Chrome being started first, and
+/// asking a question should not have the side effect of opening a window on
+/// somebody's screen.
 pub async fn signed_in_state(
     client: &E2bClient,
     sandbox: &str,
@@ -828,35 +799,224 @@ pub async fn signed_in_state(
     })
 }
 
+/// What one look at a screen answers with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screen {
+    /// A `data:` URL, ready to hand to a model.
+    ///
+    /// Sent at the display's own resolution on purpose. Scaling it down would
+    /// shrink the payload, but every coordinate the model then gives back would
+    /// be in a different space from the one clicks land in, and a click that is
+    /// subtly wrong is worse than a larger image. The screen is sized so that
+    /// nothing wants to scale it: `SCREEN_WIDTH`.
+    ///
+    /// The pointer is drawn into it. Without that a model has no way to tell a
+    /// hover from a click that missed, and no way to see that what it is aiming
+    /// at has moved under the cursor.
+    ///
+    /// JPEG rather than PNG: a desktop screenshot is a photograph-like image,
+    /// and PNG costs about four times as much for no benefit a model can use.
+    pub image: String,
+    /// `1024x768`, read off the display rather than assumed. A machine made
+    /// before the screen size changed still has the one it started with.
+    pub geometry: String,
+    /// What the action before the picture exited with, and zero for a plain
+    /// look. Reported rather than turned into an error, because the picture is
+    /// usually the explanation.
+    pub exit_code: i32,
+}
+
+/// Markers the capture command prints, so one reply carries three answers.
+const ACTED: &str = "ACT:";
+const SIZED: &str = "SIZE:";
+
+/// How long the screen is given to finish changing before it is photographed.
+///
+/// On the machine rather than here, and only for an action whose effect arrives
+/// after the command returns. A click that opens a menu, submits a form or
+/// follows a link has not finished doing so when xdotool exits, and a picture
+/// taken then shows the screen the model was already looking at, which is
+/// indistinguishable to a model from a click that did nothing.
+///
+/// A pointer move and a wait are finished when they return, and charging them
+/// for a delay they cannot use would put it on every action in a batch.
+///
+/// Short. Not long enough for a page load, which is what `wait` is for and what
+/// a model should ask for rather than have guessed at on its behalf.
+fn settle_for(action: &DesktopAction) -> &'static str {
+    match action {
+        DesktopAction::Move { .. } | DesktopAction::Wait { .. } => "",
+        _ => "sleep 0.4 ;",
+    }
+}
+
+/// Reads the three answers back out of one command's output.
+///
+/// `None` when there is no picture, which is the only part that cannot be
+/// missing: a caller with a geometry and no image has nothing to show a model.
+fn read_screen(out: &Output) -> Option<Screen> {
+    let mut exit_code = 0;
+    let mut geometry = None;
+    let mut image = None;
+
+    for line in out.stdout.lines() {
+        let line = line.trim();
+        if let Some(code) = line.strip_prefix(ACTED) {
+            exit_code = code.trim().parse().unwrap_or(0);
+        } else if let Some(size) = line.strip_prefix(SIZED) {
+            geometry = Some(size.trim().to_string());
+        } else if geometry.is_some() && !line.is_empty() {
+            // Only after the size, and that ordering is the whole check. An
+            // action is free to write to stdout, and a picture taken from a
+            // line the action printed is a data URL of somebody's shell output.
+            // The capture short-circuits on failure, so no size means no
+            // picture rather than the wrong one.
+            image = Some(line.to_string());
+        }
+    }
+
+    Some(Screen {
+        image: format!("data:image/jpeg;base64,{}", image?),
+        geometry: geometry.unwrap_or_default(),
+        exit_code,
+    })
+}
+
+/// How long a chunk of typed text is, and how long xdotool pauses between the
+/// keystrokes inside it.
+///
+/// One `xdotool type` of a long string arrives faster than a page can process
+/// it: a React field that re-renders per keystroke dropped characters out of
+/// the middle, and a form that validates as you type rejected the half it had.
+/// Broken into chunks, each its own invocation, the page gets a gap to catch up
+/// in. 12ms between keys is quick enough that a paragraph is not a wait and
+/// slow enough that nothing has been observed to drop.
+const TYPE_CHUNK: usize = 48;
+const TYPE_DELAY_MS: u16 = 12;
+
 /// One thing an agent can do to its screen.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DesktopAction {
-    Click { x: i32, y: i32, button: u8, count: u8 },
-    Move { x: i32, y: i32 },
-    Type { text: String },
-    Key { keys: String },
-    Scroll { down: bool, amount: u8 },
+    Click {
+        x: i32,
+        y: i32,
+        button: u8,
+        count: u8,
+    },
+    Move {
+        x: i32,
+        y: i32,
+    },
+    /// Press at one point, move to another, release. A slider, a file dragged
+    /// onto a drop zone, a selection across a block of text: all of them are
+    /// impossible with clicks alone, and a model that has no drag reaches for a
+    /// sequence of clicks that does something else.
+    Drag {
+        from: (i32, i32),
+        to: (i32, i32),
+    },
+    Type {
+        text: String,
+    },
+    Key {
+        keys: String,
+    },
+    Scroll {
+        x: i32,
+        y: i32,
+        down: bool,
+        amount: u8,
+    },
+    /// Do nothing for a moment. The one action whose point is the time it
+    /// takes: a page that is still loading is not a page a screenshot can be
+    /// read off, and without this the only way to wait is to spend a model call
+    /// looking again.
+    Wait {
+        ms: u32,
+    },
 }
 
 impl DesktopAction {
     /// The xdotool invocation. Everything the model supplied is quoted, because
     /// this is model output going into a shell.
+    ///
+    /// `--sync` on every move, and it is load-bearing rather than tidy. xdotool
+    /// hands X a request and returns; the click that follows is a separate
+    /// request, and the server is free to deliver it before the pointer has
+    /// finished moving. On an idle machine the two arrive in order and this
+    /// looks like superstition. Under load they do not, and the click lands
+    /// wherever the pointer happened to be, which reads as a model that cannot
+    /// aim.
+    ///
+    /// `--clearmodifiers` on typing and keys for the same class of reason: a
+    /// modifier left held by an earlier chord turns the next word into a series
+    /// of shortcuts, and nothing in a screenshot shows that a key is down.
     pub fn command(&self) -> String {
         match self {
             DesktopAction::Click { x, y, button, count } => {
-                format!("xdotool mousemove {x} {y} click --repeat {} {button}", (*count).max(1))
+                format!(
+                    "xdotool mousemove --sync {x} {y} click --clearmodifiers --repeat {} {button}",
+                    (*count).max(1)
+                )
             }
-            DesktopAction::Move { x, y } => format!("xdotool mousemove {x} {y}"),
-            // `--` stops xdotool reading text that begins with a dash as flags.
-            DesktopAction::Type { text } => {
-                format!("xdotool type --delay 12 -- {}", quote(text))
+            DesktopAction::Move { x, y } => format!("xdotool mousemove --sync {x} {y}"),
+            DesktopAction::Drag { from, to } => format!(
+                "xdotool mousemove --sync {} {} mousedown 1 mousemove --sync {} {} \
+                 sleep 0.2 mouseup 1",
+                from.0, from.1, to.0, to.1
+            ),
+            // Chunked, so a page that re-renders per keystroke keeps up. `--`
+            // stops xdotool reading text that begins with a dash as flags.
+            DesktopAction::Type { text } => chunks(text, TYPE_CHUNK)
+                .map(|chunk| {
+                    format!(
+                        "xdotool type --clearmodifiers --delay {TYPE_DELAY_MS} -- {}",
+                        quote(chunk)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" && "),
+            DesktopAction::Key { keys } => {
+                format!("xdotool key --clearmodifiers -- {}", quote(keys))
             }
-            DesktopAction::Key { keys } => format!("xdotool key -- {}", quote(keys)),
-            DesktopAction::Scroll { down, amount } => {
-                format!("xdotool click --repeat {} {}", (*amount).max(1), if *down { 5 } else { 4 })
-            }
+            // Moved first, because a wheel event goes to whatever is under the
+            // pointer. Scrolling without aiming scrolls the last thing clicked,
+            // which is how a model reading a long page ends up scrolling a
+            // sidebar it had no interest in.
+            DesktopAction::Scroll { x, y, down, amount } => format!(
+                "xdotool mousemove --sync {x} {y} click --repeat {} {}",
+                (*amount).max(1),
+                if *down { 5 } else { 4 }
+            ),
+            // `sleep` rather than a Rust delay, so the whole action set is one
+            // kind of thing: a string that runs on the machine.
+            DesktopAction::Wait { ms } => format!("sleep {}", (*ms as f64 / 1000.0).min(10.0)),
         }
     }
+}
+
+/// Splits a string into pieces of at most `size` characters, never mid-char.
+fn chunks(text: &str, size: usize) -> impl Iterator<Item = &str> + '_ {
+    let mut rest = text;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        // A char boundary at or before the limit. Slicing by bytes would panic
+        // on any text a person actually types. If the limit falls inside the
+        // very first character the whole of it goes, because a chunk of zero
+        // characters is a loop that never ends.
+        let mut cut = size.min(rest.len());
+        while cut > 0 && !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        if cut == 0 {
+            cut = rest.chars().next().map(char::len_utf8).unwrap_or(rest.len());
+        }
+        let (head, tail) = rest.split_at(cut);
+        rest = tail;
+        Some(head)
+    })
 }
 
 /// Base64, so a script can be written into the sandbox through a shell without
@@ -948,10 +1108,10 @@ fn unmatchable(names: &[&str]) -> String {
 /// window left on the old profile would swallow the next sign-in too, and the
 /// operator would sign in again into the same invisible jar. And a browser that
 /// is not Chrome at all, which the template ships and which an agent can still
-/// be looking at from before the shims landed: it holds none of the accounts,
-/// `browse` cannot see it, and it serves no debugging port. The operator's own
-/// window is not spared, because a sign-in performed there is one no agent can
-/// ever use, which is the failure this whole arrangement exists to stop.
+/// be looking at from before the shims landed: it holds none of the accounts
+/// and sign-in detection cannot see it. The operator's own window is not
+/// spared, because a sign-in performed there is one no agent can ever use,
+/// which is the failure this whole arrangement exists to stop.
 ///
 /// Precise about which processes it looks at. Chrome's renderers and zygotes
 /// are the same binary and do not all carry `--user-data-dir`, so matching them
@@ -1007,17 +1167,11 @@ pub fn as_chrome(program: &str) -> String {
         "--no-first-run".to_string(),
         "--password-store=basic".to_string(),
         format!("--user-data-dir={CHROME_PROFILE}"),
-        // Without the port, a window opened here would hold the profile with
-        // no remote interface, and `browse` would find Chrome running,
-        // re-attach, and never get the port it needs. That is the failure the
-        // second profile was invented to avoid, so it is closed here rather
-        // than reintroduced.
-        format!("--remote-debugging-port={CDP_PORT}"),
     ];
     // A caller's own profile or port is dropped rather than kept. Nothing in
-    // this app names either any more, so anything that does is a model asking
-    // for a second profile: a window holding no accounts, invisible to every
-    // other tool, and indistinguishable from a fresh machine. Dropping the
+    // this app names either, so anything that does is a model asking for a
+    // second profile: a window holding no accounts, invisible to sign-in
+    // detection, and indistinguishable from a fresh machine. Dropping the
     // caller's flags rather than appending ours after them also means the
     // command line says once what it does, instead of contradicting itself and
     // relying on which end Chrome reads first.
@@ -1031,25 +1185,6 @@ pub fn as_chrome(program: &str) -> String {
         .collect();
     command.extend(args);
     command.join(" ")
-}
-
-/// What `browse` needs on the machine: the driver, and a browser with its
-/// remote interface open.
-///
-/// The invocation comes from `as_chrome` rather than being spelled again here.
-/// When it was spelled again, this route quietly lost `--password-store=basic`,
-/// so the cookie jar was encrypted one way when `browse` opened Chrome and
-/// another way when the operator clicked the icon, and whichever got there
-/// first decided whether the other could read a session at all.
-fn start_browser(driver: &str) -> String {
-    format!(
-        "mkdir -p {GUAC_DIR} && echo {driver} | base64 -d > {GUAC_DIR}/browser.py; \
-         python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
-         {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 {chrome} \
-         >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
-        guard = port_open(CDP_PORT),
-        chrome = as_chrome(&format!("{BROWSER} about:blank")),
-    )
 }
 
 /// The desktop's own name for a web browser, pointed at ours.
@@ -1090,13 +1225,14 @@ fn web_browser_helper() -> String {
 /// Puts one browser on the machine, and makes every route to a browser that
 /// one.
 ///
-/// There used to be two profiles. `browse` gave itself one because Chrome
-/// ignores `--remote-debugging-port` when it re-attaches to an existing
-/// profile; everything else — an agent's `open_on_desktop`, the icon on the
-/// desktop, a `google-chrome` an agent typed into a shell — got the default. An
-/// operator who signed in on the screen therefore signed in to a browser no
-/// agent could use, and nothing said so: detection reads the profile `browse`
-/// drives and truthfully reported an empty jar.
+/// There used to be two profiles, because the browser Guaca drove over the
+/// debugging port had to have one to itself. Everything else got the default:
+/// an agent's `open_on_desktop`, the icon on the desktop, a `google-chrome` an
+/// agent typed into a shell. An operator who signed in on the screen
+/// therefore signed in to a browser no agent could use, and nothing said so:
+/// detection read the driven profile and truthfully reported an empty jar. The
+/// driven profile is gone and the pinning is not, because it is what makes a
+/// sign-in visible at all.
 ///
 /// So the name is shadowed rather than the callers being trusted to remember,
 /// and every other browser's name is shadowed the same way, because the machine
@@ -1128,8 +1264,7 @@ fn install_browser_shims() -> String {
          for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
          /usr/bin/chromium /usr/bin/chromium-browser; do\n\
          \x20 [ -x \"$real\" ] && exec \"$real\" --no-sandbox --no-first-run \
-         --password-store=basic --user-data-dir={CHROME_PROFILE} \
-         --remote-debugging-port={CDP_PORT} \"$@\"\n\
+         --password-store=basic --user-data-dir={CHROME_PROFILE} \"$@\"\n\
          done\n\
          echo 'no chrome on this machine' >&2\n\
          exit 127\n"
@@ -1332,11 +1467,6 @@ mod tests {
             let launched = as_chrome(typed);
             assert!(launched.starts_with(BROWSER), "{typed} -> {launched}");
             assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
-            assert!(
-                launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
-                "a window without the port re-attaches and leaves browse with no interface: \
-                 {launched}"
-            );
             assert!(launched.contains("--no-sandbox"), "{launched}");
             // Observed: Chrome opened on the screen, asked to create a system
             // keyring password, and the agent driving it reported that the
@@ -1361,21 +1491,25 @@ mod tests {
     }
 
     #[test]
-    fn browse_opens_the_browser_the_same_way_every_other_route_does() {
-        // These flags drifted apart once already: this route spelled its own
-        // and lost `--password-store=basic`, which decides how the cookie jar
-        // is encrypted. Nothing failed; a session written by one route was
-        // simply unreadable by the other.
-        let start = start_browser("BASE64");
-        assert_eq!(
-            start.matches(&format!("--user-data-dir={CHROME_PROFILE}")).count(),
-            1,
-            "{start}"
-        );
-        assert!(start.contains("--password-store=basic"), "{start}");
-        assert!(start.contains(&format!("--remote-debugging-port={CDP_PORT}")), "{start}");
-        assert!(start.contains(&port_open(CDP_PORT)), "started only when nothing is serving");
-        assert!(start.contains(&format!("{GUAC_DIR}/browser.py")), "{start}");
+    fn nothing_on_a_machine_opens_a_remote_interface_into_the_browser() {
+        // The debugging port is gone, and it has to stay gone rather than
+        // surviving in one of the five places a browser gets launched from.
+        // While it existed, a machine had two ways to use the web that
+        // disagreed about which window was in front, and every route that
+        // forgot the port silently produced a browser the driver could not
+        // attach to. A computer is looked at now; a page is asked on a browser,
+        // which is `kernel.rs`.
+        for launched in [
+            as_chrome("google-chrome https://example.com"),
+            as_chrome("firefox"),
+            install_browser_shims(),
+            web_browser_helper(),
+        ] {
+            assert!(
+                !launched.contains("remote-debugging"),
+                "a remote interface on a machine is the failure this deleted: {launched}"
+            );
+        }
     }
 
     #[test]
@@ -1466,7 +1600,7 @@ mod tests {
         assert!(evict.contains("--type="), "helper processes must be excluded: {evict}");
         assert!(evict.contains("pkill"), "{evict}");
         // A browser that is not ours at all has no profile worth sparing: it
-        // holds none of the accounts and `browse` cannot see it.
+        // holds none of the accounts and detection cannot see it.
         assert!(evict.contains("[f]irefox"), "{evict}");
         // And every pattern is bracketed, because each of these names is in the
         // command line of the shell doing the matching: an unbracketed
@@ -1525,16 +1659,11 @@ mod tests {
 
     #[test]
     fn base64_round_trips_through_the_decoder_it_is_paired_with() {
-        // The driver script is written into the sandbox this way, so a wrong
-        // encoder is a syntax error in a file nobody looks at.
+        // Scripts and attachments are written into the sandbox this way, so a
+        // wrong encoder is a syntax error in a file nobody looks at.
         for sample in ["", "a", "ab", "abc", "abcd", "hello world", "{\"x\": 1}\n"] {
             assert_eq!(decode(&base64_encode(sample.as_bytes())), sample);
         }
-    }
-
-    #[test]
-    fn the_browser_driver_is_shipped_with_the_binary() {
-        assert!(BROWSER_DRIVER.contains("__guacEls"), "the driver must be the real script");
     }
 
     #[test]
@@ -1542,7 +1671,7 @@ mod tests {
         // Everything here is written by a model and handed to bash, so a stray
         // quote is a command injection rather than a typo.
         let command = DesktopAction::Type { text: "it's fine; rm -rf /".into() }.command();
-        assert!(command.starts_with("xdotool type --delay 12 -- "), "{command}");
+        assert!(command.starts_with("xdotool type --clearmodifiers --delay 12 -- "), "{command}");
         // The embedded quote is closed and reopened rather than ending the
         // argument, so the rest stays text instead of becoming a command.
         assert!(command.contains("'it'\\''s fine; rm -rf /'"), "{command}");
@@ -1550,23 +1679,170 @@ mod tests {
     }
 
     #[test]
-    fn a_click_moves_first_so_it_lands_where_the_model_meant() {
+    fn long_text_is_typed_in_pieces_so_a_page_can_keep_up() {
+        // One `xdotool type` of a long string outruns a field that re-renders
+        // per keystroke: characters go missing out of the middle, and the model
+        // sees a screenshot of text it did not write.
+        let text = "x".repeat(TYPE_CHUNK * 2 + 5);
+        let command = DesktopAction::Type { text }.command();
+        assert_eq!(command.matches("xdotool type").count(), 3, "{command}");
+        // Sequenced with `&&`, so a chunk that fails stops the rest rather than
+        // typing the tail of a sentence into whatever is focused next.
+        assert_eq!(command.matches(" && ").count(), 2, "{command}");
+
+        // Every character survives the split, in order, once.
+        let typed: String = command
+            .split(" && ")
+            .map(|piece| piece.trim_start_matches("xdotool type --clearmodifiers --delay 12 -- "))
+            .map(|piece| piece.trim_matches('\''))
+            .collect();
+        assert_eq!(typed.len(), TYPE_CHUNK * 2 + 5);
+    }
+
+    #[test]
+    fn text_is_split_on_characters_rather_than_bytes() {
+        // A model typing an em dash, an emoji or any non-Latin script hands
+        // this multi-byte characters, and a byte-indexed split would panic
+        // inside one of them.
+        let text = "→".repeat(TYPE_CHUNK);
+        let command = DesktopAction::Type { text: text.clone() }.command();
+        let typed: String = command
+            .split(" && ")
+            .map(|piece| piece.trim_start_matches("xdotool type --clearmodifiers --delay 12 -- "))
+            .map(|piece| piece.trim_matches('\''))
+            .collect();
+        assert_eq!(typed, text);
+    }
+
+    #[test]
+    fn a_click_moves_first_and_waits_for_the_pointer_to_land() {
+        // `--sync` is the whole point. Without it the move and the click are
+        // two requests to X and the second can be delivered first, so a click
+        // lands wherever the pointer happened to be: a model that aimed
+        // correctly and missed anyway.
         assert_eq!(
             DesktopAction::Click { x: 40, y: 12, button: 1, count: 1 }.command(),
-            "xdotool mousemove 40 12 click --repeat 1 1"
+            "xdotool mousemove --sync 40 12 click --clearmodifiers --repeat 1 1"
         );
         assert_eq!(
             DesktopAction::Click { x: 1, y: 2, button: 3, count: 2 }.command(),
-            "xdotool mousemove 1 2 click --repeat 2 3"
+            "xdotool mousemove --sync 1 2 click --clearmodifiers --repeat 2 3"
         );
     }
 
     #[test]
-    fn scrolling_down_and_up_are_different_buttons() {
-        assert!(DesktopAction::Scroll { down: true, amount: 3 }.command().ends_with(" 5"));
-        assert!(DesktopAction::Scroll { down: false, amount: 3 }.command().ends_with(" 4"));
+    fn scrolling_down_and_up_are_different_buttons_at_a_named_place() {
+        let down = DesktopAction::Scroll { x: 500, y: 400, down: true, amount: 3 }.command();
+        let up = DesktopAction::Scroll { x: 500, y: 400, down: false, amount: 3 }.command();
+        assert!(down.ends_with(" 5"), "{down}");
+        assert!(up.ends_with(" 4"), "{up}");
+        // A wheel event goes to whatever is under the pointer, so where it is
+        // aimed is part of the action rather than a leftover from the last
+        // click: a model reading an article scrolled the sidebar instead.
+        assert!(down.contains("mousemove --sync 500 400"), "{down}");
         // A zero repeat is a no-op that reads as a broken tool.
-        assert!(DesktopAction::Scroll { down: true, amount: 0 }.command().contains("--repeat 1"));
+        assert!(DesktopAction::Scroll { x: 1, y: 1, down: true, amount: 0 }
+            .command()
+            .contains("--repeat 1"));
+    }
+
+    #[test]
+    fn a_drag_holds_the_button_down_across_the_move() {
+        // Press, move, release, in that order and in one invocation. Split
+        // across three commands the button is released by the shell exiting
+        // between them, and the drag is a click followed by a click.
+        let command = DesktopAction::Drag { from: (10, 20), to: (90, 20) }.command();
+        assert!(command.starts_with("xdotool mousemove --sync 10 20 mousedown 1"), "{command}");
+        assert!(command.contains("mousemove --sync 90 20"), "{command}");
+        assert!(command.ends_with("mouseup 1"), "{command}");
+    }
+
+    #[test]
+    fn only_actions_whose_effect_arrives_later_are_waited_for() {
+        // A click that opens a menu, submits a form or follows a link has not
+        // finished doing so when xdotool exits, and a picture taken then shows
+        // the screen the model was already looking at, which is
+        // indistinguishable to a model from a click that did nothing.
+        for changes in [
+            DesktopAction::Click { x: 1, y: 1, button: 1, count: 1 },
+            DesktopAction::Type { text: "hello".into() },
+            DesktopAction::Key { keys: "Return".into() },
+            DesktopAction::Scroll { x: 1, y: 1, down: true, amount: 3 },
+            DesktopAction::Drag { from: (0, 0), to: (9, 9) },
+        ] {
+            assert!(settle_for(&changes).contains("sleep"), "{changes:?} finishes after it exits");
+        }
+        // The two that are finished when they return are not charged for a
+        // delay they cannot use, which would otherwise be paid on every action
+        // in a sequence. A wait has already waited.
+        assert_eq!(settle_for(&DesktopAction::Move { x: 1, y: 1 }), "");
+        assert_eq!(settle_for(&DesktopAction::Wait { ms: 500 }), "");
+    }
+
+    #[test]
+    fn a_screen_is_read_out_of_one_command_that_did_three_things() {
+        // The action, the settle and the capture are one round trip, so one
+        // reply has to carry the action's exit code, the geometry and the
+        // picture. `echo -n` runs the marker into the geometry and the capture
+        // puts the base64 on its own line.
+        let out = Output {
+            stdout: "ACT:0\nSIZE:1024x768\nAAAABBBB".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        let screen = read_screen(&out).expect("a picture and a size");
+        assert_eq!(screen.geometry, "1024x768");
+        assert_eq!(screen.image, "data:image/jpeg;base64,AAAABBBB");
+        assert_eq!(screen.exit_code, 0);
+    }
+
+    #[test]
+    fn a_refused_action_is_reported_and_photographed_anyway() {
+        // Sequenced with `;` rather than `&&` on purpose: whatever refused the
+        // action is on the screen, and a model told only that its click failed
+        // does it again.
+        let out = Output {
+            stdout: "ACT:1\nSIZE:1024x768\nAAAA".into(),
+            stderr: "no such key".into(),
+            exit_code: 0,
+        };
+        let screen = read_screen(&out).expect("a picture even so");
+        assert_eq!(screen.exit_code, 1);
+        assert_eq!(screen.image, "data:image/jpeg;base64,AAAA");
+    }
+
+    #[test]
+    fn output_from_the_action_is_never_mistaken_for_a_picture() {
+        // An action is free to write to stdout. Reading a picture out of a line
+        // it printed hands a model a data URL of somebody's shell output, drawn
+        // as a broken image with no error anywhere.
+        let noisy = Output {
+            stdout: "ACT:0\nxdotool: something\nSIZE:1024x768\nREALIMAGE".into(),
+            stderr: String::new(),
+            exit_code: 0,
+        };
+        assert_eq!(
+            read_screen(&noisy).unwrap().image,
+            "data:image/jpeg;base64,REALIMAGE",
+            "only what follows the size is the picture"
+        );
+
+        // And a capture that failed short-circuits before printing a size, so
+        // there is no picture at all rather than the wrong one.
+        let failed = Output {
+            stdout: "ACT:0\nxdotool: something".into(),
+            stderr: "scrot: failed".into(),
+            exit_code: 1,
+        };
+        assert_eq!(read_screen(&failed), None);
+    }
+
+    #[test]
+    fn waiting_is_bounded_so_a_model_cannot_hold_a_turn_open() {
+        // A model asked to be patient will ask for a minute, and the turn it is
+        // spending is the operator's.
+        assert_eq!(DesktopAction::Wait { ms: 800 }.command(), "sleep 0.8");
+        assert_eq!(DesktopAction::Wait { ms: 600_000 }.command(), "sleep 10");
     }
 
     #[test]

@@ -126,10 +126,13 @@ LinkedIn has no API to call, which is what makes the browser kind the general
 one.
 
 **Capability is observed, not declared.** The protocols assume an agent
-publishes what it can do. For half of this, that is the wrong direction: the
-browser is holding the cookies, so the truthful move is to read the machine
-rather than to ask a person to maintain a manifest that drifts the moment they
-log out. What a declaration buys, and what this gives up, is certainty: a
+publishes what it can do. For half of this, that is the wrong direction:
+whatever is holding the cookies knows, so the truthful move is to read it rather
+than to ask a person to maintain a manifest that drifts the moment they log out.
+An agent has two places that can hold them, a computer and a browser, and each
+is read on its own and recorded against itself, because a session in one is not
+reachable from the other and an agent told only the service name reaches for the
+wrong tool. What a declaration buys, and what this gives up, is certainty: a
 declared capability is exact, while an observed one has to survive the fact that
 a cookie's presence does not mean a login. `google.com` cookies on a signed-out
 browser and a `PHPSESSID` handed to anonymous visitors were both real false
@@ -180,8 +183,8 @@ it, which is the one decision an injection is in a position to talk it out of.
 `runtime::needs_consent` is the structural version, and it is deliberately
 narrow. Three conditions, all of which must hold: the browser action changes
 something rather than reading it, this turn has already taken in a page or a
-screen, and the browser is standing on a site this agent holds a session for.
-Reading is never gated, because an agent that cannot read cannot report the
+screen, and the browser is standing on a site this agent holds a session for,
+in that browser rather than anywhere else. Reading is never gated, because an agent that cannot read cannot report the
 attack either, and gating navigation would mean approving a click in order to
 reach the click being approved. What is left is the case this paper and
 BrowseSafe agree is worth paying for: the payload does not need to obtain

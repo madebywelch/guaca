@@ -73,10 +73,12 @@ Ten tools, described to the model and visible in the transcript when used:
 | `request_permission` | Stops and asks you before acting in your name |
 | `run_command` | A shell on its own machine |
 | `open_on_desktop` | Launches something on that machine's screen |
-| `use_screen` | Looks at the screen, clicks, types |
-| `browse` | Drives Chrome through the DevTools protocol |
+| `use_screen` | Looks at the screen, clicks, types, drags |
+| `browse` | Uses its own browser, which knows where everything on a page is |
 
-The last four need a computer, which is optional; see below.
+The first three of those need a computer and the last needs a browser. Both are
+optional, both are separate, and an agent is offered only the tools for what it
+actually has. See below.
 
 ## Files
 
@@ -149,13 +151,20 @@ one and the panel becomes that routine: switch it off without deleting it, fire
 a test run that does not move the schedule, rewrite what it says, retime it, and
 read what it has actually done.
 
-## Computers
+## Computers and browsers
 
-With an [E2B](https://e2b.dev) key configured, an agent can be given a Linux
-machine with a desktop, a browser and a shell. The screen sits at the top of the
-panel beside the conversation: a live picture while you read, and interactive
-when you click it open.
+An agent can be given two things, and they are not the same thing.
 
+**A computer**, with an [E2B](https://e2b.dev) key: a Linux machine with a
+desktop, a shell and a screen. The agent works it the way a person does, by
+looking at a picture of the screen and aiming a pointer at it. That is
+approximate, which is why the web does not belong here, and it is the only way
+to use anything that is not a web page: an application, a file, an installer, a
+terminal window.
+
+- Every screen action answers with a fresh picture, so the agent is always
+  looking at the result of what it just did rather than at a memory of the
+  screen two actions ago.
 - The machine sleeps after fifteen idle minutes and keeps its disk, so it wakes
   up still signed in to whatever it was signed in to.
 - Sandboxes are private, and the viewer is a loopback proxy that holds the
@@ -164,8 +173,22 @@ when you click it open.
 - A machine that no live agent refers to is released on the next launch. A
   forgotten sandbox bills exactly like a used one.
 
-Without an E2B key none of this appears, and the other four tools are not
-offered.
+**A browser**, with a [Kernel](https://kernel.sh) key: a Chrome in the cloud and
+nothing else. Chrome already knows where every link, button and field is, so the
+agent asks the page rather than guessing at pixels. This is what the web is for.
+
+- Sign-ins survive. Each agent gets a profile of its own, and a browser is
+  created from it, so an account you signed it in to last week is open in a
+  browser that did not exist a second ago.
+- It goes quiet within seconds of the last action and stops billing, and comes
+  back the moment the agent uses it again.
+- The live view is where you take over, and taking over is the point: signing an
+  agent in is the one thing only you can do.
+
+Both panes sit at the top of the panel beside the conversation: a live picture
+while you read, interactive when you click one open. Neither appears without its
+key, and the tools that need it are not offered to the model either, so an agent
+never spends a turn discovering that something was never set up.
 
 ## Connectors
 
@@ -177,12 +200,17 @@ knowledge was.
 Two halves, and which one you get is decided by the service rather than by a
 preference.
 
-**Sign in on the agent's computer.** Open its screen, log in to whatever you
-like, and that is the whole procedure. Nothing is declared anywhere: Chrome is
-holding the cookies, so Guaca asks the browser what it is signed in to and puts
-the answer in that agent's prompt and on every other agent's roster. Log out and
-it disappears the same way. There is nowhere to type a password because Guaca
-never handles one.
+**Sign in for the agent.** Open its browser, or its computer's screen, log in to
+whatever you like, and that is the whole procedure. Nothing is declared
+anywhere: Chrome is holding the cookies, so Guaca asks it what it is signed in
+to and puts the answer in that agent's prompt and on every other agent's roster.
+Log out and it disappears the same way. There is nowhere to type a password
+because Guaca never handles one.
+
+Which of the two you signed in on is recorded and shown, because the two have
+unrelated cookie jars. An agent told only "you can reach Gmail" when the session
+is on its computer's screen will call `browse`, be shown a login page, and
+report the account as broken.
 
 **Credentials, on the group.** For an API with a plain token, paste it into the
 group's settings and name a variable. Every machine in that group gets it in the
@@ -191,7 +219,7 @@ environment of every command it runs.
 Two things follow from where each half physically lives, and both are load
 bearing:
 
-- A browser session is cookies on **one** machine, so it belongs to one agent.
+- A session is cookies in **one** jar, so it belongs to one agent.
   The rest of the crew is told who holds it, in the same roster that lists
   skills, so an agent asked to post to LinkedIn says "Researcher can do that"
   rather than "I am not signed in". A skill is a claim an agent wrote about
@@ -241,8 +269,9 @@ honest answer is the OS keychain, and that is a deliberate follow-up rather than
 something faked here.
 
 Deleting an agent is a soft delete: it leaves the rail and can never be messaged
-again, its computer is destroyed and its memory goes, but what it already said
-stays readable and its name becomes free to reuse. **Start fresh** on a group
+again, its computer and browser are destroyed along with the browser profile
+holding its sign-ins, and its memory goes, but what it already said stays
+readable and its name becomes free to reuse. **Start fresh** on a group
 resets its whole crew (transcripts, routines, memories and spend) while keeping
 the agents themselves.
 
@@ -257,9 +286,9 @@ GUAC_LOG=guac=debug pnpm app
 something: where everything lives, and which file to read first for the part
 being changed. `docs/ARCHITECTURE.md` is the long version, including why agent
 conversations end rather than going round forever, which is the hardest thing
-here. `docs/ROUTINES.md`, `docs/MACHINES.md` and `docs/WORKSPACE.md` cover the
-subsystems it does not, and `docs/PROTOCOL.md` records what the
-interoperability literature contributed.
+here. `docs/ROUTINES.md`, `docs/MACHINES.md`, `docs/BROWSERS.md` and
+`docs/WORKSPACE.md` cover the subsystems it does not, and `docs/PROTOCOL.md`
+records what the interoperability literature contributed.
 
 ## Status
 

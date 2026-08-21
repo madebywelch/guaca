@@ -64,6 +64,9 @@ export function SettingsDialog({ onClose }: Props) {
   const [apiKey, setApiKey] = useState("");
   const [e2bKey, setE2bKey] = useState("");
   const [idleMinutes, setIdleMinutes] = useState("");
+  const [kernelKey, setKernelKey] = useState("");
+  const [browserIdleMinutes, setBrowserIdleMinutes] = useState("");
+  const [stealth, setStealth] = useState(settings?.browserStealth ?? false);
   const [limits, setLimits] = useState<GuardLimits>(
     settings?.limits ?? {
       maxHops: 8,
@@ -99,9 +102,13 @@ export function SettingsDialog({ onClose }: Props) {
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
         ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
+        ...(kernelKey.trim() ? { kernelApiKey: kernelKey.trim() } : {}),
+        ...(browserIdleMinutes.trim() ? { browserIdleMinutes: Number(browserIdleMinutes) } : {}),
+        browserStealth: stealth,
       });
       setSettings(next);
       setApiKey("");
+      setKernelKey("");
       setStatus({ tone: "ok", text: "Saved." });
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -122,6 +129,9 @@ export function SettingsDialog({ onClose }: Props) {
         ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
         ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
         ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
+        ...(kernelKey.trim() ? { kernelApiKey: kernelKey.trim() } : {}),
+        ...(browserIdleMinutes.trim() ? { browserIdleMinutes: Number(browserIdleMinutes) } : {}),
+        browserStealth: stealth,
       });
       setStatus({ tone: "ok", text: result });
     } catch (error) {
@@ -214,6 +224,58 @@ export function SettingsDialog({ onClose }: Props) {
           <span className="field__hint">
             Idle minutes before a machine sleeps. Sleeping keeps its disk, so a browser stays signed
             in and wakes where it left off. Only the running time is billed.
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field__label">Kernel API key</span>
+          <input
+            className="input input--mono"
+            type="password"
+            value={kernelKey}
+            placeholder={
+              settings?.kernelKeySet ? `Stored ${settings.kernelKeyHint}` : "sk_… (optional)"
+            }
+            autoComplete="off"
+            onChange={(event) => setKernelKey(event.target.value)}
+          />
+          <span className="field__hint">
+            Gives every agent its own browser: a Chrome in the cloud, separate from its computer.
+            This is what agents use for the web, because it tells them where everything on a page is
+            instead of making them aim at pixels. Without a key that pane stays closed and agents
+            have no `browse`.
+          </span>
+        </label>
+
+        <label className="field">
+          <span className="field__label">Close browsers after</span>
+          <input
+            className="input input--mono"
+            inputMode="numeric"
+            value={browserIdleMinutes}
+            placeholder={`${settings?.browserIdleMinutes ?? 60} minutes`}
+            onChange={(event) => setBrowserIdleMinutes(event.target.value.replace(/[^0-9]/g, ""))}
+          />
+          <span className="field__hint">
+            Idle minutes before a browser is thrown away. It stops billing within seconds of going
+            quiet either way, and what it was signed in to is kept, so the next one opens signed in
+            to the same accounts. Longer only saves the seconds a fresh one takes to start.
+          </span>
+        </label>
+
+        <label className="field field--row">
+          <input
+            type="checkbox"
+            checked={stealth}
+            onChange={(event) => setStealth(event.target.checked)}
+          />
+          <span>
+            <span className="field__label">Hide that browsers are automated</span>
+            <span className="field__hint">
+              For sites that block automation. Kernel disguises the browser and solves captchas.
+              Costs more per browser and needs a plan that includes it, so leave it off until a site
+              turns an agent away.
+            </span>
           </span>
         </label>
 

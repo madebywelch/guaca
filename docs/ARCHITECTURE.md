@@ -314,6 +314,13 @@ gate. Three conditions have to hold together:
 - this turn has already taken in a page or a screenshot,
 - the browser is standing on a domain this agent holds a session for.
 
+The third one reads the *browser's* sessions rather than the agent's whole list.
+An agent can hold a computer and a browser, they have unrelated cookie jars, and
+the URL this is decided from came from the browser. A session the computer holds
+is not something a `browse` click could spend, so gating on it would stop and
+ask about an account the action cannot touch, which is how an operator learns to
+click through the prompt without reading it.
+
 Any one of them on its own refuses ordinary work. Gating reading means an agent
 cannot report the attack it found. Gating an untainted turn means a dialog in
 front of an agent doing exactly what the operator told it. Gating a site nobody
@@ -560,11 +567,13 @@ Stated plainly rather than discovered later.
   to the sender, and the sender is not notified. The run they belonged to ends
   rather than hanging, but nobody is told what was lost.
 - **The consent gate is one tool wide.** `needs_consent` covers `browse`,
-  because that is where a signed-in session is spent by pressing something. A
-  turn that reads a page and then runs `curl` through `run_command` reaches the
-  same internet with the same credentials and is not gated, because a command is
-  not addressed to a domain and there is nothing to match a session against.
-  Wording is still the only thing holding that path.
+  because that is where an action is addressed to a domain and can be matched
+  against a session. Two paths reach the same internet with the same credentials
+  and are not gated: a `curl` through `run_command`, which is not addressed to a
+  domain at all, and a `use_screen` click on a page the operator signed in to on
+  the machine's own screen, because a screenshot carries no URL to match. Both
+  predate the split into a computer and a browser and neither was made worse by
+  it. Wording is still the only thing holding them.
 - **A peer's answer to a follow-up instruction goes to its own channel, not back
   to the agent that instructed it.** `expects_reply` stays false for a message
   to a peer that has already written, because that asymmetry is what makes

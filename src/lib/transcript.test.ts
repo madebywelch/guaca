@@ -8,6 +8,7 @@ function card(id: string, name: string): AgentCard {
     id,
     groupId: "g1",
     sandboxId: null,
+    browserId: null,
     name,
     avatar: "plain",
     color: "#c7d96b",

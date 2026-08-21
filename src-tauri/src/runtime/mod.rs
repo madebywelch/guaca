@@ -79,7 +79,48 @@ fn needs_consent<'a>(action: &str, reading: &Reading, held: &'a [Signin]) -> Opt
     crate::domain::signin::session_for(held, reading.url.as_deref()?)
 }
 
-/// Turns the browser driver's JSON into something a model reads well.
+/// What a screenshot is introduced as, and what replaces one that has aged out.
+///
+/// The replacement is not silence. A model that finds a picture missing from its
+/// own history concludes the tool failed and takes another; told the picture was
+/// dropped and why, it uses the one in front of it.
+const SCREEN_NOW: &str = "This is what your screen looks like now.";
+const SCREEN_WAS: &str =
+    "(An earlier picture of your screen was here. Only the most recent one is kept, and it is \
+     below. What you did is still in the tool results above.)";
+
+/// Drops every screenshot in the conversation so far, leaving a line saying so.
+///
+/// The message list is rebuilt from the transcript at the start of every turn,
+/// so this only ever prunes within one turn. That is where the growth is: a
+/// screen action answers with a picture and a turn can hold twenty of them.
+///
+/// Rewrites rather than removes, because the picture sits in a `user` turn
+/// between an assistant turn and its tool results. Taking the turn out entirely
+/// would leave a hole in a sequence some providers validate, and the sentence
+/// left behind is a better answer anyway.
+///
+/// Screenshots only, matched by the line they were introduced with. A picture
+/// in the conversation is not necessarily a screen: an operator who attaches a
+/// photograph and asks about it sends one the same way, and dropping that would
+/// be the app quietly discarding the thing it was asked about.
+fn forget_old_screens(messages: &mut [ChatMessage]) {
+    use crate::llm::openrouter::{ContentPart, UserContent};
+
+    for message in messages.iter_mut() {
+        let ChatMessage::User { content } = message else { continue };
+        let UserContent::Parts(parts) = content else { continue };
+        let is_screen = parts
+            .iter()
+            .any(|part| matches!(part, ContentPart::Text { text } if text == SCREEN_NOW));
+        if is_screen {
+            *content = UserContent::Text(SCREEN_WAS.to_string());
+        }
+    }
+}
+
+/// Turns the browser's JSON description of a page into something a model reads
+/// well.
 ///
 /// The whole page and every element would be most of a context window, so this
 /// is bounded on purpose: enough text to understand the page, and the numbered
@@ -238,7 +279,7 @@ use crate::domain::envelope::{
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{Routine, RunKind};
-use crate::domain::signin::Signin;
+use crate::domain::signin::{BrowserState, Signin, Surface};
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
@@ -668,8 +709,8 @@ impl Runtime {
 
     /// The largest file this will push onto a machine one command at a time.
     ///
-    /// Bytes reach a sandbox as base64 inside a shell command, which is what
-    /// already puts the browser driver there. That has a ceiling, and a real
+    /// Bytes reach a sandbox as base64 inside a shell command, which is also
+    /// how a script gets there. That has a ceiling, and a real
     /// upload endpoint is the fix; until then a file too big to place says so
     /// rather than failing halfway through with a truncated document.
     const PLACEABLE_BYTES: u64 = 8 * 1024 * 1024;
@@ -1352,6 +1393,11 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
+        // What this agent actually has, decided once and used twice: the prompt
+        // describes exactly these, and the tool list offers exactly these. The
+        // two disagreeing is the failure this replaced, where every agent was
+        // told it had a machine whether or not a provider was configured.
+        let surfaces = self.surfaces();
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -1364,6 +1410,7 @@ impl Runtime {
             &history,
             &batch,
             mode,
+            surfaces,
         );
         // After assembly, because what a file becomes depends on things the
         // prompt cannot reach: bytes on disk, and a machine that may have to be
@@ -1423,7 +1470,7 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                tools: tools::specs(),
+                tools: tools::specs(surfaces),
                 temperature: None,
             };
 
@@ -1478,10 +1525,15 @@ impl Runtime {
                 // so it follows as a turn of its own. This is the whole reason
                 // an agent can work a screen rather than only describe one.
                 if let Some(image) = outcome.image {
-                    messages.push(ChatMessage::user_seeing(
-                        "This is what your screen looks like now.",
-                        image,
-                    ));
+                    // And only the newest one stays. Every screen action
+                    // answers with a picture now, so a turn that works a form
+                    // would otherwise carry a dozen near-identical screenshots:
+                    // the cost climbs quadratically over a turn, and a model
+                    // shown ten pictures of one desktop starts reasoning about
+                    // the wrong one. What an old screenshot was evidence of is
+                    // in the tool result beside it, which is text and stays.
+                    forget_old_screens(&mut messages);
+                    messages.push(ChatMessage::user_seeing(SCREEN_NOW, image));
                 }
             }
 
@@ -1970,10 +2022,8 @@ impl Runtime {
                     );
                 }
 
-                let outcome = match self.ensure_computer(card).await {
-                    Ok((client, sandbox)) => {
-                        client.browse(&sandbox.id, &sandbox.envd_token, &action, &args).await
-                    }
+                let outcome = match self.ensure_browser(card).await {
+                    Ok((client, session)) => client.browse(&session, &action, &args).await,
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
@@ -2003,9 +2053,9 @@ impl Runtime {
             ToolInvocation::OpenOnDesktop { command } => {
                 // Rewritten here as well as inside `open_on_desktop`, because
                 // what the agent is told has to be what ran: a browser that is
-                // not the one holding the accounts is pointed at the one that
-                // is, and an agent that hears its own words back describes a
-                // window that is not there.
+                // not the one holding the machine's accounts is pointed at the
+                // one that is, and an agent that hears its own words back
+                // describes a window that is not there.
                 let opened = crate::e2b::as_chrome(&command);
                 let shown = opened_on_screen(&command);
                 let outcome = match self.ensure_computer(card).await {
@@ -2022,8 +2072,10 @@ impl Runtime {
                             if shown == command {
                                 ""
                             } else {
-                                " This machine has one browser, which is the one `browse` drives \
-                                 and the one holding your accounts, so that is what opened."
+                                " This machine has one browser, and it is the one holding whatever \
+                                 accounts your screen is signed in to, so that is what opened. It \
+                                 is not the same browser as `browse`, which is somewhere else \
+                                 with its own accounts."
                             }
                         ),
                         ToolOutcome::Ok { summary: format!("opened {shown}") },
@@ -2149,7 +2201,19 @@ impl Runtime {
         action: &str,
         reading: &Reading,
     ) -> Option<String> {
-        let held = self.inner.store.agent_signins(card.id).unwrap_or_default();
+        // The browser's own sessions, not the agent's whole list. The URL this
+        // is decided from came from the browser, so a session the *computer*
+        // holds is not the thing being spent: gating on it would stop and ask
+        // about an account this action cannot touch, which teaches an operator
+        // to click through the prompt without reading it.
+        let held: Vec<Signin> = self
+            .inner
+            .store
+            .agent_signins(card.id)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|signin| signin.surface == Surface::Browser)
+            .collect();
         let (url, service) = {
             let session = needs_consent(action, reading, &held)?;
             (reading.url.clone().unwrap_or_default(), session.label())
@@ -2497,8 +2561,20 @@ impl Runtime {
     /// Looking at, and acting on, the screen.
     ///
     /// Split out because it is the only tool that answers with a picture: a
-    /// model cannot act on a screen described to it in prose, so a look comes
-    /// back as an image in the conversation rather than as text.
+    /// model cannot act on a screen described to it in prose, so the screen
+    /// comes back as an image in the conversation rather than as text.
+    ///
+    /// Every action answers with a picture, not just `look`, and that is the
+    /// single change that made this tool work. The tool used to say "look again
+    /// after anything that changes the screen" and models did not: they clicked,
+    /// were told "clicked at 412, 300", and typed into a form they had last seen
+    /// two actions ago. Every harness that drives a computer well returns the
+    /// screen after each action for exactly this reason, and it is not politeness
+    /// about wording: a picture is the only thing that can carry "the click
+    /// opened a dialog", and prose describing the click cannot.
+    ///
+    /// What it costs is an image per action, and that is paid for one level up,
+    /// where only the newest screenshot stays in the conversation.
     async fn use_screen(
         &self,
         card: &AgentCard,
@@ -2528,69 +2604,98 @@ impl Runtime {
             }
         };
 
-        if matches!(action, tools::ScreenAction::Look) {
-            return match client.screenshot(&sandbox.id, &sandbox.envd_token).await {
-                Ok((image, geometry)) => (
-                    format!(
-                        "Here is your screen, {geometry} pixels. Coordinates are measured from \
-                         the top left of this picture."
-                    ),
-                    Part::ToolCall {
-                        name: tools::USE_SCREEN.to_string(),
-                        arguments,
-                        outcome: ToolOutcome::Ok {
-                            summary: format!("looked at the screen ({geometry})"),
-                        },
-                    },
-                    Some(image),
-                ),
-                Err(err) => failed(
-                    format!("Error: could not see the screen ({err})."),
-                    err.to_string(),
-                    arguments,
-                ),
-            };
-        }
-
-        let (desktop, described) = match &action {
-            tools::ScreenAction::Look => unreachable!("handled above"),
-            tools::ScreenAction::Click { x, y, button, count } => (
+        // The action first, then the picture. A `look` is the one with nothing
+        // to do beforehand.
+        let described = match &action {
+            tools::ScreenAction::Look => None,
+            tools::ScreenAction::Click { x, y, button, count } => Some((
                 crate::e2b::DesktopAction::Click { x: *x, y: *y, button: *button, count: *count },
                 format!("clicked at {x}, {y}"),
-            ),
-            tools::ScreenAction::Move { x, y } => (
+            )),
+            tools::ScreenAction::Move { x, y } => Some((
                 crate::e2b::DesktopAction::Move { x: *x, y: *y },
                 format!("moved the pointer to {x}, {y}"),
-            ),
-            tools::ScreenAction::Type { text } => (
+            )),
+            tools::ScreenAction::Drag { from, to } => Some((
+                crate::e2b::DesktopAction::Drag { from: *from, to: *to },
+                format!("dragged from {}, {} to {}, {}", from.0, from.1, to.0, to.1),
+            )),
+            tools::ScreenAction::Type { text } => Some((
                 crate::e2b::DesktopAction::Type { text: text.clone() },
                 format!("typed {} characters", text.chars().count()),
-            ),
-            tools::ScreenAction::Key { keys } => {
-                (crate::e2b::DesktopAction::Key { keys: keys.clone() }, format!("pressed {keys}"))
-            }
-            tools::ScreenAction::Scroll { down, amount } => (
-                crate::e2b::DesktopAction::Scroll { down: *down, amount: *amount },
+            )),
+            tools::ScreenAction::Key { keys } => Some((
+                crate::e2b::DesktopAction::Key { keys: keys.clone() },
+                format!("pressed {keys}"),
+            )),
+            tools::ScreenAction::Scroll { x, y, down, amount } => Some((
+                crate::e2b::DesktopAction::Scroll { x: *x, y: *y, down: *down, amount: *amount },
                 format!("scrolled {} {amount}", if *down { "down" } else { "up" }),
+            )),
+            tools::ScreenAction::Wait { ms } => {
+                Some((crate::e2b::DesktopAction::Wait { ms: *ms }, format!("waited {ms}ms")))
+            }
+        };
+
+        // One call, because it is one round trip. The action, the moment the
+        // screen needs to finish changing, and the picture all happen on the
+        // machine.
+        let screen = match client
+            .look_at_screen(&sandbox.id, &sandbox.envd_token, described.as_ref().map(|(a, _)| a))
+            .await
+        {
+            Ok(screen) => screen,
+            Err(err) => {
+                // The action may well have gone through, so this does not claim
+                // otherwise. An agent told flatly that its click failed does it
+                // again, which is the one thing it must not do to a button it
+                // may already have pressed.
+                let done = described
+                    .as_ref()
+                    .map(|(_, said)| format!("You may have {said}, but "))
+                    .unwrap_or_default();
+                return failed(
+                    format!("Error: {done}the screen could not be photographed ({err})."),
+                    err.to_string(),
+                    arguments,
+                );
+            }
+        };
+
+        let geometry = &screen.geometry;
+        let (rendered, summary) = match (&described, screen.exit_code) {
+            // The picture comes back even when the action was refused, because
+            // whatever refused it is on the screen. A model told only that its
+            // click failed tries again; shown the dialog that swallowed it, it
+            // deals with the dialog.
+            (Some((_, said)), code) if code != 0 => (
+                format!(
+                    "That did not go through: {said} was refused by the machine (exit {code}). \
+                     The picture below is what is actually on the screen."
+                ),
+                format!("{said}, refused"),
+            ),
+            (Some((_, said)), _) => {
+                (format!("You {said}. This is the screen now, {geometry} pixels."), said.clone())
+            }
+            (None, _) => (
+                format!(
+                    "Here is your screen, {geometry} pixels. Coordinates are measured from the \
+                     top left of this picture."
+                ),
+                format!("looked at the screen ({geometry})"),
             ),
         };
 
-        match client.act_on_desktop(&sandbox.id, &sandbox.envd_token, &desktop).await {
-            Ok(_) => (
-                format!("{described}. Look again to see what changed."),
-                Part::ToolCall {
-                    name: tools::USE_SCREEN.to_string(),
-                    arguments,
-                    outcome: ToolOutcome::Ok { summary: described },
-                },
-                None,
-            ),
-            Err(err) => failed(
-                format!("Error: that did not reach the screen ({err})."),
-                err.to_string(),
+        (
+            rendered,
+            Part::ToolCall {
+                name: tools::USE_SCREEN.to_string(),
                 arguments,
-            ),
-        }
+                outcome: ToolOutcome::Ok { summary },
+            },
+            Some(screen.image),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2842,6 +2947,72 @@ impl Runtime {
         Ok((client, fresh))
     }
 
+    /// Which of the two places agents in this workspace have.
+    ///
+    /// Read from whether a provider is configured rather than from whether this
+    /// agent has been given one yet, because provisioning is lazy: an agent with
+    /// no sandbox recorded still has a computer, it just has not needed one. A
+    /// key that is set and wrong is a computer that fails when used, which is a
+    /// different thing from one that was never offered and is reported
+    /// differently.
+    pub fn surfaces(&self) -> tools::Surfaces {
+        let config = self.config();
+        tools::Surfaces {
+            computer: !config.e2b.api_key.trim().is_empty(),
+            browser: !config.kernel.api_key.trim().is_empty(),
+        }
+    }
+
+    /// The agent's browser, made or replaced if there is not a live one.
+    ///
+    /// The single place a browser is provisioned, for the same reason the
+    /// computer has one: the agent's tool and the operator's pane must not
+    /// disagree about which browser an agent has. Lazy on purpose, and an agent
+    /// that never uses the web never costs one.
+    ///
+    /// A browser that has gone is replaced rather than reported. That is the
+    /// expected end of every browser: it goes to standby seconds after the last
+    /// action, and the provider deletes it some minutes later. Nothing is lost
+    /// when it does, because the cookies went back to the agent's profile and
+    /// the replacement is created from it, so the account an operator signed in
+    /// to yesterday is open in a browser that did not exist a second ago.
+    pub async fn ensure_browser(
+        &self,
+        card: &AgentCard,
+    ) -> Result<(crate::kernel::KernelClient, crate::kernel::Session), crate::kernel::KernelError>
+    {
+        use crate::kernel::{KernelClient, KernelError};
+
+        let config = self.config();
+        let client = KernelClient::new(&config.kernel.api_key).ok_or(KernelError::NoKey)?;
+        let idle = config.kernel.idle_minutes.max(1) * 60;
+
+        if let Some(id) = card.browser_id.clone() {
+            // Asked rather than assumed, and the socket is taken from the
+            // answer. A stored socket outlives the browser it addressed, and
+            // connecting to one is a hang rather than an error.
+            if let Some(live) = client.get(&id).await? {
+                return Ok((client, live));
+            }
+        }
+
+        let fresh = client.create(&card.id.to_string(), idle, config.kernel.stealth).await?;
+
+        // A browser that cannot be written down is a browser nobody can reach
+        // and nobody will stop paying for. The computer learned this the hard
+        // way: failing to read a create reply once orphaned three sandboxes.
+        if let Err(err) = self.inner.store.set_agent_browser(card.id, Some(&fresh.id)) {
+            tracing::error!(%err, browser = %fresh.id, "could not record a browser; releasing it");
+            let _ = client.delete(&fresh.id).await;
+            return Err(KernelError::Protocol(format!(
+                "the browser could not be recorded and was released ({err})"
+            )));
+        }
+
+        self.inner.events.emit(UiEvent::AgentsChanged);
+        Ok((client, fresh))
+    }
+
     /// Books one model call's cost and says so, immediately.
     ///
     /// The saying is the point. A crew working on its own errands showed the
@@ -2907,6 +3078,45 @@ impl Runtime {
             }
             tracing::info!(%sandbox, "releasing a sandbox no agent refers to");
             if client.kill(&sandbox).await.is_ok() {
+                swept += 1;
+            }
+        }
+        Ok(swept)
+    }
+
+    /// Ends every browser this app made that no agent still refers to.
+    ///
+    /// The same failure as the sandbox sweep, and worth its own pass because
+    /// the two providers are configured independently: a crash between creating
+    /// a browser and recording it, or an agent deleted while its browser was
+    /// up, leaves something billing that nothing in the app can see. Only
+    /// browsers this app tagged are touched, because the account may be doing
+    /// other work.
+    pub async fn sweep_browsers(&self) -> Result<usize, crate::kernel::KernelError> {
+        let config = self.config();
+        let Some(client) = crate::kernel::KernelClient::new(&config.kernel.api_key) else {
+            return Ok(0);
+        };
+
+        let known: std::collections::HashSet<String> = self
+            .inner
+            .store
+            .list_agents()
+            .unwrap_or_default()
+            .into_iter()
+            // A terminated agent's browser is destroyed with it, so its id must
+            // not shield a live browser from the sweep.
+            .filter(|card| card.lifecycle != Lifecycle::Terminated)
+            .filter_map(|card| card.browser_id)
+            .collect();
+
+        let mut swept = 0;
+        for browser in client.list_ours().await? {
+            if known.contains(&browser) {
+                continue;
+            }
+            tracing::info!(%browser, "releasing a browser no agent refers to");
+            if client.delete(&browser).await.is_ok() {
                 swept += 1;
             }
         }
@@ -3034,50 +3244,83 @@ impl Runtime {
         )
     }
 
-    /// Asks an agent's browser what it is signed in to, and records the answer.
+    /// Asks both of an agent's places what they are signed in to, and records
+    /// the answers.
     ///
-    /// The machine is the source of truth, so this replaces whatever was stored
-    /// rather than adding to it: an entry that outlives the logout it should
-    /// have noticed keeps the crew routing work to an agent that will hit a
-    /// login wall.
+    /// Whatever holds the cookies is the source of truth, so each answer
+    /// replaces what was stored for that place rather than adding to it: an
+    /// entry that outlives the logout it should have noticed keeps the crew
+    /// routing work to an agent that will hit a login wall.
     ///
-    /// A machine that is asleep or gone is left alone and the last known list
-    /// stands. Waking a sandbox to refresh a list would cost money every time
-    /// anybody looked at an agent.
+    /// Two places, scanned independently, and one being unavailable must not
+    /// disturb the other. A machine that is asleep or gone is left alone and its
+    /// last known list stands, because waking a sandbox to refresh a list would
+    /// cost money every time anybody looked at an agent. A browser that has
+    /// already been deleted is left alone for a different reason: creating one
+    /// to ask would start a bill for a question nobody asked.
     pub async fn scan_signins(&self, agent: AgentId) -> Result<Vec<Signin>, RuntimeError> {
         let card = self.inner.store.get_agent(agent)?.ok_or(RuntimeError::UnknownAgent(agent))?;
 
-        let Some(sandbox) = card.sandbox_id.clone() else {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        };
-        let Some(envd) = card.sandbox_envd_token.clone() else {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        };
-        let Some(client) = crate::e2b::E2bClient::new(&self.config().e2b.api_key) else {
-            return Ok(self.inner.store.agent_signins(agent)?);
-        };
+        let mut asked = false;
+        if let Some(state) = self.computer_signin_state(&card).await {
+            let found = crate::domain::signin::detect(agent, Surface::Computer, &state, now_ms());
+            self.inner.store.replace_signins(agent, Surface::Computer, &found)?;
+            asked = true;
+        }
+        if let Some(state) = self.browser_signin_state(&card).await {
+            let found = crate::domain::signin::detect(agent, Surface::Browser, &state, now_ms());
+            self.inner.store.replace_signins(agent, Surface::Browser, &found)?;
+            asked = true;
+        }
+
+        if asked {
+            self.mark_scanned(agent);
+            self.inner.events.emit(UiEvent::AgentsChanged);
+        }
+        Ok(self.inner.store.agent_signins(agent)?)
+    }
+
+    /// What the machine's browser is holding, or nothing if it cannot be asked
+    /// without waking or paying for something.
+    async fn computer_signin_state(&self, card: &AgentCard) -> Option<BrowserState> {
+        let sandbox = card.sandbox_id.clone()?;
+        let envd = card.sandbox_envd_token.clone()?;
+        let client = crate::e2b::E2bClient::new(&self.config().e2b.api_key)?;
         if client.state(&sandbox).await.unwrap_or(crate::e2b::SandboxState::Gone)
             != crate::e2b::SandboxState::Running
         {
-            return Ok(self.inner.store.agent_signins(agent)?);
+            return None;
         }
 
-        let state = match crate::e2b::signed_in_state(&client, &sandbox, &envd).await {
-            Ok(state) => state,
+        match crate::e2b::signed_in_state(&client, &sandbox, &envd).await {
+            Ok(state) => Some(state),
             Err(err) => {
-                // Not worth failing whatever asked. A browser that will not
-                // answer is a machine whose sessions are simply unknown, and
-                // the last known list is still the best answer there is.
-                tracing::debug!(agent = %card.name, %err, "could not read the browser's sessions");
-                return Ok(self.inner.store.agent_signins(agent)?);
+                // Not worth failing whatever asked. A machine that will not
+                // answer is one whose sessions are simply unknown, and the last
+                // known list is still the best answer there is.
+                tracing::debug!(agent = %card.name, %err, "could not read the machine's sessions");
+                None
             }
-        };
+        }
+    }
 
-        let found = crate::domain::signin::detect(agent, &state, now_ms());
-        let stored = self.inner.store.replace_signins(agent, &found)?;
-        self.mark_scanned(agent);
-        self.inner.events.emit(UiEvent::AgentsChanged);
-        Ok(stored)
+    /// The same question of the hosted browser.
+    ///
+    /// Asked of the browser it already has, never of a new one. A browser that
+    /// timed out has written its cookies back to the agent's profile, so making
+    /// one to look would return the same answer and start a bill for it.
+    async fn browser_signin_state(&self, card: &AgentCard) -> Option<BrowserState> {
+        let id = card.browser_id.clone()?;
+        let client = crate::kernel::KernelClient::new(&self.config().kernel.api_key)?;
+        let session = client.get(&id).await.ok().flatten()?;
+
+        match client.signed_in_state(&session).await {
+            Ok(state) => Some(state),
+            Err(err) => {
+                tracing::debug!(agent = %card.name, %err, "could not read the browser's sessions");
+                None
+            }
+        }
     }
 
     /// Whether this agent's sessions are stale enough to be worth re-reading.
@@ -3357,6 +3600,7 @@ mod tests {
             sandbox_id: Some(sandbox.into()),
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
+            browser_id: None,
             lifecycle,
             pinned: false,
             rail_order: 0,
@@ -3391,6 +3635,7 @@ mod tests {
     fn session(domain: &str) -> Signin {
         Signin {
             agent_id: AgentId::new(),
+            surface: Surface::Browser,
             domain: domain.into(),
             service: domain.into(),
             recognised: true,
@@ -3466,11 +3711,60 @@ mod tests {
     }
 
     #[test]
+    fn only_the_newest_picture_of_a_screen_stays_in_the_conversation() {
+        use crate::llm::openrouter::{ContentPart, UserContent};
+
+        // Every screen action answers with a picture now, so a turn spent
+        // filling a form would otherwise carry a dozen near-identical
+        // screenshots: the cost climbs quadratically over one turn, and a model
+        // shown ten pictures of one desktop starts reasoning about the wrong
+        // one.
+        let mut messages = vec![
+            ChatMessage::user("Book the room."),
+            ChatMessage::user_seeing(SCREEN_NOW, "data:image/jpeg;base64,AAA"),
+            ChatMessage::user_seeing(SCREEN_NOW, "data:image/jpeg;base64,BBB"),
+        ];
+        forget_old_screens(&mut messages);
+
+        let images = messages
+            .iter()
+            .filter(|message| {
+                matches!(message, ChatMessage::User { content: UserContent::Parts(_) })
+            })
+            .count();
+        assert_eq!(images, 0, "every earlier screenshot has to go");
+
+        // And the turn says why, rather than vanishing. A model that finds a
+        // picture missing from its own history concludes the tool failed and
+        // takes another.
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            ChatMessage::User { content: UserContent::Text(text) } if text == SCREEN_WAS
+        )));
+
+        // A picture that is not a screen is left alone. An operator who
+        // attaches a photograph and asks about it sends one the same way, and
+        // dropping it would be the app discarding the thing it was asked about.
+        let mut attached = vec![ChatMessage::user_seeing(
+            "The attached file plan.png looks like this.",
+            "data:image/png;base64,CCC",
+        )];
+        forget_old_screens(&mut attached);
+        match &attached[0] {
+            ChatMessage::User { content: UserContent::Parts(parts) } => {
+                assert!(parts.iter().any(|part| matches!(part, ContentPart::ImageUrl { .. })))
+            }
+            other => panic!("an attached picture was dropped: {other:?}"),
+        }
+    }
+
+    #[test]
     fn a_screenshot_taints_the_turn_without_moving_the_browser() {
-        // `use_screen` reads the same page through a different tool and carries
-        // no URL of its own. A turn that looked at the screen and then clicks
-        // is the same risk as one that read the page, so the browser's last
-        // known position is what the click is judged against.
+        // `use_screen` looks at a different place with no URL of its own, and
+        // the browser is still wherever `browse` left it. A turn that has taken
+        // in a screen and then clicks in the browser is the same risk as one
+        // that read the page, so the browser's last known position is what the
+        // click is judged against.
         let held = [session("gmail.com")];
         let looked = Reading { ingested: true, url: Some("https://mail.gmail.com/".into()) };
         assert!(needs_consent("click", &looked, &held).is_some());

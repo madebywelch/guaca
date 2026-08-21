@@ -1,9 +1,16 @@
-//! What an agent's browser is already signed in to.
+//! What an agent is already signed in to.
 //!
-//! Not something an operator types. The browser knows: it is holding the
-//! cookies. Chrome's remote interface will list them, so Guaca asks the machine
-//! rather than asking the person, and an agent that got signed in ten seconds
-//! ago advertises it on the roster without anybody recording anything.
+//! Not something an operator types. Whatever is holding the cookies knows, so
+//! Guaca asks it rather than asking the person, and an agent that got signed in
+//! ten seconds ago advertises it on the roster without anybody recording
+//! anything.
+//!
+//! Two things can be holding them, and the rule below is shared by both because
+//! it is a fact about the web rather than about where a browser runs. A computer
+//! keeps its cookies in a file, read off the disk by `sessions.py`; a hosted
+//! browser is asked over the DevTools protocol by `cdp.rs`. Both arrive here as
+//! a `BrowserState`, and both are recorded against the `Surface` they came from,
+//! because a session on one is not reachable from the other.
 //!
 //! The hard part is not reading cookies, it is deciding what a cookie means.
 //! Two failure modes, both observed on a real machine while this was written:
@@ -95,11 +102,58 @@ pub struct CookieMark {
     pub session: bool,
 }
 
-/// A site an agent's browser is signed in to.
+/// Which of an agent's two places holds a session.
+///
+/// An agent can be given a computer and a browser, they are different machines
+/// on different providers, and their cookie jars are unrelated. Recording which
+/// one a session is in is not bookkeeping: an agent signed in to Gmail on its
+/// computer's screen and told only "you can reach Gmail" calls `browse`, is
+/// shown a login page, and reports the account as broken. The operator has the
+/// same problem in reverse, because signing an agent in is something only they
+/// can do and they have to know which window to do it in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Surface {
+    /// The Linux machine with a screen. Reached by looking and pointing.
+    Computer,
+    /// The hosted browser. Reached by asking the page.
+    Browser,
+}
+
+impl Surface {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Surface::Computer => "computer",
+            Surface::Browser => "browser",
+        }
+    }
+
+    /// Anything unrecognised reads as the computer, which is where every
+    /// session recorded before there was a second surface came from.
+    pub fn parse(raw: &str) -> Self {
+        match raw {
+            "browser" => Surface::Browser,
+            _ => Surface::Computer,
+        }
+    }
+
+    /// How an agent is told to reach it, in the words of the tool that does.
+    pub fn how(self) -> &'static str {
+        match self {
+            Surface::Computer => "on your computer's screen, so `use_screen` reaches it",
+            Surface::Browser => "in your browser, so `browse` reaches it",
+        }
+    }
+}
+
+/// A site an agent is signed in to, and where.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Signin {
     pub agent_id: AgentId,
+    /// Which of the agent's two places this session is in. A session on one is
+    /// not reachable from the other.
+    pub surface: Surface,
     /// The host, normalised: `linkedin.com`.
     pub domain: String,
     /// What to call it. A recognised service gets its real name; anything else
@@ -182,7 +236,7 @@ pub fn session_for<'a>(signins: &'a [Signin], url: &str) -> Option<&'a Signin> {
 ///
 /// `now` is passed rather than read so the result is a pure function of its
 /// input and the tests do not depend on a clock.
-pub fn detect(agent_id: AgentId, state: &BrowserState, now: i64) -> Vec<Signin> {
+pub fn detect(agent_id: AgentId, surface: Surface, state: &BrowserState, now: i64) -> Vec<Signin> {
     let visited: std::collections::HashSet<String> =
         state.visited.iter().map(|host| host_of(host)).collect();
 
@@ -203,6 +257,7 @@ pub fn detect(agent_id: AgentId, state: &BrowserState, now: i64) -> Vec<Signin> 
         if signed_in {
             found.push(Signin {
                 agent_id,
+                surface,
                 domain: (*suffix).to_string(),
                 service: (*service).to_string(),
                 recognised: true,
@@ -238,6 +293,7 @@ pub fn detect(agent_id: AgentId, state: &BrowserState, now: i64) -> Vec<Signin> 
         if seen.insert(domain.clone()) {
             found.push(Signin {
                 agent_id,
+                surface,
                 domain: domain.clone(),
                 service: domain,
                 recognised: false,
@@ -299,7 +355,7 @@ mod tests {
     #[test]
     fn a_real_machine_reports_the_one_account_it_actually_has() {
         let agent = AgentId::new();
-        let found = detect(agent, &real_machine(), 100);
+        let found = detect(agent, Surface::Computer, &real_machine(), 100);
 
         assert_eq!(found.len(), 1, "expected LinkedIn and nothing else, got {found:?}");
         assert_eq!(found[0].service, "LinkedIn");
@@ -315,7 +371,7 @@ mod tests {
         // and durable, so anything short of a real signature check claims the
         // agent can read Gmail. It then wastes a turn finding out it cannot,
         // and the operator sees a broken account rather than an absent one.
-        let found = detect(AgentId::new(), &real_machine(), 100);
+        let found = detect(AgentId::new(), Surface::Computer, &real_machine(), 100);
         assert!(
             !found.iter().any(|s| s.service == "Google"),
             "signed out of Google must read as signed out: {found:?}"
@@ -325,7 +381,7 @@ mod tests {
         let mut state = real_machine();
         state.cookies.push(cookie(".google.com", "__Secure-1PSID", true, false));
         state.visited.push("mail.google.com".into());
-        let found = detect(AgentId::new(), &state, 100);
+        let found = detect(AgentId::new(), Surface::Computer, &state, 100);
         assert!(found.iter().any(|s| s.service == "Google"), "{found:?}");
     }
 
@@ -334,7 +390,7 @@ mod tests {
         // Every one of these is httpOnly and durable, which is why the obvious
         // heuristic is useless: a browser that has read the news for an hour
         // holds hundreds of them.
-        let found = detect(AgentId::new(), &real_machine(), 100);
+        let found = detect(AgentId::new(), Surface::Computer, &real_machine(), 100);
         for noise in ["adnxs.com", "360yield.com", "a-mo.net", "adgrx.com", "amazon-adsystem.com"] {
             assert!(!found.iter().any(|s| s.domain.contains(noise)), "reported {noise}: {found:?}");
         }
@@ -348,7 +404,7 @@ mod tests {
             cookies: vec![cookie(".wiki.internal.example", "auth_user", true, false)],
             visited: vec!["wiki.internal.example".into()],
         };
-        let found = detect(AgentId::new(), &state, 100);
+        let found = detect(AgentId::new(), Surface::Computer, &state, 100);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].domain, "internal.example");
         assert!(!found[0].recognised, "a guess must not be presented as a certainty");
@@ -371,7 +427,7 @@ mod tests {
             visited: vec!["listings.example".into(), "www.events.example".into()],
         };
         assert!(
-            detect(AgentId::new(), &state, 100).is_empty(),
+            detect(AgentId::new(), Surface::Computer, &state, 100).is_empty(),
             "an anonymous session id must not read as an account"
         );
     }
@@ -385,10 +441,10 @@ mod tests {
 
         let unvisited =
             BrowserState { cookies: cookies.clone(), visited: vec!["news.example".into()] };
-        assert!(detect(AgentId::new(), &unvisited, 100).is_empty());
+        assert!(detect(AgentId::new(), Surface::Computer, &unvisited, 100).is_empty());
 
         let visited = BrowserState { cookies, visited: vec!["tracker.example".into()] };
-        assert_eq!(detect(AgentId::new(), &visited, 100).len(), 1);
+        assert_eq!(detect(AgentId::new(), Surface::Computer, &visited, 100).len(), 1);
     }
 
     #[test]
@@ -399,7 +455,10 @@ mod tests {
             cookies: vec![cookie(".www.linkedin.com", "li_at", true, true)],
             visited: vec!["www.linkedin.com".into()],
         };
-        assert!(detect(AgentId::new(), &state, 100).is_empty(), "a session cookie proves nothing");
+        assert!(
+            detect(AgentId::new(), Surface::Computer, &state, 100).is_empty(),
+            "a session cookie proves nothing"
+        );
     }
 
     #[test]
@@ -414,7 +473,10 @@ mod tests {
             ],
             visited: vec!["www.google.com".into()],
         };
-        assert!(detect(AgentId::new(), &state, 100).is_empty(), "a known service is judged once");
+        assert!(
+            detect(AgentId::new(), Surface::Computer, &state, 100).is_empty(),
+            "a known service is judged once"
+        );
     }
 
     #[test]
@@ -439,16 +501,17 @@ mod tests {
             ],
             visited: vec!["www.linkedin.com".into()],
         };
-        assert_eq!(detect(AgentId::new(), &state, 100).len(), 1);
+        assert_eq!(detect(AgentId::new(), Surface::Computer, &state, 100).len(), 1);
     }
 
     #[test]
     fn nothing_in_the_jar_means_nothing_claimed() {
-        assert!(detect(AgentId::new(), &BrowserState::default(), 100).is_empty());
+        assert!(detect(AgentId::new(), Surface::Computer, &BrowserState::default(), 100).is_empty());
     }
 
     fn signin_for(domain: &str) -> Signin {
         Signin {
+            surface: Surface::Computer,
             agent_id: AgentId::new(),
             domain: domain.into(),
             service: domain.into(),
