@@ -39,6 +39,18 @@ of that match and fell through to the silent mode, so every schedule an agent
 kept was answered by an agent that had just been told nothing was being asked of
 it. Anything carrying work is `Assigned`, whoever sent it.
 
+**Every eval fault but one points at a crew that talks too much, which is why
+the app twice shipped one that stopped too early.** Answered too often, said it
+twice, thanked a thank-you, nagged a peer: all the same direction. `Silent` is
+the only check facing the other way and it needs the whole run to have told the
+operator nothing, so a coordinator that answered while the agent holding the
+actual job said nothing satisfies it. `AssignedAndSaidNothing` reads `intent`
+off the wire and names the agent that was given work and produced no text for
+anyone; a tool trail is not an answer, because the turn that shipped this did
+call a tool. The runtime half is in `emit_reply`: an `Assigned` turn that
+produces nothing files a notice instead of returning quietly, since a turn with
+no text used to produce no envelope at all and therefore no trace of itself.
+
 **A pipeline spends two hops per phase, so the hop limit is four phases, not
 eight.** A coordinator working through specialists in sequence is one hop out
 and one hop back each time, and the next instruction starts from where the last
@@ -287,6 +299,21 @@ the real cookie names; do not loosen them without a fresh capture.
 **A cookie value must never leave the sandbox.** `browser.py` drops it at the
 only point in the system that sees one, and `CookieMark` has no field it could
 arrive in.
+
+**Everything the app says about page content is wording, except one rule.**
+`WEB_LABEL`, the `[OPERATOR]`/`[AGENT]` labels and the "Message sources" section
+all tell a model that a page is data. An injection is writing aimed at the same
+model arguing the reverse, so where they disagree there was nothing left.
+`needs_consent` in `runtime/mod.rs` is the part that does not depend on the
+model having been convinced: a `click` or `type`, in a turn that has already
+read a page or a screen, on a domain the agent holds a session for, parks the
+turn on the operator. All three conditions are load-bearing and each one alone
+refuses honest work, so read the doc comment before narrowing or widening any of
+them. It is a pure function on purpose, kept apart from the asking, and two of
+its tests exist only to fail a careless rewrite: `notgmail.com` is not a
+`gmail.com` session, and the host in `https://gmail.com@evil.com/` is
+`evil.com`. Reading is never gated, because an agent that cannot read cannot
+report the attack either.
 
 **A failed model call is retried before the operator hears about it, and the
 row the retry reads is the transcript.** `stream_with_retries` re-attempts only
