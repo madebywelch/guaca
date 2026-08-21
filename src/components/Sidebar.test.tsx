@@ -76,6 +76,7 @@ function draw(groups: Group[], agents: AgentCard[] = [], activity: Record<string
       onEditAgent={vi.fn()}
       onNewGroup={vi.fn()}
       onEditGroup={vi.fn()}
+      onOpenCafeteria={vi.fn()}
       onOpenSettings={vi.fn()}
       onOpenSearch={vi.fn()}
       onOpenMenu={vi.fn()}

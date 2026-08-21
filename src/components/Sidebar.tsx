@@ -15,6 +15,7 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
   onNewGroup: () => void;
   onEditGroup: (group: Group) => void;
+  onOpenCafeteria: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
   /** Where the operator right-clicked, and on whom. */
@@ -52,6 +53,7 @@ export function Sidebar({
   onEditAgent,
   onNewGroup,
   onEditGroup,
+  onOpenCafeteria,
   onOpenSettings,
   onOpenSearch,
   onOpenMenu,
@@ -566,6 +568,14 @@ export function Sidebar({
       </div>
 
       <div className="rail__foot">
+        {/* Above "New agent" because it is the faster of the two ways to add
+            somebody, and the one an operator reaches for more than once. */}
+        <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
+          <span aria-hidden="true" className="rail__hash">
+            ☰
+          </span>
+          Cafeteria
+        </button>
         <button type="button" className="btn btn--rail" onClick={onNewAgent}>
           <span aria-hidden="true" className="rail__hash">
             +

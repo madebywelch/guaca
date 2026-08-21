@@ -150,8 +150,16 @@ describe("App", () => {
 
   it("offers a way in when there are no agents", async () => {
     render(<App />);
-    expect(await screen.findByRole("button", { name: /starter crew/i })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /open the cafeteria/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /create one agent/i })).toBeTruthy();
+  });
+
+  it("opens the cafeteria from the empty state", async () => {
+    // The one path a workspace with nothing in it is expected to take, so it
+    // has to reach somewhere that can actually fill it.
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /open the cafeteria/i }));
+    expect(await screen.findByRole("dialog", { name: /cafeteria/i })).toBeTruthy();
   });
 
   it("lists agents and opens a channel", async () => {

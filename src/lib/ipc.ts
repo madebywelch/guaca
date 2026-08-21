@@ -119,6 +119,18 @@ export const api = {
    */
   duplicateAgent: (id: AgentId) => invoke<AgentCard>("duplicate_agent", { id }),
 
+  /**
+   * Hires a set of preconfigured agents into one group, in one call.
+   *
+   * Batched rather than looped for two reasons. Every create announces itself
+   * and the rail re-reads the whole roster, so six hires done one at a time
+   * redraw the sidebar six times. And a name already taken in the group is
+   * settled on the Rust side against the roster *and* the rest of the batch,
+   * which is the one place that rule can live without being written twice.
+   */
+  hireAgents: (groupId: GroupId, drafts: AgentDraft[]) =>
+    invoke<AgentCard[]>("hire_agents", { groupId, drafts }),
+
   setAgentPaused: (id: AgentId, paused: boolean) =>
     invoke<AgentCard>("set_agent_paused", { id, paused }),
 
