@@ -99,8 +99,12 @@ export function BrowserScreen({ agent }: Props) {
    * Called from inside the click handler rather than from an effect afterwards,
    * because this webview is WebKit and WebKit only honours a focus change that
    * is part of a user gesture. An effect running on the next render is not.
+   *
+   * Wrapped so its identity is stable: `grow` below depends on it, and a fresh
+   * function every render would rebuild that callback for nothing. A ref does
+   * not change, so there is nothing to list.
    */
-  const grabKeyboard = () => frame.current?.focus();
+  const grabKeyboard = useCallback(() => frame.current?.focus(), []);
 
   /**
    * Grows the pane to fill the window, and takes the keyboard with it.
@@ -113,7 +117,7 @@ export function BrowserScreen({ agent }: Props) {
     cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
     setFull(true);
     grabKeyboard();
-  }, []);
+  }, [grabKeyboard]);
 
   // Escape shrinks it again. On the window rather than the frame, because the
   // live view swallows key presses once it has focus.
