@@ -253,11 +253,13 @@ the agents themselves.
 GUAC_LOG=guac=debug pnpm app
 ```
 
-`AGENTS.md` is the short version for anyone, human or otherwise, about to change
-something: what is surprising, what will bite, and how to check.
-`docs/ARCHITECTURE.md` is the long version, including why agent conversations
-end rather than going round forever, which is the hardest thing here.
-`docs/PROTOCOL.md` records what the interoperability literature contributed.
+`AGENTS.md` is the map for anyone, human or otherwise, about to change
+something: where everything lives, and which file to read first for the part
+being changed. `docs/ARCHITECTURE.md` is the long version, including why agent
+conversations end rather than going round forever, which is the hardest thing
+here. `docs/ROUTINES.md`, `docs/MACHINES.md` and `docs/WORKSPACE.md` cover the
+subsystems it does not, and `docs/PROTOCOL.md` records what the
+interoperability literature contributed.
 
 ## Status
 
