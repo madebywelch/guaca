@@ -52,6 +52,10 @@ pub enum Script {
     Instruct { recipients: Vec<String>, text: String },
     /// A `send_message` carrying files, named the way a model names them.
     SendFiles { recipients: Vec<String>, text: String, files: Vec<String> },
+    /// An `attach_file` call: files put on the answer rather than sent to a
+    /// peer. The tool name is the one a model actually emitted, so the alias
+    /// path is exercised wherever a scenario asks for it.
+    Attach { tool: String, files: Vec<String> },
     /// Emit a `directory` tool call.
     Directory,
     /// Emit an `update_notes` tool call.
@@ -143,6 +147,16 @@ pub fn render(script: &Script) -> String {
                     {"index":0,"function":{"arguments": piece}}
                 ]}}]})));
             }
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Attach { tool, files } => {
+            let args = serde_json::json!({ "files": files }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_attach","type":"function",
+                 "function":{"name": tool,"arguments": args}}
+            ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));

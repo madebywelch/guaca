@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { fileUrl, previewKind, readableSize, readFileText } from "./files";
+import { fileUrl, kindLabel, previewKind, readableSize, readFileText } from "./files";
 import type { Attachment } from "./types";
 
 /**
@@ -16,8 +16,26 @@ describe("previewKind", () => {
     expect(previewKind("image/png")).toBe("image");
     expect(previewKind("image/webp")).toBe("image");
     expect(previewKind("application/pdf")).toBe("pdf");
-    expect(previewKind("text/markdown")).toBe("text");
     expect(previewKind("application/json")).toBe("text");
+  });
+
+  it("gives markdown its own kind, because that is what the agents write in", () => {
+    // A brief drawn as monospace `##` is a document the operator reads around
+    // rather than through, and the app already renders every message body as
+    // the prose it is. A file is the same prose that arrived as a file.
+    expect(previewKind("text/markdown")).toBe("markdown");
+    // Everything else textual stays source. A log is not prose, and markdown
+    // rules applied to one would eat its punctuation.
+    expect(previewKind("text/plain")).toBe("text");
+    expect(previewKind("text/csv")).toBe("text");
+    expect(previewKind("text/html")).toBe("text");
+  });
+
+  it("says Markdown rather than shouting it", () => {
+    // The generic `text/` rule upcases the subtype, which reads as MARKDOWN
+    // in the one heading an operator sees while reading the document.
+    expect(kindLabel("text/markdown")).toBe("Markdown");
+    expect(kindLabel("text/csv")).toBe("CSV");
   });
 
   it("refuses to guess at anything else", () => {

@@ -2461,6 +2461,24 @@ button {
   mask-image: linear-gradient(to bottom, #000 70%, transparent);
 }
 
+/* A markdown file drawn as the document it is, cut and faded exactly as its
+   source would have been. Markdown is what the agents write in, so this is the
+   preview that gets used: a brief shown as monospace `##` is one the operator
+   reads around rather than through. Same renderer as a message body, because a
+   file is the same prose that happened to arrive as one. */
+.file__doc {
+  padding: 0.6rem 0.7rem;
+  max-height: 11rem;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+/* The heading a document opens with is not a heading in a conversation: at
+   message size it shouts across the transcript, and a card is a glance. */
+.file__doc .md {
+  font-size: 0.78rem;
+}
+
 .file__foot {
   display: flex;
   align-items: center;
@@ -2605,7 +2623,8 @@ button {
   background: var(--ground);
 }
 
-.file-view__body[data-kind="text"] {
+.file-view__body[data-kind="text"],
+.file-view__body[data-kind="markdown"] {
   flex-direction: column;
   padding: 0.35rem 0.5rem;
 }
@@ -2615,6 +2634,19 @@ button {
   max-height: none;
   mask-image: none;
   font-size: 0.75rem;
+}
+
+.file-view__body .file__doc {
+  max-height: none;
+  mask-image: none;
+}
+
+/* The one place in the app where a document is read rather than glanced at, so
+   the measure is capped the way prose is set. Full width, a heading two lines
+   long crosses the whole window and the eye loses the return. */
+.file-view__body .file__doc .md {
+  font-size: 0.85rem;
+  max-width: 44rem;
 }
 
 .file-view__image {

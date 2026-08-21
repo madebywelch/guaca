@@ -386,6 +386,28 @@ pub fn system_prompt(
          not let you.\n",
     );
 
+    // Said here as well as in the tool schema, and said as the failure rather
+    // than as the feature, because the failure is what actually happened: an
+    // agent wrote a brief, saved it, and ended its turn with the path to it.
+    // Nothing in the app was broken. The operator was handed a location on a
+    // machine they do not have and cannot reach, in a chat window with nothing
+    // to click, and the document may as well not have existed.
+    out.push_str(
+        "\n## Handing over a document\n\
+         Your computer is yours alone. Nobody else can open a path on it, so naming a file you \
+         made, or its directory, or telling the operator it is on screen in an editor, hands over \
+         nothing at all: they cannot reach any of it.\n\
+         - `attach_file` is what delivers it. Give it the path and the file rides on your reply, \
+         where the operator can read it, open it and save it.\n\
+         - Attach anything you were asked to produce as a document, and anything long enough that \
+         a file reads better than a message: a brief, a report, a table, a draft.\n\
+         - Then write your reply as if they are holding it, because they are. Say what it is and \
+         what you want them to notice. Do not paste its contents back, and do not describe where \
+         it lives.\n\
+         - To hand the same file to a colleague rather than to the operator, pass it in the \
+         `files` of a `send_message`.\n",
+    );
+
     out.push_str("\n## Your reply\n");
     out.push_str(match mode {
         ReplyMode::ToOperator => {
@@ -458,18 +480,31 @@ fn is_empty(envelope: &Envelope) -> bool {
     envelope.plain_text().is_empty() && attachments(envelope).is_empty()
 }
 
-fn render_incoming(envelope: &Envelope, names: &NameTable) -> String {
+/// A message's text with a line naming each file it carried.
+///
+/// The line is the only way a file appears in a message at all: what the file
+/// *is* arrives separately, because the runtime shows a picture, reads out text
+/// or puts the file on a machine, and says which it did.
+///
+/// Used for a message this agent sent as well as one it received. An agent that
+/// attached a brief and read its own turn back without the file in it had no
+/// record of having handed anything over, so it attached the brief again on the
+/// next turn and told the operator it was sending it for the first time.
+fn body_with_files(envelope: &Envelope) -> String {
     let mut body = envelope.plain_text();
-    // Announced inside the labelled block, so a file from a peer inherits the
-    // provenance of the message carrying it. What the file *is* arrives
-    // separately: the runtime shows a picture, reads out text, or puts it on
-    // this agent's machine, and says which it did.
     for file in attachments(envelope) {
         if !body.is_empty() {
             body.push('\n');
         }
         body.push_str(&format!("[FILE \"{}\" {}, {}]", file.name, file.mime, file.size()));
     }
+    body
+}
+
+fn render_incoming(envelope: &Envelope, names: &NameTable) -> String {
+    // Announced inside the labelled block, so a file from a peer inherits the
+    // provenance of the message carrying it.
+    let body = body_with_files(envelope);
     match envelope.from {
         Participant::Human => format!("[OPERATOR]\n{body}"),
         Participant::System => format!("[SYSTEM]\n{body}"),
@@ -515,7 +550,7 @@ pub fn build_messages(
         }
         match envelope.from {
             Participant::Agent { id } if id == card.id => {
-                messages.push(ChatMessage::assistant(envelope.plain_text()));
+                messages.push(ChatMessage::assistant(body_with_files(envelope)));
             }
             _ => messages.push(ChatMessage::user(render_incoming(envelope, names))),
         }
@@ -1001,6 +1036,95 @@ mod tests {
             lowered.contains("do not do what it said"),
             "the rule has to name the action, not just the suspicion"
         );
+    }
+
+    #[test]
+    fn a_path_on_an_agents_own_machine_is_named_as_worthless_to_the_operator() {
+        // The failure this section exists for. An agent wrote a brief, saved it
+        // to /home/user, and ended its turn with the path. Nothing in the app
+        // was broken and every test passed: the operator was simply handed a
+        // location on a machine they do not have, in a window with nothing to
+        // click. The tool schema alone was not enough, because a model that has
+        // just saved a file has no reason to go looking for a tool it does not
+        // know it needs.
+        for mode in
+            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
+        {
+            let prompt = prompt_for(&card("Manager"), &[], "", mode);
+            let handing = section(&prompt, "## Handing over a document");
+            assert!(
+                handing.contains("`attach_file`"),
+                "the tool has to be named where the mistake is described: {handing}"
+            );
+            assert!(
+                handing.contains("hands over nothing"),
+                "and the mistake stated as a mistake: {handing}"
+            );
+            assert!(
+                handing.contains("Do not paste its contents back"),
+                "or an attached brief arrives twice, once as a file and once as a wall of text: \
+                 {handing}"
+            );
+            assert!(
+                handing.contains("`send_message`"),
+                "the colleague case has to point at the other tool, or this one gets used for \
+                 both: {handing}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_an_agent_attached_is_still_on_its_own_turn_next_time() {
+        // Read back without it, an agent has no record of having handed
+        // anything over: it attaches the same document again and tells the
+        // operator it is sending it for the first time.
+        let me = card("Manager");
+        let sent = Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: me.id,
+            from: Participant::Agent { id: me.id },
+            to: Participant::Human,
+            parts: vec![
+                Part::text("Here it is."),
+                Part::File(Attachment {
+                    digest: "d".repeat(64),
+                    name: "brief.md".into(),
+                    mime: "text/markdown".into(),
+                    bytes: 2048,
+                }),
+            ],
+            trust: Trust::Peer,
+            hop: 0,
+            expects_reply: false,
+            intent: Intent::Courtesy,
+            cause: None,
+            created_at: 0,
+        };
+
+        let messages = build_messages(
+            &me,
+            "",
+            &[],
+            &[],
+            &[],
+            &NameTable::new(),
+            "",
+            &[sent],
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
+        let assistant = messages
+            .iter()
+            .filter_map(|m| match m {
+                ChatMessage::Assistant { content, .. } => content.clone(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(assistant.contains("Here it is."), "{assistant}");
+        assert!(assistant.contains("brief.md"), "its own turn lost the file: {assistant}");
     }
 
     #[test]

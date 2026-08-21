@@ -317,3 +317,191 @@ async fn a_file_never_leaks_into_the_text_of_a_message() {
         .expect("the operator's message is in the channel");
     assert_eq!(stored.plain_text(), "read this");
 }
+
+/// Every file part on a message this agent sent to the operator, oldest first.
+fn handed_over(h: &Harness, agent: &str) -> Vec<String> {
+    h.runtime
+        .store()
+        .channel_messages(h.id(agent), 200)
+        .unwrap()
+        .iter()
+        .filter(|envelope: &&Envelope| envelope.to == Participant::Human)
+        .flat_map(|envelope| {
+            envelope.parts.iter().filter_map(|part| match part {
+                Part::File(file) => Some(file.name.clone()),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_an_agent_attaches_reaches_the_operator() {
+    // The failure this exists for: an agent wrote a brief, saved it, and ended
+    // its turn with the path. The operator was handed a location on a machine
+    // that is not theirs, in a window with nothing to click, and the document
+    // may as well not have been written.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Tidied up and attached. The second risk is the one to worry about.".into())
+        } else {
+            Script::Attach { tool: "attach_file".into(), files: vec!["notes.md".into()] }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let notes = h.runtime.files().put("notes.md", b"# Risks\n\n1. cost\n2. the vendor").unwrap();
+    let run = h
+        .runtime
+        .send_from_human_with(h.id("Manager"), "Tidy this up and give it back.", vec![notes])
+        .unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        handed_over(&h, "Manager"),
+        vec!["notes.md"],
+        "the operator was told about a file rather than given one:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_handed_over_with_nothing_said_still_arrives() {
+    // Sending a document with no covering note is a normal thing to do, and
+    // models do it constantly. A reply judged empty by its text alone would
+    // drop the file the whole turn was spent producing, which is the one
+    // failure worse than not having the feature: the agent believes it handed
+    // the document over and the operator never sees it.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("".into())
+        } else {
+            Script::Attach { tool: "attach".into(), files: vec!["agenda.txt".into()] }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let agenda = h.runtime.files().put("agenda.txt", b"1. budget\n2. hiring").unwrap();
+    let run = h
+        .runtime
+        .send_from_human_with(h.id("Manager"), "Hand that back to me.", vec![agenda])
+        .unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        handed_over(&h, "Manager"),
+        vec!["agenda.txt"],
+        "a reply with a file and no words is still a reply:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed() {
+    // No sandbox in CI, so a path on the agent's own machine cannot be read,
+    // which is exactly the path this has to get right: an agent told nothing
+    // goes on to tell the operator the brief is attached to a message that
+    // carries no file at all.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I could not hand the file over.".into())
+        } else {
+            Script::Attach { tool: "attach_file".into(), files: vec!["/home/user/brief.md".into()] }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Write me a brief.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        handed_over(&h, "Manager").is_empty(),
+        "nothing should have been attached:\n{}",
+        h.transcript()
+    );
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("/home/user/brief.md was not attached"), "{told}");
+    assert!(
+        told.contains("do not tell them it is attached"),
+        "the model has to be told what not to claim: {told}"
+    );
+    assert!(
+        told.contains("attach it again"),
+        "and given a way forward, or it rewords the claim and retries: {told}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_same_document_attached_twice_in_one_turn_is_one_file() {
+    // A model that attaches the brief, writes a paragraph, then attaches the
+    // brief again would otherwise put two identical cards under one message.
+    let stub = serve(|body| {
+        let calls = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+        match calls {
+            0 | 1 => Script::Attach { tool: "attach_file".into(), files: vec!["menu.md".into()] },
+            _ => Script::Say("Attached.".into()),
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let menu = h.runtime.files().put("menu.md", b"soup, then fish").unwrap();
+    let run =
+        h.runtime.send_from_human_with(h.id("Manager"), "Give me the menu.", vec![menu]).unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        handed_over(&h, "Manager"),
+        vec!["menu.md"],
+        "the same document arrived twice:\n{}",
+        h.transcript()
+    );
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("Nothing new was attached"), "the second call has to say so: {told}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_reads_its_own_attachment_back_on_the_next_turn() {
+    // Without this the agent has no record of having handed anything over: it
+    // attaches the same document again next turn and tells the operator it is
+    // sending it for the first time.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Attached.".into())
+        } else if reading_peer_replies(body) {
+            Script::Say("Already sent.".into())
+        } else {
+            Script::Attach { tool: "attach_file".into(), files: vec!["brief.md".into()] }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let brief = h.runtime.files().put("brief.md", b"the deadline is the 14th").unwrap();
+    let first =
+        h.runtime.send_from_human_with(h.id("Manager"), "Hand me the brief.", vec![brief]).unwrap();
+    h.settle(first).await;
+
+    let then = h.runtime.send_from_human(h.id("Manager"), "Did you send it?").unwrap();
+    h.settle(then).await;
+
+    let last = stub.transcript.lock().last().cloned().unwrap();
+    let assistant: Vec<String> = last["messages"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m["role"] == "assistant")
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(
+        assistant.iter().any(|turn| turn.contains("brief.md")),
+        "its own turn lost the file it attached: {assistant:?}"
+    );
+}

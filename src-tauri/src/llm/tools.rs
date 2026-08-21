@@ -27,6 +27,7 @@ pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
+pub const ATTACH_FILE: &str = "attach_file";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -484,6 +485,40 @@ fn all_specs() -> Vec<ToolSpec> {
                 "additionalProperties": false
             }),
         },
+        ToolSpec {
+            name: ATTACH_FILE.to_string(),
+            // The eleventh tool, and it earns its place because without it a
+            // document an agent produces has no way to reach the operator at
+            // all. `send_message` carries files to another agent; the answer a
+            // turn ends with carried text and nothing else, so an agent asked
+            // for a brief wrote one and then typed the path to it. The operator
+            // read `/home/user/brief.md`, which is a path on a machine that is
+            // not theirs, in an app with no way to open it.
+            description: "Attach a file to your answer, so whoever reads it can open it. The \
+                          file you made is on your own computer and nobody else can reach that \
+                          machine, so writing its path into your answer hands over nothing: this \
+                          is what actually delivers it. Name it by its path, for example \
+                          `/home/user/brief.md`, or by the name of a file already attached to \
+                          something in your channel. Attach anything you were asked to produce as \
+                          a document and anything easier read as one: a brief, a report, a table, \
+                          a draft. Then say what it is in your answer rather than repeating its \
+                          contents, because the reader has the file itself."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "minItems": 1,
+                        "description": "The files to attach: a path on your computer, or the \
+                                        name of one already in your channel."
+                    }
+                },
+                "required": ["files"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -494,6 +529,10 @@ pub enum ToolInvocation {
         to: Vec<String>,
         text: String,
         intent: Intent,
+        files: Vec<String>,
+    },
+    /// Hand files to whoever this turn is answering, on the answer itself.
+    AttachFile {
         files: Vec<String>,
     },
     /// Stop and ask the operator whether to go ahead.
@@ -572,8 +611,8 @@ pub enum ScreenAction {
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ToolParseError {
     #[error(
-        "unknown tool {name:?}. Available tools: directory, send_message, update_notes, \
-         run_command, open_on_desktop, use_screen, browse, schedule, create_agent."
+        "unknown tool {name:?}. Available tools: directory, send_message, attach_file, \
+         update_notes, run_command, open_on_desktop, use_screen, browse, schedule, create_agent."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -582,6 +621,8 @@ pub enum ToolParseError {
     MissingRecipients,
     #[error("send_message needs a non-empty `text`")]
     MissingText,
+    #[error("attach_file needs a non-empty `files` list")]
+    MissingFiles,
     #[error("update_notes needs a `content` string")]
     MissingContent,
     #[error("run_command needs a non-empty `command` string")]
@@ -610,7 +651,7 @@ impl ToolParseError {
             ToolParseError::UnknownTool { name } => {
                 format!(
                     "Error: no tool named {name:?}. You can call `directory`, `send_message`, \
-                     `update_notes` (your memory), or `run_command`."
+                     `attach_file`, `update_notes` (your memory), or `run_command`."
                 )
             }
             ToolParseError::BadJson { name, detail } => format!(
@@ -658,6 +699,12 @@ impl ToolParseError {
             }
             ToolParseError::MissingText => {
                 "Error: `text` must be a non-empty string containing the message body.".to_string()
+            }
+            ToolParseError::MissingFiles => {
+                "Error: `files` must name at least one file, by its path on your computer or by \
+                 the name of one already in your channel, for example \
+                 {\"files\": [\"/home/user/brief.md\"]}."
+                    .to_string()
             }
             ToolParseError::IncompleteAgent { needs } => format!(
                 "Error: to create an agent you need {needs}. For example {{\"name\": \"Chief of \
@@ -1082,6 +1129,27 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
 
             Ok(ToolInvocation::SendMessage { to, text, intent, files })
         }
+        // The aliases are the words a model reaches for when it has just been
+        // told to give the operator a document. Each names this and nothing
+        // else, so refusing one buys a retry and a turn spent on spelling.
+        ATTACH_FILE | "attach" | "attach_files" | "share_file" | "show_file" | "send_file" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: ATTACH_FILE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let files = normalize_list(
+                value
+                    .get("files")
+                    .or_else(|| value.get("attachments"))
+                    .or_else(|| value.get("paths"))
+                    .or_else(|| value.get("path"))
+                    .or_else(|| value.get("file")),
+            );
+            if files.is_empty() {
+                return Err(ToolParseError::MissingFiles);
+            }
+            Ok(ToolInvocation::AttachFile { files })
+        }
         other => Err(ToolParseError::UnknownTool { name: other.to_string() }),
     }
 }
@@ -1112,8 +1180,15 @@ fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
                         }
                     }
                     serde_json::Value::Object(map) => {
-                        if let Some(serde_json::Value::String(name)) =
-                            map.get("name").or_else(|| map.get("agent"))
+                        // `path` and `file` for an attachment, the other two
+                        // for a recipient. One list serves both callers, and a
+                        // key that means nothing to one of them cannot collide
+                        // with anything the other sends.
+                        if let Some(serde_json::Value::String(name)) = map
+                            .get("name")
+                            .or_else(|| map.get("agent"))
+                            .or_else(|| map.get("path"))
+                            .or_else(|| map.get("file"))
                         {
                             let trimmed = name.trim();
                             if !trimmed.is_empty() {
@@ -1569,9 +1644,9 @@ mod tests {
         let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
-            10,
+            11,
             "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
-             create_agent, request_permission, send_message, update_notes"
+             create_agent, request_permission, send_message, attach_file, update_notes"
         );
         for spec in &specs {
             assert_eq!(
@@ -2016,5 +2091,64 @@ mod tests {
     #[test]
     fn delivery_rendering_handles_an_empty_result() {
         assert_eq!(render_deliveries(&[]), "No messages were sent.");
+    }
+
+    #[test]
+    fn a_file_is_attached_whichever_word_the_model_reached_for() {
+        // An agent that has just been told to give the operator a document
+        // reaches for whatever its training used. Each of these names this and
+        // nothing else, so refusing one costs a turn on spelling.
+        for name in
+            ["attach_file", "attach", "attach_files", "share_file", "show_file", "send_file"]
+        {
+            let parsed = parse(&call(name, r#"{"files":["/home/user/brief.md"]}"#));
+            assert_eq!(
+                parsed,
+                Ok(ToolInvocation::AttachFile { files: vec!["/home/user/brief.md".into()] }),
+                "{name} should attach"
+            );
+        }
+    }
+
+    #[test]
+    fn one_file_arrives_however_a_model_spells_the_argument() {
+        // The schema says an array under `files`. A single path under `path` is
+        // the near miss a model makes when it has exactly one document, and it
+        // is unambiguous.
+        for arguments in [
+            r#"{"files":["brief.md"]}"#,
+            r#"{"files":"brief.md"}"#,
+            r#"{"attachments":["brief.md"]}"#,
+            r#"{"paths":["brief.md"]}"#,
+            r#"{"path":"brief.md"}"#,
+            r#"{"file":"brief.md"}"#,
+            r#"{"files":[{"path":"brief.md"}]}"#,
+        ] {
+            assert_eq!(
+                parse(&call(ATTACH_FILE, arguments)),
+                Ok(ToolInvocation::AttachFile { files: vec!["brief.md".into()] }),
+                "{arguments} should attach one file"
+            );
+        }
+    }
+
+    #[test]
+    fn an_attach_that_names_nothing_is_told_what_a_call_looks_like() {
+        for arguments in ["{}", r#"{"files":[]}"#, r#"{"files":""}"#] {
+            let err = parse(&call(ATTACH_FILE, arguments)).unwrap_err();
+            assert_eq!(err, ToolParseError::MissingFiles, "{arguments}");
+            // A refusal that only says no gets reworded and retried.
+            assert!(err.guidance().contains("/home/user/brief.md"), "{}", err.guidance());
+        }
+    }
+
+    #[test]
+    fn attaching_is_offered_with_no_computer_and_no_browser() {
+        // Forwarding a file already in the channel is host-side and needs no
+        // machine at all, and an operator with no provider configured is
+        // exactly the person who still wants the document.
+        let offered: Vec<String> =
+            specs(Surfaces::none()).into_iter().map(|spec| spec.name).collect();
+        assert!(offered.contains(&ATTACH_FILE.to_string()), "{offered:?}");
     }
 }

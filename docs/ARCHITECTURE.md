@@ -457,6 +457,34 @@ which is where an agent that *produced* a document has it. The operator's end is
 the same pipe: `dragDropEnabled` hands Rust the dropped paths, so the bytes are
 read on the Rust side and never enter the webview.
 
+**A file reaches the operator on the turn's own answer, through `attach_file`.**
+For a while it could not reach them at all. `send_message` carries files to
+another agent; a turn's final message carried text and nothing else, so an agent
+asked for a brief wrote one, saved it, and ended its turn with the path. That
+reads as success and is not: `/home/user/brief.md` is a location on a sandbox
+the operator does not have, in an app with nothing to click. The tool resolves
+its arguments through the same `resolve_files` a send uses, and `emit_reply`
+puts what came back on the reply envelope rather than sending anything of its
+own, so there is no second message, no extra hop and nothing new for the guard
+to judge. Three consequences worth knowing:
+
+- **The reply is delivered when it carries a file and no text.** Handing over a
+  document with nothing typed is normal, and a reply judged empty by its text
+  alone would drop the thing the whole turn was spent producing.
+- **It attaches to whatever the reply is addressed to.** In every mode but
+  `ToPeer` that is the operator's channel, including `Assigned`, where a
+  delegated agent's answer is filed as a note. A peer turn attaches to the peer,
+  which is the honest reading of "attach to your answer".
+- **An agent's own attachments are named back to it.** `body_with_files` runs
+  over own messages as well as incoming ones. Without it an agent reads its last
+  turn back with no file in it, has no record of handing anything over, and
+  attaches the same document again while telling the operator it is the first
+  time.
+
+The prompt states the mistake rather than the feature (*Handing over a
+document*), because the tool schema alone was not enough: a model that has just
+saved a file has no reason to go looking for a tool it does not know it needs.
+
 **A drop is taken into the store before anything is sent.** `stage_files` runs
 on the drop, which is what lets the app refuse a 40 MB archive while the
 operator is still holding it rather than failing the message they went on to
@@ -478,11 +506,21 @@ not 64 hex characters is refused before it is ever joined onto a path. The
 name in the URL decides the type of the answer and nothing else.
 
 A transcript draws what it can of a file rather than naming it: a picture, a
-document's first page in the webview's own viewer, the first lines of anything
-textual, and for the rest a row saying what it is. Each opens a full view, and
-each offers a copy into the downloads folder, whose path is said out loud
-because a file saved somewhere the operator has to go looking for has not really
-been saved.
+document's first page in the webview's own viewer, a markdown file as the
+document it is, the first lines of anything else textual, and for the rest a row
+saying what it is. Each opens a full view, and each offers a copy into the
+downloads folder, whose path is said out loud because a file saved somewhere the
+operator has to go looking for has not really been saved.
+
+Markdown is its own preview kind because it is what the agents write in. A brief
+drawn as monospace `##` is a document the operator reads around rather than
+through, and every message body in this app is already rendered as the prose it
+is: a file is the same prose that happened to arrive as a file. It goes through
+the same `Markdown` component, which means the same trust decision, and that is
+the point rather than a coincidence. Raw HTML is off because `rehype-raw` is not
+installed, and a document off an agent's machine is no more trustworthy than the
+message that carried it. Anything else textual stays source: a log is not prose,
+and markdown rules applied to one eat its punctuation.
 
 One exception, and it is WebKit's. A custom scheme is allowed in an `img` and
 a `fetch` if the CSP names it, and refused in a frame however it is named, as

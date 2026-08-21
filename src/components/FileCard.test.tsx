@@ -100,12 +100,51 @@ describe("FileCard", () => {
   });
 
   it("reads the first lines of a text file into the transcript", async () => {
-    render(<FileCard file={file("notes.md", "text/markdown")} />);
+    const { container } = render(<FileCard file={file("server.log", "text/plain")} />);
 
     await waitFor(() => expect(screen.getByText(/first line/)).toBeTruthy());
+    // As its own source. A log is not prose, and markdown rules applied to one
+    // would eat its punctuation.
+    expect(container.querySelector(".file__text")).toBeTruthy();
     const asked = fetched.mock.calls[0] ?? [];
     expect(asked[0]).toContain("guacfile:");
     expect(asked[1].headers.Range).toBe("bytes=0-2047");
+  });
+
+  it("draws a markdown file as the document it is, not as its source", async () => {
+    // The format the agents actually write in. A brief shown as monospace `##`
+    // is a document the operator reads around rather than through, and this app
+    // already renders every message body as the prose it is.
+    fetched.mockResolvedValue({
+      ok: true,
+      status: 206,
+      text: async () => "# Risks\n\n- the vendor\n- **the deadline**\n",
+    });
+    const { container } = render(<FileCard file={file("brief.md", "text/markdown")} />);
+
+    await waitFor(() => expect(container.querySelector("h1")).toBeTruthy());
+    expect(container.querySelector("h1")?.textContent).toBe("Risks");
+    expect(container.querySelectorAll("li")).toHaveLength(2);
+    expect(container.querySelector("strong")?.textContent).toBe("the deadline");
+    // Never the raw syntax, which is the whole point.
+    expect(container.textContent).not.toContain("**");
+    expect(container.querySelector(".file__text")).toBeNull();
+  });
+
+  it("renders no HTML out of a file, whoever's machine it came off", async () => {
+    // A file from an agent's computer is no more trustworthy than the message
+    // that carried it, and the message renderer has never allowed raw HTML.
+    // `react-markdown` ignores it unless `rehype-raw` is added, and it is not.
+    fetched.mockResolvedValue({
+      ok: true,
+      status: 206,
+      text: async () => '<img src="x" onerror="alert(1)"><script>alert(2)</script>\n\nplain\n',
+    });
+    const { container } = render(<FileCard file={file("hostile.md", "text/markdown")} />);
+
+    await waitFor(() => expect(container.textContent).toContain("plain"));
+    expect(container.querySelector("script")).toBeNull();
+    expect(container.querySelector("img")).toBeNull();
   });
 
   it("names anything it cannot draw and offers no preview it does not have", () => {
@@ -200,7 +239,7 @@ describe("FileCard", () => {
     fireEvent.click(retry);
 
     await waitFor(() =>
-      expect(container.querySelector(".file__text")?.textContent).toContain("first line"),
+      expect(container.querySelector(".file__doc")?.textContent).toContain("first line"),
     );
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
