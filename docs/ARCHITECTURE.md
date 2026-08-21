@@ -522,18 +522,40 @@ installed, and a document off an agent's machine is no more trustworthy than the
 message that carried it. Anything else textual stays source: a log is not prose,
 and markdown rules applied to one eat its punctuation.
 
-One exception, and it is WebKit's. A custom scheme is allowed in an `img` and
-a `fetch` if the CSP names it, and refused in a frame however it is named, as
-a scheme source, as a host, or through `default-src`, with no violation event
-and no console line to say so. A PDF is drawn by the webview's own viewer and
-that viewer only runs in a frame, so `localCopy` fetches the document over the
-scheme like everything else and hands the frame a `blob:` URL. That is the one
-place a file's bytes sit in the renderer: the copy is made when the frame
-comes near the viewport and revoked when it leaves. Do not simplify it back to
-a direct `src`. It will pass every test in this repo and draw an empty
-rectangle. Any other way the renderer is given to reach a file goes through
-the same scheme, and the CSP has to name it or the element silently asks for
-nothing.
+Two exceptions, and both are WebKit's.
+
+The first is CORS, and it cost every preview but the picture. A response on a
+custom scheme is cross-origin to the page that asked for it, so a `fetch` of one
+that does not name an allowed origin rejects with `TypeError: Load failed`
+before the caller sees a status. An `img` is exempt, and is also the one preview
+that does not go through `fetch`, so pictures drew while a markdown brief, a
+PDF and a log all came up as a widget saying the file could not be read. The
+refusals were unreadable for the same reason: the status of a 404 is no more
+visible than the body, so the three sentences `whyNot` exists to tell apart all
+arrived as the same one. `file_response` therefore answers everything, refusals
+included, with `access-control-allow-origin`. It names the app's own origin
+rather than allowing any, and refuses a page that is not this app's with a 403:
+this webview also holds a cross-origin frame showing an agent's browser, and a
+wildcard would let script in that frame read any file whose digest it could
+name. `app_origin` has to keep agreeing with Tauri's `get_app_url`, because an
+origin that is merely close fails exactly as a missing one does.
+
+The second is frames. A custom scheme is allowed in an `img` and a `fetch` if
+the CSP names it, and refused in a frame however it is named, as a scheme
+source, as a host, or through `default-src`, with no violation event and no
+console line to say so. A PDF is drawn by the webview's own viewer and that
+viewer only runs in a frame, so `localCopy` fetches the document over the scheme
+like everything else and hands the frame a `blob:` URL. That is the one place a
+file's bytes sit in the renderer: the copy is made when the frame comes near the
+viewport and revoked when it leaves. Do not simplify it back to a direct `src`.
+It will pass every test in this repo and draw an empty rectangle. Any other way
+the renderer is given to reach a file goes through the same scheme, and the CSP
+has to name it or the element silently asks for nothing.
+
+Neither of these is visible from the harness or from CI: a mocked `fetch` has no
+origin to check and jsdom has no viewer. Both were found by pointing a real
+WKWebView at a scheme handler and reading what came back, which is what to do
+with the next one.
 
 Two limits worth knowing: 25 MB in, and 8 MB onto a machine, because bytes reach
 a sandbox as base64 inside a shell command. A real upload endpoint is the fix
