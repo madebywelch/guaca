@@ -21,6 +21,7 @@ vi.mock("./ipc", () => ({
 }));
 
 const { ACTIVITY_CHANNEL, useStore } = await import("./store");
+const { DEFAULT_PREFS } = await import("./prefs");
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
   return {
@@ -85,6 +86,11 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     activity: {},
     lastActive: {},
     settings: null,
+    // Named explicitly for the same reason as every field above it: zustand's
+    // setState merges, so a slice left out of this list leaks into whichever
+    // test runs next.
+    prefs: DEFAULT_PREFS,
+    activeRun: {},
     selected: "chef",
     messages,
     streams: {},

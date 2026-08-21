@@ -66,28 +66,17 @@ export function usePulseChoreography(pulses: Pulse[], onDone: (id: number) => vo
   const seen = useRef(new Set<number>());
   const lastStart = useRef(0);
   const timers = useRef(new Set<number>());
-  // Kept in a ref so the pump does not need `onDone` in its dependencies, which
-  // would restart the scheduler on every render.
+  /** The wait for the next throw, or null when there is nothing left to play. */
+  const wait = useRef<number | null>(null);
+  // Kept in a ref so the scheduler does not need `onDone` in its dependencies,
+  // which would rebuild it on every render.
   const done = useRef(onDone);
   done.current = onDone;
 
-  useEffect(() => {
-    for (const pulse of pulses) {
-      if (seen.current.has(pulse.id)) continue;
-      seen.current.add(pulse.id);
-
-      if (prefersReducedMotion()) {
-        done.current(pulse.id);
-        continue;
-      }
-      if (queue.current.length >= MAX_QUEUE) {
-        // Dropped from the animation only. The message itself arrived.
-        done.current(pulse.id);
-        continue;
-      }
-      queue.current.push(pulse);
-    }
-  }, [pulses]);
+  // Set by the effect below, and declared before the effect that fills the
+  // queue so the scheduler exists by the time the first pulses arrive: effects
+  // run in the order they are written.
+  const schedule = useRef<() => void>(() => {});
 
   useEffect(() => {
     const after = (ms: number, run: () => void) => {
@@ -111,25 +100,57 @@ export function usePulseChoreography(pulses: Pulse[], onDone: (id: number) => vo
       });
     };
 
-    // A single interval is enough: it only ever starts the next throw once the
-    // stagger has elapsed, so the cost is one cheap check per tick.
-    const pump = window.setInterval(() => {
-      if (queue.current.length === 0) return;
-      const now = Date.now();
-      if (now - lastStart.current < STAGGER_MS) return;
+    // Each throw books the wait for the next one, so a window with nothing
+    // crossing it holds no timer at all. Polling for work instead costs a
+    // wakeup several times a second for the life of the app to find an empty
+    // queue, and a renderer that never goes idle never stops drawing.
+    const book = () => {
+      if (wait.current !== null || queue.current.length === 0) return;
 
-      const next = queue.current.shift();
-      if (!next) return;
-      lastStart.current = now;
-      start(next);
-    }, 80);
+      wait.current = window.setTimeout(
+        () => {
+          wait.current = null;
+
+          const next = queue.current.shift();
+          if (next) {
+            lastStart.current = Date.now();
+            start(next);
+          }
+          book();
+        },
+        Math.max(0, STAGGER_MS - (Date.now() - lastStart.current)),
+      );
+    };
+
+    schedule.current = book;
 
     return () => {
-      window.clearInterval(pump);
+      if (wait.current !== null) window.clearTimeout(wait.current);
+      wait.current = null;
       for (const id of timers.current) window.clearTimeout(id);
       timers.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    for (const pulse of pulses) {
+      if (seen.current.has(pulse.id)) continue;
+      seen.current.add(pulse.id);
+
+      if (prefersReducedMotion()) {
+        done.current(pulse.id);
+        continue;
+      }
+      if (queue.current.length >= MAX_QUEUE) {
+        // Dropped from the animation only. The message itself arrived.
+        done.current(pulse.id);
+        continue;
+      }
+      queue.current.push(pulse);
+    }
+
+    schedule.current();
+  }, [pulses]);
 
   return { staged, inFlight: staged.filter((p) => p.phase === "flight") };
 }

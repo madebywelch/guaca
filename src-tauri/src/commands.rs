@@ -849,6 +849,21 @@ pub fn retry_turn(
     Ok(state.runtime.retry_turn(agent_id, message_id)?)
 }
 
+/// Stops a conversation and everything it set off.
+///
+/// A run rather than an agent: what the operator wants to end reached however
+/// many agents it reached, and stopping only the one they happen to be looking
+/// at would leave the rest of it running on their bill.
+///
+/// False when the run had already finished, which is the ordinary outcome of a
+/// stop that arrives a moment too late. It is not an error and there is nothing
+/// for the operator to do about it: the answer they were waiting for is already
+/// on screen.
+#[tauri::command]
+pub fn stop_run(state: State<'_, AppState>, run_id: RunId) -> Reply<bool> {
+    Ok(state.runtime.stop_run(run_id))
+}
+
 #[tauri::command]
 pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)

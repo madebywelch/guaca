@@ -166,6 +166,87 @@ permitted up to 48 billable calls. The unit is now the model call, because that
 is the thing that costs money. A cascade test caught this; the fix is one line
 and the test that found it is still there.
 
+## A stop marks the run and releases nothing
+
+The limits above decide when a conversation ends on its own. A stop is the
+operator deciding, and the two are the same mechanism seen from different ends:
+a run that has been called off is a run with no budget left, except that it is
+the person paying who said so.
+
+The mark is on the `RunId`, in the same structure that already decides
+settlement, and there is no second generation of a run. `RunId` is minted once
+per operator action and every envelope the action causes inherits it, so "this
+conversation" is already a value the runtime can name; `retry_turn` is already
+how the operator sends the same thing again, as a new run.
+
+**A stop releases nothing.** This is the part that is easy to get wrong and hard
+to notice. Every envelope booked against a run is released by whatever consumes
+it, and `track_inflight` reads a negative delta against a run it is no longer
+counting as that run reaching zero. So a stop that tidily released the envelopes
+it was ending would emit a second `RunSettled`, report the run finished twice and
+reconcile its spend twice. Marking and waking is the whole of what `stop_run`
+does. Each boundary that notices the mark releases through `finish_turn`, the
+same call an ordinary turn ends with.
+
+There are four boundaries, and between them they cover every place a turn can
+be:
+
+- **After an envelope is dequeued, inside the pause park.** The only case
+  `run_turn` cannot reach: an agent that is not accepting work never gets there,
+  so its booking would be held until somebody resumed it. The check is inside
+  the park rather than above it because an agent that was already asleep when
+  the stop arrived has to see it on the wake-up, which is why `stop_run` also
+  notifies every inbox.
+
+  The actor only ever examines the envelope it is holding, which is why the same
+  place also drains the queue behind it whenever anything at all is stopped. A
+  paused agent parked on one conversation would otherwise never notice that a
+  different one, sitting behind it in the same inbox, had been called off — and
+  that run would wait on a turn that cannot happen until somebody resumes an
+  agent the operator has already stopped. What survives the drain keeps its place
+  in line in a holding queue, and stays counted in the depth the rail reads,
+  because an envelope set aside is as queued as one still in the channel.
+- **At the top of the turn**, before the prompt, the placeholder and the first
+  call. This catches the whole queued half of a stopped cascade, so a fan-out
+  that reached eight agents leaves eight channels each saying why nothing came
+  back rather than eight messages nobody answered.
+- **Inside the turn**, before each model call and between tool calls. Before the
+  call and not after: a step reserved for a call that a stop then prevents would
+  leave the run reporting a call it never made, for the rest of its life. Between
+  tool calls is the finest boundary that exists, because one tool call is a
+  single unbounded await into a sandbox or a browser.
+- **After the turn's rounds, before its reply is decided.** The one that is easy
+  to leave out, because the two checks above look like they cover the loop. They
+  do not cover the way out of it: a turn whose last call comes back with text and
+  no tool calls leaves by the ordinary break at the bottom of the round, and a
+  stop that landed during that call — which for a single-round reply is the whole
+  turn — would reach the reply with the mode it started in and write to the peer
+  that was waiting. One lock read per turn closes it.
+
+A stop does not interrupt the model call in flight. The streaming client has no
+cancellation handle, so the turn that is talking finishes talking and stops
+before it would have called again. That is also what keeps the accounting
+honest: a call that was paid for is a call that completed. The same reasoning is
+why a stop is not looked at inside the retry loop either, which is the one place
+it costs something: a step is claimed for the whole call before the first
+attempt, so abandoning it between attempts would leave the run reporting a step
+against no call. A stop landing during a backoff waits it out.
+
+A stopped turn keeps its words and sends them nowhere. It reports as a note, so
+whatever it managed to say lands in its own channel where the operator can read
+how far it got, and the peer that was waiting is not written to. Not sending on
+is the whole of what a stop is for.
+
+Two things a stop has to answer for that nothing else does. A turn parked on a
+permission request is holding its envelope inside a ten-minute window, so the
+stop closes those rows itself — expired rather than denied, because the operator
+stopped a conversation and did not refuse an action, and that difference is what
+a standing grant would be read out of later. The row moves before the turn is
+woken, because the turn reads its verdict back off the row. And a stop of a run
+that has already finished returns false and writes nothing: a line in the
+transcript saying a conversation was stopped, in a conversation that ended on its
+own, describes something that did not happen.
+
 ## A failed model call is retried before the operator hears about it
 
 `stream_with_retries` is the loop and `LlmError::is_transient` decides. Rate

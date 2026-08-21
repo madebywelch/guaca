@@ -7,7 +7,22 @@ import ReactDOM from "react-dom/client";
 
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { applyAppearance } from "./lib/appearance";
+import { loadPrefs } from "./lib/prefs";
 import "./styles.css";
+
+/**
+ * The operator's scale and surface, before anything is drawn.
+ *
+ * `App` applies these too, and has to: it is what a change while the window is
+ * open goes through, and what follows the OS when the surface is set to. But an
+ * effect runs after the first commit has painted, so doing it only there means
+ * every launch shows one frame of white at 100% before snapping to whatever was
+ * stored. One synchronous write here, before the root is created, and there is
+ * nothing to snap from.
+ */
+const stored = loadPrefs();
+applyAppearance(stored.uiScale, stored.surface);
 
 /**
  * Paints a failure that happened before or outside React.

@@ -10,6 +10,7 @@ import { useCallback, useMemo } from "react";
 import { create } from "zustand";
 
 import { api } from "./ipc";
+import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
 import { keepThought } from "./reasoning";
 import type {
@@ -25,6 +26,7 @@ import type {
   MessageId,
   Participant,
   RoutineId,
+  RunId,
   Settings,
   Tokens,
   UiEvent,
@@ -69,6 +71,22 @@ interface State {
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
+  /** Local preferences. See `lib/prefs`: the runtime never reads these. */
+  prefs: Prefs;
+  /**
+   * The conversation each agent is currently part of, so it can be stopped.
+   *
+   * Learned from the placeholder that opens in the agent's channel, which is
+   * the runtime's own statement that this agent is working on that run, and
+   * dropped when the run settles. Not read from `sendMessage`'s return value:
+   * that only knows about conversations the operator started, and a routine or
+   * a peer's request is exactly as worth stopping.
+   *
+   * Keyed by agent rather than by run because that is the question the button
+   * asks: the operator is looking at one channel and wants what is happening in
+   * it to stop.
+   */
+  activeRun: Record<AgentId, RunId | undefined>;
 
   /** Everything each group has spent, ever. Keyed by group id. */
   usage: Record<GroupId, Tokens | undefined>;
@@ -162,6 +180,13 @@ interface State {
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
   setSettings: (settings: Settings) => void;
+  /**
+   * Merges a change into the local preferences and writes them back.
+   *
+   * The write is here rather than in an effect beside the reader, so there is
+   * one place a preference is persisted and no component has to remember to.
+   */
+  setPrefs: (patch: Partial<Prefs>) => void;
 }
 
 let pulseSeq = 0;
@@ -212,6 +237,8 @@ export const useStore = create<State>((set, get) => ({
   activity: {},
   lastActive: {},
   settings: null,
+  prefs: loadPrefs(),
+  activeRun: {},
   usage: {},
   pulse: {},
   approvals: {},
@@ -502,6 +529,7 @@ export const useStore = create<State>((set, get) => ({
           delete reasoning[event.agentId];
           return {
             reasoning,
+            activeRun: { ...state.activeRun, [event.agentId]: event.runId },
             streams: {
               ...state.streams,
               [event.messageId]: {
@@ -564,9 +592,23 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "activityChanged": {
-        set((state) => ({
-          activity: { ...state.activity, [event.agentId]: event.activity },
-        }));
+        set((state) => {
+          // An agent that has gone quiet is not working on anything, so the run
+          // it was working on stops being the one to stop. Left behind, the
+          // entry would still be here when the agent was next handed work, and
+          // the Stop button would name the conversation before this one.
+          // Absent is the right kind of wrong: no button beats the wrong one.
+          const activeRun =
+            event.activity.state === "idle" && state.activeRun[event.agentId] !== undefined
+              ? (() => {
+                  const next = { ...state.activeRun };
+                  delete next[event.agentId];
+                  return next;
+                })()
+              : state.activeRun;
+
+          return { activity: { ...state.activity, [event.agentId]: event.activity }, activeRun };
+        });
         break;
       }
 
@@ -628,11 +670,26 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
-      case "runSettled":
+      case "runSettled": {
+        // Every agent that was working on this one has stopped, whether it
+        // finished, was refused or was stopped. Cleared by run rather than by
+        // agent because a cascade leaves several entries pointing at it.
+        set((state) => {
+          const activeRun = { ...state.activeRun };
+          let changed = false;
+          for (const [agent, run] of Object.entries(activeRun)) {
+            if (run === event.runId) {
+              delete activeRun[agent as AgentId];
+              changed = true;
+            }
+          }
+          return changed ? { activeRun } : {};
+        });
         // The live totals are additions to a number this corrects. Cheap: one
         // grouped sum over a local table, and only when a run has gone quiet.
         void get().refreshUsage();
         break;
+      }
 
       case "approvalRequested": {
         set((state) => ({
@@ -660,6 +717,14 @@ export const useStore = create<State>((set, get) => ({
 
   setSettings(settings) {
     set({ settings });
+  },
+
+  setPrefs(patch) {
+    set((state) => {
+      const prefs = { ...state.prefs, ...patch };
+      savePrefs(prefs);
+      return { prefs };
+    });
   },
 }));
 

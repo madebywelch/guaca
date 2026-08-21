@@ -17,6 +17,11 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/ipc.ts          Every call into Rust.
+  lib/prefs.ts        What the operator sets and the runtime never reads.
+  lib/appearance.ts   Scale and surface, as one write to the root element.
+  lib/notify.ts       When an interruption is warranted. Mostly when it is not.
+  lib/announce.ts     What that interruption would say. One event in, one line out.
+  lib/keybinds.ts     Every key the app answers to, in one list.
   components/         One file per surface.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
@@ -55,6 +60,7 @@ repo: the frontend renders state and forwards intent.
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
@@ -69,6 +75,7 @@ repo: the frontend renders state and forwards intent.
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
+| Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.
@@ -132,6 +139,31 @@ the model takes a screenshot to see what `browse` did.
 - **`Routine::next_run_at` is an `Option` because some triggers have no next
   run.** A sentinel date would be shown to the operator, and it is one bad
   comparison away from firing something that was waiting on a connector.
+- **A stop marks a run and releases nothing.** `track_inflight` reads a negative
+  delta against a run it is no longer counting as that run reaching zero, and
+  emits a second `RunSettled` for it. So a stop that helpfully released the
+  envelopes it was ending would report the run finished twice, which fails the
+  trajectory suite and double-counts its spend. Marking is the whole mechanism:
+  each of the three boundaries releases through `finish_turn`, exactly as an
+  ordinary turn does.
+- **The stop check sits before `reserve_step`, not after it.** One line later and
+  a run reports a model call that a stop prevented, for the rest of its life.
+- **The checks inside the round loop do not cover the way out of it.** A turn
+  whose last call returns text and no tool calls leaves by the break at the
+  bottom, so there is a fourth check after the loop and before the reply is
+  decided. Without it a stop that landed during a single-round reply turn — the
+  whole turn, in that shape — still wrote to the peer that was waiting.
+- **An actor only ever examines the envelope it is holding.** A paused agent
+  parked on one run therefore cannot see that another run's work is queued behind
+  it, which is why the pause park drains the queue whenever anything is stopped.
+  Survivors go to a holding queue and stay counted in `depth`.
+- **`--flesh` and `--flesh-soft` are pinned on `.rail`.** The rail is dark in
+  both surfaces and reads both tokens, so a dark value for either would repaint
+  it and no test would notice. Pinning them on the one element every rail rule
+  descends from makes the rail a colour scope rather than a naming convention.
+- **`data-surface` is only ever `light` or `dark`.** `system` is resolved before
+  it reaches the document. A stylesheet rule keyed on `system` would have to
+  duplicate the one keyed on `dark`, and CSS has no way to share them.
 
 ## Conventions
 

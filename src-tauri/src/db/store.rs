@@ -908,6 +908,24 @@ impl Store {
         Ok(out)
     }
 
+    /// What one run is still waiting on the operator to answer.
+    ///
+    /// Read from the row rather than from the runtime's map of waiters, because
+    /// the map is keyed by request and carries no run: the row is where the two
+    /// are related, and it is the record everywhere else in this subsystem.
+    pub fn pending_approvals_for_run(&self, run: RunId) -> Result<Vec<ApprovalId>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT id FROM approvals WHERE run_id=?1 AND state='pending'")?;
+        let rows = stmt.query_map(params![run.to_string()], |row| row.get::<_, String>(0))?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?.parse::<ApprovalId>().map_err(|e| StoreError::Corrupt(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
     /// Expires everything still waiting. Called at startup.
     ///
     /// The turn that raised a request is holding a channel in memory, so a
