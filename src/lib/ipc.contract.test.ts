@@ -73,4 +73,19 @@ describe("IPC contract", () => {
     expect(source).toMatch(/fn get_settings\([^)]*\)\s*->\s*Reply<RedactedConfig>/);
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
+
+  it("draws the same floor under a price on both sides", () => {
+    // The rail's meters and the menu bar are two readings of one number, and
+    // each decides on its own whether a cost is worth the width it takes. A
+    // free model prices every call at a real zero, so the two agreeing is what
+    // keeps `$0.0000` off one surface after it was taken off the other. Nothing
+    // else in the build compares them: the rule is written twice because one
+    // reader is TypeScript and the other is Rust.
+    const web = read("src/components/TokenMeter.tsx").match(/MIN_PRICE = ([\d.e-]+)/);
+    const rust = read("src-tauri/src/menubar.rs").match(/MIN_PRICE: f64 = ([\d._e-]+)/);
+    expect(web, "no MIN_PRICE in TokenMeter.tsx").not.toBeNull();
+    expect(rust, "no MIN_PRICE in menubar.rs").not.toBeNull();
+    // Rust spells long numbers with underscores; the value is what has to match.
+    expect(Number(rust![1]!.replaceAll("_", ""))).toBe(Number(web![1]!));
+  });
 });

@@ -56,6 +56,16 @@ import type {
 
 const EVENT_CHANNEL = "guac://event";
 
+/**
+ * The menu bar asking the window to open one agent's channel.
+ *
+ * Its own channel rather than a `UiEvent`. That one is the runtime saying what
+ * happened, and this is one surface asking another to go somewhere: folding
+ * them together would put a case in the transcript's event handling for
+ * something the runtime never emits. Kept in step with `tray.rs`.
+ */
+const REVEAL_CHANNEL = "guac://reveal";
+
 export const api = {
   /** `null` when the agent has never been given a computer. */
   agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
@@ -352,6 +362,18 @@ export async function notifyOperator(title: string, body: string): Promise<boole
 /** Subscribes to runtime events. Returns an unsubscribe function. */
 export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<UnlistenFn> {
   return listen<UiEvent>(EVENT_CHANNEL, (message) => handler(message.payload));
+}
+
+/**
+ * Subscribes to the menu bar asking for a channel to be opened.
+ *
+ * The window is already shown, unminimised and focused by the time this
+ * arrives; all that is left is which channel it lands in. Answering a
+ * permission request from the strip does not come through here: that one is
+ * decided in Rust and reaches the transcript as an ordinary settled event.
+ */
+export function onRevealRequest(handler: (agent: AgentId) => void): Promise<UnlistenFn> {
+  return listen<AgentId>(REVEAL_CHANNEL, (message) => handler(message.payload));
 }
 
 /**

@@ -12,7 +12,7 @@ import { type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
-import { api, notifyOperator, onRuntimeEvent } from "./lib/ipc";
+import { api, notifyOperator, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "./lib/store";
@@ -141,6 +141,31 @@ export default function App() {
       unlisten?.();
     };
   }, [announce, applyEvent, bootstrap, setBanner]);
+
+  // A row in the menu bar, clicked. The window is already up by the time this
+  // lands; the only thing left is which channel it lands in, and the newest
+  // window of it is the right one: a request the strip offered is the last
+  // thing in the channel that raised it.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      const stop = await onRevealRequest((agent) => {
+        void select(agent);
+      });
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [select]);
 
   /**
    * Runs something on one agent and re-reads the roster.

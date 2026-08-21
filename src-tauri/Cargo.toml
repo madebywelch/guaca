@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` is the menu bar presence. The image is decoded by
+# `include_image!` at compile time, so no runtime image feature goes with it.
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 
 serde = { version = "1", features = ["derive"] }
