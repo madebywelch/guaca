@@ -422,7 +422,7 @@ export function Sidebar({
             className="orb orb--all"
             aria-current={focused === null}
             aria-label={`All groups, ${agents.length} agents`}
-            onClick={() => focusGroup(null)}
+            onClick={() => void focusGroup(null)}
           >
             <span className="orb__ring">
               {/* The count, because the word is already under it and a circle
@@ -442,7 +442,7 @@ export function Sidebar({
               activity={activity}
               current={focused?.id === group.id}
               over={isOver({ kind: "group", id: group.id })}
-              onOpen={() => focusGroup(focused?.id === group.id ? null : group.id)}
+              onOpen={() => void focusGroup(focused?.id === group.id ? null : group.id)}
               onDragOver={() => hover({ kind: "group", id: group.id })}
               onDragOut={() => hover(null)}
             />
