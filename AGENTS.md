@@ -64,7 +64,7 @@ repo: the frontend renders state and forwards intent.
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
-| Attachments, previews, drops | *Files are references, and what a model gets depends on what they are* |
+| Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
@@ -114,6 +114,13 @@ the model takes a screenshot to see what `browse` did.
 - **`FileCard` hands the frame a `blob:` URL on purpose.** WebKit refuses a
   custom scheme in a frame and says nothing. A direct `guacfile:` `src` passes
   every test in this repo and draws an empty rectangle.
+- **`emit_reply` delivers a reply that carries a file and no text.** Handing over
+  a document with nothing typed is normal, and judging the reply empty by its
+  text alone drops the thing the turn was spent producing.
+- **`body_with_files` names a file on an agent's own turns too, not just on
+  incoming ones.** An agent that reads its last turn back without the file it
+  attached has no record of handing anything over, so it attaches the document
+  again and reports it as the first time.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
   level higher, a single token re-renders every message in the transcript.
 - **The sign-in tests carry real cookie names.** A cookie's presence is not a

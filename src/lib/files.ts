@@ -28,19 +28,25 @@ export const SNIPPET_BYTES = 2048;
 export const PREVIEW_BYTES = 256 * 1024;
 
 /** What can be drawn of a file, decided by its type and nothing else. */
-export type PreviewKind = "image" | "pdf" | "text" | "none";
+export type PreviewKind = "image" | "pdf" | "markdown" | "text" | "none";
 
 /**
- * Which of the four a file is.
+ * Which of the five a file is.
  *
  * By type, never by sniffing the bytes, which is the same rule the runtime
  * follows when it decides what to show a model. A file that is only mostly text
  * renders as a screenful of replacement characters, and the operator is better
  * served by a row saying what it is and a button that saves it.
+ *
+ * Markdown is its own kind because it is the format the agents actually write
+ * in. A brief drawn as monospace source is a document the operator reads around
+ * the syntax rather than through it, and the app already renders every message
+ * body the same way: a file is the same prose that arrived without one.
  */
 export function previewKind(mime: string): PreviewKind {
   if (mime.startsWith("image/")) return "image";
   if (mime === "application/pdf") return "pdf";
+  if (mime === "text/markdown") return "markdown";
   if (mime.startsWith("text/") || mime === "application/json") return "text";
   return "none";
 }
@@ -62,6 +68,8 @@ export function previewKind(mime: string): PreviewKind {
 export function kindLabel(mime: string): string {
   if (mime === "application/pdf") return "PDF";
   if (mime === "application/zip") return "ZIP archive";
+  // Ahead of the `text/` rule below, which would shout it.
+  if (mime === "text/markdown") return "Markdown";
   if (mime.startsWith("image/")) return `${mime.slice("image/".length).toUpperCase()} image`;
   if (mime.startsWith("text/")) return mime.slice("text/".length).toUpperCase();
   if (mime === "application/json") return "JSON";
