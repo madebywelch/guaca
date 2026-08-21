@@ -4,7 +4,14 @@ import { api } from "../lib/ipc";
 import { thoughtLine } from "../lib/reasoning";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
-import { type Activity, type AgentCard, type AgentId, errorMessage } from "../lib/types";
+import {
+  type Activity,
+  type AgentCard,
+  type AgentId,
+  type Envelope,
+  errorMessage,
+  plainText,
+} from "../lib/types";
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
@@ -183,7 +190,19 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
         // board rather than a transcript.
         <ActivityFlow messages={messages ?? []} byId={lookups.byId} />
       ) : (
-        <div className="pane__scroll" ref={scrollRef}>
+        // A log rather than a plain box, so a screen reader offers it as the
+        // transcript it is. `aria-live` is off deliberately: the role would
+        // otherwise announce politely, and opening a channel replaces three
+        // hundred rows at once, which is the whole history read aloud for the
+        // crime of clicking a name. What is worth hearing is announced by
+        // `Arrivals` below, one message at a time, as it lands.
+        <div
+          className="pane__scroll"
+          ref={scrollRef}
+          role="log"
+          aria-live="off"
+          aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
+        >
           {messages === undefined ? (
             <p className="hint" style={{ padding: "1rem 1.15rem" }}>
               Loading…
@@ -232,6 +251,10 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
 
       {isActivity ? null : (
         <>
+          {/* Outside the log on purpose. Inside it the sentence is a second
+              copy of the newest message for anybody reading the transcript
+              itself, which is the cost of announcing it to everybody else. */}
+          <Arrivals channel={channel} messages={messages} lookups={lookups} />
           {agent && <WorkingNote agent={agent} state={activity[agent.id]} />}
           <Composer
             placeholder={`Message ${agent?.name ?? "agent"}`}
@@ -337,7 +360,10 @@ function LiveStreams({
   useLayoutEffect(follow);
 
   return (
-    <>
+    // Never announced. A live region reading a bubble as it is typed says the
+    // same sentence a dozen times before it is finished; the finished message
+    // is announced once, by `Arrivals`, and "is working" by `WorkingNote`.
+    <div aria-live="off">
       {live.map(([id, buffer]) => {
         if (!buffer) return null;
 
@@ -354,6 +380,87 @@ function LiveStreams({
           <StreamingMessage key={id} agent={lookups.byId(buffer.agentId)} text={buffer.text} />
         ) : null;
       })}
-    </>
+    </div>
   );
+}
+
+/**
+ * The one thing a transcript says out loud.
+ *
+ * Waiting for a reply is the whole shape of using this app, and a reader who
+ * cannot see the column arrive has no way of knowing one did. So a message
+ * addressed to the operator is announced once, when it settles, and nothing
+ * else is: what is announced is exactly what is drawn as a full bubble.
+ *
+ * That symmetry is the rule, and it is the same one the channel is arranged by.
+ * Peer traffic and tool trails are collapsed on screen precisely because
+ * reading them line by line buries the conversation; read aloud they would bury
+ * it far more thoroughly, since there is no glancing past a sentence being
+ * spoken.
+ *
+ * Its own component so a message landing in another agent's channel costs this
+ * one nothing, and so the sentence is built where it is announced rather than
+ * threaded down from the pane.
+ */
+function Arrivals({
+  channel,
+  messages,
+  lookups,
+}: {
+  channel: ChannelKey;
+  messages: Envelope[] | undefined;
+  lookups: ReturnType<typeof useAgentLookup>;
+}) {
+  const [said, setSaid] = useState("");
+  /** The newest message already accounted for. Null until the channel is read. */
+  const seen = useRef<string | null>(null);
+
+  // Declared before the one below so it runs first on the render that changes
+  // both: a channel switch has to forget what it had seen before that render
+  // decides whether the newest message is news.
+  useEffect(() => {
+    seen.current = null;
+    setSaid("");
+  }, [channel]);
+
+  useEffect(() => {
+    const newest = messages?.[messages.length - 1];
+    if (!newest) return;
+    // Opening a channel is not an arrival. Everything in it was already there.
+    if (seen.current === null || seen.current === newest.id) {
+      seen.current = newest.id;
+      return;
+    }
+    seen.current = newest.id;
+    setSaid(announcement(newest, lookups.byId));
+  }, [messages, lookups]);
+
+  return (
+    // Explicit rather than left to the role: the transcript above declares
+    // `aria-live="off"`, live-region settings are inherited, and an implicit
+    // value from `role="status"` is a weaker claim than a stated one.
+    <p className="offscreen" role="status" aria-live="polite" aria-atomic="true">
+      {said}
+    </p>
+  );
+}
+
+/** What an arriving message is worth saying, or nothing. */
+function announcement(message: Envelope, byId: ReturnType<typeof useAgentLookup>["byId"]): string {
+  if (message.from.kind !== "agent") return "";
+  const who = byId(message.from.id)?.name ?? "An agent";
+
+  // Ahead of the text, as everywhere else: this is the one thing in a
+  // transcript the operator is expected to act on rather than read.
+  const asking = message.parts.find((part) => part.type === "approval");
+  if (asking) return `${who} is asking you: ${asking.summary}`;
+
+  // Addressed to a peer, so it is a collapsed row here rather than a bubble.
+  if (message.to.kind !== "human") return "";
+
+  const body = plainText(message);
+  if (!body) return "";
+  // Long enough to be the message, short enough that a reader can interrupt it
+  // and go and read the column instead.
+  return body.length > 300 ? `${who}: ${body.slice(0, 300)}…` : `${who}: ${body}`;
 }
