@@ -189,14 +189,23 @@ export interface ConnectorDraft {
 }
 
 /**
- * A site an agent's browser turned out to be signed in to.
+ * Which of an agent's two places holds a session.
  *
- * Nobody types these. They are read off the machine by asking Chrome what
- * cookies it holds, so an agent signed in a minute ago advertises it without
- * anyone recording anything.
+ * A computer and a browser have unrelated cookie jars, so a sign-in in one is
+ * not reachable from the other. The operator needs this to know which window to
+ * sign in through.
+ */
+export type Surface = "computer" | "browser";
+
+/**
+ * A site an agent turned out to be signed in to.
+ *
+ * Nobody types these. They are read off whatever holds the cookies, so an agent
+ * signed in a minute ago advertises it without anyone recording anything.
  */
 export interface Signin {
   agentId: AgentId;
+  surface: Surface;
   /** The host, normalised: `linkedin.com`. */
   domain: string;
   /** A recognised service's real name, or the domain when it is a guess. */
@@ -216,6 +225,22 @@ export interface Computer {
   vncUrl: string | null;
 }
 
+/**
+ * An agent's hosted browser: a Chrome and nothing else.
+ *
+ * A different thing from a computer and on a different provider. There is no
+ * asleep state to show: a browser goes to standby on its own within seconds and
+ * comes back the moment anything drives it, so the operator has nothing to act
+ * on.
+ */
+export interface Browser {
+  sessionId: string;
+  /** `running` or `gone`. */
+  state: string;
+  /** Where the operator watches and takes over. Absent once it has gone. */
+  liveViewUrl: string | null;
+}
+
 /** One command's result, from the agent's computer. */
 export interface Output {
   stdout: string;
@@ -228,6 +253,8 @@ export interface AgentCard {
   groupId: GroupId;
   /** Set once the agent has been given a computer. */
   sandboxId: string | null;
+  /** Set once the agent has been given a browser, which is a separate thing. */
+  browserId: string | null;
   name: string;
   avatar: string;
   color: string;
@@ -276,6 +303,10 @@ export interface Settings {
   e2bKeySet: boolean;
   e2bKeyHint: string;
   computerIdleMinutes: number;
+  kernelKeySet: boolean;
+  kernelKeyHint: string;
+  browserIdleMinutes: number;
+  browserStealth: boolean;
   baseUrl: string;
   defaultModel: string;
   apiKeySet: boolean;
@@ -289,6 +320,9 @@ export interface SettingsPatch {
   operatorName?: string;
   e2bApiKey?: string;
   computerIdleMinutes?: number;
+  kernelApiKey?: string;
+  browserIdleMinutes?: number;
+  browserStealth?: boolean;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;

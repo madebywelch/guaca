@@ -25,10 +25,11 @@ src-tauri/src/
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
   db/                 SQLite. Plain SQL, numbered migrations.
-  e2b.rs              Sandboxes: the machines agents work on.
+  e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
-  browser.py          Drives a machine's Chrome over the DevTools protocol.
-  sessions.py         Reports what that Chrome is signed in to.
+  sessions.py         Reports what a machine's Chrome is signed in to.
+  kernel.rs           Browsers: a hosted Chrome, which is where the web belongs.
+  cdp.rs              The DevTools protocol. Asks a page instead of looking.
   workspace.rs        Per-agent memory: one markdown file the agent rewrites.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
   eval.rs             Reads a run and says whether it communicated sensibly.
@@ -53,10 +54,13 @@ repo: the frontend renders state and forwards intent.
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
+| Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules and triggers | `docs/ROUTINES.md` |
-| Sandboxes, the browser, sign-ins, credentials | `docs/MACHINES.md`, then *Connectors* in `docs/PROTOCOL.md` |
+| Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
+| Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
+| Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
@@ -78,6 +82,13 @@ not enter a prompt, a transcript, an event or the webview, and there is no field
 on the types that cross those boundaries for one to arrive in. Keep it that way:
 `docs/MACHINES.md`.
 
+**A computer and a browser are two places, not two views of one.** A computer is
+an E2B machine with a screen, worked by looking and pointing (`use_screen`). A
+browser is a hosted Chrome, worked by asking the page (`browse`). Different
+providers, unrelated cookie jars, separate sign-ins, either configurable without
+the other. Anything that describes one to a model has to disclaim the other, or
+the model takes a screenshot to see what `browse` did.
+
 ## What looks like a simplification and is not
 
 - **A thread between two agents is `pair_messages`.** A send is filed under the
@@ -95,6 +106,15 @@ on the types that cross those boundaries for one to arrive in. Keep it that way:
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
+- **Every `use_screen` action answers with a picture, and only the newest one
+  stays.** The first is what stops a model acting on a screen two actions old;
+  the second is what keeps that affordable. Removing either breaks the other.
+- **A machine's Chrome opens no debugging port.** Two ways to use the web on one
+  screen disagreed about which window was in front, and each fix moved the
+  disagreement. `docs/BROWSERS.md` has the history before you add one back.
+- **A sign-in is stored against the surface it was found on.** Both are scanned
+  independently, so a replace that took the agent's whole set would erase the
+  other's findings on every scan.
 
 ## Conventions
 

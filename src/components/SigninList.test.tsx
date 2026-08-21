@@ -19,6 +19,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     id: "a1",
     groupId: "g1",
     sandboxId: "sb-1",
+    browserId: null,
     name: "Researcher",
     avatar: "plain",
     color: "#c7d96b",
@@ -37,6 +38,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
 function signin(over: Partial<Signin> = {}): Signin {
   return {
     agentId: "a1",
+    surface: "browser",
     domain: "linkedin.com",
     service: "LinkedIn",
     recognised: true,
@@ -94,16 +96,41 @@ describe("SigninList", () => {
     expect(await screen.findByText("looks signed in")).toBeTruthy();
   });
 
-  it("says there is nothing to be signed in to when the agent has no computer", async () => {
-    render(<SigninList agent={card({ sandboxId: null })} />);
-    expect(await screen.findByText(/no computer yet/)).toBeTruthy();
+  it("says there is nothing to be signed in to when the agent has neither place", async () => {
+    render(<SigninList agent={card({ sandboxId: null, browserId: null })} />);
+    expect(await screen.findByText(/no computer and no browser yet/)).toBeTruthy();
     expect(scanAgentSignins).not.toHaveBeenCalled();
   });
 
-  it("explains that signing in on the screen is all there is to do", async () => {
+  it("scans an agent that has only a browser", async () => {
+    // Either place can hold a session, so an agent that has only ever used the
+    // web is still worth asking. Keying this off the machine alone left every
+    // browser-only agent reporting nothing for ever.
+    render(<SigninList agent={card({ sandboxId: null, browserId: "kb-1" })} />);
+    await screen.findByText(/Signed in/);
+    expect(scanAgentSignins).toHaveBeenCalled();
+  });
+
+  it("explains that signing in is all there is to do", async () => {
     render(<SigninList agent={card()} />);
-    expect(await screen.findByText(/sign in to a site on its screen/)).toBeTruthy();
-    expect(screen.getByText(/do not have to tell Researcher/)).toBeTruthy();
+    expect(await screen.findByText(/sign in to a site there/)).toBeTruthy();
+    expect(screen.getByText(/do not have to tell/)).toBeTruthy();
+  });
+
+  it("says which of the two places holds a session", async () => {
+    // A computer and a browser have unrelated cookie jars. An operator looking
+    // at "LinkedIn" needs to know which window the agent will find it in, and
+    // an agent told only the service name reaches for the wrong tool.
+    const both = [
+      signin({ service: "LinkedIn", surface: "browser" }),
+      signin({ service: "Gmail", domain: "google.com", surface: "computer" }),
+    ];
+    agentSignins.mockResolvedValue(both);
+    scanAgentSignins.mockResolvedValue(both);
+    render(<SigninList agent={card()} />);
+
+    expect(await screen.findByText("in its browser")).toBeTruthy();
+    expect(screen.getByText("on its screen")).toBeTruthy();
   });
 
   it("rechecks on demand", async () => {

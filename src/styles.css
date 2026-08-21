@@ -2227,6 +2227,25 @@ button {
   margin-bottom: 0.95rem;
 }
 
+/* A setting that is a yes or a no. The label sits beside the control rather
+   than above it, because a checkbox with its name overhead reads as a heading
+   with an orphaned box under it. */
+.field--row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+}
+
+.field--row input[type="checkbox"] {
+  margin-top: 0.2rem;
+  flex: none;
+}
+
+.field--row .field__label,
+.field--row .field__hint {
+  display: block;
+}
+
 .connectors {
   margin-bottom: 1.15rem;
 }

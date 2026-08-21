@@ -25,7 +25,7 @@ use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::now_ms;
 use guac_lib::domain::routine::{RunKind, Trigger};
-use guac_lib::domain::signin::Signin;
+use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
@@ -1279,6 +1279,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         },
         limits: GuardLimits::default(),
         e2b: Default::default(),
+        kernel: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -1659,6 +1660,7 @@ fn a_schedule_that_cannot_be_read_does_not_starve_the_runtime() {
 fn signin_on(agent: guac_lib::domain::ids::AgentId, service: &str) -> Signin {
     Signin {
         agent_id: agent,
+        surface: Surface::Browser,
         domain: format!("{}.example", service.to_lowercase()),
         service: service.into(),
         recognised: true,
@@ -1679,7 +1681,11 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     h.runtime
         .store()
-        .replace_signins(h.id("Researcher"), &[signin_on(h.id("Researcher"), "LinkedIn")])
+        .replace_signins(
+            h.id("Researcher"),
+            Surface::Browser,
+            &[signin_on(h.id("Researcher"), "LinkedIn")],
+        )
         .unwrap();
     h.runtime
         .store()
@@ -1702,16 +1708,17 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     let researcher = prompts.get("Researcher").expect("Researcher ran");
     let manager = prompts.get("Manager").expect("Manager ran");
 
-    // The machine that holds the session knows it holds it.
+    // The agent that holds the session knows it holds it, and knows which of
+    // its two places holds it: a session in one is unreachable from the other.
     assert!(
-        researcher.contains("Your browser is signed in to these")
-            && researcher.contains("- LinkedIn"),
+        researcher.contains("You are signed in to these already")
+            && researcher.contains("- LinkedIn in your browser"),
         "the agent whose browser is signed in must be told so: {researcher}"
     );
     // The one that is not, is not told it is.
     assert!(
-        !manager.contains("Your browser is signed in to these"),
-        "cookies are on one disk; claiming otherwise produces a login wall: {manager}"
+        !manager.contains("You are signed in to these already"),
+        "cookies are in one jar; claiming otherwise produces a login wall: {manager}"
     );
     // But it is told who to ask, which is the answer it should give instead.
     assert!(
@@ -1743,7 +1750,11 @@ async fn the_directory_says_which_peer_is_signed_in_to_what() {
     let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
     h.runtime
         .store()
-        .replace_signins(h.id("Researcher"), &[signin_on(h.id("Researcher"), "LinkedIn")])
+        .replace_signins(
+            h.id("Researcher"),
+            Surface::Browser,
+            &[signin_on(h.id("Researcher"), "LinkedIn")],
+        )
         .unwrap();
 
     let run = h.runtime.send_from_human(h.id("Manager"), "who can post to LinkedIn?").unwrap();

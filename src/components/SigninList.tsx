@@ -9,15 +9,20 @@ interface Props {
 }
 
 /**
- * What an agent's browser is signed in to. Read, not written.
+ * What an agent is signed in to, and where. Read, not written.
  *
- * There is nothing to fill in here on purpose. The browser is holding the
- * cookies, so Guaca asks the machine rather than asking the operator to keep a
- * list up to date: sign in on the agent's screen and it appears, log out and it
- * goes. The list is also on every peer's roster, which is what lets a crew
- * route work to the one machine that can do it.
+ * There is nothing to fill in here on purpose. Whatever holds the cookies
+ * knows, so Guaca asks it rather than asking the operator to keep a list up to
+ * date: sign in and it appears, log out and it goes. The list is also on every
+ * peer's roster, which is what lets a crew route work to the one agent that can
+ * do it.
  *
- * The scan runs when this opens and again whenever the agent has been browsing,
+ * Each row says which of the agent's two places holds the session, and that is
+ * not decoration. A computer and a browser have unrelated cookie jars, so an
+ * operator looking at "LinkedIn" needs to know which window the agent will find
+ * it in, and which one to sign in through next time.
+ *
+ * The scan runs when this opens and again whenever the agent has been working,
  * so the usual case is that it is already right by the time anyone looks.
  */
 export function SigninList({ agent }: Props) {
@@ -25,6 +30,9 @@ export function SigninList({ agent }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const now = useNow(30_000);
+  // Whether there is anything to ask. Either place can hold a session, so an
+  // agent that has only ever used the web is still worth scanning.
+  const somewhere = Boolean(agent.sandboxId || agent.browserId);
 
   const load = useCallback(async () => {
     try {
@@ -42,7 +50,7 @@ export function SigninList({ agent }: Props) {
   // Asking the machine costs a round trip, so the stored answer is drawn first
   // and corrected a moment later rather than leaving the panel empty.
   useEffect(() => {
-    if (!agent.sandboxId) return;
+    if (!somewhere) return;
     let cancelled = false;
     void api
       .scanAgentSignins(agent.id)
@@ -53,7 +61,7 @@ export function SigninList({ agent }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [agent.id, agent.sandboxId]);
+  }, [agent.id, somewhere]);
 
   const rescan = async () => {
     setBusy(true);
@@ -76,30 +84,41 @@ export function SigninList({ agent }: Props) {
         <button
           type="button"
           className="btn btn--ghost btn--small"
-          disabled={busy || !agent.sandboxId}
+          disabled={busy || !somewhere}
           onClick={() => void rescan()}
         >
           {busy ? "Checking…" : "Check now"}
         </button>
       </div>
 
-      {!agent.sandboxId && (
+      {!somewhere && (
         <p className="field__hint">
-          {agent.name} has no computer yet, so there is no browser to be signed in to.
+          {agent.name} has no computer and no browser yet, so there is nothing holding a session.
         </p>
       )}
 
-      {agent.sandboxId && signins.length === 0 && (
+      {somewhere && signins.length === 0 && (
         <p className="field__hint">
-          Nothing. Open this agent's computer, sign in to a site on its screen, and it will show up
-          here and on every other agent's roster. You do not have to tell {agent.name} about it.
+          Nothing. Open this agent's browser or its computer's screen, sign in to a site there, and
+          it will show up here and on every other agent's roster. You do not have to tell{" "}
+          {agent.name} about it.
         </p>
       )}
 
       {signins.map((signin) => (
-        <div className="connector" key={signin.domain}>
+        <div className="connector" key={`${signin.surface}:${signin.domain}`}>
           <div className="connector__row">
             <strong className="connector__service">{signin.service}</strong>
+            <span
+              className="connector__account"
+              title={
+                signin.surface === "browser"
+                  ? "In this agent's browser, which is what `browse` uses."
+                  : "In the browser on this agent's computer screen, which only `use_screen` reaches."
+              }
+            >
+              {signin.surface === "browser" ? "in its browser" : "on its screen"}
+            </span>
             {!signin.recognised && (
               <span
                 className="connector__account"

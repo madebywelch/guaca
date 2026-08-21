@@ -23,7 +23,7 @@ use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
-use crate::domain::signin::Signin;
+use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
@@ -176,6 +176,7 @@ impl Store {
             sandbox_id: None,
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
+            browser_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
             version: 1,
@@ -258,7 +259,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,browser_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -275,7 +276,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,browser_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -323,6 +324,26 @@ impl Store {
                 sandbox.map(|s| s.1),
                 sandbox.map(|s| s.2),
             ],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Records which hosted browser is this agent's browser.
+    ///
+    /// Separate from `set_agent_sandbox` rather than one call taking both,
+    /// because they are provisioned independently: an agent that only ever
+    /// browses never costs a machine, and one that only ever runs commands
+    /// never costs a browser. A single setter would have to be given the value
+    /// it is not changing, and the caller that guessed wrong would silently
+    /// release the other one.
+    pub fn set_agent_browser(&self, id: AgentId, browser: Option<&str>) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET browser_id=?2 WHERE id=?1",
+            params![id.to_string(), browser],
         )?;
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
@@ -819,41 +840,57 @@ impl Store {
 
     // ---- sign-ins --------------------------------------------------------
 
-    /// Records what one machine's browser turned out to be signed in to.
+    /// Records what one of an agent's two places turned out to be signed in to.
     ///
-    /// Replaces the agent's whole set rather than merging, because this is a
+    /// Replaces that surface's whole set rather than merging, because this is a
     /// cache of something that lives elsewhere: an entry that outlives the
     /// logout it should have noticed keeps the crew routing work to an agent
     /// that will hit a login wall. `first_seen_at` is carried across so
     /// "signed in since Tuesday" survives a rescan.
+    ///
+    /// Scoped to the surface, and that is the whole reason the column exists. A
+    /// computer and a browser are scanned independently and at different
+    /// moments; a replace that took the agent's whole set would mean asking one
+    /// what it holds erases everything the other reported, so an agent's
+    /// accounts would flicker between two halves of the truth depending on
+    /// which scan ran last.
     pub fn replace_signins(
         &self,
         agent: AgentId,
+        surface: Surface,
         found: &[Signin],
     ) -> Result<Vec<Signin>, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         {
-            let mut earliest =
-                tx.prepare("SELECT first_seen_at FROM signins WHERE agent_id=?1 AND domain=?2")?;
+            let mut earliest = tx.prepare(
+                "SELECT first_seen_at FROM signins WHERE agent_id=?1 AND surface=?2 AND domain=?3",
+            )?;
             let mut insert = tx.prepare(
-                "INSERT INTO signins (agent_id,domain,service,recognised,first_seen_at,last_seen_at)
-                 VALUES (?1,?2,?3,?4,?5,?6)",
+                "INSERT INTO signins
+                   (agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )?;
 
-            let mut carried: Vec<(String, i64)> = Vec::new();
+            let mut carried: Vec<i64> = Vec::new();
             for signin in found {
                 let since: Option<i64> = earliest
-                    .query_row(params![agent.to_string(), signin.domain], |row| row.get(0))
+                    .query_row(params![agent.to_string(), surface.as_str(), signin.domain], |row| {
+                        row.get(0)
+                    })
                     .optional()?;
-                carried.push((signin.domain.clone(), since.unwrap_or(signin.first_seen_at)));
+                carried.push(since.unwrap_or(signin.first_seen_at));
             }
 
-            tx.execute("DELETE FROM signins WHERE agent_id=?1", params![agent.to_string()])?;
+            tx.execute(
+                "DELETE FROM signins WHERE agent_id=?1 AND surface=?2",
+                params![agent.to_string(), surface.as_str()],
+            )?;
 
-            for (signin, (_, since)) in found.iter().zip(carried) {
+            for (signin, since) in found.iter().zip(carried) {
                 insert.execute(params![
                     agent.to_string(),
+                    surface.as_str(),
                     signin.domain,
                     signin.service,
                     signin.recognised as i64,
@@ -866,10 +903,11 @@ impl Store {
         self.agent_signins(agent)
     }
 
+    /// Everything one agent reaches, wherever it holds the session.
     pub fn agent_signins(&self, agent: AgentId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT agent_id,domain,service,recognised,first_seen_at,last_seen_at
+            "SELECT agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at
                FROM signins WHERE agent_id=?1 ORDER BY service",
         )?;
         let rows = stmt.query_map(params![agent.to_string()], row_to_signin)?;
@@ -887,7 +925,8 @@ impl Store {
     pub fn group_signins(&self, group: GroupId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT s.agent_id,s.domain,s.service,s.recognised,s.first_seen_at,s.last_seen_at
+            "SELECT s.agent_id,s.surface,s.domain,s.service,s.recognised,s.first_seen_at,
+                      s.last_seen_at
                FROM signins s
                JOIN agents a ON a.id = s.agent_id
               WHERE a.group_id=?1 AND a.lifecycle <> 'terminated'
@@ -1603,6 +1642,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             sandbox_envd_token: row.get(13)?,
             sandbox_traffic_token: row.get(14)?,
             pinned: row.get::<_, i64>(15)? != 0,
+            browser_id: row.get(16)?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -1776,11 +1816,12 @@ fn row_to_signin(row: &Row<'_>) -> RowResult<Signin> {
             agent_id: agent_raw
                 .parse::<AgentId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
-            domain: row.get(1)?,
-            service: row.get(2)?,
-            recognised: row.get::<_, i64>(3)? != 0,
-            first_seen_at: row.get(4)?,
-            last_seen_at: row.get(5)?,
+            surface: Surface::parse(&row.get::<_, String>(1)?),
+            domain: row.get(2)?,
+            service: row.get(3)?,
+            recognised: row.get::<_, i64>(4)? != 0,
+            first_seen_at: row.get(5)?,
+            last_seen_at: row.get(6)?,
         })
     })())
 }
@@ -1919,6 +1960,7 @@ mod tests {
 
     fn signin_at(agent: AgentId, service: &str, domain: &str, at: i64) -> Signin {
         Signin {
+            surface: Surface::Computer,
             agent_id: agent,
             domain: domain.into(),
             service: service.into(),
@@ -1996,6 +2038,7 @@ mod tests {
         f.store
             .replace_signins(
                 agent.id,
+                Surface::Computer,
                 &[
                     signin_at(agent.id, "LinkedIn", "linkedin.com", 100),
                     signin_at(agent.id, "GitHub", "github.com", 100),
@@ -2007,7 +2050,11 @@ mod tests {
         // Logged out of GitHub; the next scan only sees LinkedIn.
         let after = f
             .store
-            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 200)])
+            .replace_signins(
+                agent.id,
+                Surface::Computer,
+                &[signin_at(agent.id, "LinkedIn", "linkedin.com", 200)],
+            )
             .unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].service, "LinkedIn");
@@ -2021,11 +2068,19 @@ mod tests {
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
 
         f.store
-            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 100)])
+            .replace_signins(
+                agent.id,
+                Surface::Computer,
+                &[signin_at(agent.id, "LinkedIn", "linkedin.com", 100)],
+            )
             .unwrap();
         let again = f
             .store
-            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 900)])
+            .replace_signins(
+                agent.id,
+                Surface::Computer,
+                &[signin_at(agent.id, "LinkedIn", "linkedin.com", 900)],
+            )
             .unwrap();
 
         assert_eq!(again[0].first_seen_at, 100, "the first sighting must not move");
@@ -2040,7 +2095,13 @@ mod tests {
         let gone = f.store.create_agent(&draft("Ghost")).unwrap();
 
         for (agent, service) in [(mine.id, "LinkedIn"), (peer.id, "GitHub"), (gone.id, "Gmail")] {
-            f.store.replace_signins(agent, &[signin_at(agent, service, "x.example", 1)]).unwrap();
+            f.store
+                .replace_signins(
+                    agent,
+                    Surface::Computer,
+                    &[signin_at(agent, service, "x.example", 1)],
+                )
+                .unwrap();
         }
         f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
 
@@ -2059,7 +2120,11 @@ mod tests {
         let f = fixture();
         let agent = f.store.create_agent(&draft("Researcher")).unwrap();
         f.store
-            .replace_signins(agent.id, &[signin_at(agent.id, "LinkedIn", "linkedin.com", 1)])
+            .replace_signins(
+                agent.id,
+                Surface::Computer,
+                &[signin_at(agent.id, "LinkedIn", "linkedin.com", 1)],
+            )
             .unwrap();
 
         assert_eq!(f.store.delete_agent_signins(agent.id).unwrap(), 1);

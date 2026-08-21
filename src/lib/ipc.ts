@@ -19,6 +19,7 @@ import type {
   ApprovalId,
   ApprovalState,
   Attachment,
+  Browser,
   Computer,
   Connector,
   ConnectorDraft,
@@ -60,6 +61,21 @@ export const api = {
 
   /** Destroys the sandbox and everything on its disk. */
   deleteAgentComputer: (id: AgentId) => invoke<void>("delete_agent_computer", { id }),
+
+  /** `null` when the agent has no browser, or the one it had has gone. */
+  agentBrowser: (id: AgentId) => invoke<Browser | null>("agent_browser", { id }),
+
+  /** Opens one, or hands back the one it already has. Idempotent. */
+  startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),
+
+  /**
+   * Ends it, keeping what it is signed in to.
+   *
+   * Closing is what writes the cookies back to the agent's profile, so this is
+   * how a sign-in just performed is made durable rather than waiting for the
+   * idle timeout to do it.
+   */
+  stopAgentBrowser: (id: AgentId) => invoke<void>("stop_agent_browser", { id }),
 
   /** Every account a crew can reach. Never carries a credential's value. */
   groupConnectors: (groupId: GroupId) => invoke<Connector[]>("group_connectors", { groupId }),

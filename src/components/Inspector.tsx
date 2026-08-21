@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import type { AgentCard, RoutineId } from "../lib/types";
+import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
 import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
@@ -137,6 +138,7 @@ export function Inspector({ agent, onEditProfile }: Props) {
             it. The list beside it is remounted deliberately, by its key. */}
         <div className="inspector__level" hidden={routine !== null}>
           <ComputerScreen agent={agent} key={agent.id} />
+          <BrowserScreen agent={agent} key={`browser:${agent.id}`} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} key={`${agent.id}:${listVersion}`} />
         </div>
 
