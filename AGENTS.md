@@ -114,6 +114,12 @@ the model takes a screenshot to see what `browse` did.
 - **`FileCard` hands the frame a `blob:` URL on purpose.** WebKit refuses a
   custom scheme in a frame and says nothing. A direct `guacfile:` `src` passes
   every test in this repo and draws an empty rectangle.
+- **Every `guacfile:` answer carries `access-control-allow-origin`, refusals
+  included.** A custom scheme is cross-origin to the page that asked, so without
+  it a `fetch` rejects with `TypeError: Load failed` and never sees the status.
+  An `img` is exempt and is the only preview that is not a `fetch`, so dropping
+  the header shows as pictures drawing and every document, log and PDF failing,
+  each with the one error message that cannot say which failure it was.
 - **`emit_reply` delivers a reply that carries a file and no text.** Handing over
   a document with nothing typed is normal, and judging the reply empty by its
   text alone drops the thing the turn was spent producing.
