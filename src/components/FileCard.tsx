@@ -13,15 +13,16 @@ import {
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type Attachment, errorMessage } from "../lib/types";
+import { Markdown } from "./Markdown";
 
 /**
  * A file on a message.
  *
  * Shown rather than named, because a document that arrives as a filename is a
  * document the operator has to open something else to read. A picture is drawn,
- * a PDF gets its first page, a text file gets its first lines, and anything
- * this cannot draw says so and offers the one thing that always works. All four
- * open a full view on a click.
+ * a PDF gets its first page, a markdown file is drawn as the document it is, a
+ * text file gets its first lines, and anything this cannot draw says so and
+ * offers the one thing that always works. All five open a full view on a click.
  *
  * The bytes come over `guacfile:` rather than IPC: see `lib/files.ts`.
  */
@@ -82,6 +83,8 @@ function Thumbnail({ file }: { file: Attachment }) {
       return <img className="file__image" src={fileUrl(file)} alt={file.name} loading="lazy" />;
     case "pdf":
       return <Page file={file} />;
+    case "markdown":
+      return <Snippet file={file} limit={SNIPPET_BYTES} render="markdown" />;
     case "text":
       return <Snippet file={file} limit={SNIPPET_BYTES} />;
     default:
@@ -195,7 +198,17 @@ function Unreadable({
 }
 
 /**
- * The first lines of a text file, as text.
+ * The first lines of a text file.
+ *
+ * `render` decides whether they are drawn as their own source or as the
+ * document they describe. Markdown is drawn: it is what the agents write in,
+ * and a brief shown as monospace `##` is one the operator reads around rather
+ * than through. Everything else is source, because a log is not prose and
+ * markdown rules applied to one would eat its punctuation.
+ *
+ * The same trust as a message body, and the same renderer: no raw HTML, and
+ * links leave through the operator's own browser. A file from an agent's
+ * machine is no more trustworthy than the message that carried it.
  *
  * `sayTrimmed` where the operator would otherwise believe they have read the
  * whole thing. Under a message the cut is plain from the shape of it; in the
@@ -204,10 +217,12 @@ function Unreadable({
 function Snippet({
   file,
   limit,
+  render = "source",
   sayTrimmed,
 }: {
   file: Attachment;
   limit: number;
+  render?: "source" | "markdown";
   sayTrimmed?: boolean;
 }) {
   const [read, setRead] = useState<{ text: string; trimmed: boolean } | null>(null);
@@ -228,7 +243,13 @@ function Snippet({
   if (failed) return <Unreadable file={file} why={failed} onRetry={again} />;
   return (
     <>
-      <pre className="file__text">{read?.text ?? ""}</pre>
+      {render === "markdown" ? (
+        <div className="file__doc">
+          <Markdown>{read?.text ?? ""}</Markdown>
+        </div>
+      ) : (
+        <pre className="file__text">{read?.text ?? ""}</pre>
+      )}
       {sayTrimmed && read?.trimmed && (
         <p className="hint">The first {readableSize(limit)}. Save a copy to read the rest.</p>
       )}
@@ -239,7 +260,7 @@ function Snippet({
 /**
  * The file, as big as the window will allow.
  *
- * The same four shapes as the strip with the bounds taken off. A file with no
+ * The same five shapes as the strip with the bounds taken off. A file with no
  * preview lands here too: the operator clicked something, and an explanation
  * with a way forward beats nothing happening.
  */
@@ -291,6 +312,8 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
             <img className="file-view__image" src={fileUrl(file)} alt={file.name} />
           ) : kind === "pdf" ? (
             <Document file={file} />
+          ) : kind === "markdown" ? (
+            <Snippet file={file} limit={PREVIEW_BYTES} render="markdown" sayTrimmed />
           ) : kind === "text" ? (
             <Snippet file={file} limit={PREVIEW_BYTES} sayTrimmed />
           ) : (

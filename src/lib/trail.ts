@@ -20,7 +20,7 @@
  * name of a function in a file they do not have.
  */
 
-import { asRecord, sendRecipients } from "./toolArgs";
+import { asRecord, attachedNames, sendRecipients } from "./toolArgs";
 import type { Part, ToolOutcome } from "./types";
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
@@ -171,6 +171,17 @@ function describe(tool: string, args: Args): Described {
       };
     }
 
+    // Named, because the file itself is drawn under the message and the chip's
+    // job is to say which call put it there. `2 files attached` beside two
+    // cards is a count of what the operator is already looking at.
+    case "attach_file": {
+      const named = attachedNames(args);
+      return {
+        title: named.length > 0 ? `Attached ${named.join(", ")}` : "Attached a file",
+        target: null,
+      };
+    }
+
     case "schedule": {
       const action = text(args, "action");
       if (action === "cancel") return { title: "Cancelled a routine", target: null };
@@ -279,6 +290,8 @@ function manyLabel(group: TrailGroup): string {
       return `Opened ${count} programs`;
     case "schedule":
       return `${count} changes to its schedule`;
+    case "attach_file":
+      return `Attached ${count} files`;
     case "update_notes":
       return `Updated its memory ${count} times`;
     case "directory":
@@ -340,14 +353,16 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
  * the page". `open_on_desktop` answers with the command it was handed.
  * `use_screen` answers `clicked at (412, 96)` beside a step that says where it
  * clicked. `update_notes` answers with a character count printed directly above
- * the characters. None of them is wrong; all of them are the line above read
- * back, and nine of those turned a row into a paragraph of grey monospace,
- * which is the shape this was collapsed to get away from.
+ * the characters. `attach_file` answers `attached brief.md` beside a chip that
+ * says "Attached brief.md" and a card drawing brief.md. None of them is wrong;
+ * all of them are the line above read back, and nine of those turned a row into
+ * a paragraph of grey monospace, which is the shape this was collapsed to get
+ * away from.
  *
  * A failure is never an echo. Whatever went wrong is not something the title
  * could have said.
  */
-const ECHOES = new Set(["browse", "use_screen", "open_on_desktop", "update_notes"]);
+const ECHOES = new Set(["browse", "use_screen", "open_on_desktop", "update_notes", "attach_file"]);
 
 /** Whether what came back is worth reading beside the call it came from. */
 export function tellsMore(step: Step): boolean {

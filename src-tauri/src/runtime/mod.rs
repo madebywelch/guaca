@@ -301,6 +301,17 @@ const INBOX: &str = "/home/user/inbox";
 /// command line, and few enough round trips to be worth it.
 const PLACE_CHUNK: usize = 192 * 1024;
 
+/// What a model is told it has lost when a file it named could not be resolved.
+///
+/// Two sentences, one per caller, because the mistake each is about to make is
+/// different: a send leaves a colleague waiting for a document, an attach
+/// leaves an answer claiming one. Silence is the worst outcome available in
+/// both cases, since agent and reader would each believe the file arrived.
+const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
+const UNATTACHED_FILE: &str =
+    "It is not on your answer, so do not tell them it is attached. Check the path with \
+     `run_command` and attach it again, or say plainly that you could not hand it over.";
+
 /// How long an agent will wait for peers that are still answering the same
 /// thing, before reading what it already has.
 ///
@@ -816,10 +827,18 @@ impl Runtime {
     /// Returns what travelled and, for everything that did not, a line worded
     /// for the model: an agent that believes it attached a document will go on
     /// to discuss a file nobody else can see.
+    ///
+    /// `consequence` is what the caller wants said about the failure, because
+    /// the two callers lose different things. A `send_message` that dropped a
+    /// file has a recipient who never received it and is about to be told it is
+    /// on the way; an `attach_file` that dropped one has an answer that is
+    /// about to claim a document is attached to it. Both need the reason and
+    /// then their own sentence about what not to do next.
     async fn resolve_files(
         &self,
         card: &AgentCard,
         wanted: &[String],
+        consequence: &str,
     ) -> (Vec<Attachment>, Vec<String>) {
         let mut found = Vec::new();
         let mut missing = Vec::new();
@@ -837,10 +856,7 @@ impl Runtime {
             // Not something it was sent, so it is something it made.
             match self.pull_file(card, name).await {
                 Ok(file) => found.push(file),
-                Err(why) => missing.push(format!(
-                    "{name} was not attached: {why}. The recipient did not get it, so do not \
-                     tell them it is on the way."
-                )),
+                Err(why) => missing.push(format!("{name} was not attached: {why}. {consequence}")),
             }
         }
         (found, missing)
@@ -1626,6 +1642,11 @@ impl Runtime {
         let mut addressed: HashSet<AgentId> = HashSet::new();
         // What this turn has read off the web, and where from.
         let mut reading = Reading::default();
+        // Files `attach_file` has put on the answer this turn has not written
+        // yet. Collected here rather than sent as they arrive, because they
+        // belong on the message the agent is still composing: a file delivered
+        // the moment it was named would sit above the sentence explaining it.
+        let mut attached: Vec<Attachment> = Vec::new();
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
@@ -1708,6 +1729,7 @@ impl Runtime {
                         settled,
                         &mut addressed,
                         &mut reading,
+                        &mut attached,
                         call,
                     )
                     .await;
@@ -1819,6 +1841,7 @@ impl Runtime {
                 &addressed,
                 collected_text,
                 tool_parts,
+                attached,
             );
         }
 
@@ -1918,6 +1941,7 @@ impl Runtime {
         addressed: &HashSet<AgentId>,
         text: String,
         mut tool_parts: Vec<Part>,
+        files: Vec<Attachment>,
     ) {
         let text = text.trim().to_string();
         let me = Participant::Agent { id: card.id };
@@ -2021,7 +2045,11 @@ impl Runtime {
             }
         }
 
-        if text.is_empty() {
+        // A file with nothing typed is still an answer, and the one this app
+        // was missing: "here is the brief" is a courtesy the model often
+        // skips. Judging the reply empty by its text alone would drop the
+        // document the whole turn was spent producing.
+        if text.is_empty() && files.is_empty() {
             return;
         }
 
@@ -2035,7 +2063,7 @@ impl Runtime {
             channel_id,
             from: me,
             to,
-            parts: vec![Part::text(text)],
+            parts: with_files(&text, files),
             trust: Trust::Peer,
             hop,
             // An agent's answer never itself demands an answer. This is the
@@ -2067,6 +2095,8 @@ impl Runtime {
         addressed: &mut HashSet<AgentId>,
         // What this turn has read off the web so far. See `Reading`.
         reading: &mut Reading,
+        // Files this turn has attached to the answer it has not written yet.
+        attached: &mut Vec<Attachment>,
         call: &ToolCall,
     ) -> ToolResult {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
@@ -2080,6 +2110,7 @@ impl Runtime {
                 settled,
                 addressed,
                 reading,
+                attached,
                 call,
                 arguments,
             )
@@ -2099,6 +2130,7 @@ impl Runtime {
         settled: bool,
         addressed: &mut HashSet<AgentId>,
         reading: &mut Reading,
+        attached: &mut Vec<Attachment>,
         call: &ToolCall,
         arguments: serde_json::Value,
     ) -> (String, Part, Option<String>) {
@@ -2335,7 +2367,7 @@ impl Runtime {
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
-                let (attached, missing) = self.resolve_files(card, &files).await;
+                let (carried, missing) = self.resolve_files(card, &files, UNSENT_FILE).await;
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -2346,7 +2378,7 @@ impl Runtime {
                     &to,
                     &text,
                     intent,
-                    &attached,
+                    &carried,
                 );
                 let rendered = tools::render_deliveries(&deliveries);
                 let queued =
@@ -2394,6 +2426,63 @@ impl Runtime {
                 (
                     rendered,
                     Part::ToolCall { name: tools::SEND_MESSAGE.to_string(), arguments, outcome },
+                )
+            }
+
+            ToolInvocation::AttachFile { files } => {
+                let (found, missing) = self.resolve_files(card, &files, UNATTACHED_FILE).await;
+
+                // Deduplicated against the turn rather than the call: a model
+                // that attaches the brief, writes a paragraph, then attaches
+                // the brief again would otherwise put two identical cards under
+                // one message. The digest is the identity, so the same document
+                // named two ways is one attachment.
+                let mut added: Vec<String> = Vec::new();
+                for file in found {
+                    if attached.iter().any(|held| held.digest == file.digest) {
+                        continue;
+                    }
+                    added.push(file.name.clone());
+                    attached.push(file);
+                }
+
+                let outcome = match (added.is_empty(), missing.is_empty()) {
+                    (false, true) => {
+                        ToolOutcome::Ok { summary: format!("attached {}", added.join(", ")) }
+                    }
+                    (false, false) => ToolOutcome::Partial {
+                        summary: format!("attached {} of {}", added.len(), files.len()),
+                        refused: missing
+                            .iter()
+                            .map(|why| RefusedRecipient {
+                                to: "attachment".to_string(),
+                                reason: why.clone(),
+                            })
+                            .collect(),
+                    },
+                    (true, false) => ToolOutcome::Refused { reason: missing.join(" ") },
+                    // Every name resolved to something already attached, which
+                    // is not a failure: the answer carries the file either way.
+                    (true, true) => ToolOutcome::Ok { summary: "already attached".to_string() },
+                };
+
+                let mut rendered = if added.is_empty() {
+                    "Nothing new was attached.".to_string()
+                } else {
+                    format!(
+                        "{} attached to your answer. The reader gets the file itself, so say what \
+                         it is rather than repeating what is in it.",
+                        added.join(", ")
+                    )
+                };
+                if !missing.is_empty() {
+                    rendered.push('\n');
+                    rendered.push_str(&missing.join("\n"));
+                }
+
+                (
+                    rendered,
+                    Part::ToolCall { name: tools::ATTACH_FILE.to_string(), arguments, outcome },
                 )
             }
         };

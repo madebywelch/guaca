@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { foldTrail, hasDetail, readSpent, type Step, trailStep } from "./trail";
+import { foldTrail, hasDetail, readSpent, type Step, tellsMore, trailStep } from "./trail";
 import type { Part, ToolOutcome } from "./types";
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
@@ -50,6 +50,35 @@ describe("what one call was", () => {
     const [step] = steps(call("run_code", { source: "print(1)" }, ok("exit 0")));
     expect(step?.title).toBe("Used run_code");
     expect(step?.target).toBeNull();
+  });
+
+  it("names the document that was attached, since the operator can see the card", () => {
+    // The file itself is drawn under the message. The chip's job is to say
+    // which call put it there, and the path it came from is on a machine the
+    // operator has never seen.
+    const [step] = steps(
+      call("attach_file", { files: ["/home/user/exec-brief.md"] }, ok("attached exec-brief.md")),
+    );
+    expect(step?.title).toBe("Attached exec-brief.md");
+    // Nothing behind the chip: the summary is the title again, and the document
+    // is already on screen.
+    expect(step?.target).toBeNull();
+    expect(tellsMore(step as Step)).toBe(false);
+  });
+
+  it("says what could not be attached, because that is not on screen anywhere", () => {
+    const [step] = steps(
+      call(
+        "attach_file",
+        { files: ["/home/user/brief.md"] },
+        { status: "refused", reason: "brief.md was not attached: there is no file at it." },
+      ),
+    );
+    expect(step?.failed).toBe(true);
+    // A failure is never an echo. Whatever went wrong is not something the
+    // title could have said.
+    expect(tellsMore(step as Step)).toBe(true);
+    expect(step?.said).toContain("was not attached");
   });
 
   it("carries the reason a call was refused, not the fact that it happened", () => {
