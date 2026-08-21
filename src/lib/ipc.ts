@@ -30,6 +30,7 @@ import type {
   ConnectorDraft,
   ConnectorId,
   Decision,
+  DeviceCode,
   Envelope,
   Group,
   GroupDraft,
@@ -49,10 +50,21 @@ import type {
   SettingsPatch,
   Signin,
   Staged,
+  SubscriptionStatus,
   UiEvent,
 } from "./types";
 
 const EVENT_CHANNEL = "guac://event";
+
+/**
+ * The menu bar asking the window to open one agent's channel.
+ *
+ * Its own channel rather than a `UiEvent`. That one is the runtime saying what
+ * happened, and this is one surface asking another to go somewhere: folding
+ * them together would put a case in the transcript's event handling for
+ * something the runtime never emits. Kept in step with `tray.rs`.
+ */
+const REVEAL_CHANNEL = "guac://reveal";
 
 export const api = {
   /** `null` when the agent has never been given a computer. */
@@ -286,6 +298,24 @@ export const api = {
    * API key configured" for a key they can see, which reads as a bug.
    */
   testConnection: (patch?: SettingsPatch) => invoke<string>("test_connection", { patch }),
+
+  subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
+
+  /** Asks for a code to carry to a browser. Returns in one round trip. */
+  beginSubscriptionSignin: () => invoke<DeviceCode>("begin_subscription_signin"),
+
+  /**
+   * Waits for the code to be entered, which takes as long as the operator does.
+   *
+   * Parks for up to fifteen minutes on purpose: the whole sign-in is one call,
+   * so abandoning it leaves nothing half-finished to clean up. The caller has to
+   * keep its own "waiting" state, because this does not resolve until it is over.
+   */
+  completeSubscriptionSignin: (code: DeviceCode) =>
+    invoke<SubscriptionStatus>("complete_subscription_signin", { code }),
+
+  /** Forgets the sign-in, and moves the provider off it if it was in use. */
+  signOutSubscription: () => invoke<Settings>("sign_out_subscription"),
 };
 
 /**
@@ -332,6 +362,18 @@ export async function notifyOperator(title: string, body: string): Promise<boole
 /** Subscribes to runtime events. Returns an unsubscribe function. */
 export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<UnlistenFn> {
   return listen<UiEvent>(EVENT_CHANNEL, (message) => handler(message.payload));
+}
+
+/**
+ * Subscribes to the menu bar asking for a channel to be opened.
+ *
+ * The window is already shown, unminimised and focused by the time this
+ * arrives; all that is left is which channel it lands in. Answering a
+ * permission request from the strip does not come through here: that one is
+ * decided in Rust and reaches the transcript as an ordinary settled event.
+ */
+export function onRevealRequest(handler: (agent: AgentId) => void): Promise<UnlistenFn> {
+  return listen<AgentId>(REVEAL_CHANNEL, (message) => handler(message.payload));
 }
 
 /**

@@ -611,7 +611,7 @@ impl Runtime {
     /// that says nothing.
     pub async fn probe(&self, config: &AppConfig) -> Result<String, LlmError> {
         let request = ChatRequest {
-            model: config.inference.default_model.clone(),
+            model: config.inference.active_model().to_string(),
             messages: vec![
                 ChatMessage::system("Reply with the single word: ok"),
                 ChatMessage::user("ping"),
@@ -622,8 +622,11 @@ impl Runtime {
         let completion = self.inner.llm.stream_chat(&config.inference, &request, |_| {}).await?;
         Ok(format!(
             "Connected to {} using {}. Model replied: {}",
-            config.inference.base_url,
-            config.inference.default_model,
+            // Where the call actually went, which is not the endpoint field when
+            // a subscription is paying: reporting a URL the request never
+            // touched is how a working setup reads as misconfigured.
+            config.inference.endpoint(),
+            config.inference.active_model(),
             completion.content.trim().chars().take(80).collect::<String>()
         ))
     }
@@ -1315,6 +1318,31 @@ impl Runtime {
         }
 
         true
+    }
+
+    /// How many conversations are in flight.
+    ///
+    /// The count rather than the ids, because the one caller is a surface that
+    /// says how many there are and offers to end them. Handing out the ids
+    /// would invite a caller to hold them, and a run id outlives the run.
+    pub fn live_runs(&self) -> usize {
+        self.inner.runs.lock().outstanding.len()
+    }
+
+    /// Ends every conversation in flight, and says how many that was.
+    ///
+    /// The counterpart to closing the window without quitting. Agents keep
+    /// their own appointments, so a window that is gone is not a workspace that
+    /// has stopped: a routine can fire, spend money and reach a peer with
+    /// nobody watching. This is the one lever that needs no window.
+    ///
+    /// A snapshot and then a stop each, rather than one pass under the lock.
+    /// [`Self::stop_run`] takes the same lock and wakes every inbox, and a run
+    /// that settles on its own between the two is a `false` this deliberately
+    /// does not count.
+    pub fn stop_everything(&self) -> usize {
+        let live: Vec<RunId> = self.inner.runs.lock().outstanding.keys().copied().collect();
+        live.into_iter().filter(|run| self.stop_run(*run)).count()
     }
 
     /// Closes, on the operator's behalf, every permission request a stopped run
@@ -2615,6 +2643,18 @@ impl Runtime {
         }
     }
 
+    /// Acting outside the workspace, if the operator says so.
+    ///
+    /// Refused before they are asked when the workspace has no computer and no
+    /// browser. `specs` does not offer the tool in that case, and this is the
+    /// same rule where a model that called it anyway meets it: nothing such an
+    /// agent can call leaves the workspace, so a yes would authorise an action
+    /// it has no way to carry out. What it is short of is access, and pressing
+    /// Allow cannot hand it any. The live failure was an agent asked for
+    /// something needing a calendar nobody here holds an account for: it worked
+    /// out that it had no access, then asked to be given some, and the operator
+    /// was handed a decision that changed nothing instead of a sentence saying
+    /// what was missing.
     async fn ask_to_act(
         &self,
         card: &AgentCard,
@@ -2623,6 +2663,25 @@ impl Runtime {
         because: String,
         arguments: serde_json::Value,
     ) -> (String, Part) {
+        let surfaces = self.surfaces();
+        if !surfaces.computer && !surfaces.browser {
+            let reason = "nothing this agent can do reaches outside the workspace".to_string();
+            return (
+                "Refused, and the operator was not asked: this workspace has no computer and no \
+                 browser, so nothing you can call reaches outside it and there is no action here \
+                 for them to authorise. What you are missing is access, not permission, and no \
+                 answer of theirs would give you any. Say in your reply what you could not reach \
+                 and that they can add a provider in settings, then carry on with the part you \
+                 can do from here."
+                    .to_string(),
+                Part::ToolCall {
+                    name: tools::REQUEST_PERMISSION.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Refused { reason },
+                },
+            );
+        }
+
         let mut detail = vec![DetailField {
             label: format!("What {} will do", card.name),
             value: action.clone(),

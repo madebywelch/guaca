@@ -212,6 +212,41 @@ cannot be provable it asks a person rather than pretending.
 after the fact. This is the first thing you want when five agents have been
 talking and something went wrong.
 
+## Paying for a turn with a subscription, and why only one vendor allows it
+
+Both of the model vendors an operator is most likely to already be paying monthly
+publish an OAuth flow that funds inference from a consumer plan instead of from a
+metered key. Only one of them permits a third party to use it, and the split is
+policy rather than protocol, so it is recorded here rather than being rediscovered
+by whoever asks for the other half.
+
+**OpenAI permits it, and says so.** ChatGPT sign-in is a published Codex
+authentication method alongside API keys, and OpenAI extended it to third-party
+harnesses rather than reserving it for its own clients: Sam Altman announced
+ChatGPT-account sign-in for OpenClaw on 2 May 2026, and the same device-code flow
+is what `subscription.rs` performs. The credential is a plan, so the calls draw
+on the plan's quota and no per-token bill arrives. Guaca sends its own
+`User-Agent` and the `originator` the backend expects on that endpoint; it does
+not claim to be the CLI.
+
+**Anthropic prohibits it, and enforces it.** Consumer Claude OAuth tokens are for
+Claude Code and Claude.ai only. Server-side enforcement landed in January 2026,
+the documentation was made explicit on 19 February 2026, and on 4 April 2026
+subscription quota stopped covering third-party harnesses altogether. The policy
+names the Agent SDK specifically, so there is no sanctioned client library route
+either. A Claude subscription therefore cannot fund Guaca, and the flow is not
+implemented: it would fail at the server, breach the Consumer Terms the operator
+agreed to, and put their account at risk of revocation without notice. Claude
+models still reach Guaca the way they always have, through an API key or through
+OpenRouter, which remains the default endpoint and the default model.
+
+This is worth restating because the asymmetry is not obvious from the outside.
+The two flows look near-identical — OAuth, PKCE, a rotating bearer token, a
+plan-scoped claim in an ID token — and a reasonable person assumes that
+implementing one means the other is a weekend of work. The blocker is a term of
+service and a server-side check, and neither is something this repo can engineer
+around.
+
 ## Considered and declined
 
 **A verifier agent.** The failure taxonomy above puts task verification at 17.3%

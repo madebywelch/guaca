@@ -12,7 +12,7 @@ import { type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
-import { api, notifyOperator, onRuntimeEvent } from "./lib/ipc";
+import { api, notifyOperator, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "./lib/store";
@@ -142,6 +142,31 @@ export default function App() {
     };
   }, [announce, applyEvent, bootstrap, setBanner]);
 
+  // A row in the menu bar, clicked. The window is already up by the time this
+  // lands; the only thing left is which channel it lands in, and the newest
+  // window of it is the right one: a request the strip offered is the last
+  // thing in the channel that raised it.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    void (async () => {
+      const stop = await onRevealRequest((agent) => {
+        void select(agent);
+      });
+      if (cancelled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+    })();
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [select]);
+
   /**
    * Runs something on one agent and re-reads the roster.
    *
@@ -159,7 +184,12 @@ export default function App() {
     }
   };
 
-  const needsKey = ready && settings !== null && !settings.apiKeySet;
+  // A key is only missing if a key is what pays. An operator on a subscription
+  // has nothing to paste, so this asked them forever for something the Provider
+  // pane does not offer them, and the one banner the app uses to say "you are
+  // not set up yet" stopped meaning anything.
+  const needsKey =
+    ready && settings !== null && settings.provider === "compatible" && !settings.apiKeySet;
   const openAgent =
     selected && selected !== ACTIVITY_CHANNEL ? agents.find((a) => a.id === selected) : undefined;
 

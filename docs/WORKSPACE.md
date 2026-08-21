@@ -444,6 +444,97 @@ failing together are two notifications while one agent failing twice is one.
 There is a button that sends a test notification, which is the only way to tell a
 refused operating-system permission from a working one.
 
+## The menu bar is Guaca with the window shut
+
+A notification is a thing that happened. The menu bar is the state of things,
+standing, for as long as the window is not what you are looking at. Those are
+different questions and neither answers the other: a banner about a parked turn
+is gone in four seconds, and the turn is still parked.
+
+So there is a presence in the menu bar, and it has four channels doing four
+jobs. `menubar.rs` decides all of it and `tray.rs` draws it, which is what makes
+every judgement below arguable in a test rather than by squinting at a corner of
+the screen.
+
+- **The glyph** is state without being looked at. An outline when nothing is
+  running, filled when something is, and warm red when an agent is blocked on
+  you. That last one is the only glyph that is not a template image, and giving
+  up the menu bar's own light-and-dark tinting is the price of it: macOS tints a
+  template image to match the bar, so a template glyph cannot have a colour.
+  Worth paying exactly once, for the one state that must not be missed.
+- **The title** is the count of turns waiting on you, and nothing else. Menu bar
+  width is shared with every other app on the machine. A number that is always
+  there becomes furniture and stops being read; one that appears only when
+  something is parked is information. The spend is deliberately not here.
+- **The tooltip** is one line on hover: what is happening, and what the session
+  has cost. The glance that costs no click and no width.
+- **The menu** is the whole picture. What is waiting, who is working, what has
+  been spent, and the two things worth doing from here.
+
+**A permission request is answered from the strip.** That is the point of the
+whole feature. A parked turn is the one thing in Guaca that stops until you deal
+with it, and the flow-preserving move is to answer it where you noticed it rather
+than to go and find the channel. The request's own fields are under it, because a
+decision made without them is a decision made blind, and every one of them is
+`label: value` with the label being Guaca's word: a value crafted to read like an
+answer then sits behind a heading the runtime wrote rather than loose in a menu of
+answers. The same refusal as the card in the transcript applies, for the same
+reason: `actOnBehalf` is never offered an "always".
+
+**Spend is two lines, session and all time.** A price with no places is a working
+crew reading `$0.00` for its first hour, so the precision follows the number,
+exactly as the group meters do. The token count is always there and the price
+joins it only when there is one worth the width, under the same floor as the
+meters: a local server and a subscription plan price nothing at all, and a free
+model prices every call at a real zero, so `$0.0000` is what a strip shared with
+every other app would otherwise spend seven characters saying. No price is not a
+price of zero either, which is why a workspace with one local crew and one hosted
+one reports the hosted one's bill rather than the average of a number and a
+silence.
+
+That floor is written twice, once in Rust and once in TypeScript, and
+`ipc.contract.test.ts` compares them. Two readings of one number that disagree
+give the operator no way to tell which is lying.
+
+**Closing the window puts Guaca in the menu bar instead of ending it.** Tauri
+exits when the last window closes, and for this app that is the wrong default:
+agents keep their own appointments, so quitting on a close means a routine set
+for every morning stops firing the first time somebody tidies their screen, with
+nothing said. A hidden window is not a closed one, so preventing the close is the
+whole mechanism and no exit handling goes with it. Command-Q and the strip's own
+Quit still quit.
+
+That is conditional on the strip having built, and the condition is the point
+rather than caution: an app with no window and no menu bar icon is one the
+operator cannot see, cannot reach and cannot stop. If the tray did not build,
+closing the window quits exactly as it used to.
+
+**"Stop everything running" is the counterpart to that change.** A window that is
+gone is not a workspace that has stopped, and the cost of finding that out late
+is money. It sits beside the spend it is about, appears only when there is
+something to stop, and is a run-level stop like the one in the working line: what
+the operator wants to end reached however many agents it reached.
+
+Two implementation decisions are load-bearing and read as fussiness.
+
+The presence is **read, not accumulated**. Every number but the session total is
+a fresh read of whatever already holds the truth: the roster, the activity map,
+the pending requests, the usage table. A presence assembled by adding up events
+drifts the moment one is missed, and the thing that would drift is the number
+being used to decide whether to go and look. The reads are local, coalesced, and
+happen only while something is happening.
+
+The menu is **edited in place when it can be**. Replacing a menu closes one the
+operator is reading, and the spend on it moves every few seconds while a crew
+works, so a strip that rebuilt on every change would be unreadable exactly when
+it was worth reading. `menubar::plan` compares the shape of the rows: same shapes
+in the same order is the same menu saying different numbers, which is a text
+edit, and anything else is a rebuild.
+
+What is deliberately not here: a second window. A popover would be a whole
+webview to position, blur and keep in step for the sake of drawing a sparkline
+nobody asked for, and none of the four questions this answers needs one.
+
 ## Every key the app answers to is in one list
 
 The app answered to a dozen keys and said so nowhere, which is the same as not

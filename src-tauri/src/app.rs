@@ -1,10 +1,10 @@
 //! Tauri application wiring.
 //!
-//! The only file that knows Tauri exists. Everything below it is a plain Rust
-//! library with plain tests, which is why the cascade tests can drive the real
-//! runtime without a window.
+//! One of the two files that know Tauri exists, the other being `tray.rs`.
+//! Everything below them is a plain Rust library with plain tests, which is why
+//! the cascade tests can drive the real runtime without a window.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use tauri::http::{Request, Response};
 use tauri::{Emitter, Manager, UriSchemeContext};
@@ -17,15 +17,32 @@ use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
 use crate::runtime::Runtime;
+use crate::subscription::Subscription;
+use crate::tray::{self, Tray};
 use crate::workspace::Workspace;
 
-/// Bridges runtime events onto the webview's event bus.
+/// Bridges runtime events onto the webview's event bus, and onto the menu bar.
+///
+/// Two subscribers rather than one, because the two are not alternatives: the
+/// window can be closed for a week while routines fire, and the strip is what
+/// is left saying so. Neither can be a call the other has to make.
 struct TauriSink {
     app: tauri::AppHandle,
+    /// Filled once the menu bar exists.
+    ///
+    /// The sink has to be handed to the runtime before the runtime exists to be
+    /// given to the strip, so one of the two has to be late. This one, because
+    /// an event that arrives in the gap is one the strip would have redrawn
+    /// itself for anyway on the next: it reads the world rather than adding
+    /// events up.
+    tray: Arc<OnceLock<Arc<Tray>>>,
 }
 
 impl EventSink for TauriSink {
     fn emit(&self, event: UiEvent) {
+        if let Some(tray) = self.tray.get() {
+            tray.observe(&event);
+        }
         // A failed emit means the window is gone. That is not an error worth
         // propagating into an agent's turn; the transcript is already durable.
         if let Err(err) = self.app.emit(CHANNEL, &event) {
@@ -157,6 +174,34 @@ fn app_origin(config: &tauri::Config) -> String {
     }
 }
 
+/// Closing the window puts Guaca in the menu bar instead of ending it.
+///
+/// Tauri exits when the last window closes, and for this app that is the wrong
+/// default: agents keep their own appointments, so quitting on a close means a
+/// routine set for every morning stops firing the first time somebody tidies
+/// their screen, with nothing said. A hidden window is not a closed one, so
+/// preventing the close is the whole mechanism and no exit handling goes with
+/// it. Command-Q and the strip's own Quit still quit.
+///
+/// Conditional on the strip being there, and that is the point rather than
+/// caution: an app with no window and no menu bar icon is one the operator
+/// cannot see, cannot reach and cannot stop. If the tray did not build, closing
+/// the window quits exactly as it used to.
+fn hide_rather_than_quit(window: &tauri::Window, event: &tauri::WindowEvent) {
+    let tauri::WindowEvent::CloseRequested { api, .. } = event else {
+        return;
+    };
+    if window.app_handle().tray_by_id(tray::TRAY_ID).is_none() {
+        return;
+    }
+    api.prevent_close();
+    if let Err(err) = window.hide() {
+        tracing::warn!(%err, "could not hide the window, so it closes instead");
+        return;
+    }
+    tracing::info!("window closed; Guaca is still running in the menu bar");
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -177,6 +222,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .register_uri_scheme_protocol(FILE_SCHEME, serve_file)
+        .on_window_event(hide_rather_than_quit)
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
             let config_dir = app.path().app_config_dir()?;
@@ -206,17 +252,35 @@ pub fn run() {
                 Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
             }
             let app_config = config::load(&config_path)?;
-            let sink = Arc::new(TauriSink { app: app.handle().clone() });
+            // The ChatGPT sign-in, beside the settings rather than inside them.
+            // `subscription.rs` says why: the two files have different writers
+            // and one of them writes in the background.
+            let subscription = Arc::new(Subscription::open(config_dir.join("subscription.json")));
+            let menubar = Arc::new(OnceLock::new());
+            let sink = Arc::new(TauriSink { app: app.handle().clone(), tray: menubar.clone() });
 
             let runtime = Runtime::with_handle(
                 handle.clone(),
                 store,
-                LlmClient::new()?,
+                LlmClient::new()?.with_subscription(subscription.clone()),
                 app_config,
                 Workspace::new(workspace_dir.clone()),
                 FileStore::new(files_dir),
                 sink,
             );
+
+            // Before anything is started, so the first thing an agent does on
+            // the way up has somewhere to be shown. A menu bar that will not
+            // build is logged and lived without: the window is the record and
+            // the strip is the copy, and taking the app down over the copy
+            // would be the wrong way round.
+            match Tray::install(app.handle(), runtime.clone()) {
+                Ok(tray) => {
+                    let _ = menubar.set(tray);
+                }
+                Err(err) => tracing::warn!(%err, "no menu bar presence this session"),
+            }
+
             let started = runtime.start_all()?;
             // Agents keep their own appointments.
             runtime.start_scheduler();
@@ -279,7 +343,7 @@ pub fn run() {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| data_dir.clone());
 
-            app.manage(AppState { runtime, config_path, downloads });
+            app.manage(AppState { runtime, config_path, downloads, subscription });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -339,6 +403,10 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,
+            commands::subscription_status,
+            commands::begin_subscription_signin,
+            commands::complete_subscription_signin,
+            commands::sign_out_subscription,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Guac");

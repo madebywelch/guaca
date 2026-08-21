@@ -560,6 +560,56 @@ async fn stopping_a_run_closes_the_request_it_was_waiting_on() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_everything_ends_every_run_exactly_once() {
+    // The lever the menu bar offers, and the reason it exists: closing the
+    // window leaves Guaca running, so the one thing that must work with no
+    // window is halting the spend. Two runs rather than one, because a stop
+    // that released the work it was ending would take a run's count below zero
+    // and report it finished twice, and a single run can hide that behind its
+    // own settle.
+    let stub = serve(|body| Script::SendTo {
+        recipients: vec![if speaker(body) == "Manager" { "Chef" } else { "Manager" }.into()],
+        text: "and another thing".into(),
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    assert_eq!(h.runtime.live_runs(), 0);
+    assert_eq!(h.runtime.stop_everything(), 0, "a stop with nothing running stops nothing");
+
+    let first = h.runtime.send_from_human(h.id("Manager"), "Talk to Chef.").unwrap();
+    let second = h.runtime.send_from_human(h.id("Chef"), "Talk to Manager.").unwrap();
+
+    h.wait_until("both conversations have paid for a call", |h| {
+        [first, second].iter().all(|run| {
+            h.sink.count_of(|e| matches!(e, UiEvent::TokensUsed { run_id, .. } if run_id == run))
+                > 0
+        })
+    })
+    .await;
+    assert_eq!(h.runtime.live_runs(), 2, "the strip counts conversations, not agents");
+
+    assert_eq!(h.runtime.stop_everything(), 2);
+
+    for (run, which) in [(first, "the first"), (second, "the second")] {
+        assert!(
+            h.settled_within(run, 10).await,
+            "{which} conversation owes an ending:\n{}",
+            h.trajectory(run).ledger
+        );
+        let t = h.expect_normal(run, "every conversation stopped at once");
+        assert_eq!(
+            t.steps().map(|steps| steps as usize),
+            Some(t.calls()),
+            "{which} conversation must not report a call it never made:\n{}",
+            t.ledger
+        );
+    }
+
+    assert_eq!(h.runtime.live_runs(), 0, "and nothing is left outstanding");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_that_has_already_finished_changes_nothing() {
     // The ordinary outcome of a stop pressed a moment too late. It is not an
     // error, and it must write nothing: a line saying a conversation was

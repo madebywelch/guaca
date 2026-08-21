@@ -23,6 +23,26 @@ export function money(dollars: number): string {
   return `$${dollars.toFixed(4)}`;
 }
 
+/** The smallest price {@link money} can draw. Below it every digit is a zero. */
+const MIN_PRICE = 0.0001;
+
+/**
+ * Whether there is a price worth the space it takes to draw.
+ *
+ * Three things report no charge and only one of them is null. A local server
+ * prices nothing, so its cost is absent. A free model prices every call at a
+ * real zero, and free inference over an afternoon stays zero, which drew
+ * `$0.0000` beside the sparkline: seven characters of a narrow rail saying
+ * nothing. A paid call small enough to round away says the same nothing at more
+ * precision, which is why the floor is what {@link money} can render rather
+ * than zero itself.
+ *
+ * Narrows, so the caller that draws the price does not have to assert it.
+ */
+export function priced(cost: number | null | undefined): cost is number {
+  return cost != null && cost >= MIN_PRICE;
+}
+
 /** 1.2k, 3.4M. Exact below a thousand, because early numbers are small. */
 export function compact(tokens: number): string {
   if (tokens < 1000) return String(tokens);
@@ -90,8 +110,9 @@ export function TokenMeter({ groupId }: Props) {
           ? [
               `${total.prompt.toLocaleString()} in, ${total.completion.toLocaleString()} out`,
               `${total.calls.toLocaleString()} model call${total.calls === 1 ? "" : "s"}`,
-              // Absent on a local server, which has nothing to charge.
-              total.cost === null ? null : `$${total.cost.toFixed(total.cost < 1 ? 4 : 2)}`,
+              // Absent on a local server and on a free model, neither of which
+              // has anything to charge.
+              priced(total.cost) ? money(total.cost) : null,
             ]
               .filter(Boolean)
               .join(" · ")
@@ -110,16 +131,15 @@ export function TokenMeter({ groupId }: Props) {
           />
         ))}
       </span>
-      {/* One number, not two. A group header already carries a name, a
-          sparkline, a headcount and a gear, and tokens and dollars are the
-          same fact twice: the price is the one an operator acts on. The count
-          is what is left when a provider prices nothing, and then it is the
-          only signal there is. Both are in the tooltip either way. */}
-      {total?.cost != null ? (
-        <span className="meter__cost">{money(total.cost)}</span>
-      ) : (
-        <span className="meter__count">{compact(spent)}</span>
-      )}
+      {/* The count is the one that is always there, because it is the one that
+          always moves: every call adds to it whatever the provider charges, and
+          a number climbing next to the sparkline is the difference between
+          watching work and watching a spinner. The price joins it only when
+          there is one to name. This used to be the other way around, one number
+          with the price winning, which showed a free model as `$0.0000` and hid
+          the only figure that was going anywhere. */}
+      <span className="meter__count">{compact(spent)}</span>
+      {priced(total?.cost) && <span className="meter__cost">{money(total.cost)}</span>}
     </span>
   );
 }

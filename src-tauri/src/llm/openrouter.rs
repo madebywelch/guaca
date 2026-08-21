@@ -7,13 +7,16 @@
 //! classification) all live in the wire handling.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
-use crate::config::InferenceConfig;
+use crate::config::{InferenceConfig, Provider};
+use crate::llm::codex;
 use crate::llm::sse::SseDecoder;
+use crate::subscription::Subscription;
 
 // ---- request types -------------------------------------------------------
 
@@ -263,6 +266,15 @@ pub enum LlmError {
     NotConfigured,
     #[error("the inference endpoint rejected the API key (HTTP {status}): {message}")]
     Auth { status: u16, message: String },
+    /// A subscription that is missing, expired, or refused.
+    ///
+    /// Separate from `Auth` because the way out is different and an agent
+    /// reading this mid-turn has to be told which one it is: nobody fixes a
+    /// rejected sign-in by checking their API key.
+    #[error(
+        "the ChatGPT subscription could not be used: {message}. Open Settings and sign in again."
+    )]
+    SubscriptionRejected { message: String },
     #[error("rate limited by the inference endpoint: {message}")]
     RateLimited { message: String, retry_after_secs: Option<u64> },
     #[error("model {model:?} was rejected: {message}")]
@@ -299,6 +311,7 @@ impl LlmError {
         match self {
             LlmError::NotConfigured => "no API key configured".into(),
             LlmError::Auth { .. } => "API key rejected".into(),
+            LlmError::SubscriptionRejected { .. } => "sign in to ChatGPT again".into(),
             LlmError::RateLimited { .. } => "rate limited".into(),
             LlmError::ModelRejected { model, .. } => format!("model {model} unavailable"),
             LlmError::Upstream { status, .. } => format!("upstream HTTP {status}"),
@@ -485,6 +498,13 @@ impl ToolCallAccumulator {
 #[derive(Debug, Clone)]
 pub struct LlmClient {
     http: reqwest::Client,
+    /// The ChatGPT sign-in, when this build has one attached.
+    ///
+    /// Optional rather than required so every test that only exercises the
+    /// compatible transport constructs a client the same way it always did. A
+    /// subscription call without one is a configuration error with a clear
+    /// message, not a panic.
+    subscription: Option<Arc<Subscription>>,
 }
 
 impl LlmClient {
@@ -493,13 +513,24 @@ impl LlmClient {
             .user_agent(concat!("guac/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|source| LlmError::Transport { url: "client".into(), source })?;
-        Ok(Self { http })
+        Ok(Self { http, subscription: None })
+    }
+
+    /// Gives this client the sign-in that subscription calls are made with.
+    pub fn with_subscription(mut self, subscription: Arc<Subscription>) -> Self {
+        self.subscription = Some(subscription);
+        self
     }
 
     /// Streams a completion, calling `on_token` for each fragment.
     ///
     /// `on_token` runs on the caller's task and must not block; it exists so
     /// the UI can render a turn as it happens rather than after it ends.
+    ///
+    /// The one place the two providers part company. Everything above this call
+    /// assembles a single kind of request and reads a single kind of completion,
+    /// which is why a subscription needed no change to the runtime, the prompt
+    /// or the guard.
     pub async fn stream_chat<F>(
         &self,
         cfg: &InferenceConfig,
@@ -511,6 +542,15 @@ impl LlmClient {
     {
         if !cfg.is_ready() {
             return Err(LlmError::NotConfigured);
+        }
+
+        if cfg.provider == Provider::Chatgpt {
+            let Some(subscription) = &self.subscription else {
+                return Err(LlmError::SubscriptionRejected {
+                    message: "this build has no sign-in store".to_string(),
+                });
+            };
+            return codex::stream(&self.http, subscription, cfg, request, &mut on_token).await;
         }
 
         let url = cfg.chat_completions_url();
