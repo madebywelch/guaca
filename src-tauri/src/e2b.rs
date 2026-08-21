@@ -67,6 +67,57 @@ const GUAC_DIR: &str = "/home/user/.guac";
 /// instead of being destroyed.
 const CHROME_PROFILE: &str = "/home/user/.guac/chrome";
 
+/// Where the shims go. First on PATH, so a name typed into a shell, an icon on
+/// the desktop and a script asking the system for "a browser" all reach the
+/// same one.
+const LOCAL_BIN: &str = "/home/user/.local/bin";
+
+/// The desktop entries the menu, the file manager and `xdg-open` read. A user
+/// entry takes precedence over the packaged one of the same name, which is how
+/// a browser that is installed on the machine stops being reachable from it.
+const LOCAL_APPS: &str = "/home/user/.local/share/applications";
+
+/// The one browser on a machine. Every other name is rewritten to this, and the
+/// wrapper resolves it to whichever browser is actually installed.
+const BROWSER: &str = "google-chrome";
+
+/// Every name a browser is launched by on these machines.
+///
+/// Rewriting the ones that are not Chrome is not pedantry about brands. Only
+/// Chrome is on the profile holding the accounts, only Chrome serves the
+/// debugging port `browse` drives, and a second browser is a window an agent
+/// reads while the rest of its tools look somewhere else: told to send mail,
+/// an agent opened the browser whose icon was on the desktop, drove it by
+/// coordinates, and read the page with `browse`, which was on Chrome the whole
+/// time. The template ships that other browser, with an icon, a menu entry and
+/// a name on PATH, so declining to use it has to be a property of the machine
+/// rather than a line in a prompt.
+///
+/// The last four are what the *system* reaches for when something asks for a
+/// browser without naming one, which is how a link in any other app opens.
+const BROWSER_NAMES: [&str; 10] = [
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "firefox",
+    "firefox-esr",
+    "x-www-browser",
+    "sensible-browser",
+    "www-browser",
+    "gnome-www-browser",
+];
+
+/// The names the one browser *runs* under. Two, because the wrapper resolves to
+/// whichever of them is installed, and both are matched against a command line
+/// rather than looked up: `google-chrome` catches `google-chrome-stable`.
+const CHROME_PROCESSES: [&str; 2] = ["google-chrome", "chromium"];
+
+/// And the names a browser that is not ours runs under. Stems for the same
+/// reason: `firefox` catches `firefox-esr`, and every other name above is a
+/// symlink that execs one of these.
+const OTHER_PROCESSES: [&str; 1] = ["firefox"];
+
 /// Long enough for `apt-get install`, short enough that a hung command does not
 /// hold an agent's turn open indefinitely.
 const RUN_TIMEOUT: Duration = Duration::from_secs(120);
@@ -444,15 +495,24 @@ impl E2bClient {
     pub async fn start_desktop(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         for command in [
             // Before anything can be opened on the screen, so there is no
-            // window through which the wrong profile can be reached.
-            install_chrome_shim(),
-            evict_wrong_profile_browser(),
+            // window through which the wrong browser can be reached.
+            install_browser_shims(),
+            evict_other_browsers(),
             daemon(
                 "pgrep -x Xvfb",
                 "Xvfb",
                 "Xvfb :0 -ac -screen 0 1280x800x24 -dpi 96 -nolisten tcp",
             ),
-            daemon("pgrep -x xfce4-session", "xfce4", "env DISPLAY=:0 startxfce4"),
+            // The session's PATH is inherited by every icon, menu entry and
+            // terminal on that screen, so it is where the shims either shadow
+            // the other browsers or do not. Set here rather than trusted to
+            // `~/.profile`, which a login shell reads only when there is no
+            // `~/.bash_profile` beside it.
+            daemon(
+                "pgrep -x xfce4-session",
+                "xfce4",
+                &format!("env DISPLAY=:0 PATH={LOCAL_BIN}:$PATH startxfce4"),
+            ),
             // x11vnc daemonises itself with -bg, so it is started directly.
             format!(
                 "pgrep -x x11vnc >/dev/null || x11vnc -bg -display :0 -forever -shared \
@@ -489,7 +549,7 @@ impl E2bClient {
     ) -> Result<Output, E2bError> {
         self.start_desktop(sandbox, envd_token).await?;
 
-        let program = chrome_flags(program);
+        let program = as_chrome(program);
 
         self.run(
             sandbox,
@@ -509,21 +569,8 @@ impl E2bClient {
     async fn ensure_browser(&self, sandbox: &str, envd_token: &str) -> Result<(), E2bError> {
         self.start_desktop(sandbox, envd_token).await?;
 
-        let script = base64_encode(BROWSER_DRIVER.as_bytes());
-        self.run(
-            sandbox,
-            envd_token,
-            &format!(
-                "mkdir -p ~/.guac && echo {script} | base64 -d > ~/.guac/browser.py; \
-                 python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
-                 {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 google-chrome --no-sandbox \
-                 --no-first-run --user-data-dir={CHROME_PROFILE} \
-                 --remote-debugging-port={CDP_PORT} about:blank \
-                 >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
-                guard = port_open(CDP_PORT)
-            ),
-        )
-        .await?;
+        self.run(sandbox, envd_token, &start_browser(&base64_encode(BROWSER_DRIVER.as_bytes())))
+            .await?;
 
         // Chrome takes a moment to open the port, and a browse that arrives
         // first fails in a way that reads as the tool being broken.
@@ -557,7 +604,7 @@ impl E2bClient {
                 sandbox,
                 envd_token,
                 &format!(
-                    "python3 ~/.guac/browser.py {action} {}",
+                    "python3 {GUAC_DIR}/browser.py {action} {}",
                     quote(&serde_json::to_string(args).unwrap_or_else(|_| "{}".into()))
                 ),
             )
@@ -861,29 +908,61 @@ fn port_open(port: u16) -> String {
     format!("(exec 3<>/dev/tcp/127.0.0.1/{port})")
 }
 
-/// Closes a browser that is already holding the wrong profile.
+/// A pattern that matches a running browser without matching the shell doing
+/// the matching.
 ///
-/// The shim decides where the *next* Chrome goes. A machine made before it, or
-/// one where somebody launched Chrome another way, can already have a window
-/// open on the old profile, and Chrome re-attaches to a running instance: the
-/// operator would sign in again into the same invisible jar and see the same
-/// empty list. So a browser on any other profile is ended, once, and whatever
-/// opens next opens correctly.
+/// Every name here appears in the command line of the bash running the
+/// eviction, so an unbracketed `pkill -f` kills its own parent halfway through.
+/// The first letter is bracketed: the pattern still matches `firefox`, and the
+/// literal `[f]irefox` in the shell's own command line does not match it.
+fn unmatchable(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| {
+            let mut chars = name.chars();
+            match chars.next() {
+                Some(first) => format!("[{first}]{}", chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Closes any browser on the machine that is not the one agents can use.
+///
+/// Two shapes of wrong browser, and each is a window that reads as working.
+/// Chrome on another profile: Chrome re-attaches to a running instance, so a
+/// window left on the old profile would swallow the next sign-in too, and the
+/// operator would sign in again into the same invisible jar. And a browser that
+/// is not Chrome at all, which the template ships and which an agent can still
+/// be looking at from before the shims landed: it holds none of the accounts,
+/// `browse` cannot see it, and it serves no debugging port. The operator's own
+/// window is not spared, because a sign-in performed there is one no agent can
+/// ever use, which is the failure this whole arrangement exists to stop.
 ///
 /// Precise about which processes it looks at. Chrome's renderers and zygotes
 /// are the same binary and do not all carry `--user-data-dir`, so matching them
 /// would read the app's own browser as a stray and close it mid-task. Only the
 /// main processes are considered, and only when one of them is on a profile
-/// that is not ours.
-fn evict_wrong_profile_browser() -> String {
+/// that is not ours. Nothing else on the machine has a profile worth sparing.
+fn evict_other_browsers() -> String {
+    let chrome = unmatchable(&CHROME_PROCESSES);
+    let strangers = unmatchable(&OTHER_PROCESSES);
     format!(
-        "if pgrep -af 'google-chrome|chromium' | grep -v -- '--type=' | \
+        "if pgrep -af '{chrome}' | grep -v -- '--type=' | \
          grep -v -- '--user-data-dir={CHROME_PROFILE}' | grep -q .; then \
-         pkill -f 'google-chrome|chromium' || true; sleep 1; fi"
+         pkill -f '{chrome}' || true; sleep 1; fi; \
+         pkill -f '{strangers}' || true"
     )
 }
 
-/// Rewrites a browser invocation so it lands in the one profile that counts.
+/// Rewrites any browser invocation as the one browser, in the one profile.
+///
+/// A name that is not Chrome is not refused, it is answered: an agent that asks
+/// for a browser wants a web page, and the machine has one browser to give it.
+/// Refusing would only teach the model to reach for the same window through
+/// `run_command` instead.
 ///
 /// The shim on PATH does this too, and this does it again at the call site,
 /// because the two fail differently: the shim covers a name typed into a shell
@@ -893,14 +972,14 @@ fn evict_wrong_profile_browser() -> String {
 ///
 /// Chrome also cannot use its own sandbox inside one and refuses to start
 /// without being told so, which is why `--no-sandbox` is here.
-fn chrome_flags(program: &str) -> String {
-    let trimmed = program.trim_start();
-    let Some(binary) = ["google-chrome-stable", "google-chrome", "chromium-browser", "chromium"]
-        .into_iter()
-        .find(|name| trimmed.starts_with(name))
-    else {
+pub fn as_chrome(program: &str) -> String {
+    let trimmed = program.trim();
+    let (binary, rest) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
+    // The whole first word or nothing. `starts_with` reads `firefox-esr` as
+    // `firefox` and leaves `-esr` behind as an argument to Chrome.
+    if !BROWSER_NAMES.contains(&binary) {
         return program.to_string();
-    };
+    }
 
     // `--password-store=basic` keeps Chrome away from the system keyring.
     // There is no unlocked keyring daemon on these machines, so Chrome asks to
@@ -910,25 +989,59 @@ fn chrome_flags(program: &str) -> String {
     // written under one store and reopened under another cannot read its own
     // jar, which is a session that silently evaporates. Same flag everywhere,
     // or the profile is only usable by whichever route opened it first.
-    let mut flags = vec!["--no-sandbox", "--no-first-run", "--password-store=basic"];
-    let profile = format!("--user-data-dir={CHROME_PROFILE}");
-    let port = format!("--remote-debugging-port={CDP_PORT}");
-    // Without the port, a window opened here would hold the profile with no
-    // remote interface, and `browse` would find Chrome running, re-attach, and
-    // never get the port it needs. That is the failure the second profile was
-    // invented to avoid, so it has to be closed here rather than reintroduced.
-    if !program.contains("--user-data-dir") {
-        flags.push(&profile);
-    }
-    if !program.contains("--remote-debugging-port") {
-        flags.push(&port);
-    }
-    flags.retain(|flag| !program.contains(flag));
-
-    program.replacen(binary, &format!("{binary} {}", flags.join(" ")), 1)
+    let mut command = vec![
+        BROWSER.to_string(),
+        "--no-sandbox".to_string(),
+        "--no-first-run".to_string(),
+        "--password-store=basic".to_string(),
+        format!("--user-data-dir={CHROME_PROFILE}"),
+        // Without the port, a window opened here would hold the profile with
+        // no remote interface, and `browse` would find Chrome running,
+        // re-attach, and never get the port it needs. That is the failure the
+        // second profile was invented to avoid, so it is closed here rather
+        // than reintroduced.
+        format!("--remote-debugging-port={CDP_PORT}"),
+    ];
+    // A caller's own profile or port is dropped rather than kept. Nothing in
+    // this app names either any more, so anything that does is a model asking
+    // for a second profile: a window holding no accounts, invisible to every
+    // other tool, and indistinguishable from a fresh machine. Dropping the
+    // caller's flags rather than appending ours after them also means the
+    // command line says once what it does, instead of contradicting itself and
+    // relying on which end Chrome reads first.
+    let args: Vec<String> = rest
+        .split_whitespace()
+        .filter(|arg| {
+            !arg.starts_with("--user-data-dir") && !arg.starts_with("--remote-debugging-port")
+        })
+        .filter(|arg| !command.iter().any(|flag| flag == arg))
+        .map(str::to_string)
+        .collect();
+    command.extend(args);
+    command.join(" ")
 }
 
-/// Puts one Chrome on the machine, and makes every route to it the same one.
+/// What `browse` needs on the machine: the driver, and a browser with its
+/// remote interface open.
+///
+/// The invocation comes from `as_chrome` rather than being spelled again here.
+/// When it was spelled again, this route quietly lost `--password-store=basic`,
+/// so the cookie jar was encrypted one way when `browse` opened Chrome and
+/// another way when the operator clicked the icon, and whichever got there
+/// first decided whether the other could read a session at all.
+fn start_browser(driver: &str) -> String {
+    format!(
+        "mkdir -p {GUAC_DIR} && echo {driver} | base64 -d > {GUAC_DIR}/browser.py; \
+         python3 -c 'import websocket' 2>/dev/null || pip install -q websocket-client; \
+         {guard} >/dev/null 2>&1 || (setsid env DISPLAY=:0 {chrome} \
+         >/tmp/guac-chrome.log 2>&1 </dev/null &) ; sleep 1",
+        guard = port_open(CDP_PORT),
+        chrome = as_chrome(&format!("{BROWSER} about:blank")),
+    )
+}
+
+/// Puts one browser on the machine, and makes every route to a browser that
+/// one.
 ///
 /// There used to be two profiles. `browse` gave itself one because Chrome
 /// ignores `--remote-debugging-port` when it re-attaches to an existing
@@ -938,18 +1051,28 @@ fn chrome_flags(program: &str) -> String {
 /// agent could use, and nothing said so: detection reads the profile `browse`
 /// drives and truthfully reported an empty jar.
 ///
-/// So the name is shadowed rather than the callers being trusted to remember.
-/// A wrapper earlier on PATH takes the flags with it wherever it is invoked
-/// from, and a desktop entry in the user's own XDG directory takes precedence
-/// over the packaged one, which is what the icon and the menu read. Both are
-/// written every time the desktop starts, because the alternative is a machine
-/// that behaves differently depending on when it was made.
-fn install_chrome_shim() -> String {
+/// So the name is shadowed rather than the callers being trusted to remember,
+/// and every other browser's name is shadowed the same way, because the machine
+/// ships one and an agent that finds it uses it. Four routes, four shims: a
+/// wrapper earlier on PATH takes the flags with it wherever it is invoked from,
+/// symlinks put every other name on that wrapper, a desktop entry in the user's
+/// own XDG directory takes precedence over the packaged one of the same name,
+/// and a launcher sitting on the desktop is rewritten in place, because it is a
+/// file rather than an entry anything looks up. All of it is written every time
+/// the desktop starts, because the alternative is a machine that behaves
+/// differently depending on when it was made.
+///
+/// The entries to shadow are read off the machine rather than listed here. A
+/// name guessed wrong is a browser still on the menu with nothing reporting it,
+/// and the packaged entry is the one route where the file names itself: it is
+/// found by what it runs. Ours is written after them, so a machine whose
+/// packaged entry has the same name as ours ends up with ours.
+fn install_browser_shims() -> String {
     // Resolved past the shim itself: `/usr/bin/google-chrome` is a symlink to
     // the first of these, and calling by name would find the wrapper again.
     let wrapper = format!(
         "#!/bin/sh\n\
-         # Guaca: one profile on this machine, the one agents can use.\n\
+         # Guaca: one browser on this machine, the one agents can use.\n\
          for real in /opt/google/chrome/google-chrome /usr/bin/google-chrome-stable \
          /usr/bin/chromium /usr/bin/chromium-browser; do\n\
          \x20 [ -x \"$real\" ] && exec \"$real\" --no-sandbox --no-first-run \
@@ -959,26 +1082,50 @@ fn install_chrome_shim() -> String {
          echo 'no chrome on this machine' >&2\n\
          exit 127\n"
     );
-    let entry = "[Desktop Entry]\n\
-                 Version=1.0\n\
-                 Type=Application\n\
-                 Name=Google Chrome\n\
-                 Exec=/home/user/.local/bin/google-chrome %U\n\
-                 Icon=google-chrome\n\
-                 Terminal=false\n\
-                 Categories=Network;WebBrowser;\n\
-                 MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;\n";
+    let entry = format!(
+        "[Desktop Entry]\n\
+         Version=1.0\n\
+         Type=Application\n\
+         Name=Google Chrome\n\
+         Exec={LOCAL_BIN}/{BROWSER} %U\n\
+         Icon=google-chrome\n\
+         Terminal=false\n\
+         Categories=Network;WebBrowser;\n\
+         MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;\n"
+    );
+    // The shadows are the same launcher with the menu item taken away. Hidden
+    // outright would delete the association too, and then a link clicked in
+    // another app would go looking for the next handler; this way anything that
+    // asks for that browser by name still gets this one, and a person or an
+    // agent looking at the menu sees one browser on it.
+    let shadow = format!("{entry}NoDisplay=true\n");
+
+    let others: Vec<&str> = BROWSER_NAMES.iter().copied().filter(|name| *name != BROWSER).collect();
+
+    // Ours is on the list too. The packaged Chrome launcher runs the real
+    // binary by its own path, which is a window on the default profile: the
+    // same wrong browser, wearing the right name.
+    let stems = [CHROME_PROCESSES.as_slice(), OTHER_PROCESSES.as_slice()].concat().join("|");
 
     format!(
-        "mkdir -p /home/user/.local/bin /home/user/.local/share/applications && \
-         echo {wrapper} | base64 -d > /home/user/.local/bin/google-chrome && \
-         chmod +x /home/user/.local/bin/google-chrome && \
-         ln -sf /home/user/.local/bin/google-chrome /home/user/.local/bin/google-chrome-stable && \
-         echo {entry} | base64 -d > /home/user/.local/share/applications/google-chrome.desktop && \
-         (grep -q '.local/bin' ~/.profile 2>/dev/null || \
-          echo 'PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.profile)",
+        "mkdir -p {LOCAL_BIN} {LOCAL_APPS}; \
+         echo {wrapper} | base64 -d > {LOCAL_BIN}/{BROWSER} && chmod +x {LOCAL_BIN}/{BROWSER}; \
+         for name in {others}; do ln -sf {LOCAL_BIN}/{BROWSER} {LOCAL_BIN}/$name; done; \
+         grep -lriE '^Exec=.*({stems})' /usr/share/applications /usr/local/share/applications \
+         2>/dev/null | while read -r packaged; do \
+         echo {shadow} | base64 -d > \"{LOCAL_APPS}/$(basename \"$packaged\")\"; done; \
+         echo {entry} | base64 -d > {LOCAL_APPS}/{BROWSER}.desktop; \
+         for icon in /home/user/Desktop/*.desktop; do \
+         grep -qiE '^Exec=.*({stems})' \"$icon\" 2>/dev/null && \
+         cp {LOCAL_APPS}/{BROWSER}.desktop \"$icon\"; done; \
+         grep -q '.local/bin' ~/.profile 2>/dev/null || \
+         echo 'PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.profile; \
+         ! [ -f ~/.bash_profile ] || grep -q '.local/bin' ~/.bash_profile || \
+         echo 'PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.bash_profile",
         wrapper = base64_encode(wrapper.as_bytes()),
         entry = base64_encode(entry.as_bytes()),
+        shadow = base64_encode(shadow.as_bytes()),
+        others = others.join(" "),
     )
 }
 
@@ -1110,7 +1257,7 @@ mod tests {
     }
 
     #[test]
-    fn every_way_of_opening_chrome_lands_in_the_profile_agents_can_use() {
+    fn every_way_of_opening_a_browser_lands_in_the_profile_agents_can_use() {
         // The bug this closes: an operator signs in on the screen, and the
         // session goes to a profile no agent drives. Nothing errors, and
         // detection truthfully reports an empty jar for the browser it reads.
@@ -1118,8 +1265,14 @@ mod tests {
             "google-chrome https://mail.google.com",
             "google-chrome-stable",
             "chromium https://example.com",
+            // And the one an agent reached for on its own. Naming another
+            // browser is not refused, it is answered with the one that works.
+            "firefox https://mail.google.com",
+            "firefox-esr",
+            "x-www-browser https://example.com",
         ] {
-            let launched = chrome_flags(typed);
+            let launched = as_chrome(typed);
+            assert!(launched.starts_with(BROWSER), "{typed} -> {launched}");
             assert!(launched.contains(CHROME_PROFILE), "{typed} -> {launched}");
             assert!(
                 launched.contains(&format!("--remote-debugging-port={CDP_PORT}")),
@@ -1136,16 +1289,63 @@ mod tests {
                 launched.contains("--password-store=basic"),
                 "without this Chrome blocks on a keyring prompt: {launched}"
             );
+            // The name is replaced rather than prefixed. `starts_with` reads
+            // `firefox-esr` as `firefox` and hands Chrome an `-esr` it has
+            // never heard of.
+            for other in ["firefox", "chromium", "www-browser"] {
+                assert!(!launched.contains(other), "{typed} -> {launched}");
+            }
         }
 
+        // What the agent asked for survives: the page it wanted, on the
+        // browser that can open it.
+        assert!(as_chrome("firefox https://mail.google.com").ends_with(" https://mail.google.com"));
+    }
+
+    #[test]
+    fn browse_opens_the_browser_the_same_way_every_other_route_does() {
+        // These flags drifted apart once already: this route spelled its own
+        // and lost `--password-store=basic`, which decides how the cookie jar
+        // is encrypted. Nothing failed; a session written by one route was
+        // simply unreadable by the other.
+        let start = start_browser("BASE64");
+        assert_eq!(
+            start.matches(&format!("--user-data-dir={CHROME_PROFILE}")).count(),
+            1,
+            "{start}"
+        );
+        assert!(start.contains("--password-store=basic"), "{start}");
+        assert!(start.contains(&format!("--remote-debugging-port={CDP_PORT}")), "{start}");
+        assert!(start.contains(&port_open(CDP_PORT)), "started only when nothing is serving");
+        assert!(start.contains(&format!("{GUAC_DIR}/browser.py")), "{start}");
+    }
+
+    #[test]
+    fn every_route_to_a_browser_on_the_machine_is_shimmed_onto_the_one() {
         // The shim covers what the call site cannot see: a name typed into a
-        // shell, and the icon on the desktop.
-        let shim = install_chrome_shim();
-        assert!(shim.contains("/home/user/.local/bin/google-chrome"), "{shim}");
-        assert!(shim.contains("applications/google-chrome.desktop"), "the icon reads this one");
+        // shell, an icon double-clicked on the screen, and anything that asks
+        // the system for a browser without naming one.
+        let shim = install_browser_shims();
+        assert!(shim.contains(&format!("{LOCAL_BIN}/{BROWSER}")), "{shim}");
+        assert!(shim.contains(&format!("{LOCAL_APPS}/{BROWSER}.desktop")), "the menu reads this");
+        assert!(shim.contains("/home/user/Desktop/*.desktop"), "so does the icon on the screen");
+        assert!(shim.contains("/usr/share/applications"), "and the packaged entries: {shim}");
+        for name in BROWSER_NAMES.iter().filter(|name| **name != BROWSER) {
+            assert!(shim.contains(name), "{name} is a way to open a browser here: {shim}");
+        }
+        // Ours last, or a packaged entry with the same name would be shadowed
+        // by the copy that is kept off the menu, and the machine would have no
+        // browser on it at all.
+        let shadowing = shim.find("basename").unwrap_or_default();
+        let ours = shim.find(&format!("> {LOCAL_APPS}/{BROWSER}.desktop")).unwrap_or_default();
+        assert!(shadowing < ours, "{shim}");
+        // A login shell reads `~/.profile` only when there is no
+        // `~/.bash_profile`, and on that machine the shims are off PATH and
+        // every name resolves to the browser they were meant to shadow.
+        assert!(shim.contains("~/.bash_profile"), "{shim}");
 
         // What actually lands on the machine, rather than what the command
-        // looks like: the wrapper and the desktop entry travel base64'd.
+        // looks like: the wrapper and the desktop entries travel base64'd.
         let written: String = shim
             .split_whitespace()
             .filter(|token| token.len() > 40)
@@ -1157,38 +1357,60 @@ mod tests {
         // launch, or one of them writes a cookie jar the other cannot read.
         assert!(written.contains("--password-store=basic"), "{written}");
         assert!(written.contains(CHROME_PROFILE), "{written}");
+        // The shadowing entries keep the association and lose the menu item,
+        // so the screen offers one browser and a link still opens.
+        assert!(written.contains("NoDisplay=true"), "{written}");
+        assert!(written.contains(&format!("Exec={LOCAL_BIN}/{BROWSER}")), "{written}");
     }
 
     #[test]
-    fn a_browser_already_on_the_wrong_profile_is_ended_but_ours_is_left_alone() {
+    fn a_browser_on_the_wrong_profile_or_of_the_wrong_kind_is_ended() {
         // Chrome re-attaches to a running instance, so a window left open on
         // the old profile would swallow the next sign-in too. The filter has to
         // be exact: renderers and zygotes are the same binary and do not all
         // carry the flag, and matching them would close the app's own browser
         // in the middle of a task.
-        let evict = evict_wrong_profile_browser();
+        let evict = evict_other_browsers();
         assert!(evict.contains(&format!("--user-data-dir={CHROME_PROFILE}")), "{evict}");
         assert!(evict.contains("--type="), "helper processes must be excluded: {evict}");
         assert!(evict.contains("pkill"), "{evict}");
+        // A browser that is not ours at all has no profile worth sparing: it
+        // holds none of the accounts and `browse` cannot see it.
+        assert!(evict.contains("[f]irefox"), "{evict}");
+        // And every pattern is bracketed, because each of these names is in the
+        // command line of the shell doing the matching: an unbracketed
+        // `pkill -f` kills its own parent halfway through the eviction.
+        for stem in [CHROME_PROCESSES.as_slice(), OTHER_PROCESSES.as_slice()].concat() {
+            assert!(!evict.contains(stem), "{stem} would match the shell running this: {evict}");
+        }
     }
 
     #[test]
-    fn a_flag_the_caller_already_set_is_not_set_twice() {
-        let once = chrome_flags("google-chrome --no-sandbox --user-data-dir=/tmp/x");
+    fn a_caller_cannot_ask_for_a_second_profile() {
+        // A window on another profile is the failure this file exists to stop,
+        // so the caller's own is dropped rather than deduplicated: it used to
+        // win, and nothing in the app names one any more.
+        let once = as_chrome("google-chrome --no-sandbox --user-data-dir=/tmp/x");
         assert_eq!(once.matches("--no-sandbox").count(), 1, "{once}");
         assert_eq!(once.matches("--user-data-dir").count(), 1, "{once}");
-        // And a caller that named its own profile keeps it: only `browse` does
-        // that, and it names this one.
-        assert!(once.contains("--user-data-dir=/tmp/x"), "{once}");
+        assert!(once.contains(CHROME_PROFILE), "{once}");
+        assert!(!once.contains("/tmp/x"), "{once}");
+
+        // Rewriting an already-rewritten command changes nothing, because both
+        // `open_on_desktop` and the runtime that tells the agent what happened
+        // run it.
+        let twice = as_chrome(&once);
+        assert_eq!(twice, once);
     }
 
     #[test]
     fn a_program_that_is_not_a_browser_is_left_alone() {
-        assert_eq!(
-            chrome_flags("xdg-open /home/user/report.pdf"),
-            "xdg-open /home/user/report.pdf"
-        );
-        assert_eq!(chrome_flags("thunar"), "thunar");
+        // A document is opened by whatever the machine has for that kind of
+        // file, and there are more of those than this runtime knows about.
+        assert_eq!(as_chrome("xdg-open /home/user/report.pdf"), "xdg-open /home/user/report.pdf");
+        assert_eq!(as_chrome("thunar"), "thunar");
+        // A whole word or nothing: this is a text editor, not a browser.
+        assert_eq!(as_chrome("firefox-history-reader x"), "firefox-history-reader x");
     }
 
     #[test]
