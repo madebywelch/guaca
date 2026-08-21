@@ -6,7 +6,7 @@ import { useStore } from "../lib/store";
 import type { WirePeer } from "../lib/transcript";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
-import { compact, money } from "./TokenMeter";
+import { compact, money, priced } from "./TokenMeter";
 import { MessageModal } from "./WireRow";
 
 /**
@@ -155,6 +155,7 @@ export function ActivityFlow({ messages, byId }: Props) {
           const boardWidth = Math.max(block.lanes.length * laneW, laneW);
           const laneX = (i: number) => i * laneW + laneW / 2;
           const day = dayLabel(block.startedAt);
+          const usage = spent[block.runId];
 
           return (
             <section className="run" key={block.key} data-open={isOpen ? "true" : undefined}>
@@ -187,19 +188,13 @@ export function ActivityFlow({ messages, byId }: Props) {
                 <span className="run__count">
                   {block.rows.length} {block.rows.length === 1 ? "message" : "messages"}
                 </span>
-                {spent[block.runId] && (
+                {usage && (
                   <span
                     className="run__tokens"
-                    title={`${spent[block.runId]!.prompt.toLocaleString()} in, ${spent[
-                      block.runId
-                    ]!.completion.toLocaleString()} out, over ${spent[
-                      block.runId
-                    ]!.calls.toLocaleString()} model call(s)`}
+                    title={`${usage.prompt.toLocaleString()} in, ${usage.completion.toLocaleString()} out, over ${usage.calls.toLocaleString()} model call(s)`}
                   >
-                    {compact(spent[block.runId]!.prompt + spent[block.runId]!.completion)}
-                    {spent[block.runId]!.cost != null && (
-                      <span className="run__cost">{money(spent[block.runId]!.cost!)}</span>
-                    )}
+                    {compact(usage.prompt + usage.completion)}
+                    {priced(usage.cost) && <span className="run__cost">{money(usage.cost)}</span>}
                   </span>
                 )}
               </button>
