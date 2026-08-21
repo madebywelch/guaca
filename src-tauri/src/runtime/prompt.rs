@@ -13,6 +13,7 @@ use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
+use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
 use crate::llm::tools::Surfaces;
@@ -54,6 +55,11 @@ pub fn system_prompt(
     // places. Nobody typed these: they were read off whatever holds the cookies.
     signins: &[Signin],
     notes: &str,
+    // What this agent already has standing, newest firing first. In the prompt
+    // rather than behind a tool call: an agent asked to change something it
+    // keeps has to know it keeps it before it decides what to do, and a list it
+    // has to go and ask for is a list it asks for after deciding.
+    routines: &[Routine],
     mode: ReplyMode,
     // Which of the two places this agent has. Not a preference: a section
     // describing a machine that is not configured is a promise the app cannot
@@ -252,6 +258,38 @@ pub fn system_prompt(
          reach you as new messages by themselves. A routine that fires to go looking finds \
          nothing, because whatever you were waiting for would already have arrived.\n",
     );
+
+    // The whole list, every turn, and the id of each. An agent asked half an
+    // hour later to change something it already keeps decides what to do before
+    // it calls anything, so a schedule it could have gone and asked for is a
+    // schedule it reads after the decision: it wrote a second routine beside
+    // the first, told the operator it had made the change, and both fired.
+    if routines.is_empty() {
+        out.push_str("\nYou have nothing standing.\n");
+    } else {
+        out.push_str("\nYou have these standing already:\n\n");
+        for routine in routines {
+            // The name only when there is one. An agent naming its own routine
+            // is optional, and a row that fell back to the instruction would
+            // then print it twice, in two different lengths.
+            let name = routine.name.trim();
+            let label = if name.is_empty() { String::new() } else { format!(" · {name}") };
+            out.push_str(&format!(
+                "- {}{label} — {} — {}\n",
+                routine.id,
+                routine.describe(),
+                one_line(&routine.what)
+            ));
+        }
+        out.push_str(
+            "\nThese are yours to keep in order, and the id is how you reach one. When you are \
+             asked for something that one of them already does, change that one: `update` with \
+             its id takes a new time, a new instruction or a new name and leaves the rest of it \
+             as it was. Adding a second routine does not replace the first — both fire, and the \
+             operator gets the work twice — so `cancel` is what retires one. `list` gives you \
+             the full instruction of each, which is cut short above.\n",
+        );
+    }
 
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should colour how it reads everything after.
@@ -458,6 +496,29 @@ pub fn system_prompt(
     out
 }
 
+/// A routine's instruction as one line of a list.
+///
+/// The instruction is written to be acted on with no other context, which is
+/// several sentences, and this list is read to recognise a job rather than to
+/// carry it out: `schedule` with `list` hands over the whole thing. Ten
+/// routines drawn in full would be the largest section of the prompt, and the
+/// rule underneath them the part that got skimmed.
+fn one_line(what: &str) -> String {
+    /// Enough to tell two routines apart. Well under the shortest instruction
+    /// worth writing, which is why the full text is a tool call away.
+    const WIDTH: usize = 100;
+
+    let what = what.split_whitespace().collect::<Vec<_>>().join(" ");
+    if what.chars().count() <= WIDTH {
+        return what;
+    }
+    let cut: String = what.chars().take(WIDTH).collect();
+    match cut.rfind(char::is_whitespace) {
+        Some(space) => format!("{}…", cut[..space].trim_end()),
+        None => format!("{cut}…"),
+    }
+}
+
 /// The files a message carries, in the order it carries them.
 pub fn attachments(envelope: &Envelope) -> Vec<&Attachment> {
     envelope
@@ -528,6 +589,7 @@ pub fn build_messages(
     signins: &[Signin],
     names: &NameTable,
     notes: &str,
+    routines: &[Routine],
     history: &[Envelope],
     inbound: &[Envelope],
     mode: ReplyMode,
@@ -540,6 +602,7 @@ pub fn build_messages(
         credentials,
         signins,
         notes,
+        routines,
         mode,
         surfaces,
     ))];
@@ -578,7 +641,22 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], notes, mode, Surfaces::both())
+        system_prompt(card, "", roster, &[], &[], notes, &[], mode, Surfaces::both())
+    }
+
+    /// The prompt for an agent that already keeps a schedule.
+    fn prompt_keeping(card: &AgentCard, routines: &[Routine]) -> String {
+        system_prompt(
+            card,
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            routines,
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -599,6 +677,7 @@ mod tests {
             &[],
             names,
             notes,
+            &[],
             history,
             inbound,
             mode,
@@ -640,7 +719,8 @@ mod tests {
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::Intent;
     use crate::domain::envelope::{Part, Trust};
-    use crate::domain::ids::{GroupId, MessageId, RunId};
+    use crate::domain::ids::{GroupId, MessageId, RoutineId, RunId};
+    use crate::domain::routine::{Cadence, Trigger};
     use crate::domain::signin::Surface;
 
     fn card(name: &str) -> AgentCard {
@@ -799,6 +879,7 @@ mod tests {
             &[credential("GitHub", "madebywelch", "GITHUB_TOKEN")],
             &[signed_in(c.id, "LinkedIn")],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::both(),
         );
@@ -832,8 +913,17 @@ mod tests {
         let mut hedged = signed_in(c.id, "intranet.example");
         hedged.recognised = false;
 
-        let prompt =
-            system_prompt(&c, "", &[], &[], &[hedged], "", ReplyMode::ToOperator, Surfaces::both());
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[hedged],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
         assert!(prompt.contains("may also be signed in"), "a guess has to read as one");
         assert!(
             !prompt.contains("Your browser is signed in to these"),
@@ -853,8 +943,17 @@ mod tests {
         let c = card("Researcher");
         let mut token = credential("GitHub", "madebywelch", "GITHUB_TOKEN");
         token.secret_hint = "...ter2".into();
-        let prompt =
-            system_prompt(&c, "", &[], &[token], &[], "", ReplyMode::ToOperator, Surfaces::both());
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[token],
+            &[],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
 
         assert!(prompt.contains("GITHUB_TOKEN"), "the name is what it needs");
         assert!(!prompt.contains("ghp_"), "no value, not even a hint of one");
@@ -884,6 +983,7 @@ mod tests {
             &[],
             &[signed_in(c.id, "LinkedIn")],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::both(),
         );
@@ -911,6 +1011,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::both(),
         );
@@ -993,6 +1094,117 @@ mod tests {
             !section(&prompt, "## Your computer").contains("schedule"),
             "the computer section is about the machine"
         );
+    }
+
+    /// A routine as the store would hand one back.
+    fn standing(id: RoutineId, name: &str, what: &str, trigger: Trigger) -> Routine {
+        Routine {
+            id,
+            agent_id: AgentId::new(),
+            name: name.to_string(),
+            what: what.to_string(),
+            trigger,
+            active: true,
+            next_run_at: Some(crate::domain::now_ms() + 3_600_000),
+            last_run_at: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_agent_reads_its_own_schedule_before_it_writes_another_one() {
+        // The failure this is for: an operator asks half an hour later for a
+        // change to something the agent already keeps, the agent has no idea it
+        // keeps it, and writes a second routine beside the first. Both fire.
+        // Behind a tool call this arrives after the decision, not before it, so
+        // it is in the prompt.
+        let id = RoutineId::new();
+        let prompt = prompt_keeping(
+            &card("Watcher"),
+            &[standing(
+                id,
+                "Listings sweep",
+                "Check the new listings and email me a summary.",
+                Trigger::Clock(Cadence::Weekdays),
+            )],
+        );
+        let schedule = section(&prompt, "## Your schedule");
+        assert!(schedule.contains("Listings sweep"), "it has to know what it keeps: {schedule}");
+        assert!(
+            schedule.contains(&id.to_string()),
+            "and the id, or it has nothing to change the routine by: {schedule}"
+        );
+        assert!(schedule.contains("every weekday"), "with what it is standing for: {schedule}");
+        assert!(
+            schedule.contains("`update`"),
+            "knowing it exists is only useful with the way to change it: {schedule}"
+        );
+        assert!(
+            schedule.contains("does not replace"),
+            "and the reason not to add a second one has to be the consequence: {schedule}"
+        );
+    }
+
+    #[test]
+    fn an_agent_with_nothing_standing_is_told_that_plainly() {
+        // Silence here reads as "no schedule section applies to me", and an
+        // empty list is the ordinary case.
+        let schedule = {
+            let prompt = prompt_keeping(&card("Watcher"), &[]);
+            section(&prompt, "## Your schedule").to_string()
+        };
+        assert!(schedule.contains("nothing standing"), "{schedule}");
+        assert!(!schedule.contains("`update`"), "nothing to update yet: {schedule}");
+    }
+
+    #[test]
+    fn a_switched_off_routine_does_not_claim_a_next_firing_in_the_prompt() {
+        // It still holds the slot it was holding, so the countdown is there to
+        // be printed. An agent told a routine fires in an hour reports work as
+        // in hand that nobody is going to do.
+        let mut off = standing(
+            RoutineId::new(),
+            "Listings sweep",
+            "Check the listings.",
+            Trigger::Clock(Cadence::Daily),
+        );
+        off.active = false;
+        let prompt = prompt_keeping(&card("Watcher"), &[off]);
+        let schedule = section(&prompt, "## Your schedule");
+        assert!(schedule.contains("switched off"), "{schedule}");
+        assert!(!schedule.contains("next in"), "{schedule}");
+    }
+
+    #[test]
+    fn a_long_instruction_is_cut_down_to_a_line_rather_than_drawn_in_full() {
+        // An instruction is written to be acted on with no other context, so it
+        // runs to several sentences. Ten of them in full would be the largest
+        // section in the prompt, and the rule underneath them the part that got
+        // skimmed. `list` is where the whole thing lives.
+        let long = "Check the listings on both sites, compare them against the ones you                     reported yesterday, and email the operator a summary of anything new,                     including the asking price and the agent's name.";
+        let prompt = prompt_keeping(
+            &card("Watcher"),
+            &[standing(RoutineId::new(), "Sweep", long, Trigger::Clock(Cadence::Daily))],
+        );
+        let schedule = section(&prompt, "## Your schedule");
+        assert!(schedule.contains("Check the listings on both sites"), "{schedule}");
+        assert!(!schedule.contains("the asking price"), "{schedule}");
+        assert!(schedule.contains('…'), "a cut has to look like one: {schedule}");
+        assert!(schedule.contains("`list`"), "and the full text has to be reachable: {schedule}");
+    }
+
+    #[test]
+    fn an_unnamed_routine_is_titled_by_what_it_does_without_filling_the_list() {
+        // Naming a routine is optional, and an agent that skipped it still has
+        // to be able to tell one row from another.
+        let long = "Publish the queued posts on the day only, in America/New_York, after                     checking the feed for anything the manager has already cleared.";
+        let prompt = prompt_keeping(
+            &card("Watcher"),
+            &[standing(RoutineId::new(), "", long, Trigger::Clock(Cadence::Daily))],
+        );
+        let schedule = section(&prompt, "## Your schedule");
+        assert!(schedule.contains("Publish the queued posts"), "{schedule}");
+        assert!(!schedule.contains("America/New_York — "), "the title is cut: {schedule}");
     }
 
     #[test]
@@ -1110,6 +1322,7 @@ mod tests {
             &[],
             &NameTable::new(),
             "",
+            &[],
             &[sent],
             &[],
             ReplyMode::ToOperator,
@@ -1181,6 +1394,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::both(),
         );
@@ -1194,6 +1408,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::both(),
         );
@@ -1334,6 +1549,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces::none(),
         );
@@ -1350,6 +1566,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             ReplyMode::ToOperator,
             Surfaces { computer: true, browser: false },
         );

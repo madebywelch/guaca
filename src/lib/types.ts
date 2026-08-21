@@ -379,7 +379,13 @@ export type UiEvent =
     }
   | { type: "runSettled"; runId: RunId; stepsUsed: number }
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
-  | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState };
+  | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
+  /**
+   * One agent's schedule changed: it set a routine, edited one, cancelled one,
+   * or one came due and moved. The list refetches; nothing here is patched,
+   * because a schedule is a handful of rows.
+   */
+  | { type: "routinesChanged"; agentId: AgentId };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

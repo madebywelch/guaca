@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/ipc";
 import { describeTrigger, parseTrigger, routineTitle } from "../lib/routine";
+import { useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentId, errorMessage, type Routine, type RoutineId } from "../lib/types";
 
@@ -51,6 +52,11 @@ export function RoutineList({ agentId, onOpen }: Props) {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const now = useNow(30_000);
+  // A routine set, retimed, cancelled or fired since this was drawn. The
+  // operator watching an agent work is the one most likely to be looking at
+  // this list while it changes, and until this existed the only way to see the
+  // change was to close the panel and open it again.
+  const changed = useStore((state) => state.routineVersion[agentId] ?? 0);
 
   const load = useCallback(async () => {
     try {
@@ -64,7 +70,7 @@ export function RoutineList({ agentId, onOpen }: Props) {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, changed]);
 
   return (
     <section className="routines">

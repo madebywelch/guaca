@@ -492,6 +492,26 @@ impl Routine {
         }
     }
 
+    /// The same, cut down to something that fits one line of a list.
+    ///
+    /// An agent naming its own routine is optional, so the title is often the
+    /// instruction, and an instruction is written to be acted on with no other
+    /// context: several sentences. Whoever is reading a list is recognising a
+    /// routine rather than reading it, and the whole instruction is what the
+    /// `list` action is for. Cut to the width a name is already held to, so a
+    /// named row and an unnamed one are the same shape.
+    pub fn short_title(&self) -> String {
+        let title = self.title().trim();
+        if title.chars().count() <= MAX_NAME_LEN {
+            return title.to_string();
+        }
+        let cut: String = title.chars().take(MAX_NAME_LEN).collect();
+        match cut.rfind(char::is_whitespace) {
+            Some(space) => format!("{}…", cut[..space].trim_end()),
+            None => format!("{cut}…"),
+        }
+    }
+
     /// What happens to its slot, given that it just ran at `now`.
     pub fn after_running(&self, now: i64) -> NextSlot {
         match self.trigger.cadence() {
@@ -507,7 +527,16 @@ impl Routine {
     }
 
     /// How it reads back to the agent that set it.
+    ///
+    /// A routine the operator has switched off says so instead of claiming a
+    /// next firing. It still holds the slot it was holding, so the countdown
+    /// is there to be printed, and an agent told "every weekday, next in 15
+    /// hours" about a row that will not fire reports work as being in hand
+    /// that nobody is going to do.
     pub fn describe(&self) -> String {
+        if !self.active {
+            return format!("{}, switched off by the operator", self.trigger.describe());
+        }
         match self.next_run_at {
             Some(at) => format!("{}, next {}", self.trigger.describe(), when(at)),
             // Nothing to promise: it happens when the event does.
@@ -544,7 +573,45 @@ fn when(at: i64) -> String {
     if seconds <= 0 {
         return "now".to_string();
     }
-    format!("in {}", human_gap(seconds as u32))
+    format!("in {}", rough_gap(seconds as u32))
+}
+
+/// A gap to a moment, as the nearest whole unit of something.
+///
+/// [`human_gap`] is exact because a repeat is a number somebody chose: "every 2
+/// hours" has to read back as that and not as an approximation of it. The gap
+/// to a next firing is not a number anybody chose, and it is almost never a
+/// round multiple of anything, so exactness there produced "next in 51823
+/// seconds": the true answer to a question nobody asked, in every prompt and
+/// every reply that mentions a schedule.
+fn rough_gap(secs: u32) -> String {
+    const MINUTE: u32 = 60;
+    const HOUR: u32 = 60 * MINUTE;
+    const DAY: u32 = 24 * HOUR;
+
+    if secs < MINUTE {
+        return "under a minute".to_string();
+    }
+    // Which unit to use is decided on the rounded number rather than on the raw
+    // seconds, or a slot 59 and a half minutes out reads as 60 minutes. The
+    // boundaries sit where the larger unit starts being the easier read: 30
+    // hours is clearer than a day and a bit.
+    let minutes = (secs + MINUTE / 2) / MINUTE;
+    let hours = (secs + HOUR / 2) / HOUR;
+    let (n, unit) = if minutes < 60 {
+        (minutes, "minute")
+    } else if hours < 48 {
+        (hours, "hour")
+    } else {
+        ((secs + DAY / 2) / DAY, "day")
+    };
+    // "in minute" is what a bare unit reads as here, unlike in "every minute",
+    // which is the wording `human_gap` is for.
+    match (n, unit) {
+        (1, "hour") => "an hour".to_string(),
+        (1, unit) => format!("a {unit}"),
+        (n, unit) => format!("{n} {unit}s"),
+    }
 }
 
 /// The shortest gap a routine may repeat on.
@@ -611,6 +678,71 @@ pub fn validate(
         return Err(RoutineError::TooFar);
     }
     Ok(())
+}
+
+/// Where an edited routine's next firing lands.
+///
+/// Three cases, and the difference between them is what was asked for. A stated
+/// time is honoured. An untouched time keeps the slot it was holding, because
+/// correcting a typo must not push the schedule to tomorrow. And a trigger
+/// swapped for one that would never fire at that moment has to move: "every
+/// hour" turned into "every weekday" keeps its hour but cannot keep its
+/// Saturday, or the label and the firing disagree from the moment it is saved.
+///
+/// A trigger that is not a clock lands nowhere at all, whatever was asked for.
+///
+/// One rule for both editors. An operator editing in the panel and an agent
+/// calling `schedule` with `update` are changing the same row, and two answers
+/// to "when is it next due" would be two schedules.
+pub fn next_slot_for(trigger: &Trigger, existing: &Routine, in_secs: Option<u32>) -> Option<i64> {
+    let cadence = trigger.cadence()?;
+    let now = super::now_ms();
+    match (in_secs, existing.next_run_at) {
+        (Some(_), _) => Some(cadence.first_run(now, in_secs)),
+        // Coming back to the clock from a trigger that held no slot: there is
+        // nothing to keep, so it starts one interval out like a new routine.
+        (None, None) => Some(cadence.first_run(now, None)),
+        (None, Some(slot)) if cadence.accepts(slot) => Some(slot),
+        (None, Some(slot)) => Some(cadence.next_after(slot, now).unwrap_or(slot)),
+    }
+}
+
+/// Words that carry the subject of an instruction, for [`same_job`].
+///
+/// Anything shorter than four characters is grammar rather than subject
+/// matter: left in, "check the listings" and "email the operator" score on
+/// `the` and every pair of instructions looks related.
+fn subject_words(text: &str) -> std::collections::HashSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|word| word.chars().count() >= 4)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether two instructions read like the same job.
+///
+/// Deliberately loose, and deliberately only ever used to say something out
+/// loud. An agent that has just written a second routine for work it already
+/// had standing is told so, with both ids, while it still knows which one it
+/// meant; a false positive costs a sentence it can ignore.
+///
+/// It is not a refusal, and it must not become one. Nothing here can tell
+/// "move the sweep to ten" from "sweep at ten as well": both arrive as the
+/// same instruction on a different clock, so a guard that refused the second
+/// would refuse honest work, and the agent's way around it would be to reword
+/// the instruction until it got through.
+pub fn same_job(a: &str, b: &str) -> bool {
+    let (a, b) = (subject_words(a), subject_words(b));
+    let fewer = a.len().min(b.len());
+    if fewer == 0 {
+        // Two instructions with no subject words between them. Nothing to
+        // compare, so nothing is claimed.
+        return false;
+    }
+    // Three subject words in five. Below that, two routines that both mention
+    // the listings are usually two jobs; at or above it they are usually one.
+    a.intersection(&b).count() * 5 >= fewer * 3
 }
 
 #[cfg(test)]
@@ -940,5 +1072,83 @@ mod tests {
         assert_eq!(json["kind"], serde_json::json!("scheduled"));
         assert_eq!(json["spent"]["calls"], serde_json::json!(2));
         assert_eq!(json["spent"]["cost"], serde_json::json!(0.002));
+    }
+
+    #[test]
+    fn a_next_firing_is_described_in_a_unit_a_reader_can_use() {
+        // A slot is a moment on the clock, not a gap somebody chose, so it is
+        // almost never a round number of anything. Printed exactly, an agent
+        // was told "next in 51823 seconds" on every turn.
+        let now = crate::domain::now_ms();
+        assert_eq!(when(now + 51_823_000), "in 14 hours");
+        assert_eq!(when(now + 3_599_000), "in an hour");
+        assert_eq!(when(now + 86_400_000 * 3), "in 3 days");
+        assert_eq!(when(now + 30_000), "in under a minute");
+        assert_eq!(when(now - 1_000), "now");
+        // And a single unit reads as one. "next in minute" was the shape a
+        // bare unit takes here, which is not the shape "every minute" takes.
+        assert_eq!(when(now + 70_000), "in a minute");
+        assert_eq!(when(now + 5_500_000), "in 2 hours");
+        // A repeat is still exact: it reads back as the number that was set.
+        assert_eq!(human_gap(7200), "2 hours");
+    }
+
+    #[test]
+    fn correcting_a_routine_leaves_the_slot_it_was_holding_alone() {
+        // The edit an operator makes most: a typo in the instruction. Moving
+        // the next firing to an interval from now would quietly cancel this
+        // morning's run.
+        let slot = at(2025, 6, 10, 9, 0);
+        let existing = routine(clock(Cadence::Daily), Some(slot));
+        assert_eq!(next_slot_for(&clock(Cadence::Daily), &existing, None), Some(slot));
+    }
+
+    #[test]
+    fn a_trigger_that_would_never_fire_at_that_moment_moves_the_slot() {
+        // Saturday at nine, told to run on weekdays. It keeps the hour and
+        // gives up the day, or the row says "every weekday" and fires on a
+        // Saturday.
+        let saturday = at(2025, 6, 14, 9, 0);
+        let existing = routine(clock(Cadence::Daily), Some(saturday));
+        let moved = next_slot_for(&clock(Cadence::Weekdays), &existing, None).unwrap();
+        assert_ne!(moved, saturday);
+        assert!(Cadence::Weekdays.accepts(moved), "it moved to a day it would actually fire on");
+    }
+
+    #[test]
+    fn coming_back_to_the_clock_from_an_event_starts_like_a_new_routine() {
+        // An event trigger holds no slot, so there is nothing to keep and
+        // nothing to compute a next firing from.
+        let existing = routine(event("stripe", "invoice.paid"), None);
+        assert!(next_slot_for(&clock(Cadence::Daily), &existing, None).is_some());
+        // And going the other way lands nowhere at all, whatever was asked for.
+        let clocked = routine(clock(Cadence::Daily), Some(at(2025, 6, 10, 9, 0)));
+        assert_eq!(next_slot_for(&event("stripe", "invoice.paid"), &clocked, Some(60)), None);
+    }
+
+    #[test]
+    fn a_second_routine_for_work_already_standing_is_recognised_as_the_same_job() {
+        // The failure this exists for: an operator asks for an adjustment to
+        // something the agent already keeps, and the agent writes a second
+        // routine beside the first. Both fire, and the work happens twice.
+        assert!(same_job(
+            "Check the new listings and email me a summary.",
+            "Check Zillow listings and send me a summary of what is new.",
+        ));
+        // Reworded down to nothing recognisable in common is not the same job,
+        // and neither is a routine that merely works on the same subject.
+        assert!(!same_job(
+            "Check the new listings and email me a summary.",
+            "Write up this week's market activity and file it in the drive.",
+        ));
+        assert!(!same_job("Check the listings.", "Pay the invoices."));
+    }
+
+    #[test]
+    fn two_instructions_of_pure_grammar_are_not_claimed_to_match() {
+        // Nothing to compare is not evidence of a match. An empty subject set
+        // divided into is also how this would have panicked.
+        assert!(!same_job("do it now", "do it now"));
+        assert!(!same_job("", "check the listings"));
     }
 }

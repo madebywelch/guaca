@@ -1201,10 +1201,28 @@ mod live {
         instruction: &str,
         secs: u64,
     ) -> Option<(Harness, Eval)> {
+        run_live_prepared(crew, instruction, secs, |_| {}).await
+    }
+
+    /// The same, with something already true of the workspace before the crew
+    /// is asked anything.
+    ///
+    /// A scenario about what an agent does with what it already keeps cannot
+    /// arrange that with an instruction: it would be asking for the thing under
+    /// test. `setup` runs against the live store, and everything after it is
+    /// the ordinary path, including the machine cleanup an early assertion must
+    /// not be able to skip.
+    async fn run_live_prepared(
+        crew: &[LiveAgent],
+        instruction: &str,
+        secs: u64,
+        setup: impl FnOnce(&Harness),
+    ) -> Option<(Harness, Eval)> {
         let config = configured()?;
         let before = machines_now(&config).await;
         let h = live_crew(config.clone(), crew);
         let names: Vec<&str> = crew.iter().map(|a| a.name).collect();
+        setup(&h);
 
         // Started before the instruction, because the first turn can park.
         let (answering, asked) = answer_permission_requests(&h);
@@ -1713,6 +1731,71 @@ mod live {
             booked[0].what
         );
         eval.expect_told_operator("Watcher", 1, "a standing weekday job");
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
+    async fn live_a_change_to_a_standing_job_changes_it_rather_than_adding_a_second() {
+        // The one this whole path exists for, and it is a question about
+        // judgement rather than about machinery: half an hour after booking
+        // something, the operator asks for it differently without saying which
+        // routine they mean. An agent that cannot see what it keeps writes a
+        // second one, tells the operator it has made the change, and both fire
+        // from then on. Nothing in the scripted suite can see this: the model
+        // decides it.
+        let crew = vec![LiveAgent::skilled("Watcher", &["monitoring", "reporting"])];
+        let Some((h, eval)) = run_live_prepared(
+            &crew,
+            "Actually, do the listings sweep every day rather than just weekdays.",
+            240,
+            |h| {
+                // Booked in an earlier conversation, which is the only place
+                // this can come from: the turn under test must not be the turn
+                // that created it.
+                h.runtime
+                    .store()
+                    .create_routine(
+                        h.id("Watcher"),
+                        "Listings sweep",
+                        "Check the new listings on both sites and email the operator anything \
+                         new, with the asking price.",
+                        guac_lib::domain::routine::Trigger::Clock(
+                            guac_lib::domain::routine::Cadence::Weekdays,
+                        ),
+                        Some(guac_lib::domain::now_ms() + 3_600_000),
+                    )
+                    .unwrap();
+            },
+        )
+        .await
+        else {
+            eprintln!("no configured model; skipping");
+            return;
+        };
+        report("a change to a standing job", &eval);
+
+        let standing = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+        println!(
+            "standing: {:?}",
+            standing.iter().map(|r| (r.title().to_string(), r.describe())).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            standing.len(),
+            1,
+            "a change to a standing job is one routine, not two that both fire: {:?}",
+            standing.iter().map(|r| (r.title().to_string(), r.describe())).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            standing[0].trigger,
+            guac_lib::domain::routine::Trigger::Clock(guac_lib::domain::routine::Cadence::Daily),
+            "and it is the change that was asked for"
+        );
+        assert!(
+            standing[0].what.len() > 40,
+            "the instruction it already had must survive being retimed: {:?}",
+            standing[0].what
+        );
+        eval.expect_told_operator("Watcher", 1, "a change to a standing job");
     }
 
     #[tokio::test]

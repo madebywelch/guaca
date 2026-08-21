@@ -67,6 +67,9 @@ pub enum Script {
     Hire { name: String, instructions: String, notes: String },
     /// Emit a `schedule` tool call that books a repeat on the calendar.
     Book { name: String, what: String, repeat: String },
+    /// A `schedule` call that retimes a routine the agent already has, which is
+    /// the whole of what it should do when asked to change one.
+    Retime { id: String, repeat: String },
     /// Emit a `request_permission` tool call.
     AskOperator { action: String, because: String },
     /// Answer with a 503.
@@ -195,6 +198,17 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
+        Script::Retime { id, repeat } => {
+            let args =
+                serde_json::json!({ "action": "update", "id": id, "repeat": repeat }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_retime","type":"function",
+                 "function":{"name":"schedule","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
         Script::Hire { name, instructions, notes } => {
             let args =
                 serde_json::json!({ "name": name, "instructions": instructions, "notes": notes })
@@ -238,6 +252,21 @@ pub fn speaker(body: &serde_json::Value) -> String {
         .and_then(|rest| rest.split(',').next())
         .unwrap_or("unknown")
         .to_string()
+}
+
+/// The id of the first routine this agent's own prompt says it has standing.
+///
+/// Read out of the prompt rather than handed to the stub, because that is the
+/// thing under test: an agent asked to change something it keeps has to be able
+/// to find it without going to look, or it writes a second one instead.
+pub fn standing_id(body: &serde_json::Value) -> Option<String> {
+    let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+    let schedule = system.split("## Your schedule").nth(1)?.split("\n## ").next()?;
+    schedule
+        .lines()
+        .find_map(|line| line.strip_prefix("- "))
+        .and_then(|line| line.split_whitespace().next())
+        .map(str::to_string)
 }
 
 /// True when the newest user turn carries peer messages, meaning this agent is

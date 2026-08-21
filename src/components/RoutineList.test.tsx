@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { useStore } from "../lib/store";
 import type { Routine } from "../lib/types";
 import { RoutineList } from "./RoutineList";
 
@@ -32,6 +33,7 @@ describe("RoutineList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     agentRoutines.mockResolvedValue([]);
+    useStore.setState({ routineVersion: {} });
   });
 
   it("reads a routine as a name and a cadence, and nothing else", async () => {
@@ -110,5 +112,34 @@ describe("RoutineList", () => {
   it("says so when there is nothing standing", async () => {
     render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
     expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
+  });
+
+  it("reads itself again when the agent it belongs to changes its own schedule", async () => {
+    // An agent sets a routine for itself mid-turn, with the operator looking at
+    // this panel. Until the runtime said so, the list stayed as it was drawn and
+    // the only way to see the routine was to close the panel and open it again.
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+    expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
+
+    agentRoutines.mockResolvedValue([routine()]);
+    act(() => {
+      useStore.getState().applyEvent({ type: "routinesChanged", agentId: "a1" });
+    });
+
+    expect(await screen.findByText("Boss commitment nudge")).toBeTruthy();
+  });
+
+  it("ignores a schedule change belonging to another agent", async () => {
+    // Every agent's panel would otherwise refetch on every firing anywhere in
+    // the workspace.
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+    expect(await screen.findByText(/Nothing standing/)).toBeTruthy();
+    expect(agentRoutines).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      useStore.getState().applyEvent({ type: "routinesChanged", agentId: "a2" });
+    });
+
+    expect(agentRoutines).toHaveBeenCalledTimes(1);
   });
 });
