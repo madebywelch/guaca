@@ -150,6 +150,19 @@ interface State {
    */
   openingRoutine: RoutineId | null;
 
+  /**
+   * How many times each agent's schedule has changed since the window opened.
+   *
+   * A counter rather than the routines themselves: the panel reads them from
+   * Rust when it draws, and holding a second copy here would be a cache to keep
+   * in step with the one the component already has. What the component cannot
+   * work out for itself is *when* to read again, and an agent that sets a
+   * routine mid-turn is exactly when: the list was drawn before the routine
+   * existed, and closing the panel and opening it again was the only way to see
+   * it.
+   */
+  routineVersion: Record<AgentId, number | undefined>;
+
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
 
@@ -250,6 +263,7 @@ export const useStore = create<State>((set, get) => ({
   pulses: [],
   focused: null,
   openingRoutine: null,
+  routineVersion: {},
   banner: null,
 
   async bootstrap() {
@@ -701,6 +715,16 @@ export const useStore = create<State>((set, get) => ({
       case "approvalSettled": {
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: event.state },
+        }));
+        break;
+      }
+
+      case "routinesChanged": {
+        set((state) => ({
+          routineVersion: {
+            ...state.routineVersion,
+            [event.agentId]: (state.routineVersion[event.agentId] ?? 0) + 1,
+          },
         }));
         break;
       }

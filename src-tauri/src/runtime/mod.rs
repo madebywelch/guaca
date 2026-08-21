@@ -1065,6 +1065,10 @@ impl Runtime {
                         tracing::error!(%err, "could not advance a routine; skipping it");
                         continue;
                     }
+                    // The row moved: to its next slot, or off the list
+                    // altogether if it was a one-shot. Either way the panel is
+                    // showing a firing that has already happened.
+                    runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
 
                     tracing::info!(
                         agent = %routine.agent_id.short(),
@@ -1569,6 +1573,14 @@ impl Runtime {
             .collect::<Vec<_>>();
 
         let notes = self.inner.workspace.read(agent_id);
+        // What this agent already keeps, read fresh for the same reason the
+        // sign-ins below are: the turn that is about to be asked to change a
+        // routine has to know it has one. A read that fails is an empty
+        // schedule in the prompt, which is what the tool would have said too.
+        let routines = self.inner.store.agent_routines(agent_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's schedule for its prompt");
+            Vec::new()
+        });
         // Refreshed before the prompt is built, not after, because the whole
         // point is that an agent knows what it can reach *when it is asked*.
         // Hanging this off the editor panel alone meant the first time anyone
@@ -1597,6 +1609,7 @@ impl Runtime {
             &signins,
             &names,
             &notes,
+            &routines,
             &history,
             &batch,
             mode,
@@ -3459,12 +3472,18 @@ impl Runtime {
     ///
     /// Answers in the words the agent used rather than in seconds, because the
     /// reply is the only record it keeps of what it set.
+    ///
+    /// Every path that writes a row emits [`UiEvent::RoutinesChanged`]. The
+    /// panel beside the transcript is where the operator reads a schedule, and
+    /// it was drawn before the agent wrote to it.
     fn keep_schedule(
         &self,
         card: &AgentCard,
         action: &tools::ScheduleAction,
     ) -> Result<String, crate::db::StoreError> {
-        use crate::domain::routine::{human_gap, validate, MIN_EVERY_SECS};
+        use crate::domain::routine::{
+            human_gap, next_slot_for, same_job, validate, MIN_EVERY_SECS,
+        };
 
         match action {
             tools::ScheduleAction::List => {
@@ -3474,14 +3493,20 @@ impl Runtime {
                 }
                 let mut out = String::from("Your schedule:\n");
                 for routine in routines {
+                    let name = routine.name.trim();
+                    let label = if name.is_empty() { String::new() } else { format!(" · {name}") };
                     out.push_str(&format!(
-                        "  {} — {} ({})\n",
+                        "  {}{label} — {} ({})\n",
                         routine.id,
                         routine.what,
                         routine.describe()
                     ));
                 }
-                out.push_str("Cancel one with its id.");
+                out.push_str(
+                    "`update` and an id changes one of these: a new time, a new instruction, or \
+                     both, leaving whatever you do not send alone. `cancel` and an id takes one \
+                     off.",
+                );
                 Ok(out)
             }
 
@@ -3493,31 +3518,99 @@ impl Runtime {
                     ));
                 }
 
+                // Read before the write, so the answer can say what this now
+                // stands beside.
+                let standing = self.inner.store.agent_routines(card.id)?;
                 let first = trigger.first_run(now_ms(), *in_secs);
                 let routine =
                     self.inner.store.create_routine(card.id, name, what, trigger.clone(), first)?;
+                self.emit(UiEvent::RoutinesChanged { agent_id: card.id });
 
-                Ok(format!(
+                let mut answer = format!(
                     "Scheduled: {} ({}). Its id is {}.",
                     routine.what,
                     routine.describe(),
                     routine.id
-                ))
+                );
+                // Said, never refused. Nothing here can tell "move the sweep to
+                // ten" from "sweep at ten as well", so the turn that knows
+                // which it meant is the one that has to decide, and it only
+                // knows while it is still running.
+                let twins: Vec<String> = standing
+                    .iter()
+                    // Only the ones that are going to fire. A routine the
+                    // operator switched off is their decision, and "both will
+                    // fire" about one of those is simply untrue.
+                    .filter(|other| other.active && same_job(&other.what, &routine.what))
+                    .map(|other| format!("{} ({})", other.id, other.short_title()))
+                    .collect();
+                if !twins.is_empty() {
+                    answer.push_str(&format!(
+                        " Note: {} already stands for what looks like the same job, and both will \
+                         fire, so the work happens twice. If this was meant to replace one of \
+                         them, `cancel` it — or `cancel` this one and `update` the routine you \
+                         already had.",
+                        twins.join(", ")
+                    ));
+                }
+                Ok(answer)
+            }
+
+            tools::ScheduleAction::Update { id, name, what, trigger, in_secs } => {
+                let Some(existing) = self.my_routine(card, id)? else {
+                    return Ok(format!(
+                        "You have no routine with the id {id}. Your own are listed with their \
+                         ids in front of you; `add` is how a new one starts."
+                    ));
+                };
+
+                // An absent field keeps what the row already says. Making an
+                // agent restate the instruction to move the clock is how a
+                // second routine for the same job gets written.
+                let name = name.clone().unwrap_or_else(|| existing.name.clone());
+                let what = what.clone().unwrap_or_else(|| existing.what.clone());
+                let trigger = trigger.clone().unwrap_or_else(|| existing.trigger.clone());
+                if let Err(err) = validate(&name, &what, &trigger, *in_secs) {
+                    return Ok(format!(
+                        "Refused: {err}. {} is unchanged, and the shortest repeat is {}.",
+                        existing.id,
+                        human_gap(MIN_EVERY_SECS)
+                    ));
+                }
+
+                let next = next_slot_for(&trigger, &existing, *in_secs);
+                let routine =
+                    self.inner.store.update_routine(existing.id, &name, &what, trigger, next)?;
+                self.emit(UiEvent::RoutinesChanged { agent_id: card.id });
+                Ok(format!("Updated {}: {} ({}).", routine.id, routine.what, routine.describe()))
             }
 
             tools::ScheduleAction::Cancel { id } => {
-                let Ok(parsed) = id.trim().parse() else {
-                    return Ok(format!("There is no routine with the id {id}."));
-                };
-                // Only its own: an id is guessable and a schedule is not shared.
-                let mine = self.inner.store.agent_routines(card.id)?;
-                if !mine.iter().any(|r| r.id == parsed) {
+                let Some(existing) = self.my_routine(card, id)? else {
                     return Ok(format!("You have no routine with the id {id}."));
-                }
-                self.inner.store.delete_routine(parsed)?;
-                Ok(format!("Cancelled {id}."))
+                };
+                self.inner.store.delete_routine(existing.id)?;
+                self.emit(UiEvent::RoutinesChanged { agent_id: card.id });
+                Ok(format!("Cancelled {}: {}.", existing.id, existing.short_title()))
             }
         }
+    }
+
+    /// One of this agent's own routines, by the id it was given.
+    ///
+    /// Only its own, and that is the point rather than tidiness. An id can
+    /// arrive from anywhere an agent reads — a peer's message, a page, a file —
+    /// and a schedule is not shared, so one agent must never be able to retime
+    /// or cancel another's.
+    fn my_routine(
+        &self,
+        card: &AgentCard,
+        id: &str,
+    ) -> Result<Option<Routine>, crate::db::StoreError> {
+        let Ok(parsed) = id.trim().parse() else {
+            return Ok(None);
+        };
+        Ok(self.inner.store.agent_routines(card.id)?.into_iter().find(|r| r.id == parsed))
     }
 
     /// The inference settings one agent's turn should use.

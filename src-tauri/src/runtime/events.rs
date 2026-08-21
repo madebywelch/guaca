@@ -132,6 +132,18 @@ pub enum UiEvent {
         approval_id: ApprovalId,
         state: ApprovalState,
     },
+
+    /// One agent's schedule changed: it set a routine, edited one, cancelled
+    /// one, or one came due and moved to its next slot.
+    ///
+    /// Not `AgentsChanged`, which is what this used to borrow. The roster did
+    /// not change, and the panel drawing the schedule was not listening for it
+    /// anyway: an agent that scheduled something for itself left the operator
+    /// reading a list that was drawn before the routine existed, which they
+    /// could only fix by closing the panel and opening it again.
+    RoutinesChanged {
+        agent_id: AgentId,
+    },
 }
 
 pub trait EventSink: Send + Sync + 'static {

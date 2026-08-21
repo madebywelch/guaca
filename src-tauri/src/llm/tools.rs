@@ -178,23 +178,31 @@ fn all_specs() -> Vec<ToolSpec> {
                           instruction back as a new \
                           message and work as usual, so write it as something you will be able \
                           to act on with no other context. Nothing is running while you wait, \
-                          and a routine outlives restarts. Never schedule a check for a reply, a \
-                          result, or anything else you are waiting on: those arrive as new \
-                          messages on their own, so a routine that fires to look for one only \
-                          spends a turn finding nothing."
+                          and a routine outlives restarts. What you already have standing is in \
+                          your system prompt, with the id of each: when one of those already \
+                          does the job you are being asked about, `update` that one and leave \
+                          the rest of it alone. A second routine does not replace the first, so \
+                          both fire and the work happens twice. Never schedule a check for a \
+                          reply, a result, or anything else you are waiting on: those arrive as \
+                          new messages on their own, so a routine that fires to look for one \
+                          only spends a turn finding nothing."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["list", "add", "cancel"] },
+                    "action": { "type": "string", "enum": ["list", "add", "update", "cancel"] },
                     "what": {
                         "type": "string",
-                        "description": "The instruction to give yourself when it fires."
+                        "description": "The instruction to give yourself when it fires. On \
+                                        `update`, the instruction that replaces the old one; \
+                                        leave it out to keep what the routine already says."
                     },
                     "name": {
                         "type": "string",
                         "description": "A short label for it, three or four words, so the \
-                                        operator can see at a glance what you have standing."
+                                        operator can see at a glance what you have standing. On \
+                                        `update`, a new label; leave it out to keep the one it \
+                                        already has."
                     },
                     "repeat": {
                         "type": "string",
@@ -213,9 +221,17 @@ fn all_specs() -> Vec<ToolSpec> {
                         "type": "integer",
                         "description": "How long until the first run, which is also the time of \
                                         day a `repeat` lands on. Defaults to one interval away, \
-                                        or immediately for a one-off."
+                                        or immediately for a one-off. On `update` it moves the \
+                                        next firing; leave it out to change the wording without \
+                                        moving the schedule."
                     },
-                    "id": { "type": "string", "description": "For `cancel`, from `list`." }
+                    "id": {
+                        "type": "string",
+                        "description": "The routine to `update` or `cancel`. Every routine you \
+                                        have standing is listed with its id in your system \
+                                        prompt, and `list` shows them with their full \
+                                        instructions."
+                    }
                 },
                 "required": ["action"],
                 "additionalProperties": false
@@ -590,6 +606,19 @@ pub enum ScheduleAction {
         trigger: Trigger,
         in_secs: Option<u32>,
     },
+    /// Changes a routine that already stands.
+    ///
+    /// Every field is optional, and an absent one is left as it was. The
+    /// commonest edit is a new time on an instruction that has not changed,
+    /// and making an agent restate the instruction to move the clock is how a
+    /// second routine for the same job gets written.
+    Update {
+        id: String,
+        name: Option<String>,
+        what: Option<String>,
+        trigger: Option<Trigger>,
+        in_secs: Option<u32>,
+    },
     Cancel {
         id: String,
     },
@@ -635,7 +664,7 @@ pub enum ToolParseError {
     UnknownBrowseAction,
     #[error("schedule needs a known `action`")]
     UnknownScheduleAction,
-    #[error("schedule add needs {needs}")]
+    #[error("schedule needs {needs}")]
     IncompleteSchedule { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
@@ -659,14 +688,16 @@ impl ToolParseError {
                  well-formed JSON object."
             ),
             ToolParseError::UnknownScheduleAction => {
-                "Error: `action` must be list, add or cancel. Use \
+                "Error: `action` must be list, add, update or cancel. Use \
                  {\"action\": \"list\"} to see what you have already set."
                     .to_string()
             }
             ToolParseError::IncompleteSchedule { needs } => format!(
-                "Error: to add a routine you need {needs}. For example \
+                "Error: that `schedule` call needs {needs}. To add one: \
                  {{\"action\": \"add\", \"name\": \"Listings sweep\", \"what\": \"check the \
-                 listings\", \"repeat\": \"weekdays\"}}."
+                 listings\", \"repeat\": \"weekdays\"}}. To change one you already have, \
+                 which is what a routine that needs a new time or new wording wants: \
+                 {{\"action\": \"update\", \"id\": \"3\", \"repeat\": \"daily\"}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -905,46 +936,54 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
             let secs = |name: &str| {
                 value.get(name).and_then(|v| v.as_i64()).filter(|n| *n > 0).map(|n| n as u32)
             };
+            // One reading of a repeat, for `add` and `update` both. A named
+            // repeat beats a gap in seconds when both arrive: it is the more
+            // specific of the two, and a model that sends "weekdays" alongside
+            // 86400 means the weekdays.
+            //
+            // Read as a cadence rather than as any trigger: this tool sets a
+            // clock, and a model that improvised `event:...` here would be
+            // handed a routine nothing can fire.
+            let clock = |repeat: Option<&str>, every: Option<u32>| match (repeat, every) {
+                (Some(named), _) => {
+                    Cadence::parse(named).map(Trigger::Clock).map(Some).ok_or_else(|| {
+                        ToolParseError::IncompleteSchedule {
+                            needs: "`repeat` to be one of daily, weekdays, weekly or monthly"
+                                .to_string(),
+                        }
+                    })
+                }
+                (None, Some(gap)) => Ok(Some(Trigger::Clock(Cadence::Every(gap)))),
+                (None, None) => Ok(None),
+            };
+            // A blank string is a model padding out the arguments, not an
+            // instruction to blank the field: on an update it would wipe the
+            // label or the instruction of a routine that was only being
+            // retimed.
+            let words = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+            };
             match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
                 "list" => Ok(ToolInvocation::Schedule { action: ScheduleAction::List }),
                 "add" | "create" => {
-                    let what = value
-                        .get("what")
-                        .or_else(|| value.get("prompt"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    let name = value
-                        .get("name")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .trim()
-                        .to_string();
-                    let repeat = value.get("repeat").and_then(|v| v.as_str());
-                    let every = secs("every_secs");
-                    let delay = secs("in_secs");
-                    if what.trim().is_empty() {
+                    let Some(what) = words("what").or_else(|| words("prompt")) else {
                         return Err(ToolParseError::IncompleteSchedule {
                             needs: "a `what` to do".to_string(),
                         });
-                    }
-                    // A named repeat beats a gap in seconds when both arrive:
-                    // it is the more specific of the two, and a model that
-                    // sends "weekdays" alongside 86400 means the weekdays.
-                    //
-                    // Read as a cadence rather than as any trigger: this tool
-                    // sets a clock, and a model that improvised `event:...`
-                    // here would be handed a routine nothing can fire.
-                    let trigger = match (repeat, every, delay) {
-                        (Some(named), _, _) => Cadence::parse(named)
-                            .map(Trigger::Clock)
-                            .ok_or_else(|| ToolParseError::IncompleteSchedule {
-                                needs: "`repeat` to be one of daily, weekdays, weekly or monthly"
-                                    .to_string(),
-                            })?,
-                        (None, Some(gap), _) => Trigger::Clock(Cadence::Every(gap)),
-                        (None, None, Some(_)) => Trigger::Clock(Cadence::Once),
-                        (None, None, None) => {
+                    };
+                    // Blank is legal here, unlike on an update: a routine an
+                    // agent did not name is titled by what it does.
+                    let name = words("name").unwrap_or_default();
+                    let repeat = value.get("repeat").and_then(|v| v.as_str());
+                    let delay = secs("in_secs");
+                    let trigger = match (clock(repeat, secs("every_secs"))?, delay) {
+                        (Some(trigger), _) => trigger,
+                        (None, Some(_)) => Trigger::Clock(Cadence::Once),
+                        (None, None) => {
                             return Err(ToolParseError::IncompleteSchedule {
                                 needs: "`repeat` or `every_secs` to keep doing it, or `in_secs` \
                                         to do it once"
@@ -956,12 +995,41 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                         action: ScheduleAction::Add { name, what, trigger, in_secs: delay },
                     })
                 }
+                "update" | "edit" | "change" | "modify" => {
+                    let Some(id) = words("id") else {
+                        return Err(ToolParseError::IncompleteSchedule {
+                            needs: "the `id` of the routine to change, which is listed with \
+                                    every routine you have standing"
+                                .to_string(),
+                        });
+                    };
+                    let trigger =
+                        clock(value.get("repeat").and_then(|v| v.as_str()), secs("every_secs"))?;
+                    let delay = secs("in_secs");
+                    let what = words("what").or_else(|| words("prompt"));
+                    let name = words("name");
+                    // Nothing to change is a call that would report success and
+                    // do nothing, which reads to the agent as the edit having
+                    // landed.
+                    if what.is_none() && name.is_none() && trigger.is_none() && delay.is_none() {
+                        return Err(ToolParseError::IncompleteSchedule {
+                            needs: "something to change: a new `what`, `name`, `repeat`, \
+                                    `every_secs` or `in_secs`"
+                                .to_string(),
+                        });
+                    }
+                    Ok(ToolInvocation::Schedule {
+                        action: ScheduleAction::Update { id, name, what, trigger, in_secs: delay },
+                    })
+                }
                 "cancel" | "remove" | "delete" => match value.get("id").and_then(|v| v.as_str()) {
                     Some(id) if !id.trim().is_empty() => Ok(ToolInvocation::Schedule {
                         action: ScheduleAction::Cancel { id: id.to_string() },
                     }),
                     _ => Err(ToolParseError::IncompleteSchedule {
-                        needs: "the `id` of the routine, from `list`".to_string(),
+                        needs: "the `id` of the routine, which is listed with every routine \
+                                you have standing"
+                            .to_string(),
                     }),
                 },
                 _ => Err(ToolParseError::UnknownScheduleAction),
@@ -1388,6 +1456,90 @@ mod tests {
                     in_secs: None
                 }
             })
+        );
+    }
+
+    #[test]
+    fn changing_a_routine_is_an_update_that_leaves_the_rest_of_it_alone() {
+        // The verb that was missing. Without it, an agent asked for a routine
+        // at a different time can only add a second one, and both fire.
+        assert_eq!(
+            parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\",\"repeat\":\"daily\"}")),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Update {
+                    id: "r7".into(),
+                    name: None,
+                    what: None,
+                    trigger: Some(Trigger::Clock(Cadence::Daily)),
+                    in_secs: None,
+                }
+            }),
+            "an absent field is a field to leave as it is, not one to blank"
+        );
+        // And the spellings a model reaches for instead.
+        for verb in ["edit", "change", "modify"] {
+            let parsed = parse(&call(
+                SCHEDULE,
+                &format!("{{\"action\":\"{verb}\",\"id\":\"r7\",\"what\":\"check twice\"}}"),
+            ));
+            assert!(matches!(
+                parsed,
+                Ok(ToolInvocation::Schedule { action: ScheduleAction::Update { .. } })
+            ));
+        }
+    }
+
+    #[test]
+    fn a_blank_field_on_an_update_is_padding_rather_than_an_erasure() {
+        // Models fill out every field in a schema. A routine being retimed must
+        // not lose the name and the instruction it already had because the call
+        // carried empty strings for them.
+        assert_eq!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"update\",\"id\":\"r7\",\"name\":\"\",\"what\":\"  \",\
+                  \"in_secs\":3600}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Update {
+                    id: "r7".into(),
+                    name: None,
+                    what: None,
+                    trigger: None,
+                    in_secs: Some(3600),
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn an_update_that_would_change_nothing_is_refused_rather_than_reporting_success() {
+        // It would answer "updated" and do nothing, which the agent reads as
+        // the change having landed.
+        let err = parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\"}")).unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
+        assert!(err.guidance().contains("update"), "the way out has to be in the message");
+    }
+
+    #[test]
+    fn an_update_without_an_id_is_told_where_the_id_is() {
+        let err =
+            parse(&call(SCHEDULE, "{\"action\":\"update\",\"repeat\":\"daily\"}")).unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
+        assert!(err.guidance().contains("\"id\""), "{}", err.guidance());
+    }
+
+    #[test]
+    fn the_schedule_tool_says_what_a_second_routine_for_one_job_costs() {
+        // The tool schema is read at the moment of the decision, which is where
+        // the consequence has to be: an agent that thinks adding replaces has
+        // no reason to look for `update`.
+        let spec = description(SCHEDULE);
+        assert!(spec.contains("`update`"), "{spec}");
+        assert!(spec.contains("both fire"), "a rule without its consequence: {spec}");
+        assert!(
+            spec.contains("system prompt"),
+            "and it has to know where the ids it needs already are: {spec}"
         );
     }
 

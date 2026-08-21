@@ -88,6 +88,70 @@ reason: a time on its own can only ever mean the next 24 hours.
 holding, and the scheduler fires an overdue slot once. Parking it behind a Save
 the operator has not pressed means a routine they think they stopped still runs.
 
+## An agent reads its own schedule before it decides to write another one
+
+Every routine an agent has standing is in its system prompt, with the id of
+each, its cadence and the first line of its instruction. `schedule` with `list`
+still gives the full text, and the prompt says so.
+
+It is in the prompt rather than behind that tool call because of when the two
+arrive. An operator books something, comes back half an hour later and asks for
+it differently without saying which routine they mean: "make that every day".
+The agent had no idea it kept anything, so nothing in the turn prompted it to go
+and look, and it wrote a second routine beside the first with a name one word
+different. It reported that it had made the change. Both fired from then on, and
+the operator found out by reading the panel. A list an agent has to ask for is a
+list it reads *after* deciding what to do; a list in the prompt is one it reads
+before.
+
+What is in the row is chosen for recognition rather than for reading. An
+instruction is written to be acted on with no other context, so it runs to
+several sentences, and ten of them drawn in full would be the largest section of
+the prompt with the rule underneath them the part that got skimmed. A routine
+the operator has switched off says so instead of counting down: it still holds
+the slot it was holding, and an agent told a dead routine fires in an hour
+reports work as in hand that nobody is going to do.
+
+## Changing a routine is `update`, and adding a second one is not
+
+`schedule` had `list`, `add` and `cancel`. There was no verb for "the routine
+you already have, differently", so an agent asked for one could only add, or
+cancel and add, and cancelling first means losing the wording it was keeping if
+the second call is refused. `update` takes an id and any of a name, an
+instruction, a repeat or a delay, and leaves every field it was not sent alone.
+That last part is the whole point: making an agent restate the instruction in
+order to move the clock is how a second routine gets written.
+
+Where the next firing lands after an edit is `next_slot_for`, in `domain`, and
+it is the same function the operator's panel uses. Two answers to "when is this
+next due" would be two schedules.
+
+An `add` that lands beside a routine already doing the same job says so, in the
+tool's own answer, naming both ids. It is a notice and not a refusal, and it
+must not become one: nothing in the runtime can tell "move the sweep to ten"
+from "sweep at ten as well", because both arrive as the same instruction on a
+different clock. A guard would refuse honest work, and an agent's way around a
+refusal is to reword the instruction until it gets through. Saying it out loud
+reaches the one party that knows which was meant, while the turn is still
+running. `same_job` is deliberately loose for the same reason: a false positive
+costs a sentence the turn can ignore.
+
+## A schedule changing is its own event, and the panel was not listening for one
+
+Every path that writes a routine row emits `RoutinesChanged`, carrying the agent
+whose schedule it was: the agent's own `schedule` tool, the operator's commands,
+and the scheduler advancing a routine it has just fired. `RoutineList` reads
+itself again when the id it is drawing comes up.
+
+The operator commands used to emit `AgentsChanged`, which is a claim about the
+roster, and nothing drawing a schedule was listening for it: the list survived
+on being remounted by its key when the detail panel closed. So an agent that
+booked a routine mid-turn left the operator reading a list drawn before the
+routine existed, and the only way to see it was to close the panel and open it
+again. The same held for a firing: a routine that had just run still showed the
+countdown it had before, and a one-shot that fired stayed on the list until
+something else redrew it.
+
 ## A test run is the scheduler's own path with the schedule left alone
 
 Same delivery, same fresh run, so what the button shows is what Tuesday will do.
