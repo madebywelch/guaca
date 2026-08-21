@@ -130,6 +130,52 @@ it, because it is still in it: same wall, same bill, same peers. Two rows for on
 agent would be two nodes in the sidebar's `rowRefs`, and the wire would have to
 pick one to throw a message at.
 
+## The cafeteria is a copy machine, not a registry
+
+Sixteen agents written out once, well, so that a new workspace is a few clicks
+rather than an hour of typing. They are named after jobs rather than functions:
+"Chief of Staff" and "Paralegal", not "Manager" and "Reviewer". A role carries
+duties and refusals a function label does not, so the operator does not have to
+supply them in the prompt, which is the work this removes. Titles are capped at
+three words because peers resolve each other by whole name and the composer's
+`@` typeahead gives up after two spaces, so a longer title is an agent nobody
+can delegate to.
+
+A hire copies the preset's fields into an ordinary `AgentDraft` and forgets
+where they came from: there is no preset id on
+the card, nothing joins back to `lib/cafeteria.ts`, and an agent hired yesterday
+does not change when the catalog does. That is what stops a UI file from
+becoming a schema the database has to agree with, and it is the reason there is
+no "update from preset" anywhere.
+
+A preset's model is deliberately blank, which means inherit. Writing the app
+default in at hire time is the obvious thing and it is wrong: it pins every
+hired agent to the app model and silently ignores a group that chose its own
+endpoint, which is exactly what a group-level model exists to express.
+
+A hired crew lands under the arrangement, not inside it, in the order it was
+picked. The batch reads the bottom of the rail once inside its transaction and
+hands out consecutive slots: asking per agent would give all of them the same
+answer, because none is written until the commit, and the rail would then order
+a crew by the tiebreak rather than by what the operator chose. See *The rail is
+arranged by hand* above for what those slots are.
+
+`hire_agents` takes the batch rather than the UI looping `create_agent`, for
+two reasons that both bite at four agents and up. Every create emits
+`AgentsChanged` and the rail answers each by re-reading the whole roster. And
+names are unique per group, so a batch has to be settled against the roster
+*and* against itself: two `Researcher`s picked in one go are both free until the
+first one is written. `domain::agent::hire_names` does that in the same place
+`copy_name` already lived, so the app has one rule for a name somebody else is
+holding instead of two that can disagree.
+
+The catalog is content with a test, `lib/cafeteria.test.ts`, holding it to the
+avatar and accent catalogs and to what `AgentDraft::validate` will accept. The
+rule that is not mechanically checkable is the one that matters most: every
+preset prompt states a stopping condition. A prompt without one makes a crew
+that talks to itself, no automated suite can see it, and the evals are what
+catch it. Run `./scripts/evals.sh` after touching a preset.
+
 ## A duplicate copies the card and nothing an agent went and did
 
 Look, model, skills and instructions; not the sandbox, the memory, the schedule,

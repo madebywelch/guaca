@@ -3707,3 +3707,168 @@ button {
     background: color-mix(in oklab, var(--flesh) 14%, transparent);
   }
 }
+
+/* ==========================================================================
+   Cafeteria
+
+   A wider dialog than the rest, because this one is browsed rather than filled
+   in: the operator is comparing fourteen agents, and a column that shows three
+   at a time turns a glance into a scroll. The head and the foot are pinned so
+   the group being hired into and the count are readable from anywhere in the
+   list; only the stations move.
+   ========================================================================== */
+
+/* Focus lands here on open so the dialog owns the keyboard, but this is a
+   landing spot rather than a control: the ring belongs on the tiles and the
+   buttons inside, not around the whole panel. */
+.dialog--cafeteria:focus,
+.dialog--cafeteria:focus-visible {
+  outline: none;
+}
+
+.dialog--cafeteria {
+  width: min(58rem, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  padding: 0;
+}
+
+.cafeteria__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.2rem;
+  padding: 1.35rem 1.35rem 1rem;
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.cafeteria__stations {
+  overflow-y: auto;
+  padding: 0.35rem 1.35rem 1rem;
+  flex: 1;
+}
+
+.cafeteria__station {
+  margin-top: 1.1rem;
+}
+
+.cafeteria__station-name {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 0.55rem;
+}
+
+.cafeteria__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+/* One hireable agent. A button rather than a card with a checkbox in it: the
+   whole tile is the target, and `aria-pressed` is what says it is a toggle
+   instead of something that opens. */
+.hire {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  align-items: start;
+  gap: 0.65rem;
+  text-align: left;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.hire:hover {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--edge));
+  background: var(--ground);
+}
+
+/* Selection is carried by the agent's own accent, so a picked crew reads as
+   the colours that will be in the rail a moment later. */
+.hire[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 9%, var(--raised));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.hire__face {
+  display: grid;
+  place-items: center;
+  padding-top: 0.1rem;
+}
+
+.hire__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hire__name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.004em;
+  color: var(--text);
+}
+
+/* Said quietly and on purpose. Hiring a second Researcher is a thing operators
+   do deliberately, so this reports what is already there rather than warning
+   about it. */
+.hire__already {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--edge);
+  border-radius: 99px;
+  padding: 0.05rem 0.35rem;
+}
+
+.hire__tagline {
+  font-size: 0.79rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.hire__skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+}
+
+.hire__skill {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: 99px;
+  padding: 0.1rem 0.4rem;
+}
+
+.cafeteria__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1.35rem;
+  border-top: 1px solid var(--edge);
+  flex: none;
+}
+
+.cafeteria__spacer {
+  margin-left: auto;
+}
