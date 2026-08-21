@@ -57,7 +57,7 @@ repo: the frontend renders state and forwards intent.
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Attachments, previews, drops | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
-| Schedules and triggers | `docs/ROUTINES.md` |
+| Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
 | Sandboxes, the browser, sign-ins, credentials | `docs/MACHINES.md`, then *Connectors* in `docs/PROTOCOL.md` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
@@ -75,7 +75,10 @@ lands on one side fails the build rather than at runtime.
 
 **Migrations are forward-only and numbered.** One has already run against a real
 database by the time you think of an improvement, and editing it leaves that
-database at the same `user_version` with a different schema. Add another.
+database at the same `user_version` with a different schema. Add another. They
+run with foreign key enforcement off, which is what SQLite's own table-rebuild
+procedure wants and what a migration cannot arrange for itself: the pragma is a
+no-op inside a transaction. See `migrations::run`.
 
 **A secret never reaches a model.** A credential's value and a cookie's value do
 not enter a prompt, a transcript, an event or the webview, and there is no field
@@ -99,6 +102,13 @@ on the types that cross those boundaries for one to arrive in. Keep it that way:
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
+- **A fired routine carries `Part::Routine`, not text.** The instruction reaches
+  the model either way, because `as_plain_text` returns it. The part is what
+  keeps the transcript from drawing a schedule firing as Guaca talking to the
+  operator: `docs/ROUTINES.md`.
+- **`Routine::next_run_at` is an `Option` because some triggers have no next
+  run.** A sentinel date would be shown to the operator, and it is one bad
+  comparison away from firing something that was waiting on a connector.
 
 ## Conventions
 

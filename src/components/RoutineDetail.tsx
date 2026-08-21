@@ -2,12 +2,18 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/ipc";
 import {
+  anchorFor,
   clockTime,
-  isTimed,
+  firstRunDelay,
+  type Moment,
+  momentOf,
+  nextRoundMoment,
+  ordinal,
+  parseTrigger,
+  repeatLabel,
   routineTitle,
-  secondsUntil,
   TRIGGER_CHOICES,
-  toTimeField,
+  WEEKDAYS,
 } from "../lib/routine";
 import { relativeTime, useNow } from "../lib/time";
 import {
@@ -18,6 +24,7 @@ import {
   type RoutineId,
   type RoutineRun,
 } from "../lib/types";
+import { compact, money } from "./TokenMeter";
 
 interface Props {
   agentId: AgentId;
@@ -31,8 +38,8 @@ interface Editing {
   name: string;
   what: string;
   trigger: string;
-  /** Local `HH:MM`. Ignored by triggers with no time of day. */
-  time: string;
+  /** When it should fire. Only the parts the trigger asks for are read. */
+  moment: Moment;
 }
 
 const DEFAULT_TRIGGER = "daily";
@@ -42,33 +49,41 @@ function editingFor(routine: Routine): Editing {
     name: routine.name,
     what: routine.what,
     trigger: routine.trigger,
-    time: toTimeField(routine.nextRunAt),
+    // A routine holding no moment still needs something in the fields, in case
+    // the operator switches it to a trigger that has one.
+    moment: routine.nextRunAt === null ? nextRoundMoment() : momentOf(routine.nextRunAt),
   };
 }
 
 function blank(): Editing {
-  // Now, rounded up to the next five minutes. A routine set at 9:28 first
-  // firing at 9:28 tomorrow is what the operator meant, and a round number is
-  // easier to recognise in the list afterwards.
-  const now = new Date();
-  now.setMinutes(Math.ceil(now.getMinutes() / 5) * 5, 0, 0);
-  return { name: "", what: "", trigger: DEFAULT_TRIGGER, time: toTimeField(now.getTime()) };
+  return { name: "", what: "", trigger: DEFAULT_TRIGGER, moment: nextRoundMoment() };
 }
 
 /**
  * What to send.
  *
- * `inSecs` is how a time of day reaches the backend: it anchors the first
- * firing, and every repeat after that keeps the hour. Null on an edit leaves
- * the schedule exactly where it was, which is what fixing a typo should do.
+ * `inSecs` is how a moment reaches the backend: it anchors the first firing,
+ * and every repeat after that inherits the hour, and for a weekly or monthly
+ * repeat the day as well. Null on an edit leaves the schedule exactly where it
+ * was, which is what fixing a typo should do.
  */
 function draftOf(editing: Editing, moved: boolean): RoutineDraft {
   return {
     name: editing.name.trim(),
     what: editing.what.trim(),
     trigger: editing.trigger,
-    inSecs: moved && isTimed(editing.trigger) ? secondsUntil(editing.time) : null,
+    inSecs: moved ? firstRunDelay(editing.trigger, editing.moment) : null,
   };
+}
+
+/** Why the moment on screen is not one, or null when it is. */
+function momentProblem(editing: Editing): string | null {
+  const anchor = anchorFor(editing.trigger);
+  if (anchor === "none") return null;
+  if (firstRunDelay(editing.trigger, editing.moment) !== null) return null;
+  return anchor === "date"
+    ? "That date and time have already passed. Pick one still ahead."
+    : "That is not a time of day.";
 }
 
 /**
@@ -89,7 +104,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [routine, setRoutine] = useState<Routine | null>(null);
   const [draft, setDraft] = useState<Editing>(() => blank());
   const [runs, setRuns] = useState<RoutineRun[] | null>(null);
-  // Whether the time was touched. An untouched time on an edit has to leave
+  // Whether the moment was touched. An untouched one on an edit has to leave
   // the next firing where it is: rewording an instruction should not silently
   // push the schedule to tomorrow.
   const [moved, setMoved] = useState(false);
@@ -143,6 +158,11 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   };
 
   const patch = (fields: Partial<Editing>) => setDraft((current) => ({ ...current, ...fields }));
+  /** Any change to when it fires is a change to the moment it is anchored on. */
+  const patchMoment = (fields: Partial<Moment>) => {
+    setDraft((current) => ({ ...current, moment: { ...current.moment, ...fields } }));
+    setMoved(true);
+  };
 
   const dirty =
     routine === null ||
@@ -150,6 +170,8 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
     draft.name.trim() !== routine.name ||
     draft.what.trim() !== routine.what ||
     draft.trigger !== routine.trigger;
+
+  const problem = momentProblem(draft);
 
   const save = () =>
     void run(async () => {
@@ -167,7 +189,8 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
 
   if (loading) return <p className="routines__note">Loading…</p>;
 
-  const timed = isTimed(draft.trigger);
+  const anchor = anchorFor(draft.trigger);
+  const waiting = parseTrigger(draft.trigger).kind === "event";
 
   return (
     <div className="detail">
@@ -291,16 +314,17 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
       <div className="field">
         <span className="field__label">When to run</span>
         <div className="when">
-          <span aria-hidden="true" className="routine__mark" />
+          <span aria-hidden="true" className="routine__mark" data-waiting={waiting || undefined} />
           <select
             className="input input--slim"
             aria-label="Trigger"
             value={draft.trigger}
             onChange={(event) => {
               patch({ trigger: event.target.value });
-              // Choosing a timed repeat is a decision about when, so the time
-              // goes with it rather than staying where the old row was.
-              if (isTimed(event.target.value)) setMoved(true);
+              // Choosing a trigger with a moment is a decision about when, so
+              // the moment goes with it rather than staying where the old row
+              // was. A trigger with none leaves the schedule alone.
+              if (anchorFor(event.target.value) !== "none") setMoved(true);
             }}
           >
             {TRIGGER_CHOICES.map((choice) => (
@@ -308,30 +332,82 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
                 {choice.label}
               </option>
             ))}
-            {/* A gap an agent chose for itself is not in the list, and dropping
-                it from the picker would silently rewrite the agent's schedule
-                the first time an operator saved an unrelated edit. */}
+            {/* A trigger this picker does not offer: a gap an agent chose for
+                itself, or an event. Dropping it would silently rewrite the
+                agent's schedule the first time an operator saved an unrelated
+                edit. */}
             {!TRIGGER_CHOICES.some((choice) => choice.spec === draft.trigger) && (
-              <option value={draft.trigger}>{draft.trigger}</option>
+              <option value={draft.trigger}>{repeatLabel(draft.trigger)}</option>
             )}
           </select>
-          {timed && (
+
+          {anchor === "weekday" && (
+            <select
+              className="input input--slim"
+              aria-label="Day of the week"
+              value={draft.moment.weekday}
+              onChange={(event) => patchMoment({ weekday: Number(event.target.value) })}
+            >
+              {WEEKDAYS.map((day) => (
+                <option key={day.day} value={day.day}>
+                  {day.label}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {anchor === "monthday" && (
+            <select
+              className="input input--slim"
+              aria-label="Day of the month"
+              value={draft.moment.monthday}
+              onChange={(event) => patchMoment({ monthday: Number(event.target.value) })}
+            >
+              {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
+                <option key={day} value={day}>
+                  {ordinal(day)}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {anchor === "date" && (
+            <input
+              className="input input--slim"
+              type="date"
+              aria-label="Date"
+              value={draft.moment.date}
+              onChange={(event) => patchMoment({ date: event.target.value })}
+            />
+          )}
+
+          {anchor !== "none" && (
             <>
               <span className="hint">at</span>
               <input
                 className="input input--slim"
                 type="time"
                 aria-label="Time of day"
-                value={draft.time}
-                onChange={(event) => {
-                  patch({ time: event.target.value });
-                  setMoved(true);
-                }}
+                value={draft.moment.time}
+                onChange={(event) => patchMoment({ time: event.target.value })}
               />
             </>
           )}
         </div>
-        {routine?.active && !dirty && (
+
+        {anchor === "monthday" && draft.moment.monthday > 28 && (
+          <span className="field__hint">
+            Months without a {ordinal(draft.moment.monthday)} are skipped rather than moved, so it
+            stays on the {ordinal(draft.moment.monthday)} of the months that have one.
+          </span>
+        )}
+        {waiting && (
+          <span className="field__hint">
+            This one keeps no place in the clock: nothing fires until that happens. Test run
+            delivers it now.
+          </span>
+        )}
+        {routine?.active && !dirty && routine.nextRunAt !== null && (
           <span className="field__hint">
             Next in {relativeTime(now, routine.nextRunAt)}, on{" "}
             {new Date(routine.nextRunAt).toLocaleDateString(undefined, {
@@ -356,7 +432,7 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
           <button
             type="button"
             className="btn btn--small btn--primary"
-            disabled={busy || !draft.what.trim()}
+            disabled={busy || !draft.what.trim() || problem !== null}
             onClick={save}
           >
             {routine ? "Save changes" : "Create routine"}
@@ -373,34 +449,65 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               Discard
             </button>
           )}
+          {problem && <span className="field__hint">{problem}</span>}
         </div>
       )}
 
-      {routine && (
-        <div className="field">
-          <span className="field__label">Run history</span>
-          {runs === null || runs.length === 0 ? (
-            <p className="routines__note">No runs yet.</p>
-          ) : (
-            <ul className="history">
-              {runs.map((entry) => (
-                <li key={entry.runId} className="history__row">
-                  <span className="history__when">
-                    {new Date(entry.at).toLocaleDateString(undefined, {
-                      month: "short",
-                      day: "numeric",
-                    })}{" "}
-                    at {clockTime(entry.at)}
-                  </span>
-                  {/* A button press and a real firing look the same in the
-                      transcript, so which one this was is said here. */}
-                  {entry.kind === "test" && <span className="history__kind">test run</span>}
-                  <span className="history__ago">{relativeTime(entry.at, now)}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {routine && <History runs={runs} now={now} />}
+    </div>
+  );
+}
+
+/**
+ * What a routine has actually done.
+ *
+ * Every firing carries what it spent, because that is the difference between a
+ * routine that is working and one that is being delivered to an agent which
+ * never runs: the two rows are otherwise identical, and the operator's next
+ * move is not the same.
+ */
+function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
+  return (
+    <div className="field">
+      <span className="field__label">Run history</span>
+      {runs === null || runs.length === 0 ? (
+        <p className="routines__note">No runs yet.</p>
+      ) : (
+        <ul className="history">
+          {runs.map((entry) => (
+            <li key={entry.runId} className="history__row">
+              <span className="history__when">
+                {new Date(entry.at).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })}{" "}
+                at {clockTime(entry.at)}
+              </span>
+              {/* A button press and a real firing look the same in the
+                  transcript, so which one this was is said here. */}
+              {entry.kind === "test" && <span className="history__kind">test run</span>}
+              {entry.spent.calls === 0 ? (
+                <span
+                  className="history__quiet"
+                  title="Delivered, but no model call was made under it"
+                >
+                  nothing ran
+                </span>
+              ) : (
+                <span
+                  className="history__spend"
+                  title={`${entry.spent.prompt.toLocaleString()} in, ${entry.spent.completion.toLocaleString()} out, over ${entry.spent.calls} model call(s)`}
+                >
+                  {compact(entry.spent.prompt + entry.spent.completion)}
+                  {entry.spent.cost !== null && (
+                    <span className="history__cost">{money(entry.spent.cost)}</span>
+                  )}
+                </span>
+              )}
+              <span className="history__ago">{relativeTime(entry.at, now)}</span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

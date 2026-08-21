@@ -1702,7 +1702,7 @@ mod live {
         );
         assert_eq!(
             booked[0].trigger,
-            guac_lib::domain::routine::Trigger::Weekdays,
+            guac_lib::domain::routine::Trigger::Clock(guac_lib::domain::routine::Cadence::Weekdays),
             "a weekday job is a shape on the calendar. Stored as a gap it fires on Saturday, and \
              stored as a day in seconds it loses an hour twice a year"
         );

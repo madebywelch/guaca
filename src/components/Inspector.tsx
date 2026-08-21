@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { useStore } from "../lib/store";
 import type { AgentCard, RoutineId } from "../lib/types";
 import { ComputerScreen } from "./ComputerScreen";
 import { RoutineDetail } from "./RoutineDetail";
@@ -67,6 +68,20 @@ export function Inspector({ agent, onEditProfile }: Props) {
   useEffect(() => {
     setRoutine(null);
   }, [agentId]);
+
+  // A fired routine in the transcript, clicked. The panel is opened along with
+  // it: the request came from a row the operator could see, so answering it by
+  // changing something behind a closed panel would read as the click doing
+  // nothing. Cleared as it is taken, so the same chip can be clicked again
+  // after navigating away.
+  const asked = useStore((state) => state.openingRoutine);
+  const taken = useStore((state) => state.routineOpened);
+  useEffect(() => {
+    if (asked === null) return;
+    setRoutine(asked);
+    setOpen(true);
+    taken();
+  }, [asked, taken]);
 
   // Nothing to inspect on the activity board, which is about the whole crew.
   if (!agent) return null;

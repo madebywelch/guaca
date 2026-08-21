@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use super::approval::{DetailField, ProtectedAction};
 use super::attachment::Attachment;
-use super::ids::{AgentId, ApprovalId, MessageId, RunId};
+use super::ids::{AgentId, ApprovalId, MessageId, RoutineId, RunId};
 
 /// Who is at one end of an envelope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -169,6 +169,23 @@ pub enum Part {
     /// for it, is the runtime's decision and depends on what kind of file it
     /// is.
     File(Attachment),
+    /// A routine coming due, rendered as one line the operator can open.
+    ///
+    /// The instruction is in `what` and reaches the model exactly as a text
+    /// part would: `as_plain_text` returns it, so prompt assembly, dedup and
+    /// emptiness checks are unchanged. What changes is the transcript, where a
+    /// schedule firing used to arrive as a full chat bubble from Guaca several
+    /// sentences long. An operator reading a conversation with their agent was
+    /// shown the system prompting it, in the shape of someone talking to them.
+    ///
+    /// `name` is carried so the chip can be titled by the same rule the routine
+    /// list uses, and both are the wording at the moment it fired: a routine
+    /// since renamed does not rewrite what the transcript said it was.
+    Routine {
+        routine_id: RoutineId,
+        name: String,
+        what: String,
+    },
     /// An agent asking the operator for permission, rendered as buttons.
     ///
     /// The request travels in the transcript rather than in a dialog, because
@@ -221,9 +238,14 @@ impl Part {
     }
 
     /// The plain-text projection, used for prompts, dedup hashing, and search.
+    ///
+    /// A routine's instruction is here rather than only in the part, because
+    /// what a fired routine says to the model must not depend on how the
+    /// transcript chose to draw it. The part exists to change the drawing.
     pub fn as_plain_text(&self) -> Option<&str> {
         match self {
             Part::Text { text } => Some(text),
+            Part::Routine { what, .. } => Some(what),
             _ => None,
         }
     }

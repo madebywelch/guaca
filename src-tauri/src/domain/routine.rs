@@ -1,12 +1,20 @@
-//! Routines: an agent's own schedule.
+//! Routines: an agent's own schedule, and whatever else sets one off.
 //!
 //! An agent sets these for itself. "Check the listings every five hours" and
 //! "wake me in an hour" are the same thing with and without a repeat, so both
-//! are one row: what to do, and when it is next due.
+//! are one row: what to do, and what makes it happen.
 //!
 //! What is stored is the next due time rather than a running timer, so a
 //! schedule survives a restart. Nothing has to be held in memory for a routine
 //! to fire tomorrow.
+//!
+//! Not every routine waits on a clock. A [`Trigger`] is either a [`Cadence`],
+//! which owns a moment and is what the scheduler sweeps for, or an
+//! [`EventTrigger`], which owns nothing and waits to be told. The second kind
+//! has no next moment, which is why the moment is an `Option` here and nullable
+//! in SQLite: a routine waiting on Stripe with a slot in it would either fire
+//! on the clock or need a sentinel, and a sentinel is a date the operator would
+//! eventually be shown.
 
 use chrono::{
     DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Weekday,
@@ -17,21 +25,32 @@ use super::ids::{AgentId, RoutineId, RunId};
 
 /// What makes a routine fire.
 ///
-/// Today every one of these is a clock, which is why the wire form is a string
-/// and not a number: the trigger an operator will eventually want is "when a
-/// Linear issue is assigned to me", and that has to be a new value in this
-/// column rather than a new column.
+/// One string, on the wire and in the database both, which is why this has a
+/// hand-written `Serialize`. A derived one would give the webview a tagged
+/// object and SQLite a string for the same fact, and the two would drift the
+/// first time either gained a variant.
+///
+/// The string is also what makes a new kind of trigger a new value rather than
+/// a new column: `every:3600` and `event:stripe/invoice.payment_failed` are
+/// both one `fires` column and one `trigger` field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Trigger {
+    /// A moment, or a repeat of them. The scheduler owns these.
+    Clock(Cadence),
+    /// Something happening in a service the group is connected to. No moment:
+    /// it waits.
+    Event(EventTrigger),
+}
+
+/// A repeat on the clock.
 ///
 /// `Daily`, `Weekly` and `Monthly` are deliberately not gaps in seconds even
 /// though two of them nearly are. A day is 23 or 25 hours twice a year, and a
 /// month is four different lengths, so a routine stored as a gap wanders off
-/// the hour it was set for. What is stored is the shape of the repeat; the
-/// hour it happens at comes from `next_run_at`.
-/// One string, on the wire and in the database both. A derived form would give
-/// the webview a tagged object and SQLite a string for the same fact, and the
-/// two would drift the first time either gained a variant.
+/// the hour it was set for. What is stored is the shape of the repeat; the hour
+/// it happens at comes from the slot it is holding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Trigger {
+pub enum Cadence {
     /// Fires once and is done.
     Once,
     /// A fixed gap, in seconds. What the agent's own `schedule` tool sets, and
@@ -47,54 +66,121 @@ pub enum Trigger {
     Monthly,
 }
 
-impl Trigger {
-    /// The stored form. Parsed back by [`Trigger::parse`].
+/// Something happening somewhere else.
+///
+/// `service` names a connector the group holds and `topic` is that service's
+/// own word for what happened, verbatim: `stripe` and
+/// `invoice.payment_failed`. Both are identifiers rather than prose, which is
+/// what [`EventTrigger::parse`] enforces, and the service is lowered so the
+/// stored form is canonical: one routine per event, not one per spelling.
+///
+/// **Nothing delivers one of these yet.** There is no event source, so a
+/// routine triggered this way fires only when the operator presses Test run.
+/// What exists is the shape: it stores, it reads back, it is described, it
+/// keeps a history, and the scheduler leaves it alone. What is missing is the
+/// half that cannot be written without a service to receive from: a webhook or
+/// a poll that turns an arriving event into `Runtime::send_from_routine`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTrigger {
+    pub service: String,
+    pub topic: String,
+}
+
+/// A service name longer than this is prose. Matches `connector::MAX_SERVICE_LEN`,
+/// because this names one of those.
+pub const MAX_EVENT_SERVICE_LEN: usize = 48;
+/// Vendors' event names are long: `customer.subscription.pending_update_expired`.
+pub const MAX_EVENT_TOPIC_LEN: usize = 120;
+
+impl EventTrigger {
+    /// What marks an event out from a cadence in the stored form.
+    pub const PREFIX: &'static str = "event:";
+
+    /// Reads `stripe/invoice.payment_failed`, the part after the prefix.
+    ///
+    /// Split at the first slash only: a service's own topic names can contain
+    /// more of them, and the service is the half this has to be sure of.
+    pub fn parse(rest: &str) -> Option<Self> {
+        let (service, topic) = rest.trim().split_once('/')?;
+        let service = service.trim().to_lowercase();
+        let topic = topic.trim().to_string();
+        let sound = |part: &str, max: usize| {
+            !part.is_empty() && part.chars().count() <= max && !part.contains(char::is_whitespace)
+        };
+        if !sound(&service, MAX_EVENT_SERVICE_LEN) || !sound(&topic, MAX_EVENT_TOPIC_LEN) {
+            return None;
+        }
+        Some(EventTrigger { service, topic })
+    }
+
+    pub fn as_str(&self) -> String {
+        format!("{}{}/{}", Self::PREFIX, self.service, self.topic)
+    }
+
+    /// How it reads to whoever set it: `when Stripe reports invoice.paid`.
+    pub fn describe(&self) -> String {
+        format!("when {} reports {}", titled(&self.service), self.topic)
+    }
+}
+
+/// `stripe` as `Stripe`. The service is stored lowered so it can be matched;
+/// it is shown the way the operator wrote it down.
+fn titled(service: &str) -> String {
+    let mut chars = service.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+impl Cadence {
+    /// The stored form. Parsed back by [`Cadence::parse`].
     pub fn as_str(&self) -> String {
         match self {
-            Trigger::Once => "once".to_string(),
-            Trigger::Every(secs) => format!("every:{secs}"),
-            Trigger::Daily => "daily".to_string(),
-            Trigger::Weekdays => "weekdays".to_string(),
-            Trigger::Weekly => "weekly".to_string(),
-            Trigger::Monthly => "monthly".to_string(),
+            Cadence::Once => "once".to_string(),
+            Cadence::Every(secs) => format!("every:{secs}"),
+            Cadence::Daily => "daily".to_string(),
+            Cadence::Weekdays => "weekdays".to_string(),
+            Cadence::Weekly => "weekly".to_string(),
+            Cadence::Monthly => "monthly".to_string(),
         }
     }
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
-            "once" => Some(Trigger::Once),
-            "daily" => Some(Trigger::Daily),
-            "weekdays" => Some(Trigger::Weekdays),
-            "weekly" => Some(Trigger::Weekly),
-            "monthly" => Some(Trigger::Monthly),
-            other => other.strip_prefix("every:")?.parse().ok().map(Trigger::Every),
+            "once" => Some(Cadence::Once),
+            "daily" => Some(Cadence::Daily),
+            "weekdays" => Some(Cadence::Weekdays),
+            "weekly" => Some(Cadence::Weekly),
+            "monthly" => Some(Cadence::Monthly),
+            other => other.strip_prefix("every:")?.parse().ok().map(Cadence::Every),
         }
     }
 
     pub fn repeats(&self) -> bool {
-        !matches!(self, Trigger::Once)
+        !matches!(self, Cadence::Once)
     }
 
     /// How it reads to whoever set it.
     pub fn describe(&self) -> String {
         match self {
-            Trigger::Once => "once".to_string(),
-            Trigger::Every(secs) => format!("every {}", human_gap(*secs)),
-            Trigger::Daily => "every day".to_string(),
-            Trigger::Weekdays => "every weekday".to_string(),
-            Trigger::Weekly => "every week".to_string(),
-            Trigger::Monthly => "every month".to_string(),
+            Cadence::Once => "once".to_string(),
+            Cadence::Every(secs) => format!("every {}", human_gap(*secs)),
+            Cadence::Daily => "every day".to_string(),
+            Cadence::Weekdays => "every weekday".to_string(),
+            Cadence::Weekly => "every week".to_string(),
+            Cadence::Monthly => "every month".to_string(),
         }
     }
 
-    /// Whether a moment is one this trigger would ever fire on.
+    /// Whether a moment is one this cadence would ever fire on.
     ///
     /// Only weekdays can say no. It exists so a first run the operator asked
     /// for on a Saturday moves to Monday instead of firing on a day the
     /// routine says it never runs.
     pub fn accepts(&self, at: i64) -> bool {
         match self {
-            Trigger::Weekdays => match local(at) {
+            Cadence::Weekdays => match local(at) {
                 Some(when) => !is_weekend(when.date_naive()),
                 None => false,
             },
@@ -110,11 +196,11 @@ impl Trigger {
     /// up. `None` means it is finished and the row goes.
     pub fn next_after(&self, slot: i64, now: i64) -> Option<i64> {
         match self {
-            Trigger::Once => None,
+            Cadence::Once => None,
             // A gap is counted from when it ran rather than from when it was
             // due, for the same no-catch-up reason. There is no hour to hold
             // on to here, so there is nothing to anchor to.
-            Trigger::Every(secs) => Some(now + i64::from(*secs) * 1000),
+            Cadence::Every(secs) => Some(now + i64::from(*secs) * 1000),
             _ => self.next_calendar_slot(slot, now),
         }
     }
@@ -123,16 +209,16 @@ impl Trigger {
     ///
     /// A repeat with no stated start waits one whole interval, which is what
     /// "every weekday" means to the person who said it: not now and then every
-    /// weekday. A stated start is honoured, except on a day this trigger never
+    /// weekday. A stated start is honoured, except on a day this cadence never
     /// fires on.
     pub fn first_run(&self, now: i64, in_secs: Option<u32>) -> i64 {
         let asked = in_secs.map(|delay| now + i64::from(delay) * 1000);
         match (self, asked) {
-            (Trigger::Once, _) => asked.unwrap_or(now),
+            (Cadence::Once, _) => asked.unwrap_or(now),
             (_, Some(at)) if self.accepts(at) => at,
-            (Trigger::Every(secs), None) => now + i64::from(*secs) * 1000,
+            (Cadence::Every(secs), None) => now + i64::from(*secs) * 1000,
             // A start on a day this never fires on, or none at all: the anchor
-            // keeps the hour and the trigger picks the day.
+            // keeps the hour and the cadence picks the day.
             (_, asked) => {
                 let anchor = asked.unwrap_or(now);
                 self.next_after(anchor, now).unwrap_or(anchor)
@@ -158,19 +244,72 @@ impl Trigger {
         None
     }
 
-    /// The `n`th date this trigger fires on after `anchor`.
+    /// The `n`th date this cadence fires on after `anchor`.
     ///
     /// Counted from the anchor every time rather than from the previous answer,
     /// so a monthly routine set on the 31st is the 28th in February and the
     /// 31st again in March instead of walking backwards down the calendar.
     fn nth_date(&self, anchor: NaiveDate, n: i64) -> Option<NaiveDate> {
         match self {
-            Trigger::Daily => anchor.checked_add_signed(Duration::days(n)),
-            Trigger::Weekly => anchor.checked_add_signed(Duration::days(n * 7)),
-            Trigger::Weekdays => nth_weekday_after(anchor, n),
-            Trigger::Monthly => months_after(anchor, n),
-            Trigger::Once | Trigger::Every(_) => None,
+            Cadence::Daily => anchor.checked_add_signed(Duration::days(n)),
+            Cadence::Weekly => anchor.checked_add_signed(Duration::days(n * 7)),
+            Cadence::Weekdays => nth_weekday_after(anchor, n),
+            Cadence::Monthly => months_after(anchor, n),
+            Cadence::Once | Cadence::Every(_) => None,
         }
+    }
+}
+
+impl Trigger {
+    /// The stored form. Parsed back by [`Trigger::parse`].
+    pub fn as_str(&self) -> String {
+        match self {
+            Trigger::Clock(cadence) => cadence.as_str(),
+            Trigger::Event(event) => event.as_str(),
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        match value.strip_prefix(EventTrigger::PREFIX) {
+            Some(rest) => EventTrigger::parse(rest).map(Trigger::Event),
+            None => Cadence::parse(value).map(Trigger::Clock),
+        }
+    }
+
+    /// The cadence, when this is one. `None` is a trigger the scheduler has no
+    /// business looking at.
+    pub fn cadence(&self) -> Option<Cadence> {
+        match self {
+            Trigger::Clock(cadence) => Some(*cadence),
+            Trigger::Event(_) => None,
+        }
+    }
+
+    /// Whether this fires more than once.
+    ///
+    /// An event trigger does: it fires every time the thing it names happens,
+    /// which is exactly why it must not be deleted after one firing the way a
+    /// one-shot is.
+    pub fn repeats(&self) -> bool {
+        match self {
+            Trigger::Clock(cadence) => cadence.repeats(),
+            Trigger::Event(_) => true,
+        }
+    }
+
+    /// How it reads to whoever set it.
+    pub fn describe(&self) -> String {
+        match self {
+            Trigger::Clock(cadence) => cadence.describe(),
+            Trigger::Event(event) => event.describe(),
+        }
+    }
+
+    /// When a routine just set should first fire, or `None` when it does not
+    /// wait on the clock at all.
+    pub fn first_run(&self, now: i64, in_secs: Option<u32>) -> Option<i64> {
+        self.cadence().map(|cadence| cadence.first_run(now, in_secs))
     }
 }
 
@@ -264,9 +403,31 @@ pub struct Routine {
     /// survive being switched off, which is what makes it different from
     /// deleting the thing.
     pub active: bool,
-    pub next_run_at: i64,
+    /// The moment it is next due, for a routine that waits on the clock.
+    ///
+    /// `None` is a routine that does not: an event trigger fires when its event
+    /// arrives and holds no slot in the meantime. The scheduler asks for slots
+    /// at or before now, so an empty one is never due, and that is the whole
+    /// mechanism keeping event triggers out of the sweep.
+    pub next_run_at: Option<i64>,
     pub last_run_at: Option<i64>,
     pub created_at: i64,
+}
+
+/// What becomes of a routine's slot once it has fired.
+///
+/// Three answers rather than an `Option<i64>`, because "nothing on the clock"
+/// and "finished" mean opposite things to the row: one keeps it and one deletes
+/// it, and reading them off the same `None` deleted every event routine the
+/// first time it fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NextSlot {
+    /// Due again at this moment.
+    Due(i64),
+    /// Holding no slot, and still standing.
+    Waiting,
+    /// Done. The row goes.
+    Done,
 }
 
 /// Why a routine ran.
@@ -305,12 +466,16 @@ impl Serialize for RunKind {
 ///
 /// `run_id` is the thread back to everything else the firing produced: the
 /// messages in the channel and the model calls on the bill are filed under it.
+/// `spent` is the second of those, read back at the same time, because "did
+/// Tuesday's sweep actually do anything" is answered by whether the firing
+/// bought any model calls and not by the fact that it was delivered.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineRun {
     pub run_id: RunId,
     pub kind: RunKind,
     pub at: i64,
+    pub spent: super::usage::Tokens,
 }
 
 impl Routine {
@@ -327,14 +492,27 @@ impl Routine {
         }
     }
 
-    /// When this should next fire, given that it just ran at `now`.
-    pub fn after_running(&self, now: i64) -> Option<i64> {
-        self.trigger.next_after(self.next_run_at, now)
+    /// What happens to its slot, given that it just ran at `now`.
+    pub fn after_running(&self, now: i64) -> NextSlot {
+        match self.trigger.cadence() {
+            // A clock routine always holds a slot. An empty one would be a row
+            // written by something that did not know that, and `now` is the
+            // reading that keeps the cadence's own hour closest to true.
+            Some(cadence) => match cadence.next_after(self.next_run_at.unwrap_or(now), now) {
+                Some(next) => NextSlot::Due(next),
+                None => NextSlot::Done,
+            },
+            None => NextSlot::Waiting,
+        }
     }
 
     /// How it reads back to the agent that set it.
     pub fn describe(&self) -> String {
-        format!("{}, next {}", self.trigger.describe(), when(self.next_run_at))
+        match self.next_run_at {
+            Some(at) => format!("{}, next {}", self.trigger.describe(), when(at)),
+            // Nothing to promise: it happens when the event does.
+            None => self.trigger.describe(),
+        }
     }
 }
 
@@ -392,13 +570,15 @@ pub enum RoutineError {
     TooOften { got: u32 },
     #[error("that is further ahead than this can schedule")]
     TooFar,
+    #[error("an event trigger has no start time: it fires when {service} reports {topic}")]
+    EventHasNoStart { service: String, topic: String },
 }
 
 /// Checks what was asked for before it becomes a row.
 pub fn validate(
     name: &str,
     what: &str,
-    trigger: Trigger,
+    trigger: &Trigger,
     in_secs: Option<u32>,
 ) -> Result<(), RoutineError> {
     if what.trim().is_empty() {
@@ -407,13 +587,25 @@ pub fn validate(
     if name.trim().chars().count() > MAX_NAME_LEN {
         return Err(RoutineError::NameTooLong);
     }
-    if let Trigger::Every(every) = trigger {
-        if every < MIN_EVERY_SECS {
-            return Err(RoutineError::TooOften { got: every });
+    match trigger {
+        Trigger::Clock(Cadence::Every(every)) => {
+            if *every < MIN_EVERY_SECS {
+                return Err(RoutineError::TooOften { got: *every });
+            }
+            if *every > MAX_DELAY_SECS {
+                return Err(RoutineError::TooFar);
+            }
         }
-        if every > MAX_DELAY_SECS {
-            return Err(RoutineError::TooFar);
+        // A delay is a statement about a clock, so asking for one here is a
+        // misunderstanding worth naming rather than a field to drop silently:
+        // whoever sent it thinks they have scheduled something.
+        Trigger::Event(event) if in_secs.is_some() => {
+            return Err(RoutineError::EventHasNoStart {
+                service: titled(&event.service),
+                topic: event.topic.clone(),
+            })
         }
+        _ => {}
     }
     if in_secs.is_some_and(|delay| delay > MAX_DELAY_SECS) {
         return Err(RoutineError::TooFar);
@@ -424,6 +616,7 @@ pub fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::usage::Tokens;
     use chrono::NaiveTime;
 
     /// A local wall-clock moment, as a timestamp. Every calendar assertion in
@@ -435,7 +628,15 @@ mod tests {
         instant(date.and_time(time)).unwrap()
     }
 
-    fn routine(trigger: Trigger, next_run_at: i64) -> Routine {
+    fn clock(cadence: Cadence) -> Trigger {
+        Trigger::Clock(cadence)
+    }
+
+    fn event(service: &str, topic: &str) -> Trigger {
+        Trigger::Event(EventTrigger { service: service.into(), topic: topic.into() })
+    }
+
+    fn routine(trigger: Trigger, next_run_at: Option<i64>) -> Routine {
         Routine {
             id: RoutineId::new(),
             agent_id: AgentId::new(),
@@ -462,15 +663,17 @@ mod tests {
     #[test]
     fn a_trigger_survives_the_round_trip_through_its_stored_form() {
         for trigger in [
-            Trigger::Once,
-            Trigger::Every(3600),
-            Trigger::Every(18_000),
-            Trigger::Daily,
-            Trigger::Weekdays,
-            Trigger::Weekly,
-            Trigger::Monthly,
+            clock(Cadence::Once),
+            clock(Cadence::Every(3600)),
+            clock(Cadence::Every(18_000)),
+            clock(Cadence::Daily),
+            clock(Cadence::Weekdays),
+            clock(Cadence::Weekly),
+            clock(Cadence::Monthly),
+            event("stripe", "invoice.payment_failed"),
+            event("linear", "issue.assigned"),
         ] {
-            assert_eq!(Trigger::parse(&trigger.as_str()), Some(trigger), "{trigger:?}");
+            assert_eq!(Trigger::parse(&trigger.as_str()), Some(trigger.clone()), "{trigger:?}");
         }
         assert_eq!(Trigger::parse("nonsense"), None);
         assert_eq!(Trigger::parse("every:"), None);
@@ -478,37 +681,93 @@ mod tests {
     }
 
     #[test]
+    fn an_event_is_two_identifiers_and_is_refused_when_it_is_not() {
+        // The stored form is a key: a future event source will look a routine
+        // up by it. Prose in either half is a routine nothing will ever match.
+        assert_eq!(
+            Trigger::parse("event:Stripe/invoice.paid"),
+            Some(event("stripe", "invoice.paid")),
+            "the service is lowered, so one event is not two routines"
+        );
+        // The topic is the vendor's identifier and is kept exactly.
+        assert_eq!(
+            Trigger::parse("event:github/Issues.Opened"),
+            Some(event("github", "Issues.Opened"))
+        );
+        // A topic of its own may carry slashes; the service may not.
+        assert_eq!(
+            Trigger::parse("event:hubspot/deal/stage.changed"),
+            Some(event("hubspot", "deal/stage.changed"))
+        );
+
+        assert_eq!(Trigger::parse("event:stripe"), None, "an event needs a topic");
+        assert_eq!(Trigger::parse("event:/invoice.paid"), None, "and a service");
+        assert_eq!(Trigger::parse("event:stripe/"), None);
+        assert_eq!(Trigger::parse("event:stripe/an invoice failed"), None, "not a sentence");
+        assert_eq!(Trigger::parse(&format!("event:{}/x", "s".repeat(49))), None, "not a paragraph");
+    }
+
+    #[test]
     fn a_trigger_crosses_the_ipc_boundary_as_the_string_it_is_stored_as() {
         // The webview and SQLite have to be reading the same thing. A derived
         // enum would hand the webview `{"kind":"every","secs":3600}` and the
         // database `every:3600`, and the frontend parses neither by accident.
-        let routine = routine(Trigger::Every(3600), 0);
-        let json = serde_json::to_value(&routine).unwrap();
+        let hourly = routine(clock(Cadence::Every(3600)), Some(0));
+        let json = serde_json::to_value(&hourly).unwrap();
         assert_eq!(json["trigger"], serde_json::json!("every:3600"));
 
-        let weekdays = serde_json::to_value(Trigger::Weekdays).unwrap();
+        let weekdays = serde_json::to_value(clock(Cadence::Weekdays)).unwrap();
         assert_eq!(weekdays, serde_json::json!("weekdays"));
         assert_eq!(
             serde_json::from_value::<Trigger>(serde_json::json!("monthly")).unwrap(),
-            Trigger::Monthly
+            clock(Cadence::Monthly)
         );
+
+        // An event trigger is one string too, and the routine holding one says
+        // plainly that it has no next firing rather than inventing a date.
+        let waiting = routine(event("stripe", "invoice.payment_failed"), None);
+        let json = serde_json::to_value(&waiting).unwrap();
+        assert_eq!(json["trigger"], serde_json::json!("event:stripe/invoice.payment_failed"));
+        assert_eq!(json["nextRunAt"], serde_json::Value::Null);
+
         // And a value this build does not know is refused rather than guessed.
         assert!(serde_json::from_value::<Trigger>(serde_json::json!("fortnightly")).is_err());
+        assert!(serde_json::from_value::<Trigger>(serde_json::json!("event:stripe")).is_err());
+    }
+
+    #[test]
+    fn an_event_routine_holds_no_slot_and_is_not_finished_by_firing() {
+        // Both halves matter. Nothing on the clock keeps it out of the
+        // scheduler's sweep; not being finished keeps it from being deleted
+        // like a one-shot the first time it fires.
+        let trigger = event("stripe", "invoice.payment_failed");
+        assert_eq!(trigger.cadence(), None);
+        assert_eq!(trigger.first_run(1_000, None), None);
+        assert_eq!(trigger.first_run(1_000, Some(60)), None, "a delay does not give it a slot");
+        assert!(trigger.repeats(), "it fires every time the event happens");
+
+        let waiting = routine(trigger, None);
+        assert_eq!(waiting.after_running(5_000), NextSlot::Waiting);
+        assert_eq!(
+            waiting.describe(),
+            "when Stripe reports invoice.payment_failed",
+            "and it promises no next firing, because it does not have one"
+        );
     }
 
     #[test]
     fn a_repeat_is_counted_from_when_it_ran_not_from_when_it_was_due() {
         // A machine asleep through three slots must not wake and fire three
         // times to catch up.
-        let routine = routine(Trigger::Every(3600), 1_000);
-        assert_eq!(routine.after_running(10_000_000), Some(10_000_000 + 3_600_000));
+        let routine = routine(clock(Cadence::Every(3600)), Some(1_000));
+        assert_eq!(routine.after_running(10_000_000), NextSlot::Due(10_000_000 + 3_600_000));
     }
 
     #[test]
     fn a_one_shot_has_no_next_time() {
-        let routine = routine(Trigger::Once, 1_000);
+        let routine = routine(clock(Cadence::Once), Some(1_000));
         assert!(!routine.repeats());
-        assert_eq!(routine.after_running(5_000), None);
+        assert_eq!(routine.after_running(5_000), NextSlot::Done);
     }
 
     #[test]
@@ -516,9 +775,9 @@ mod tests {
         // 2025-03-09 is when the US springs forward. A day counted in seconds
         // would move a 9am routine to 10am and leave it there.
         let slot = at(2025, 3, 8, 9, 0);
-        let next = Trigger::Daily.next_after(slot, slot + 1000).unwrap();
+        let next = Cadence::Daily.next_after(slot, slot + 1000).unwrap();
         assert_eq!(next, at(2025, 3, 9, 9, 0));
-        let after = Trigger::Daily.next_after(next, next + 1000).unwrap();
+        let after = Cadence::Daily.next_after(next, next + 1000).unwrap();
         assert_eq!(after, at(2025, 3, 10, 9, 0));
     }
 
@@ -526,12 +785,12 @@ mod tests {
     fn weekdays_skip_the_weekend_and_land_on_monday() {
         // 2025-01-03 is a Friday.
         let friday = at(2025, 1, 3, 9, 0);
-        let next = Trigger::Weekdays.next_after(friday, friday + 1000).unwrap();
+        let next = Cadence::Weekdays.next_after(friday, friday + 1000).unwrap();
         assert_eq!(next, at(2025, 1, 6, 9, 0), "Friday's next weekday is Monday");
 
         let monday = at(2025, 1, 6, 9, 0);
         assert_eq!(
-            Trigger::Weekdays.next_after(monday, monday + 1000).unwrap(),
+            Cadence::Weekdays.next_after(monday, monday + 1000).unwrap(),
             at(2025, 1, 7, 9, 0)
         );
     }
@@ -543,7 +802,7 @@ mod tests {
         let friday = at(2025, 1, 3, 9, 0);
         let monday_afternoon = at(2025, 1, 6, 15, 0);
         assert_eq!(
-            Trigger::Weekdays.next_after(friday, monday_afternoon).unwrap(),
+            Cadence::Weekdays.next_after(friday, monday_afternoon).unwrap(),
             at(2025, 1, 7, 9, 0)
         );
     }
@@ -551,7 +810,7 @@ mod tests {
     #[test]
     fn a_weekly_routine_stays_on_its_weekday() {
         let thursday = at(2025, 1, 2, 14, 30);
-        let next = Trigger::Weekly.next_after(thursday, thursday + 1000).unwrap();
+        let next = Cadence::Weekly.next_after(thursday, thursday + 1000).unwrap();
         assert_eq!(next, at(2025, 1, 9, 14, 30));
     }
 
@@ -560,16 +819,16 @@ mod tests {
         // Clamping without re-anchoring turns the 31st into the 28th and then
         // keeps it there for the rest of the year.
         let jan = at(2025, 1, 31, 8, 0);
-        let feb = Trigger::Monthly.next_after(jan, jan + 1000).unwrap();
+        let feb = Cadence::Monthly.next_after(jan, jan + 1000).unwrap();
         assert_eq!(feb, at(2025, 2, 28, 8, 0), "February has no 31st");
-        let mar = Trigger::Monthly.next_after(jan, feb + 1000).unwrap();
+        let mar = Cadence::Monthly.next_after(jan, feb + 1000).unwrap();
         assert_eq!(mar, at(2025, 3, 31, 8, 0), "March does, so it is the 31st again");
     }
 
     #[test]
     fn a_monthly_routine_crosses_the_year() {
         let dec = at(2025, 12, 15, 10, 0);
-        assert_eq!(Trigger::Monthly.next_after(dec, dec + 1000).unwrap(), at(2026, 1, 15, 10, 0));
+        assert_eq!(Cadence::Monthly.next_after(dec, dec + 1000).unwrap(), at(2026, 1, 15, 10, 0));
     }
 
     #[test]
@@ -578,16 +837,16 @@ mod tests {
         // machine left switched off can produce.
         let long_ago = at(2015, 1, 5, 9, 0);
         let now = at(2025, 6, 10, 12, 0);
-        let next = Trigger::Daily.next_after(long_ago, now).unwrap();
+        let next = Cadence::Daily.next_after(long_ago, now).unwrap();
         assert_eq!(next, at(2025, 6, 11, 9, 0));
     }
 
     #[test]
     fn a_repeat_with_no_stated_start_waits_a_whole_interval() {
         let now = at(2025, 1, 2, 9, 0);
-        assert_eq!(Trigger::Every(3600).first_run(now, None), now + 3_600_000);
-        assert_eq!(Trigger::Daily.first_run(now, None), at(2025, 1, 3, 9, 0));
-        assert_eq!(Trigger::Once.first_run(now, None), now, "a one-shot with no delay is now");
+        assert_eq!(Cadence::Every(3600).first_run(now, None), now + 3_600_000);
+        assert_eq!(Cadence::Daily.first_run(now, None), at(2025, 1, 3, 9, 0));
+        assert_eq!(Cadence::Once.first_run(now, None), now, "a one-shot with no delay is now");
     }
 
     #[test]
@@ -598,17 +857,33 @@ mod tests {
         let friday = at(2025, 1, 3, 12, 0);
         let saturday = at(2025, 1, 4, 9, 0);
         let delay = ((saturday - friday) / 1000) as u32;
-        assert_eq!(Trigger::Weekdays.first_run(friday, Some(delay)), at(2025, 1, 6, 9, 0));
+        assert_eq!(Cadence::Weekdays.first_run(friday, Some(delay)), at(2025, 1, 6, 9, 0));
 
         // A weekday start is left exactly where it was asked for.
         let monday = at(2025, 1, 6, 9, 0);
         let to_monday = ((monday - friday) / 1000) as u32;
-        assert_eq!(Trigger::Weekdays.first_run(friday, Some(to_monday)), monday);
+        assert_eq!(Cadence::Weekdays.first_run(friday, Some(to_monday)), monday);
+    }
+
+    #[test]
+    fn a_stated_start_picks_the_weekday_a_weekly_routine_keeps() {
+        // The operator says "every week, Thursday at 9" by asking for the first
+        // firing on a Thursday at 9. Nothing else in the row records the day,
+        // so a start that was quietly moved would change the cadence itself.
+        let monday = at(2025, 6, 9, 12, 0);
+        let thursday = at(2025, 6, 12, 9, 0);
+        let delay = ((thursday - monday) / 1000) as u32;
+        assert_eq!(Cadence::Weekly.first_run(monday, Some(delay)), thursday);
+        assert_eq!(
+            Cadence::Weekly.next_after(thursday, thursday + 1000).unwrap(),
+            at(2025, 6, 19, 9, 0),
+            "and it stays on that Thursday"
+        );
     }
 
     #[test]
     fn a_routine_without_a_name_is_titled_by_what_it_does() {
-        let mut r = routine(Trigger::Daily, 0);
+        let mut r = routine(clock(Cadence::Daily), Some(0));
         r.what = "check the listings".into();
         assert_eq!(r.title(), "check the listings");
         r.name = "  ".into();
@@ -619,19 +894,51 @@ mod tests {
 
     #[test]
     fn a_routine_that_does_nothing_or_runs_constantly_is_refused() {
-        assert_eq!(validate("", "  ", Trigger::Daily, None), Err(RoutineError::Empty));
+        assert_eq!(validate("", "  ", &clock(Cadence::Daily), None), Err(RoutineError::Empty));
         assert_eq!(
-            validate("", "x", Trigger::Every(5), None),
+            validate("", "x", &clock(Cadence::Every(5)), None),
             Err(RoutineError::TooOften { got: 5 })
         );
         assert_eq!(
-            validate("", "x", Trigger::Once, Some(MAX_DELAY_SECS + 1)),
+            validate("", "x", &clock(Cadence::Once), Some(MAX_DELAY_SECS + 1)),
             Err(RoutineError::TooFar)
         );
         assert_eq!(
-            validate(&"n".repeat(MAX_NAME_LEN + 1), "x", Trigger::Daily, None),
+            validate(&"n".repeat(MAX_NAME_LEN + 1), "x", &clock(Cadence::Daily), None),
             Err(RoutineError::NameTooLong)
         );
-        assert_eq!(validate("Sweep", "x", Trigger::Every(3600), Some(60)), Ok(()));
+        assert_eq!(validate("Sweep", "x", &clock(Cadence::Every(3600)), Some(60)), Ok(()));
+    }
+
+    #[test]
+    fn a_start_time_on_an_event_trigger_is_refused_rather_than_dropped() {
+        // Silently ignoring it would leave whoever sent it believing they had
+        // scheduled something, and the refusal has to say what will happen
+        // instead: an error an agent reads mid-turn needs a way forward.
+        let trigger = event("stripe", "invoice.payment_failed");
+        let refused = validate("Dunning", "chase it", &trigger, Some(3600)).unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "an event trigger has no start time: it fires when Stripe reports \
+             invoice.payment_failed"
+        );
+        assert_eq!(validate("Dunning", "chase it", &trigger, None), Ok(()));
+    }
+
+    #[test]
+    fn a_firing_carries_what_it_spent() {
+        // The history exists to answer "has this been working", and a delivery
+        // that bought no model call is a routine that did not run. Nothing else
+        // in the row distinguishes the two.
+        let run = RoutineRun {
+            run_id: RunId::new(),
+            kind: RunKind::Scheduled,
+            at: 1_000,
+            spent: Tokens { prompt: 900, completion: 100, cost: Some(0.002), calls: 2 },
+        };
+        let json = serde_json::to_value(&run).unwrap();
+        assert_eq!(json["kind"], serde_json::json!("scheduled"));
+        assert_eq!(json["spent"]["calls"], serde_json::json!(2));
+        assert_eq!(json["spent"]["cost"], serde_json::json!(0.002));
     }
 }

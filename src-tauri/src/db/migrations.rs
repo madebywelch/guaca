@@ -105,9 +105,9 @@ VALUES ('00000000-0000-4000-8000-000000000001', 'Everyone', 0);
 -- Rebuilt rather than ALTERed. SQLite refuses to ADD COLUMN when the column
 -- carries both a REFERENCES clause and a non-NULL default, so the alternative
 -- was to drop the foreign key and hope nothing ever writes a dangling group.
--- The rebuild is the documented way to add a constraint and behaves the same
--- whichever way `foreign_keys` happens to be set; migrations run on the
--- bootstrap connection, where it is off, which is what that procedure wants.
+-- The rebuild is the documented way to add a constraint, and `run` turns
+-- foreign key enforcement off around the whole migration sequence, which is
+-- what that procedure wants and what a migration cannot arrange for itself.
 CREATE TABLE agents_new (
     id            TEXT    PRIMARY KEY,
     name          TEXT    NOT NULL,
@@ -517,6 +517,55 @@ UPDATE agents SET rail_order = (
 );
 "#,
     ),
+    (
+        21,
+        r#"
+-- A routine that is not waiting on a clock.
+--
+-- `fires` was made text so the trigger after the calendar ones would be a new
+-- value rather than a new column, and that half held. This is the other half:
+-- a trigger that is not a clock has no next firing at all, and `next_run_at`
+-- was NOT NULL, so the only ways to store one were a sentinel date or a second
+-- column. A sentinel is a date the operator eventually gets shown, and it is
+-- one bad comparison away from firing something meant to wait for Stripe.
+--
+-- NULL says it plainly, and it says it to the scheduler for free: SQL compares
+-- NULL to nothing, so `next_run_at <= now` skips these without the sweep
+-- knowing what kinds of trigger exist.
+--
+-- SQLite cannot drop NOT NULL in place, so the table is rebuilt. Every routine
+-- that exists today waits on a clock and carries its slot over unchanged.
+--
+-- The history survives the rebuild because migrations run on the bootstrap
+-- connection, where `foreign_keys` is off. With it on, `DROP TABLE routines`
+-- performs an implicit DELETE first and fires `routine_runs`' ON DELETE
+-- CASCADE, taking every recorded firing with it. That is the same reason the
+-- agents rebuild in migration 1 is written this way.
+CREATE TABLE routines_new (
+    id          TEXT    PRIMARY KEY,
+    agent_id    TEXT    NOT NULL REFERENCES agents(id),
+    name        TEXT    NOT NULL DEFAULT '',
+    what        TEXT    NOT NULL,
+    fires       TEXT    NOT NULL DEFAULT 'once',
+    active      INTEGER NOT NULL DEFAULT 1,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at  INTEGER NOT NULL
+);
+
+INSERT INTO routines_new (id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at)
+SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at FROM routines;
+
+DROP TABLE routines;
+ALTER TABLE routines_new RENAME TO routines;
+
+-- Both indexes go with the old table and are rebuilt. The due index is partial
+-- now: a routine with no slot is never an answer to "what is due", so it has no
+-- business in the index the scheduler reads on every tick.
+CREATE INDEX routines_due ON routines (next_run_at) WHERE next_run_at IS NOT NULL;
+CREATE INDEX routines_agent ON routines (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -550,8 +599,31 @@ pub fn latest_version() -> i32 {
 /// opening a transaction would let two racing callers both see version 0 and
 /// both try to create the tables.
 pub fn run(conn: &mut Connection) -> Result<i32, MigrationError> {
-    let target = latest_version();
+    // Foreign keys off for the duration, which is what SQLite's own procedure
+    // for rebuilding a table asks for and what a migration cannot do for
+    // itself: the pragma is a no-op inside a transaction, and every migration
+    // runs in one. With enforcement on, the `DROP TABLE` in a rebuild performs
+    // an implicit DELETE first and fires the ON DELETE CASCADE of everything
+    // pointing at that table, so migration 21 took every routine's recorded
+    // firings with it.
+    //
+    // Nothing is lost by it here. Migrations are DDL written in this file, not
+    // input, and the connection this runs on exists only to run them: the pool
+    // the app actually works through turns enforcement on for every connection
+    // in `Store::open`. Restored anyway, because tests call this directly.
+    let enforced: bool = conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?;
+    if enforced {
+        conn.pragma_update(None, "foreign_keys", false)?;
+    }
+    let applied = apply(conn, latest_version());
+    if enforced {
+        // Best effort: whatever the migrations said is the answer worth having.
+        let _ = conn.pragma_update(None, "foreign_keys", true);
+    }
+    applied
+}
 
+fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
     loop {
         // `Immediate` takes the write lock at BEGIN rather than at first write,
         // so the loser waits here instead of failing partway through a batch.
@@ -838,6 +910,86 @@ mod tests {
         let name: String =
             conn.query_row("SELECT name FROM routines WHERE id='r1'", [], |r| r.get(0)).unwrap();
         assert_eq!(name, "", "nothing invents a name for a routine an agent set");
+    }
+
+    #[test]
+    fn rebuilding_the_routines_table_keeps_every_schedule_and_its_history() {
+        // The one migration that drops a table other rows point at. With
+        // foreign keys on, DROP TABLE fires `routine_runs`' ON DELETE CASCADE
+        // and takes every recorded firing with it, so this checks the history
+        // is still there and the slots came over unchanged.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take(20) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0,?1)",
+            [DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO routines (id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at)
+             VALUES ('r1','a','Sweep','check','weekdays',0,1750000000000,1740000000000,5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES ('r1','run-1','test',7)",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let (name, fires, active, next, last, created): (String, String, i64, i64, i64, i64) = conn
+            .query_row(
+                "SELECT name,fires,active,next_run_at,last_run_at,created_at FROM routines
+                  WHERE id='r1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (name.as_str(), fires.as_str(), active, next, last, created),
+            ("Sweep", "weekdays", 0, 1750000000000, 1740000000000, 5),
+            "every column came over as it was, including being switched off"
+        );
+
+        let runs: i64 =
+            conn.query_row("SELECT count(*) FROM routine_runs", [], |r| r.get(0)).unwrap();
+        assert_eq!(runs, 1, "the history must not be cascaded away by the rebuild");
+
+        // And the point of the rebuild: a routine with no slot is now storable.
+        conn.execute(
+            "INSERT INTO routines (id,agent_id,name,what,fires,active,next_run_at,created_at)
+             VALUES ('r2','a','Dunning','chase','event:stripe/invoice.payment_failed',1,NULL,0)",
+            [],
+        )
+        .unwrap();
+        let due: i64 = conn
+            .query_row("SELECT count(*) FROM routines WHERE next_run_at <= ?1", [i64::MAX], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(due, 1, "and it is not due, however far ahead you look");
+    }
+
+    #[test]
+    fn foreign_key_enforcement_is_off_only_while_migrations_run() {
+        // A rebuild needs it off; everything after this must not inherit that.
+        // The pool sets it per connection, but `run` is handed a connection
+        // somebody else keeps, and leaving it off there disables every cascade
+        // in the app.
+        let mut conn = memory();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        run(&mut conn).unwrap();
+        let on: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        assert!(on, "enforcement has to come back on");
     }
 
     #[test]
