@@ -287,3 +287,132 @@ not in that window. `channel_messages` takes a `through` so the window reaches
 back to the message being opened, bounded at a thousand; past that the operator
 lands in the right channel at its newest end. Anything that jumps to a message
 goes through `openMessage` rather than `select`.
+
+## Settings is eight places, because it stopped being one subject
+
+An endpoint, a set of limits, a machine's credentials, how large the window
+draws and what is allowed to interrupt you are five different questions, and one
+scroll made the operator read all five to change one. So it is a nav and a pane,
+on the Cafeteria's shape: a panel that owns its own height, a head and a foot
+pinned to it, one scrolling half.
+
+Every value lives in the shell rather than in the pane that draws it, and that is
+not tidiness. The shell is unmounted when the dialog closes, so a pane holding
+its own state would discard it on every section change: typing an endpoint,
+glancing at Limits and coming back would silently lose the endpoint. Save and
+Test stay in the foot for the same reason they used to be at the bottom of the
+one column — they act on the whole panel, not on the section that happens to be
+open — and Save still does not close, because the point of Test is to press it
+next.
+
+Two things open onto a named section rather than onto the top. The banner that
+says there is no API key opens Provider, because landing on General with the key
+two sections away was a step nobody wanted, and the shortcuts key opens
+Shortcuts. The palette's own row opens the surface rather than a section: it
+lists what is in there, so the row is found by searching for "notifications" or
+"appearance", and the nav is the first thing under the cursor once it is open.
+
+The provider list is presets, not a registry. Guaca speaks one protocol and the
+field is a text box, so the failure it exists to prevent is an endpoint that is
+off by a path segment and fails on every turn of every agent with an error from
+somebody else's server. A local endpoint is marked as local because that changes
+what the key field means: an empty key beside a warning about a missing key is a
+state an operator will try to fix forever.
+
+## The reading column has two surfaces; the rail has one
+
+`styles.css` used to say the surface never follows the OS, and the argument was
+sound as far as it went: a chat log is read for minutes at a time and white wins
+that in a lit room. It does not win it in a dark one. So the reading column is a
+token block behind `data-surface` — the same seven neutrals, four accents, a
+scrim and a shadow, and nothing else.
+
+The rail is not part of the question. It is dark in both surfaces, which is what
+makes the column read as a surface rather than as another panel, and it pins the
+two accents it draws with on `.rail` itself. That last part is load-bearing: the
+rail reads `--flesh` in twelve rules and `--flesh-soft` in two, so a dark value
+for either would have repainted it silently and no test in this repo would have
+caught it. Pinning them on the one element every rail rule descends from turns
+the rail into a colour scope instead of a naming convention.
+
+`system` is resolved before it reaches the document, so `data-surface` is only
+ever `light` or `dark`. A rule keyed on `system` would have to duplicate the one
+keyed on `dark`, and CSS has no way to share the two.
+
+Scale is the same idea from the other side: every length in the stylesheet is
+already a `rem`, so the whole interface is one root font size. It is anchored at
+16px because that is what a `rem` already resolved to — nothing had ever set a
+root font size — and `body` moved from `15px` to `0.9375rem` so that everything
+inheriting from it grows too. The rail and the inspector are capped against the
+viewport as well as scaled: both grow with the scale and the window's own minimum
+does not, so at the largest scale in the smallest window they would otherwise
+leave the reading column narrower than a message can draw.
+
+Neither preference goes anywhere near the runtime. They are `localStorage`, the
+way the inspector's open-or-closed already is, because the runtime would carry
+them across IPC only to hand them straight back.
+
+## An interruption has to earn it
+
+Guaca keeps working while nobody is looking, which is the only time a
+notification is worth anything: routines fire on a schedule, a parked turn waits
+ten minutes for an answer, a cascade settles long after the message that started
+it. All of that matters when you are elsewhere and none of it is worth a badge
+while you watch it happen.
+
+So "away" is not one condition, because the four kinds are not the same news.
+
+- **A permission request** blocks a turn until it is answered. It reaches the
+  operator when the window is not in front of them, *and* when it is but the
+  request belongs to a channel they are not looking at. Nobody finds a parked
+  turn by noticing a row change colour three screens up the rail.
+- **A routine firing** was addressed to nobody and implies no channel: it goes
+  where it was pointed, which is almost never where the operator is. It reaches
+  them whenever they are away, with no channel to match against.
+- **A conversation finishing, or failing**, is the end of something they started.
+  It reaches them only when they are away *and* it is the channel they were last
+  looking at, because a busy runtime settles runs in channels nobody has ever
+  opened and one badge each would make the whole mechanism worth turning off.
+
+Two more refusals, both of which would otherwise read as a bug. Nothing fires for
+the first few seconds after a launch: a routine whose slot passed while the app
+was closed is overdue and fires on the first tick, which is correct, but starting
+Guaca after a weekend away should not announce a weekend of schedule at once. And
+the same kind about the same channel is said once a second at most, so two agents
+failing together are two notifications while one agent failing twice is one.
+
+There is a button that sends a test notification, which is the only way to tell a
+refused operating-system permission from a working one.
+
+## Every key the app answers to is in one list
+
+The app answered to a dozen keys and said so nowhere, which is the same as not
+having them. The Shortcuts pane is that list.
+
+It is a reference rather than a rebinding system, deliberately. Nine of these
+keys are handled by the component that owns the surface they act on — Escape by
+whatever is open, Enter and the arrows by the composer and the palette — so
+rebinding would mean routing all nine through one dispatcher, and a setting that
+appears to rebind a key while only moving one of them is worse than no setting.
+The fixed ones are listed as fixed, and the three that are genuinely global are
+matched from the same table the pane draws, so a key listed there is a key that
+works.
+
+`mod` means Command or Control on every platform, both accepted. Only the label
+follows the platform: a label naming a key the keyboard does not have is worse
+than none.
+
+## Stop is a control on the conversation, not on the agent
+
+It sits in the working line, always visible rather than on hover, because a
+control that appears on hover is a control nobody knows is there and this is the
+one thing on screen that costs money to leave alone.
+
+What it stops is the run. A message that reached four agents is one conversation,
+and stopping only the one on screen would leave the other three working on the
+operator's bill. The button knows which run to name because the runtime already
+said so: a placeholder opening in an agent's channel is the runtime's own
+statement that this agent is working on that run, and the entry is dropped when
+the run settles. Not read from what `sendMessage` returned, which only knows
+about conversations the operator started — a routine's work and a peer's request
+are exactly as worth stopping.

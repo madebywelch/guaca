@@ -8,6 +8,11 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen, TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
@@ -239,6 +244,16 @@ export const api = {
    */
   retryTurn: (agentId: AgentId, messageId: MessageId) =>
     invoke<RunId>("retry_turn", { agentId, messageId }),
+
+  /**
+   * Stops a conversation and everything it set off. False when there was
+   * nothing left to stop.
+   *
+   * A run, not an agent: the thing the operator wants to end reached however
+   * many agents it reached, and stopping only the one on screen would leave the
+   * rest of the cascade running.
+   */
+  stopRun: (runId: RunId) => invoke<boolean>("stop_run", { runId }),
   /** Resets a whole group: transcripts, routines, memories and spend. */
   clearGroup: (groupId: GroupId) => invoke<GroupReset>("clear_group", { groupId }),
   agentRoutines: (id: AgentId) => invoke<Routine[]>("agent_routines", { id }),
@@ -281,6 +296,37 @@ export const api = {
  */
 export function openExternal(url: string): Promise<void> {
   return openUrl(url);
+}
+
+/**
+ * Raises an operating system notification, if the operator has ever allowed it.
+ *
+ * Permission is asked for at the moment the first notification would be shown
+ * rather than at launch, so the prompt arrives attached to something the
+ * operator can see a reason for.
+ *
+ * True means it was handed to the operating system, which is not the same as
+ * shown. On desktop the permission question is answered yes unconditionally —
+ * there is no per-app grant for the plugin to read — so a machine with
+ * notifications switched off in System Settings accepts every one of these and
+ * displays none. Nothing here can tell the difference, and any copy built on
+ * this return value has to be worded so that it does not claim to.
+ *
+ * Every failure is swallowed. A refused permission, a plugin that is not there,
+ * a platform with no notification centre: none of them are worth a banner,
+ * because the thing being announced is already on screen in the rail and the
+ * transcript. This is the redundant copy, not the record.
+ */
+export async function notifyOperator(title: string, body: string): Promise<boolean> {
+  try {
+    const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
+    if (!granted) return false;
+
+    sendNotification({ title, body });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Subscribes to runtime events. Returns an unsubscribe function. */

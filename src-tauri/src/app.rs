@@ -122,6 +122,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .register_uri_scheme_protocol(FILE_SCHEME, serve_file)
         .setup(move |app| {
             let data_dir = app.path().app_data_dir()?;
@@ -270,6 +271,7 @@ pub fn run() {
             commands::save_file,
             commands::send_message,
             commands::retry_turn,
+            commands::stop_run,
             commands::clear_channel,
             commands::clear_group,
             commands::agent_routines,

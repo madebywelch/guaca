@@ -137,6 +137,33 @@ describe("pacing", () => {
     expect(done).toHaveBeenCalledTimes(1);
   });
 
+  it("waits on nothing while there is nothing to animate", () => {
+    // A poll would keep the renderer awake for the life of the window to look
+    // at an empty queue several times a second, and a renderer that never goes
+    // idle never stops drawing.
+    const interval = vi.spyOn(window, "setInterval");
+    renderHook(() => usePulseChoreography([], vi.fn()));
+
+    expect(interval).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops waiting once the last message has played", () => {
+    const done = vi.fn();
+    const only = [pulse(1, "a", "b")];
+    const { rerender } = renderHook(({ pulses }) => usePulseChoreography(pulses, done), {
+      initialProps: { pulses: only },
+    });
+    rerender({ pulses: only });
+
+    act(() => {
+      vi.advanceTimersByTime(AIM_MS + FLIGHT_MS + CATCH_MS + STAGGER_MS);
+    });
+
+    expect(done).toHaveBeenCalledWith(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("drops the animation, never the message, when a backlog builds", () => {
     // Delivery already happened. A queue longer than anyone will watch just
     // means some throws go undrawn.

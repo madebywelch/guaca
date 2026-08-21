@@ -42,6 +42,24 @@ if (!("IntersectionObserver" in globalThis)) {
     IntersectionObserverStub;
 }
 
+// jsdom 27 ships no media queries at all, so every non-optional `matchMedia`
+// call takes the whole tree down. A stub rather than a polyfill: nothing here
+// evaluates a query, so every one of them resolves to not-matching, which is
+// the light-surface, full-motion default the app is built around. A test that
+// wants the other answer overrides this one for the length of that test.
+if (!("matchMedia" in globalThis)) {
+  (globalThis as unknown as { matchMedia: unknown }).matchMedia = (media: string) => ({
+    matches: false,
+    media,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
+
 // Tauri injects this into the real webview before the app loads. Only the URL
 // builder is needed: `lib/files.ts` addresses a stored file with it, and every
 // command goes through a mock.

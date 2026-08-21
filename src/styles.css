@@ -3,11 +3,16 @@
 /* ==========================================================================
    Guaca design tokens
 
-   A dark rail against a white page. The rail carries the identity — warm
-   olive-black, ripe avocado flesh as the one bright accent, pit brown for
-   anything the system says — and the reading column is paper, because that is
-   what long-form text wants. The surface does not follow the OS; a chat log is
-   read for minutes at a time and white wins that argument.
+   A dark rail against a page. The rail carries the identity — warm olive-black,
+   ripe avocado flesh as the one bright accent, pit brown for anything the
+   system says — and the reading column is the page.
+
+   Paper is what long-form text wants and it is still the default: a chat log is
+   read for minutes at a time and white wins that argument in a lit room. It
+   does not win it in a dark one, which is the whole reason the reading column
+   is a token block behind `data-surface` rather than a set of literals. The
+   rail is not part of that question. It is dark in both surfaces, and it pins
+   its own accents so nothing the reading column does can reach it.
 
    Type is three roles, not one. Space Grotesk carries names and titles, where
    a little character belongs. Inter carries everything you actually read for
@@ -27,10 +32,12 @@
   --rail-muted: #8b9c8d;
   --rail-wire: #2b3c32;
 
-  /* The reading surface is white, deliberately and unconditionally. Messages
-     are long-form text read for minutes at a time, and paper is the right
-     ground for that. The avocado palette stays where it belongs: the rail, the
-     agents, and the accents. */
+  /* The reading surface, and the only half of the app a surface choice moves.
+     Messages are long-form text read for minutes at a time, and paper is the
+     right ground for that in a lit room; the dark block below is the same seven
+     names and nothing else, which is what keeps "dark" from meaning "repaint
+     the app". The avocado palette stays where it belongs: the rail, the agents,
+     and the accents. */
   --ground: #fcfcfa;
   --raised: #ffffff;
   --sunken: #f2f1ea;
@@ -50,11 +57,60 @@
   --font-ui: "Inter Variable", system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --rail-w: 15.5rem;
+  /* Every length in this file is a rem, so the operator's interface scale is
+     one root font size and this is the multiplier behind it. A number rather
+     than a size, because it is also what a script would read back. */
+  --ui-scale: 1;
+
+  /* Capped against the viewport as well as scaled, because both of these grow
+     with the scale and the window's own minimum does not. At the largest scale
+     in the smallest window they would otherwise leave the reading column
+     narrower than a message can draw. */
+  --rail-w: min(15.5rem, 28vw);
   --radius: 0.7rem;
   --radius-sm: 0.4rem;
 
+  /* What a dialog is separated from the page by. A token because the answer is
+     different on dark paper, where a near-black wash over a near-black page
+     separates nothing. */
+  --scrim: rgb(11 17 13 / 0.55);
+
   --shadow-pop: 0 1.5rem 3rem -1rem rgb(24 33 27 / 0.22), 0 0 0 1px var(--edge);
+}
+
+/* Ink instead of paper.
+   Seven neutrals, four accents, a scrim and a shadow. Nothing else, and in
+   particular not one `--rail-*` name: the rail is dark in both surfaces and
+   redefining an accent it drew with would repaint it silently, which no test
+   would catch. `.rail` pins the two accents it does read.
+   The reading column sits lighter than the rail here, which is the same
+   relationship as on paper read the other way round: the rail is still the
+   darker frame and the column is still the surface you read on.
+   The accents are lifted rather than kept, because the product's olive and
+   brown are chosen against white and neither can be read on ink. They stay
+   recognisably the same colours; they are not the same values. */
+:root[data-surface="dark"] {
+  --ground: #1b1e1b;
+  --raised: #222622;
+  --sunken: #161916;
+  --edge: #30362f;
+  --text: #e7ebe2;
+  --muted: #a1aa9f;
+  /* Unchanged from paper on purpose: it is already the lightest of the three
+     greys and it is the one hints are set in, so it has the least contrast to
+     spare. */
+  --faint: #8a938a;
+
+  --flesh: #a8c95f;
+  --flesh-soft: #2b3320;
+  --pit: #c99a6a;
+  --pit-soft: #33281d;
+  --mint: #4fc48c;
+  --alarm: #e8705c;
+
+  --scrim: rgb(0 0 0 / 0.62);
+  /* The drop layer does nothing over a dark page, so the ring does the work. */
+  --shadow-pop: 0 1.5rem 3rem -1rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--edge);
 }
 
 * {
@@ -83,10 +139,22 @@ body,
   margin: 0;
 }
 
+/* The anchor every rem in this file is measured against, and the one place the
+   interface scale is applied. 16px because that is what 1rem already resolved
+   to: nothing here or in Tailwind's preflight had ever set it, so anchoring on
+   the 15px body below would have shrunk the whole app by 6.25% at scale 1. */
+html {
+  font-size: calc(16px * var(--ui-scale));
+}
+
 body {
   font-family: var(--font-ui);
   font-optical-sizing: auto;
-  font-size: 15px;
+  /* The 15px this has always been, said in a unit that scales. Every element
+     that resets with `font: inherit` and names no size of its own falls back to
+     this, so leaving it absolute would freeze them while everything around them
+     grew. */
+  font-size: 0.9375rem;
   background: var(--ground);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -107,13 +175,13 @@ button {
 }
 
 ::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
+  width: 0.7rem;
+  height: 0.7rem;
 }
 ::-webkit-scrollbar-thumb {
   background: color-mix(in oklab, var(--muted) 32%, transparent);
   border-radius: 99px;
-  border: 3px solid transparent;
+  border: 0.19rem solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
@@ -137,7 +205,8 @@ button {
 .rail__body,
 .rail__list,
 .inspector,
-.inspector__body {
+.inspector__body,
+.settings__pane {
   min-height: 0;
 }
 
@@ -157,7 +226,17 @@ button {
    Rail
    ========================================================================== */
 
+/* The rail is dark in both surfaces, so the two accents it draws with are the
+   paper values whatever the reading column is doing. Pinned here, on the one
+   element every rail rule descends from, rather than renamed at the twenty-odd
+   call sites in the reading half: this makes the rail a real colour scope
+   instead of a naming convention, and a new dark value for either token cannot
+   reach it by accident. `:focus-visible` is deliberately not covered — a focus
+   ring is drawn in both halves and should follow the surface it is drawn on. */
 .rail {
+  --flesh: #4e6b16;
+  --flesh-soft: #eef2d8;
+
   width: var(--rail-w);
   background: var(--rail-ground);
   color: var(--rail-text);
@@ -377,14 +456,14 @@ button {
 .pulse {
   position: absolute;
   left: 1.72rem;
-  width: 9px;
-  height: 9px;
-  margin-left: -4.5px;
-  border-radius: 3px;
+  width: 0.58rem;
+  height: 0.58rem;
+  margin-left: -0.29rem;
+  border-radius: 0.19rem;
   background: var(--pulse-color, var(--flesh));
   box-shadow:
-    0 0 0 3px color-mix(in oklab, var(--pulse-color, var(--flesh)) 22%, transparent),
-    0 0 10px color-mix(in oklab, var(--pulse-color, var(--flesh)) 45%, transparent);
+    0 0 0 0.19rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 22%, transparent),
+    0 0 0.64rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 45%, transparent);
   pointer-events: none;
   z-index: 2;
   animation: pulse-travel var(--pulse-duration, 620ms) cubic-bezier(0.35, 0, 0.3, 1) forwards;
@@ -1417,7 +1496,7 @@ button {
   border: 0;
   text-align: left;
   font-size: 0.78rem;
-  color: var(--ink);
+  color: var(--text);
 }
 
 .run__head:hover {
@@ -2177,6 +2256,14 @@ button {
   transform: none;
 }
 
+/* Always visible, unlike the label beside it. A control that appears on hover
+   is a control nobody knows is there, and this is the one thing on screen that
+   costs money to leave alone. */
+.working__stop {
+  margin-left: auto;
+  flex: none;
+}
+
 /* Lighter than the answer it is on the way to, and italic so a glance can tell
    the two apart without reading either: this is the only text in the pane that
    is not something anybody said. */
@@ -2606,13 +2693,13 @@ button {
   inset-block: 0;
   margin-left: 0.4rem;
   display: inline-flex;
-  gap: 2px;
+  gap: 0.13rem;
   align-items: center;
 }
 
 .wire__dots i {
-  width: 3px;
-  height: 3px;
+  width: 0.19rem;
+  height: 0.19rem;
   border-radius: 99px;
   background: currentColor;
   opacity: 0.4;
@@ -2862,6 +2949,14 @@ button {
   line-height: 1;
 }
 
+/* Four of these brands publish a black mark, and black on a dark chip is not
+   there at all. Mixed toward the foreground rather than replaced, so a brand
+   that does have a colour keeps most of it and the row still reads as a set of
+   different companies. The comment above rules out the other obvious fix. */
+:root[data-surface="dark"] .mark {
+  color: color-mix(in oklab, var(--mark, var(--muted)) 62%, var(--text));
+}
+
 .mark__icon {
   width: 0.85rem;
   height: 0.85rem;
@@ -3007,7 +3102,7 @@ button {
 .scrim {
   position: fixed;
   inset: 0;
-  background: rgb(11 17 13 / 0.55);
+  background: var(--scrim);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -3149,13 +3244,6 @@ button {
   color: var(--mint);
 }
 
-.divider {
-  height: 1px;
-  background: var(--edge);
-  margin: 1.1rem 0;
-  border: 0;
-}
-
 /* The animation is charm; someone who has asked the OS to stop moving things
    should still get a usable app. */
 @media (prefers-reduced-motion: reduce) {
@@ -3180,7 +3268,9 @@ button {
    ========================================================================== */
 
 .inspector {
-  width: 20rem;
+  /* Capped for the same reason as `--rail-w`: it scales and the window's
+     minimum does not. */
+  width: min(20rem, 30vw);
   flex: none;
   display: flex;
   flex-direction: column;
@@ -3498,7 +3588,7 @@ button {
   width: 0.85rem;
   height: 0.85rem;
   margin-top: 0.15rem;
-  border: 1.5px solid var(--mint);
+  border: 0.1rem solid var(--mint);
   border-radius: 50%;
   position: relative;
 }
@@ -3509,7 +3599,7 @@ button {
   position: absolute;
   left: 50%;
   bottom: 50%;
-  width: 1.5px;
+  width: 0.1rem;
   background: var(--mint);
   transform-origin: bottom center;
 }
@@ -4230,4 +4320,348 @@ button {
 
 .cafeteria__spacer {
   margin-left: auto;
+}
+
+/* ==========================================================================
+   Settings
+
+   Settings stopped being one column the moment it stopped being one subject.
+   An endpoint, a set of limits, a machine's credentials, how large the window
+   draws and what is allowed to interrupt you are five different questions, and
+   a single scroll made the operator read all five to change one.
+
+   So it is the Cafeteria's shape: a panel that owns its own height with a head
+   and a foot pinned to it, and one scrolling half. The nav is a vertical
+   tablist rather than the palette's horizontal one because there are eight
+   sections and they have names rather than one-word scopes.
+
+   Save and Test live in the foot, outside the scrolling half, because they act
+   on the whole panel and not on the section that happens to be open.
+   ========================================================================== */
+
+/* One height, not a height per section. Sized by its content under a
+   `max-height`, the panel was a different size on every pane — tall on
+   Provider, short on Appearance — so choosing a section resized the window
+   under the cursor and the foot moved out from under the button you were about
+   to press. A stated height, capped by the viewport, means the panes differ in
+   what they scroll and in nothing else. */
+.dialog--settings {
+  width: min(52rem, 100%);
+  display: flex;
+  flex-direction: column;
+  height: min(38rem, calc(100vh - 3rem));
+  padding: 0;
+}
+
+/* Focus lands here on open so the dialog owns the keyboard, but this is a
+   landing spot rather than a control: the ring belongs on the nav and the
+   fields inside. */
+.dialog--settings:focus,
+.dialog--settings:focus-visible {
+  outline: none;
+}
+
+.settings__head {
+  padding: 1.35rem 1.35rem 1rem;
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.settings__body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.settings__nav {
+  flex: none;
+  width: 11rem;
+  padding: 0.6rem 0.5rem;
+  border-right: 1px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  overflow-y: auto;
+}
+
+.settings__tab {
+  border: 0;
+  background: none;
+  text-align: left;
+  padding: 0.4rem 0.55rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  color: var(--muted);
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.settings__tab:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.settings__tab[aria-selected="true"] {
+  background: var(--sunken);
+  color: var(--text);
+  font-weight: 600;
+}
+
+.settings__pane {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.1rem 1.35rem 1.35rem;
+}
+
+.settings__title {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0 0 0.2rem;
+}
+
+.settings__lede {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0 0 1.1rem;
+  line-height: 1.5;
+  max-width: 34rem;
+}
+
+.settings__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding: 0.9rem 1.35rem;
+  border-top: 1px solid var(--edge);
+  flex: none;
+}
+
+/* The one action that belongs to a single pane rather than to the panel. It
+   reads the endpoint, the key and the model, which are all in arm's reach of
+   it here and were two sections away when it sat in the foot. */
+.settings__probe {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1.2rem;
+}
+
+/* A row of choices that are one choice: the surface, the scale. Radio
+   semantics rather than a select, because the whole point is seeing the options
+   at once and the set is always short. */
+.choices {
+  display: flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.choice {
+  border: 1px solid var(--edge);
+  background: var(--raised);
+  color: var(--muted);
+  border-radius: var(--radius-sm);
+  padding: 0.32rem 0.7rem;
+  font-size: 0.78rem;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.choice:hover:not([aria-pressed="true"]):not([aria-checked="true"]) {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+}
+
+.choice:disabled {
+  color: var(--faint);
+  border-color: color-mix(in oklab, var(--edge) 60%, transparent);
+  background: none;
+  cursor: default;
+}
+
+.choice[aria-pressed="true"],
+.choice[aria-checked="true"] {
+  border-color: var(--flesh);
+  background: color-mix(in oklab, var(--flesh) 10%, var(--raised));
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* One switchable thing with a name and a reason, stacked. Used by the
+   notification kinds, where there are five in a row and a `.field` each would
+   put a third of the pane's height into labels. */
+.switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.switch-row:last-of-type {
+  border-bottom: 0;
+}
+
+.switch-row__text {
+  min-width: 0;
+  flex: 1;
+}
+
+.switch-row__label {
+  display: block;
+  font-size: 0.84rem;
+  color: var(--text);
+}
+
+.switch-row[data-off="true"] .switch-row__label {
+  color: var(--faint);
+}
+
+.switch-row__hint {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--faint);
+  margin-top: 0.1rem;
+  line-height: 1.45;
+}
+
+/* One provider the operator can pick, with what is known about it. A button
+   rather than a row of radio inputs because choosing one fills in a field
+   rather than setting a value: it is an action with a current state. */
+/* One line each. Stacked over two, at seven presets, the picker filled the
+   whole pane and pushed the endpoint and the key below the fold — a shortcut
+   for filling a field, hiding the field. */
+.preset {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--edge);
+  background: var(--raised);
+  border-radius: var(--radius-sm);
+  padding: 0.34rem 0.6rem;
+  margin-bottom: 0.25rem;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.preset:hover {
+  border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+}
+
+.preset[aria-current="true"] {
+  border-color: var(--flesh);
+  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+}
+
+.preset__text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.preset__name {
+  flex: none;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+/* Gives up its room first: the name is what the row is picked by, and a
+   truncated URL still says which host it points at. */
+.preset__url {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Whether this one is usable right now. Never a reason not to choose it: a
+   provider with no key is exactly what somebody about to paste a key is
+   looking at, so the state is information rather than a refusal. */
+.preset__state {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.preset__state[data-ready="true"] {
+  color: var(--mint);
+}
+
+/* The shortcuts table. A definition list, because that is what it is. */
+.keys {
+  margin: 0 0 1.1rem;
+}
+
+.keys__group {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0.9rem 0 0.35rem;
+}
+
+.keys__row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--edge);
+}
+
+.keys__row:last-child {
+  border-bottom: 0;
+}
+
+.keys__what {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--text);
+}
+
+.keys__combo {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--sunken);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.36rem;
+  white-space: nowrap;
+}
+
+/* About. Centred, because it is the one pane that is a statement rather than a
+   set of controls. */
+.about {
+  text-align: center;
+  padding: 1rem 0 0.5rem;
+}
+
+.about__name {
+  font-family: var(--font-display);
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.about__version {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--faint);
+  margin: 0.25rem 0 0;
+}
+
+.about__facts {
+  margin: 1.2rem 0 0;
+  text-align: left;
 }
