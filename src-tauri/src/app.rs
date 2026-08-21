@@ -52,24 +52,49 @@ fn serve_file(
     context: UriSchemeContext<'_, tauri::Wry>,
     request: Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
-    let refuse = |status: u16, why: &str| {
-        Response::builder()
-            .status(status)
-            .header("content-type", "text/plain; charset=utf-8")
-            .body(why.as_bytes().to_vec())
-            .expect("a refusal is a valid response")
-    };
+    let own_origin = app_origin(context.app_handle().config());
 
     // A request can in principle arrive before `setup` has managed the state,
     // and a window that asks too early should be told to come back rather than
     // take the app down with it.
     let Some(state) = context.app_handle().try_state::<AppState>() else {
-        return refuse(503, "The file store is not open yet.");
+        return refuse(&own_origin, 503, "The file store is not open yet.");
     };
+
+    file_response(state.runtime.files(), &request, &own_origin)
+}
+
+/// One stored file, or the reason there is not one.
+///
+/// Every answer carries `access-control-allow-origin`, because a response on a
+/// custom scheme is cross-origin to the page that asked for it and WebKit checks
+/// it. Without the header a `fetch` rejects with `TypeError: Load failed`,
+/// which is what an operator reads in place of a document, and a refusal cannot
+/// even say which refusal it was: the status is unreadable too, so the three
+/// sentences `whyNot` exists to tell apart all arrive as the same one. An `img`
+/// is exempt from the check, which is why a picture drew and nothing else did.
+///
+/// It names the origin rather than allowing any, and refuses a page that is not
+/// this app's own outright. This webview also holds a cross-origin frame showing
+/// an agent's browser, and a wildcard would let script in that frame read any
+/// file whose digest it could name.
+fn file_response(
+    files: &FileStore,
+    request: &Request<Vec<u8>>,
+    own_origin: &str,
+) -> Response<Vec<u8>> {
+    // Sent on a `fetch` and absent on an `img` or a frame load. Absent is not
+    // suspicious: WebKit omits it exactly where it also does not police the
+    // answer, and the header below is then ignored rather than needed.
+    let asking = request.headers().get("origin").and_then(|value| value.to_str().ok());
+    if let Some(asking) = asking.filter(|asking| *asking != own_origin) {
+        tracing::warn!(asking, own_origin, "refused a file to a page that is not this app's");
+        return refuse(own_origin, 403, "This file is not readable from here.");
+    }
 
     let range = request.headers().get("range").and_then(|value| value.to_str().ok());
     let target = request.uri().path().trim_start_matches('/');
-    match state.runtime.files().serve(target, range) {
+    match files.serve(target, range) {
         Ok(served) => {
             // A preview that comes up blank is either a request that never
             // happened, which means the CSP, or one that was answered wrongly.
@@ -84,6 +109,11 @@ fn serve_file(
             let mut response = Response::builder()
                 .status(served.status)
                 .header("content-type", served.mime)
+                // The same header whether or not the request carried an origin,
+                // so the one cached answer is valid for either. A response that
+                // varied on the request would let an `img` fill the cache with
+                // a copy a later `fetch` of the same file cannot read.
+                .header("access-control-allow-origin", own_origin)
                 // Said even on a whole-file answer: a PDF viewer asks for the
                 // tail first, and one that is told ranges are unavailable
                 // re-reads the document from the start for every page.
@@ -99,8 +129,31 @@ fn serve_file(
         }
         Err(err) => {
             tracing::debug!(%err, target, "refused a file the webview asked for");
-            refuse(404, "No file here with that content.")
+            refuse(own_origin, 404, "No file here with that content.")
         }
+    }
+}
+
+fn refuse(own_origin: &str, status: u16, why: &str) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(status)
+        .header("content-type", "text/plain; charset=utf-8")
+        .header("access-control-allow-origin", own_origin)
+        .body(why.as_bytes().to_vec())
+        .expect("a refusal is a valid response")
+}
+
+/// The origin the app's own page is served from.
+///
+/// Dev serves it off Vite and a bundle off Tauri's own scheme. Both are the
+/// value Tauri itself puts in `Access-Control-Allow-Origin` for the protocols it
+/// registers, and both are the `Origin` WebKit then sends back here, so this has
+/// to keep agreeing with `Manager::get_app_url`.
+fn app_origin(config: &tauri::Config) -> String {
+    match tauri::is_dev().then_some(config.build.dev_url.as_ref()).flatten() {
+        Some(dev) => dev.origin().ascii_serialization(),
+        None if cfg!(windows) => "http://tauri.localhost".to_string(),
+        None => "tauri://localhost".to_string(),
     }
 }
 
@@ -291,4 +344,131 @@ pub fn run() {
         .expect("error while running Guac");
 
     drop(tokio_runtime);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The origin the webview asks from while `pnpm app` is running.
+    const DEV: &str = "http://localhost:1420";
+
+    fn asked(origin: Option<&str>, range: Option<&str>, target: &str) -> Request<Vec<u8>> {
+        let mut builder = Request::builder().uri(format!("guacfile://localhost/{target}"));
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        if let Some(range) = range {
+            builder = builder.header("range", range);
+        }
+        builder.body(Vec::new()).unwrap()
+    }
+
+    fn store() -> (FileStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (FileStore::new(dir.path().join("files")), dir)
+    }
+
+    /// A document the operator can read, rather than one they have to download.
+    ///
+    /// Every preview but a picture reaches the file store through `fetch`, and a
+    /// `fetch` whose answer does not name an allowed origin rejects before the
+    /// caller sees a status. This is the header that was missing, and its
+    /// absence turned every markdown brief an agent wrote into a widget saying
+    /// "Load failed".
+    #[test]
+    fn a_file_the_app_asks_for_can_be_read_by_the_app() {
+        let (files, _dir) = store();
+        let brief = files.put("brief.md", b"# Findings\n\nThe map is drawn.\n").unwrap();
+
+        let response = file_response(
+            &files,
+            &asked(Some(DEV), None, &format!("{}/brief.md", brief.digest)),
+            DEV,
+        );
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["access-control-allow-origin"], DEV);
+        assert_eq!(response.headers()["content-type"], "text/markdown");
+        assert_eq!(response.body(), b"# Findings\n\nThe map is drawn.\n");
+    }
+
+    /// The snippet under a message asks for the first bytes and nothing more.
+    #[test]
+    fn the_front_of_a_file_is_allowed_too() {
+        let (files, _dir) = store();
+        let log = files.put("run.txt", b"0123456789").unwrap();
+
+        let response = file_response(
+            &files,
+            &asked(Some(DEV), Some("bytes=0-3"), &format!("{}/run.txt", log.digest)),
+            DEV,
+        );
+
+        assert_eq!(response.status(), 206);
+        assert_eq!(response.headers()["access-control-allow-origin"], DEV);
+        assert_eq!(response.body(), b"0123");
+    }
+
+    /// An `img` sends no origin, and is answered anyway.
+    #[test]
+    fn a_request_with_no_origin_is_still_answered() {
+        let (files, _dir) = store();
+        let shot = files.put("screen.png", b"\x89PNG not really").unwrap();
+
+        let response =
+            file_response(&files, &asked(None, None, &format!("{}/screen.png", shot.digest)), DEV);
+
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.body(), b"\x89PNG not really");
+    }
+
+    /// The frame showing an agent's browser is another origin in this webview.
+    #[test]
+    fn a_page_that_is_not_this_app_is_refused_the_bytes() {
+        let (files, _dir) = store();
+        let brief = files.put("brief.md", b"# Findings\n").unwrap();
+
+        let response = file_response(
+            &files,
+            &asked(
+                Some("https://sessions.onkernel.com:8443"),
+                None,
+                &format!("{}/brief.md", brief.digest),
+            ),
+            DEV,
+        );
+
+        assert_eq!(response.status(), 403);
+        assert!(!response.body().windows(8).any(|w| w == b"Findings"), "the bytes stay here");
+    }
+
+    /// A refusal has to be readable, or it is the same "Load failed" again and
+    /// the operator cannot tell a missing file from a store that was not open.
+    #[test]
+    fn a_refusal_says_which_refusal_it_was() {
+        let (files, _dir) = store();
+        let missing = "0".repeat(64);
+
+        let response =
+            file_response(&files, &asked(Some(DEV), None, &format!("{missing}/gone.md")), DEV);
+
+        assert_eq!(response.status(), 404);
+        assert_eq!(response.headers()["access-control-allow-origin"], DEV);
+
+        let opening = refuse(DEV, 503, "The file store is not open yet.");
+        assert_eq!(opening.headers()["access-control-allow-origin"], DEV);
+    }
+
+    #[test]
+    fn the_allowed_origin_is_where_the_page_came_from() {
+        let mut config = tauri::Config::default();
+        config.build.dev_url = Some("http://localhost:1420/".parse().unwrap());
+
+        assert_eq!(
+            app_origin(&config),
+            if tauri::is_dev() { DEV } else { "tauri://localhost" },
+            "the dev server while `pnpm app` runs, Tauri's own scheme in a bundle"
+        );
+    }
 }
