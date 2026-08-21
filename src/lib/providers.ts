@@ -15,6 +15,13 @@
  * Local endpoints are marked because they change what the API key field means:
  * a server on this machine wants no key, and an empty key field beside a
  * warning about a missing key is the state an operator will try to fix forever.
+ *
+ * A ChatGPT subscription is deliberately not in this list. It is not an endpoint
+ * with a different URL: it speaks a different protocol, authenticates by signing
+ * in rather than by pasting, offers its own models and has no per-call price.
+ * Putting it in a list of base URLs would say it is one row different from
+ * OpenRouter, and the first thing an operator would do is look for the key field
+ * it does not have. It gets its own block in the pane, above this list.
  */
 
 export interface Provider {
@@ -110,4 +117,28 @@ export function providerFor(baseUrl: string): Provider | undefined {
  */
 export function providerReady(provider: Provider, keySet: boolean): boolean {
   return provider.local === true || keySet;
+}
+
+/**
+ * How a ChatGPT plan is written for a person.
+ *
+ * The service sends lowercase identifiers, and the point of showing one at all
+ * is so an operator can tell which of their accounts they signed in to. An
+ * unrecognised plan is title-cased rather than replaced: a plan this list has
+ * not heard of still works, and "Unknown" beside a working sign-in reads as a
+ * problem.
+ */
+export function planLabel(plan: string): string {
+  const known: Record<string, string> = {
+    free: "Free",
+    plus: "Plus",
+    pro: "Pro",
+    team: "Team",
+    business: "Business",
+    enterprise: "Enterprise",
+    edu: "Edu",
+  };
+  const key = plan.trim().toLowerCase();
+  if (!key) return "";
+  return known[key] ?? key.charAt(0).toUpperCase() + key.slice(1);
 }

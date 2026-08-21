@@ -247,6 +247,83 @@ that has already finished returns false and writes nothing: a line in the
 transcript saying a conversation was stopped, in a conversation that ended on its
 own, describes something that did not happen.
 
+## A subscription is a second provider, not a second endpoint
+
+An operator can pay for a turn two ways: an OpenAI-compatible endpoint with a key
+they pasted, or a ChatGPT subscription they signed in to. `InferenceConfig`
+carries a `Provider` rather than a flag, because almost nothing about the call is
+shared. Different host, different wire protocol, different auth header, a model
+list that is not the operator's to choose, and no price on the answer. Modelling
+the subscription as "a base URL with a different key" would put all of that
+behind a string in a text box, and the first symptom would be an agent failing on
+a parameter nobody set.
+
+**The two protocols meet in exactly one function.** `LlmClient::stream_chat`
+dispatches on the provider, and `llm/codex.rs` translates. Above that line the
+app has one shape of request and one shape of completion: `runtime/mod.rs`
+assembles a single kind of call, `prompt.rs` writes one kind of history, tool
+results come back one way, and the guard, the budget, the retry loop and the stop
+boundaries did not change at all. That is the whole reason for translating rather
+than teaching the runtime a second protocol. The cost is one file that has to be
+right about both shapes, which is what its tests are for.
+
+**What the Responses API disagrees with chat completions about.** Each of these
+was learned from a live call refusing one, and each has a test that fails without
+it:
+
+- The system prompt is not a message. It is `instructions`, and the endpoint
+  answers 400 without one.
+- A tool result is not a role. It is a `function_call_output` item carrying a
+  `call_id`, filed as a sibling of the `function_call` it answers, and there is
+  no `role: "tool"` to send.
+- A tool definition is flat. The nested `{type, function: {...}}` form is
+  accepted and then the model is never offered the tool, which reads as an agent
+  that has forgotten how to do its job.
+- There is no temperature. The parameter is rejected outright rather than
+  ignored, so a request carrying one fails in full. `probe` sets one, which is
+  why the Test connection button is the path that would have found this.
+- Nothing says `[DONE]`. The stream ends on `response.completed`, and the usage
+  rides inside it rather than arriving in a frame of its own.
+
+**A subscription call is unpriced, not free.** Tokens are counted and `cost` is
+`None`, which is what a local model already reports and what every reader
+downstream already handles. Zero would draw as a free call in the usage view.
+
+**Reasoning is asked for and still never kept.** Summaries stream to the operator
+and are dropped, exactly as on the other transport. The encrypted reasoning
+blobs that would let a later round resume the model's own working are
+deliberately not requested: keeping them would mean persisting reasoning and
+sending it back, which is the one thing `Token::Reasoning` exists to prevent. A
+multi-round turn therefore re-reasons from its tool results rather than
+continuing, and that is the price of the promise.
+
+**The sign-in is a device flow, and it lives beside the settings rather than in
+them.** `subscription.rs` has both arguments. Briefly: the other half of OAuth's
+browser dance is a redirect back, and catching one means either binding a
+localhost port or claiming a URL scheme, both of which put the app in the path of
+a credential arriving from a browser and both of which fail quietly when
+something else got there first. The device flow has no redirect. And the token
+set rotates on refresh, which is Guaca writing in the background, while
+`config.json` is rewritten wholesale every time the operator presses Save; two
+writers on one file lose a refreshed token to a stale in-memory copy, and the
+symptom is a sign-in that works until an unrelated setting changes.
+
+**A group that names its own endpoint or key leaves the subscription.**
+`GroupInference::apply` flips the provider back to the endpoint, because an
+endpoint is not where a subscription is spent. Without it such a group inherits
+the app's subscription and has both of its overrides silently ignored: the
+operator is looking at a URL and a key that nothing used, with no error to
+explain it. Overriding only the model does not flip it, since that is a group
+asking for a different model on whatever the app is already paying with. The flip
+happens before the model is collapsed, so each case lands on a model its own
+provider can run.
+
+**Only OpenAI offers this.** Anthropic prohibits it. Consumer Claude OAuth tokens
+are restricted to Claude Code and Claude.ai, enforced server-side, so a Claude
+subscription cannot fund a third-party harness however the credential is
+obtained. Claude models reach Guaca the same way they always did: an API key, or
+OpenRouter, which is still the default. `docs/PROTOCOL.md` has the dates.
+
 ## A failed model call is retried before the operator hears about it
 
 `stream_with_retries` is the loop and `LlmError::is_transient` decides. Rate
@@ -696,12 +773,37 @@ The event stream is therefore a test contract as well as a UI feed. An event
 that stops being emitted, or one emitted twice, fails here rather than showing
 up as a spinner nobody can explain.
 
+**A fourth suite asks the same three questions of the other protocol.**
+`tests/subscription.rs` drives the real runtime against a scripted Responses
+server, because the three above all speak chat completions and would pass with
+the subscription path never dispatched, the credential never read and the model
+resolved from the wrong field. Its stub asserts the three things a live call was
+observed to refuse — no `temperature`, `instructions` present, tools flat — so a
+regression is a failing test rather than a 400 nobody sees until they sign in.
+
+It also holds one `#[ignore]`d live test, `./scripts/subscription.sh`. Everything
+offline is a stub agreeing with what this app believes the protocol is; the live
+one is the only thing that notices when that belief goes stale, which it will,
+because the protocol belongs to somebody else.
+
 ## Known limitations
 
 Stated plainly rather than discovered later.
 
 - **The API key is stored in plaintext**, mode `0600`, in the app config
-  directory. See the README. The honest fix is the OS keychain.
+  directory, and the ChatGPT sign-in in `subscription.json` beside it. See the
+  README. The honest fix is the OS keychain, and it matters more for the sign-in:
+  a pasted key is scoped to inference, while that credential belongs to a ChatGPT
+  account with more than Guaca behind it.
+- **A subscription's remaining quota is not shown.** A plan is metered in hours
+  per window by the vendor, Guaca counts tokens, and the two do not convert. So
+  the usage view reports what a run spent in tokens with no price, and the first
+  sign of a plan running out is the backend refusing a turn. The number lives
+  behind an endpoint this app does not call.
+- **A multi-round subscription turn re-reasons rather than continuing.** Resuming
+  a model's own working across rounds means holding its encrypted reasoning and
+  sending it back, which this app promises not to do. The cost is tokens, not
+  correctness.
 - **History window is fixed at 40 messages** per prompt, with no summarization.
   A very long conversation loses its early context.
 - **Undelivered messages to an agent deleted mid-run are dropped**, not returned

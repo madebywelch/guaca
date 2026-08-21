@@ -159,7 +159,12 @@ export default function App() {
     }
   };
 
-  const needsKey = ready && settings !== null && !settings.apiKeySet;
+  // A key is only missing if a key is what pays. An operator on a subscription
+  // has nothing to paste, so this asked them forever for something the Provider
+  // pane does not offer them, and the one banner the app uses to say "you are
+  // not set up yet" stopped meaning anything.
+  const needsKey =
+    ready && settings !== null && settings.provider === "compatible" && !settings.apiKeySet;
   const openAgent =
     selected && selected !== ACTIVITY_CHANNEL ? agents.find((a) => a.id === selected) : undefined;
 

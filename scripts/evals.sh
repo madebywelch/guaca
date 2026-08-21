@@ -24,7 +24,16 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-model=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['inference']['defaultModel'])" "$CONFIG")
+# The model belonging to whichever provider is chosen. Printing the endpoint's
+# model while a subscription is paying names one the run will never call.
+read_model='
+import json, sys
+i = json.load(open(sys.argv[1]))["inference"]
+chatgpt = i.get("provider") == "chatgpt"
+print(i.get("subscriptionModel") if chatgpt else i["defaultModel"], end="")
+print(" (ChatGPT subscription)" if chatgpt else "")
+'
+model=$(python3 -c "$read_model" "$CONFIG")
 printf '\033[1m==> Live evals against %s\033[0m\n' "$model"
 echo "These make real model calls and cost real money. Ctrl-C now if that is a surprise."
 echo

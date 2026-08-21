@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Prefs } from "../lib/prefs";
-import type { GuardLimits, Settings, SettingsPatch } from "../lib/types";
+import type {
+  DeviceCode,
+  GuardLimits,
+  Settings,
+  SettingsPatch,
+  SubscriptionStatus,
+} from "../lib/types";
 import type { Section } from "./SettingsDialog";
 
 /**
@@ -43,6 +49,9 @@ function stored(over: Partial<Settings> = {}): Settings {
     browserStealth: false,
     baseUrl: "https://openrouter.ai/api/v1",
     defaultModel: "anthropic/claude-sonnet-4.5",
+    provider: "compatible",
+    subscriptionModel: "gpt-5.6-luna",
+    subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
     apiKeySet: true,
     apiKeyHint: "…9f2c",
     requestTimeoutSecs: 120,
@@ -51,17 +60,51 @@ function stored(over: Partial<Settings> = {}): Settings {
   };
 }
 
+/** Nobody signed in, which is what a fresh install looks like. */
+function signedOut(): SubscriptionStatus {
+  return { signedIn: false, email: "", plan: "", includesCodex: false };
+}
+
+function signedIn(over: Partial<SubscriptionStatus> = {}): SubscriptionStatus {
+  return {
+    signedIn: true,
+    email: "robert@example.com",
+    plan: "pro",
+    includesCodex: true,
+    ...over,
+  };
+}
+
 const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
 const getVersion = vi.fn<() => Promise<string>>(async () => "0.4.2");
+const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => signedOut());
+const beginSubscriptionSignin = vi.fn<() => Promise<DeviceCode>>(async () => ({
+  verificationUrl: "https://auth.openai.com/codex/device",
+  userCode: "ABCD-EFGH",
+  deviceAuthId: "dev-1",
+  intervalSecs: 2,
+}));
+const completeSubscriptionSignin = vi.fn<(code: DeviceCode) => Promise<SubscriptionStatus>>(
+  async () => signedIn(),
+);
+const signOutSubscription = vi.fn<() => Promise<Settings>>(async () =>
+  stored({ provider: "compatible" }),
+);
+const openExternal = vi.fn<(url: string) => Promise<void>>(async () => {});
 
 vi.mock("../lib/ipc", () => ({
   api: {
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
+    subscriptionStatus: () => subscriptionStatus(),
+    beginSubscriptionSignin: () => beginSubscriptionSignin(),
+    completeSubscriptionSignin: (code: DeviceCode) => completeSubscriptionSignin(code),
+    signOutSubscription: () => signOutSubscription(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
+  openExternal: (url: string) => openExternal(url),
 }));
 
 // The About pane reads the version through a dynamic import, so the module has
@@ -157,6 +200,9 @@ beforeEach(() => {
   updateSettings.mockResolvedValue(stored());
   testConnection.mockResolvedValue("Reached OpenRouter. 312 models.");
   notifyOperator.mockResolvedValue(true);
+  subscriptionStatus.mockResolvedValue(signedOut());
+  completeSubscriptionSignin.mockResolvedValue(signedIn());
+  signOutSubscription.mockResolvedValue(stored({ provider: "compatible" }));
   // No Tauri host behind this webview, which is the state the About pane is
   // built to shrug off. The one test that wants a version asks for one.
   getVersion.mockRejectedValue(new Error("no host"));
@@ -228,8 +274,13 @@ describe("what a save sends", () => {
     expect("requestTimeoutSecs" in patch).toBe(false);
     expect(patch).toEqual({
       operatorName: "Robert",
+      // Both models go every time, and so does the provider. Each model belongs
+      // to one provider, so sending only the active one would leave the other
+      // to be overwritten by whatever the next save happened to be looking at.
+      provider: "compatible",
       baseUrl: "https://openrouter.ai/api/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
+      subscriptionModel: "gpt-5.6-luna",
       limits: HELD,
     });
   });
@@ -306,8 +357,10 @@ describe("what a save sends", () => {
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(sentPatch()).toEqual({
       operatorName: "Robert",
+      provider: "compatible",
       baseUrl: "http://localhost:1234/v1",
       defaultModel: "qwen3-coder-30b",
+      subscriptionModel: "gpt-5.6-luna",
       apiKey: "sk-or-v1-typed",
       e2bApiKey: "e2b_typed",
       computerIdleMinutes: 45,
@@ -438,8 +491,12 @@ describe("testing the endpoint", () => {
     // against, and the unsaved key is the whole point: probing the stored one
     // reports "no API key" for a key the operator can see in front of them.
     expect(patch).toEqual({
+      // The provider goes with it: a test that reached the subscription while
+      // the operator is looking at a typed endpoint reports on the wrong place.
+      provider: "compatible",
       baseUrl: "https://api.groq.com/openai/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
+      subscriptionModel: "gpt-5.6-luna",
       apiKey: "gsk_typed",
     });
     expect(updateSettings).not.toHaveBeenCalled();
@@ -547,6 +604,228 @@ describe("the provider presets", () => {
     }
     // And a local one still says what is true of the server itself.
     expect(preset("Ollama").textContent).toContain("On this machine");
+  });
+});
+
+/**
+ * The ChatGPT subscription.
+ *
+ * Three states rather than two, and the middle one is the whole reason this is
+ * worth testing: the sign-in is one awaited call that parks for as long as the
+ * operator takes, so a code drawn on screen and a code that has been redeemed
+ * are different renders of the same in-flight promise. All of it lives in the
+ * shell, so a glance at Limits mid-sign-in must not discard it.
+ */
+describe("the ChatGPT subscription", () => {
+  /** The subscription row, which is not one of the endpoint presets. */
+  function row(): HTMLElement {
+    const label = screen.getByText("ChatGPT subscription", { selector: ".preset__name" });
+    const found = label.closest(".preset");
+    if (!found) throw new Error("no subscription row");
+    return found as HTMLElement;
+  }
+
+  function button(name: string): HTMLButtonElement {
+    return screen.getByRole("button", { name }) as HTMLButtonElement;
+  }
+
+  /** A sign-in that has been started and not yet finished. */
+  function parked(): { finish: (status: SubscriptionStatus) => void } {
+    let release: (status: SubscriptionStatus) => void = () => {};
+    completeSubscriptionSignin.mockReturnValue(
+      new Promise<SubscriptionStatus>((resolve) => {
+        release = resolve;
+      }),
+    );
+    return { finish: release };
+  }
+
+  it("offers a sign-in when nobody is signed in", async () => {
+    open();
+    pane("Provider");
+    await waitFor(() => expect(subscriptionStatus).toHaveBeenCalled());
+    expect(button("Sign in")).toBeTruthy();
+    // No key field, no URL: there is nothing here to type wrong.
+    expect(row().textContent).toContain("no per-token bill");
+  });
+
+  it("does not ask the runtime about a sign-in until the pane is opened", async () => {
+    open();
+    // Seven other panes have no use for it, and a status nobody is looking at
+    // is a round trip spent for nothing.
+    expect(subscriptionStatus).not.toHaveBeenCalled();
+    pane("Provider");
+    await waitFor(() => expect(subscriptionStatus).toHaveBeenCalledTimes(1));
+  });
+
+  it("draws the code and opens a browser at it", async () => {
+    const signin = parked();
+    open();
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy());
+    // Both, because a browser that refuses to open leaves the operator with
+    // nothing else to go on.
+    expect(screen.getByText("https://auth.openai.com/codex/device")).toBeTruthy();
+    expect(openExternal).toHaveBeenCalledWith("https://auth.openai.com/codex/device");
+
+    signin.finish(signedIn());
+    await waitFor(() => expect(screen.queryByText("ABCD-EFGH")).toBeNull());
+  });
+
+  it("keeps a code on screen across a change of section", async () => {
+    parked();
+    open();
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+    await waitFor(() => expect(screen.getByText("ABCD-EFGH")).toBeTruthy());
+
+    // The pane is unmounted and remounted. A code held by it rather than by the
+    // shell would be gone, and the operator would be holding a code the app had
+    // forgotten while the call for it was still parked.
+    pane("Limits");
+    pane("Provider");
+    expect(screen.getByText("ABCD-EFGH")).toBeTruthy();
+  });
+
+  it("switches the provider to the subscription once it is signed in", async () => {
+    open();
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByText(/Signed in as robert@example\.com/)).toBeTruthy());
+    // Nobody signs in to a subscription in order to keep paying with a key, so
+    // this is done rather than offered as a further step.
+    expect(row().textContent).toContain("In use");
+    expect(row().textContent).toContain("robert@example.com");
+    expect(row().textContent).toContain("Pro");
+
+    // And the save that follows carries it.
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().provider).toBe("chatgpt");
+  });
+
+  it("says so when the plan signed in to cannot run Codex", async () => {
+    completeSubscriptionSignin.mockResolvedValue(signedIn({ plan: "free", includesCodex: false }));
+    open();
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+
+    // A free plan signs in perfectly well and then cannot make one call, so the
+    // sign-in that looked like a success has to say what will happen next.
+    await waitFor(() => expect(screen.getByText(/does not include Codex/)).toBeTruthy());
+    // Drawn as a failure, not as a success. A green "signed in" over a plan that
+    // cannot make one call is the message an operator acts on and then wonders
+    // why every agent is refused.
+    expect(banner().className).toContain("banner--error");
+  });
+
+  it("reports a refused sign-in without leaving a code on screen", async () => {
+    beginSubscriptionSignin.mockResolvedValue({
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "WXYZ-1234",
+      deviceAuthId: "dev-2",
+      intervalSecs: 2,
+    });
+    completeSubscriptionSignin.mockRejectedValue({
+      kind: "signinExpired",
+      message: "nobody entered the code within fifteen minutes. Start the sign-in again.",
+    });
+    open();
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByText(/fifteen minutes/)).toBeTruthy());
+    // A dead code left on screen is a code somebody will keep typing.
+    expect(screen.queryByText("WXYZ-1234")).toBeNull();
+    expect(button("Sign in")).toBeTruthy();
+  });
+
+  it("offers a model only once the subscription is the one in use", async () => {
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "chatgpt" }));
+    pane("Provider");
+
+    await waitFor(() => expect(field(/^Model/)).toBeTruthy());
+    const select = field(/^Model/) as unknown as HTMLSelectElement;
+    expect(select.value).toBe("gpt-5.6-luna");
+    expect([...select.options].map((o) => o.value)).toEqual(["gpt-5.6-luna", "gpt-5.4-mini"]);
+  });
+
+  it("lists a stored model the known list has never heard of", async () => {
+    // A model chosen before the list changed must not be silently swapped for
+    // another one: that is a turn running on something nobody picked.
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "chatgpt", subscriptionModel: "gpt-6-unreleased" }));
+    pane("Provider");
+
+    await waitFor(() => expect(field(/^Model/)).toBeTruthy());
+    const select = field(/^Model/) as unknown as HTMLSelectElement;
+    expect(select.value).toBe("gpt-6-unreleased");
+  });
+
+  it("keeps the endpoint model when the subscription is in use", async () => {
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "chatgpt" }));
+    pane("Provider");
+    await waitFor(() => expect(field(/^Model/)).toBeTruthy());
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    // The endpoint's model is still sent, untouched. An operator who runs out of
+    // quota and switches back has to find it where they left it.
+    expect(sentPatch().defaultModel).toBe("anthropic/claude-sonnet-4.5");
+    expect(sentPatch().subscriptionModel).toBe("gpt-5.6-luna");
+  });
+
+  it("moves off the subscription when an endpoint preset is chosen", async () => {
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "chatgpt" }));
+    pane("Provider");
+    await waitFor(() => expect(row().textContent).toContain("In use"));
+
+    const label = screen.getByText("Groq", { selector: ".preset__name" });
+    fireEvent.click(label.closest("button") as HTMLButtonElement);
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    // Otherwise the operator fills in a URL and a key that nothing uses, with
+    // no error anywhere to explain why.
+    expect(sentPatch().provider).toBe("compatible");
+    expect(sentPatch().baseUrl).toBe("https://api.groq.com/openai/v1");
+  });
+
+  it("can go back to the subscription without signing in again", async () => {
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "compatible" }));
+    pane("Provider");
+
+    await waitFor(() => expect(button("Use it")).toBeTruthy());
+    fireEvent.click(button("Use it"));
+    expect(row().textContent).toContain("In use");
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().provider).toBe("chatgpt");
+    // Signing in again would send the operator back to a browser for a
+    // credential this machine is already holding.
+    expect(beginSubscriptionSignin).not.toHaveBeenCalled();
+  });
+
+  it("signing out takes the provider with it", async () => {
+    subscriptionStatus.mockResolvedValue(signedIn());
+    open(stored({ provider: "chatgpt" }));
+    pane("Provider");
+    await waitFor(() => expect(button("Sign out")).toBeTruthy());
+
+    fireEvent.click(button("Sign out"));
+    await waitFor(() => expect(screen.getByText("Signed out.")).toBeTruthy());
+
+    // Left on the subscription, every agent's next turn is the same refusal.
+    expect(button("Sign in")).toBeTruthy();
+    expect(row().textContent).not.toContain("In use");
   });
 });
 

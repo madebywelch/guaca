@@ -32,6 +32,8 @@ src-tauri/src/
     prompt.rs         Prompt assembly, including the trust boundary.
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
+    codex.rs          The other protocol: where a ChatGPT subscription is spent.
+  subscription.rs     Signing in to that subscription. A credential, not a wire.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
@@ -60,6 +62,7 @@ repo: the frontend renders state and forwards intent.
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
@@ -93,6 +96,22 @@ database at the same `user_version` with a different schema. Add another. They
 run with foreign key enforcement off, which is what SQLite's own table-rebuild
 procedure wants and what a migration cannot arrange for itself: the pragma is a
 no-op inside a transaction. See `migrations::run`.
+
+**A subscription is a second provider, not a second endpoint.** An operator pays
+for a turn with a pasted key or with a ChatGPT sign-in, and the two share almost
+nothing: different host, different wire protocol (Responses, not chat
+completions), different auth header, models that are not the operator's to
+choose, and no price on the answer. The two meet in exactly one function,
+`LlmClient::stream_chat`, and `llm/codex.rs` translates. Anything above that line
+sees one shape of request. Keep it that way: a provider branch in the runtime, the
+prompt or the guard is the wrong half of the repo.
+
+**A Claude subscription cannot pay for a turn, and this is not an oversight.**
+Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
+server-side since January 2026 and explicit in its terms since February 2026. The
+flow would fail at the server and put the operator's account at risk, so it is
+not implemented. Claude models arrive through an API key or OpenRouter, which is
+still the default. Dates and sources: `docs/PROTOCOL.md`.
 
 **A secret never reaches a model.** A credential's value and a cookie's value do
 not enter a prompt, a transcript, an event or the webview, and there is no field
@@ -242,4 +261,15 @@ failing the next. *Three test suites, asking different questions* in
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
+```
+
+A fourth, narrower one exists for the subscription. `tests/subscription.rs` runs
+the real runtime against a scripted *Responses* server, which is a protocol the
+other three never touch, and it holds one `#[ignore]`d live test. Run that after
+changing `llm/codex.rs`, or when a sign-in that worked stops working: everything
+offline is a stub agreeing with what this app believes the protocol is, and the
+failure worth catching is that belief going stale.
+
+```sh
+./scripts/subscription.sh    # a real call against your own ChatGPT plan
 ```

@@ -11,6 +11,7 @@ pub mod kernel;
 pub mod llm;
 pub mod proxy;
 pub mod runtime;
+pub mod subscription;
 pub mod trajectory;
 pub mod workspace;
 
