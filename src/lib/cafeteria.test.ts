@@ -144,6 +144,32 @@ describe("the cafeteria catalog", () => {
       );
     }
   });
+
+  it("never ties a browser to a computer, because they are two places", () => {
+    // A preset prompt is injected above the sections that describe what an
+    // agent has, so a preset that names a surface outranks the runtime's own
+    // account of it. The Market Researcher said "using your computer's
+    // browser", which in this app names the Chrome on the machine's screen:
+    // the agent worked the desktop through screenshots instead of asking the
+    // page, and every screenshot is an image the operator's model may not
+    // accept. A preset describes the work. Which surface it lands on is the
+    // runtime's to say, in `prompt.rs` and the tool descriptions.
+    const conflates = [
+      "computer's browser",
+      "browser on your computer",
+      "browser on your machine",
+      "browser on your screen",
+      "screenshot",
+    ];
+    for (const preset of HIREABLE) {
+      const prompt = preset.systemPrompt.toLowerCase();
+      for (const phrase of conflates) {
+        expect(prompt, `${preset.id} sends its browsing to the wrong surface`).not.toContain(
+          phrase,
+        );
+      }
+    }
+  });
 });
 
 describe("hiring", () => {

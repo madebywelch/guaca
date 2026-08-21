@@ -55,6 +55,22 @@ pub enum CdpError {
     /// and the model is the one who has to act on it.
     #[error("{0}")]
     Page(String),
+    /// The page this socket attached to is not there any more.
+    ///
+    /// Separate from `Page` because it is the one protocol error that is about
+    /// this client rather than about the web: a navigation can replace a target,
+    /// which invalidates the session and fails every later call on it. Chrome's
+    /// own wording for that is "Inspected target navigated or closed", which
+    /// reads to a model like the site broke. It reached one that way and went
+    /// off to work the same page through screenshots instead.
+    ///
+    /// Says what to do, because a message that only says no gets retried
+    /// verbatim or abandoned for another tool.
+    #[error(
+        "the page moved on while that was in flight, so this action lost track of it. Read the \
+         page again to get its current state and fresh element numbers, then carry on from there."
+    )]
+    TargetGone,
     #[error("the browser took too long to answer")]
     TimedOut,
     #[error("the browser replied in a form this build does not understand: {0}")]
@@ -180,7 +196,7 @@ impl Page {
                 continue;
             }
             if let Some(error) = message["error"]["message"].as_str() {
-                return Err(CdpError::Page(error.chars().take(300).collect()));
+                return Err(protocol_error(error));
             }
             return Ok(message["result"].clone());
         }
@@ -331,6 +347,31 @@ impl Page {
     }
 }
 
+/// What an error reply from the protocol means.
+///
+/// One distinction, and it is the difference between "the web did something"
+/// and "we lost our handle on it". Chrome has several wordings for the second,
+/// depending on whether the target, the session or the execution context is the
+/// thing that went away, and they all mean the same thing to a caller: attach
+/// again and ask again. Everything else is the page's own answer and is passed
+/// through, which is what `Page` is for.
+fn protocol_error(message: &str) -> CdpError {
+    const GONE: [&str; 6] = [
+        "inspected target navigated or closed",
+        "session with given id not found",
+        "no target with given id found",
+        "target closed",
+        "cannot find context with specified id",
+        "execution context was destroyed",
+    ];
+
+    let lowered = message.to_ascii_lowercase();
+    if GONE.iter().any(|gone| lowered.contains(gone)) {
+        return CdpError::TargetGone;
+    }
+    CdpError::Page(message.chars().take(300).collect())
+}
+
 /// The host part of a URL, or nothing if it has none.
 fn host_of(url: &str) -> Option<String> {
     let rest = url.split_once("://")?.1;
@@ -354,5 +395,32 @@ mod tests {
         assert_eq!(host_of("about:blank"), None);
         assert_eq!(host_of("chrome://newtab"), None);
         assert_eq!(host_of(""), None);
+    }
+
+    #[test]
+    fn a_page_that_went_away_is_told_apart_from_one_that_threw() {
+        // Chrome's own wordings for the same fact, all of which used to reach a
+        // model verbatim as though the site had failed.
+        for message in [
+            "Inspected target navigated or closed",
+            "Session with given id not found.",
+            "No target with given id found",
+            "Target closed",
+            "Cannot find context with specified id",
+            "Execution context was destroyed.",
+        ] {
+            let err = protocol_error(message);
+            assert!(matches!(err, CdpError::TargetGone), "{message} became {err:?}");
+            // The part that matters. A refusal that only says no gets retried
+            // word for word, or the tool gets abandoned for a screenshot.
+            assert!(err.to_string().contains("Read the page again"), "{err}");
+        }
+    }
+
+    #[test]
+    fn what_the_page_itself_said_is_still_passed_through() {
+        let err = protocol_error("Uncaught TypeError: x is not a function");
+        assert!(matches!(err, CdpError::Page(_)), "{err:?}");
+        assert_eq!(err.to_string(), "Uncaught TypeError: x is not a function");
     }
 }
