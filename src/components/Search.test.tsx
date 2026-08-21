@@ -58,6 +58,7 @@ const handlers = {
   onEditGroup: vi.fn(),
   onNewAgent: vi.fn(),
   onNewGroup: vi.fn(),
+  onOpenCafeteria: vi.fn(),
   onOpenSettings: vi.fn(),
 };
 

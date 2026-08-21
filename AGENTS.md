@@ -13,6 +13,7 @@ table below says which one to open before changing something.
 src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/search.ts       One ranking over hits from SQLite and from the store.
+  lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/ipc.ts          Every call into Rust.
   components/         One file per surface.
 src-tauri/src/
@@ -58,6 +59,7 @@ repo: the frontend renders state and forwards intent.
 | Schedules and triggers | `docs/ROUTINES.md` |
 | Sandboxes, the browser, sign-ins, credentials | `docs/MACHINES.md`, then *Connectors* in `docs/PROTOCOL.md` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
+| Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.

@@ -297,6 +297,31 @@ pub fn copy_name(original: &str, taken: &[String]) -> String {
         .unwrap_or_else(|| truncate_name(&first))
 }
 
+/// Names for a set of agents hired in one go, given who already holds a name in
+/// the group they are joining.
+///
+/// Resolved in sequence rather than independently, and that is the whole point:
+/// two agents hired from the same preset, or two presets that happen to share a
+/// name, are both free against the roster as it stands and would both be told
+/// they can have it. The second write then fails a unique index on a button
+/// whose job is to succeed. Each name handed out joins the pool the next one is
+/// checked against.
+///
+/// A name nobody is using is returned untouched, so an ordinary hire produces
+/// the name on the card rather than a decorated one. Clashes fall through to
+/// [`copy_name`], because one naming rule the operator can predict beats two.
+pub fn hire_names(wanted: &[String], taken: &[String]) -> Vec<String> {
+    let mut pool = taken.to_vec();
+    let mut out = Vec::with_capacity(wanted.len());
+    for want in wanted {
+        let clash = pool.iter().any(|held| held.trim().eq_ignore_ascii_case(want.trim()));
+        let name = if clash { copy_name(want, &pool) } else { want.trim().to_string() };
+        pool.push(name.clone());
+        out.push(name);
+    }
+    out
+}
+
 /// Keeps a generated name inside the limit `validate` enforces, by characters
 /// rather than bytes: a crew of emoji-named agents is legal.
 fn truncate_name(name: &str) -> String {
@@ -465,6 +490,57 @@ mod tests {
         assert_eq!(copy.chars().count(), MAX_NAME_LEN);
         let draft = AgentDraft { name: copy, ..draft() };
         assert!(draft.validate().is_ok());
+    }
+
+    #[test]
+    fn a_hire_keeps_the_name_on_the_card_when_nobody_holds_it() {
+        let wanted = taken_names(&["Manager", "Researcher"]);
+        assert_eq!(hire_names(&wanted, &[]), wanted);
+    }
+
+    #[test]
+    fn hiring_the_same_preset_twice_in_one_go_does_not_ask_for_one_name_twice() {
+        // Both are free against the roster as it stands, so resolving them
+        // independently hands out "Researcher" twice and the second write dies
+        // on the unique index.
+        let wanted = taken_names(&["Researcher", "Researcher"]);
+        assert_eq!(hire_names(&wanted, &[]), taken_names(&["Researcher", "Researcher copy"]));
+    }
+
+    #[test]
+    fn a_hire_steps_around_whoever_is_already_in_the_group() {
+        assert_eq!(
+            hire_names(&taken_names(&["Manager"]), &taken_names(&["Manager"])),
+            taken_names(&["Manager copy"])
+        );
+        // Case is not a difference the database recognises, so it is not one
+        // here either.
+        assert_eq!(
+            hire_names(&taken_names(&["Manager"]), &taken_names(&["manager"])),
+            taken_names(&["Manager copy"])
+        );
+    }
+
+    #[test]
+    fn a_batch_of_hires_is_a_batch_of_legal_drafts() {
+        // The names this hands out go straight into `validate`, so anything it
+        // can produce has to survive it. A crew hired into a group that already
+        // holds every one of them is the case that decorates every name.
+        let roster = taken_names(&["Manager", "Researcher", "Critic"]);
+        let names = hire_names(&roster, &roster);
+        assert_eq!(names.len(), roster.len());
+        for name in &names {
+            let draft = AgentDraft { name: name.clone(), ..draft() };
+            assert!(draft.validate().is_ok(), "{name:?} is not a name an operator could save");
+        }
+        let unique: std::collections::HashSet<String> =
+            names.iter().map(|n| n.to_lowercase()).collect();
+        assert_eq!(unique.len(), names.len(), "two hires were given the same name: {names:?}");
+    }
+
+    #[test]
+    fn hiring_nobody_creates_nobody() {
+        assert!(hire_names(&[], &taken_names(&["Manager"])).is_empty());
     }
 
     fn taken_names(names: &[&str]) -> Vec<String> {

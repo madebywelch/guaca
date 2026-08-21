@@ -48,7 +48,8 @@ export type SearchAction =
   | { do: "editGroup"; groupId: GroupId }
   | { do: "openSettings" }
   | { do: "newAgent" }
-  | { do: "newGroup" };
+  | { do: "newGroup" }
+  | { do: "openCafeteria" };
 
 export interface SearchResult {
   /** Unique within a result set: the React key, and what selection tracks. */
@@ -362,6 +363,14 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
       detail: "A crew that cannot see the others",
       meta: "Action",
       action: { do: "newGroup" },
+    },
+    {
+      key: "action:cafeteria",
+      kind: "actions",
+      title: "Cafeteria",
+      detail: "Hire agents that are already set up",
+      meta: "Action",
+      action: { do: "openCafeteria" },
     },
   );
 

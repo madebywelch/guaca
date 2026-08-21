@@ -21,6 +21,7 @@ interface Props {
   onEditGroup: (group: Group) => void;
   onNewAgent: () => void;
   onNewGroup: () => void;
+  onOpenCafeteria: () => void;
   onOpenSettings: () => void;
 }
 
@@ -52,6 +53,7 @@ export function Search({
   onEditGroup,
   onNewAgent,
   onNewGroup,
+  onOpenCafeteria,
   onOpenSettings,
 }: Props) {
   const agents = useStore((s) => s.agents);
@@ -134,6 +136,9 @@ export function Search({
         case "newGroup":
           onNewGroup();
           break;
+        case "openCafeteria":
+          onOpenCafeteria();
+          break;
       }
       onClose();
     },
@@ -145,6 +150,7 @@ export function Search({
       onEditGroup,
       onNewAgent,
       onNewGroup,
+      onOpenCafeteria,
       onOpenSettings,
       openMessage,
       select,

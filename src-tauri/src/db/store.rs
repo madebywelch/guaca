@@ -72,6 +72,56 @@ fn default_group_id() -> GroupId {
     migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
 }
 
+/// A fresh card from a validated draft. Everything an agent goes on to acquire
+/// (a machine, its tokens, a pin) starts empty: those are things it did, not
+/// things anybody wrote down.
+fn new_card(draft: &CleanDraft) -> AgentCard {
+    let now = now_ms();
+    AgentCard {
+        id: AgentId::new(),
+        group_id: draft.group_id.unwrap_or_else(default_group_id),
+        name: draft.name.clone(),
+        avatar: draft.avatar.clone(),
+        color: draft.color.clone(),
+        model: draft.model.clone(),
+        system_prompt: draft.system_prompt.clone(),
+        skills: draft.skills.clone(),
+        sandbox_id: None,
+        sandbox_envd_token: None,
+        sandbox_traffic_token: None,
+        lifecycle: Lifecycle::Active,
+        pinned: false,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// Takes a `&Connection` rather than a `&Store` so one insert serves both a
+/// single create and a batch inside a transaction; `Transaction` derefs here.
+fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+        params![
+            card.id.to_string(),
+            card.name,
+            card.avatar,
+            card.color,
+            card.model,
+            card.system_prompt,
+            serde_json::to_string(&card.skills).unwrap_or_else(|_| "[]".into()),
+            card.lifecycle.as_str(),
+            card.version,
+            card.created_at,
+            card.updated_at,
+            card.group_id.to_string(),
+        ],
+    )
+    .map_err(|e| classify(e, &card.name))?;
+    Ok(())
+}
+
 /// Maps SQLite's unique-constraint failure onto a domain error, so callers get
 /// "that name is taken" instead of a raw driver string.
 fn classify(err: rusqlite::Error, name: &str) -> StoreError {
@@ -163,47 +213,28 @@ impl Store {
 
     pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
-        let now = now_ms();
-        let card = AgentCard {
-            id: AgentId::new(),
-            group_id: draft.group_id.unwrap_or_else(default_group_id),
-            name: draft.name.clone(),
-            avatar: draft.avatar.clone(),
-            color: draft.color.clone(),
-            model: draft.model.clone(),
-            system_prompt: draft.system_prompt.clone(),
-            skills: draft.skills.clone(),
-            sandbox_id: None,
-            sandbox_envd_token: None,
-            sandbox_traffic_token: None,
-            lifecycle: Lifecycle::Active,
-            pinned: false,
-            version: 1,
-            created_at: now,
-            updated_at: now,
-        };
-
-        conn.execute(
-            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-            params![
-                card.id.to_string(),
-                card.name,
-                card.avatar,
-                card.color,
-                card.model,
-                card.system_prompt,
-                serde_json::to_string(&card.skills).unwrap_or_else(|_| "[]".into()),
-                card.lifecycle.as_str(),
-                card.version,
-                card.created_at,
-                card.updated_at,
-                card.group_id.to_string(),
-            ],
-        )
-        .map_err(|e| classify(e, &card.name))?;
-
+        let card = new_card(draft);
+        insert_agent(&conn, &card)?;
         Ok(card)
+    }
+
+    /// Creates a whole crew, or none of it.
+    ///
+    /// Written in one transaction because the alternative fails halfway. Names
+    /// are unique per group, and the realistic way a batch dies on its fourth
+    /// row is another window taking a name between the check and the write,
+    /// which no amount of validating up front prevents. Leaving three agents
+    /// behind and reporting an error about a fourth gives the operator a
+    /// workspace they did not ask for and no list of what landed.
+    pub fn create_agents(&self, drafts: &[CleanDraft]) -> Result<Vec<AgentCard>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let cards: Vec<AgentCard> = drafts.iter().map(new_card).collect();
+        for card in &cards {
+            insert_agent(&tx, card)?;
+        }
+        tx.commit()?;
+        Ok(cards)
     }
 
     /// Applies an operator edit and bumps the card version.
@@ -2477,6 +2508,49 @@ mod tests {
             matches!(&err, StoreError::DuplicateName(name) if name == "manager"),
             "expected DuplicateName, got {err:?}"
         );
+    }
+
+    #[test]
+    fn a_crew_written_in_one_go_is_readable_as_a_crew() {
+        let f = fixture();
+        let crew = [draft("Manager"), draft("Researcher"), draft("Critic")];
+        let cards = f.store.create_agents(&crew).unwrap();
+
+        assert_eq!(cards.len(), 3);
+        let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Manager", "Researcher", "Critic"], "order is the order asked for");
+        assert_eq!(f.store.list_agents().unwrap().len(), 3);
+        // Every one is a real card, not a half-written row.
+        for card in &cards {
+            assert_eq!(f.store.get_agent(card.id).unwrap().as_ref(), Some(card));
+        }
+    }
+
+    #[test]
+    fn a_crew_that_cannot_be_written_in_full_is_not_written_at_all() {
+        // The realistic failure: a name taken between the check and the write.
+        // Three agents landing plus an error about a fourth is a workspace the
+        // operator did not ask for and no list of what arrived.
+        let f = fixture();
+        f.store.create_agent(&draft("Critic")).unwrap();
+
+        let crew = [draft("Manager"), draft("Researcher"), draft("critic")];
+        let err = f.store.create_agents(&crew).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::DuplicateName(name) if name == "critic"),
+            "expected DuplicateName, got {err:?}"
+        );
+
+        let left: Vec<String> =
+            f.store.list_agents().unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(left, ["Critic"], "the rolled-back hire left agents behind: {left:?}");
+    }
+
+    #[test]
+    fn hiring_nobody_writes_nothing_and_is_not_an_error() {
+        let f = fixture();
+        assert!(f.store.create_agents(&[]).unwrap().is_empty());
+        assert!(f.store.list_agents().unwrap().is_empty());
     }
 
     #[test]
