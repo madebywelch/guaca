@@ -10,6 +10,7 @@ import { useCallback, useMemo } from "react";
 import { create } from "zustand";
 
 import { api } from "./ipc";
+import { keepThought } from "./reasoning";
 import type {
   Activity,
   AgentCard,
@@ -78,6 +79,18 @@ interface State {
   selected: ChannelKey | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
   streams: Record<MessageId, StreamBuffer | undefined>;
+  /**
+   * What each agent is thinking, while it is thinking it.
+   *
+   * Kept apart from `streams` rather than folded into the buffer, and that is
+   * not tidiness: the component drawing the live bubbles subscribes to
+   * `streams`, so a thought written into one would re-render and re-parse the
+   * markdown of every bubble on screen for text that is not in any of them.
+   * Keyed by agent because that is who is thinking; a turn writing to a peer
+   * streams into the peer's channel while the operator watching it work is
+   * reading its own.
+   */
+  reasoning: Record<AgentId, string | undefined>;
   pulses: Pulse[];
 
   /**
@@ -145,6 +158,7 @@ export const useStore = create<State>((set, get) => ({
   selected: null,
   messages: {},
   streams: {},
+  reasoning: {},
   pulses: [],
   focused: null,
   banner: null,
@@ -278,17 +292,25 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "streamStarted": {
-        set((state) => ({
-          streams: {
-            ...state.streams,
-            [event.messageId]: {
-              channelId: event.channelId,
-              agentId: event.agentId,
-              text: "",
-              to: event.to,
+        set((state) => {
+          // Whatever this agent was thinking belonged to the attempt this one
+          // replaces. A failed call reopens under a new id, and its half-formed
+          // last thought is not what the retry is doing.
+          const reasoning = { ...state.reasoning };
+          delete reasoning[event.agentId];
+          return {
+            reasoning,
+            streams: {
+              ...state.streams,
+              [event.messageId]: {
+                channelId: event.channelId,
+                agentId: event.agentId,
+                text: "",
+                to: event.to,
+              },
             },
-          },
-        }));
+          };
+        });
         break;
       }
 
@@ -306,11 +328,35 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "reasoningDelta": {
+        set((state) => {
+          // The stream is what says whose thought this is, and whether anything
+          // is still waiting for it. A delta for a placeholder that has already
+          // gone is dropped, exactly as its text would be.
+          const stream = state.streams[event.messageId];
+          if (!stream) return state;
+          return {
+            reasoning: {
+              ...state.reasoning,
+              [stream.agentId]: keepThought(state.reasoning[stream.agentId], event.text),
+            },
+          };
+        });
+        break;
+      }
+
       case "streamEnded": {
         set((state) => {
           const streams = { ...state.streams };
+          const ending = streams[event.messageId];
           delete streams[event.messageId];
-          return { streams };
+          if (!ending) return { streams };
+
+          // The turn is over, so the thinking goes with it. This is the whole
+          // of what makes it ephemeral: nothing else ever clears it.
+          const reasoning = { ...state.reasoning };
+          delete reasoning[ending.agentId];
+          return { streams, reasoning };
         });
         break;
       }

@@ -80,6 +80,7 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     selected: "chef",
     messages,
     streams: {},
+    reasoning: {},
     pulses: [],
     usage: {},
     pulse: {},
@@ -258,6 +259,57 @@ describe("streaming", () => {
     apply(started);
     apply({ type: "streamEnded", messageId: "s1", channelId: "chef" });
     expect(useStore.getState().streams.s1).toBeUndefined();
+  });
+});
+
+describe("what an agent is thinking", () => {
+  const started: UiEvent = {
+    type: "streamStarted",
+    messageId: "s1",
+    channelId: "manager",
+    agentId: "chef",
+    runId: "r1",
+    to: { kind: "agent", id: "manager" },
+  };
+
+  it("is filed under the agent doing the thinking, not the channel it writes to", () => {
+    // Chef answering Manager streams into Manager's channel. The operator
+    // watching Chef work is reading Chef's.
+    apply(started);
+    apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
+    expect(useStore.getState().reasoning.chef).toBe("weighing it up");
+    expect(useStore.getState().reasoning.manager).toBeUndefined();
+  });
+
+  it("is dropped when the turn ends", () => {
+    // The whole contract: it is visible while it happens and gone afterwards.
+    apply(started);
+    apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
+    apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
+    expect(useStore.getState().reasoning.chef).toBeUndefined();
+  });
+
+  it("is dropped when a failed call reopens under a new id", () => {
+    // Anything already thought belongs to the attempt that broke, exactly like
+    // the text that was already on screen.
+    apply(started);
+    apply({ type: "reasoningDelta", messageId: "s1", text: "half a thought" });
+    apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
+    apply({ ...started, messageId: "s2" });
+    expect(useStore.getState().reasoning.chef).toBeUndefined();
+  });
+
+  it("ignores a thought for a stream that never started", () => {
+    apply({ type: "reasoningDelta", messageId: "ghost", text: "x" });
+    expect(useStore.getState().reasoning).toEqual({});
+  });
+
+  it("never lands in the transcript", () => {
+    // It is not something anybody said, so no channel may hold it.
+    apply(started);
+    apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
+    expect(JSON.stringify(useStore.getState().messages)).not.toContain("weighing");
+    expect(useStore.getState().streams.s1?.text).toBe("");
   });
 });
 

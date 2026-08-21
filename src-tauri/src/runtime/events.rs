@@ -67,6 +67,19 @@ pub enum UiEvent {
         channel_id: AgentId,
         text: String,
     },
+    /// Part of the model's own working, for as long as the turn lasts.
+    ///
+    /// Addressed to the placeholder rather than to a channel, and that is what
+    /// makes it ephemeral for free: the UI files it under the agent that opened
+    /// the stream and drops the lot when the stream ends, so a thought cannot
+    /// outlive the turn that had it. Nothing here is persisted, and no channel
+    /// id is carried because a thought is not filed anywhere: a turn writing to
+    /// a peer streams into that peer's channel, while the operator watching
+    /// this agent work is reading its own.
+    ReasoningDelta {
+        message_id: MessageId,
+        text: String,
+    },
     /// The placeholder is replaced by the persisted message that follows.
     StreamEnded {
         message_id: MessageId,
@@ -162,6 +175,20 @@ impl RecordingSink {
             .collect()
     }
 
+    /// The same for the reasoning that ran alongside it.
+    pub fn streamed_reasoning(&self, message_id: MessageId) -> String {
+        self.events
+            .lock()
+            .iter()
+            .filter_map(|e| match e {
+                UiEvent::ReasoningDelta { message_id: id, text } if *id == message_id => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn appended_messages(&self) -> Vec<Envelope> {
         self.events
             .lock()
@@ -229,6 +256,24 @@ mod tests {
 
         assert_eq!(sink.streamed_text(id), "Hello, world");
         assert_eq!(sink.streamed_text(other), "NOISE");
+    }
+
+    #[test]
+    fn a_thought_and_the_text_beside_it_are_kept_apart() {
+        // They share a placeholder and arrive interleaved. A sink that mixed
+        // them would put the model's working into the assertion that says what
+        // the operator watched appear.
+        let sink = RecordingSink::new();
+        let id = MessageId::new();
+        sink.emit(UiEvent::ReasoningDelta { message_id: id, text: "weighing it up".into() });
+        sink.emit(UiEvent::StreamDelta {
+            message_id: id,
+            channel_id: AgentId::new(),
+            text: "Yes.".into(),
+        });
+
+        assert_eq!(sink.streamed_text(id), "Yes.");
+        assert_eq!(sink.streamed_reasoning(id), "weighing it up");
     }
 
     #[test]

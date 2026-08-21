@@ -1652,6 +1652,11 @@ button {
    The name is revealed on hover: whose channel this is has been established
    several times over by the time you reach the bottom of it, so the resting
    state is one moving character.
+
+   A thought is not. When the model publishes what it is working through, that
+   line is the reason to look here at all, so it is shown without being asked
+   for. One line, clipped at the pane: it is replaced several times a second
+   and wrapping it would push the composer around the screen.
    ========================================================================== */
 
 .working {
@@ -1673,11 +1678,24 @@ button {
   transform: translateX(-0.3rem);
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.working:hover .working__label {
+.working:hover .working__label,
+.working[data-thinking] .working__label {
   opacity: 1;
   transform: none;
+}
+
+/* Lighter than the answer it is on the way to, and italic so a glance can tell
+   the two apart without reading either: this is the only text in the pane that
+   is not something anybody said. */
+.working[data-thinking] .working__label {
+  font-style: italic;
+  opacity: 0.75;
 }
 
 /* The pulse is what carries "still going" when the label is hidden. It rides

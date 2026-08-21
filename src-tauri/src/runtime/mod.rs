@@ -197,7 +197,7 @@ use crate::domain::now_ms;
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::Signin;
 use crate::files::FileStore;
-use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, ToolCall};
+use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
@@ -3011,35 +3011,61 @@ const PEN_FLUSH: Duration = Duration::from_millis(16);
 /// sentence held back waiting for a buffer to fill, and a fast one must not
 /// flood. Whatever is unflushed when the call ends is written by `flush`, so
 /// no token is ever dropped.
+///
+/// Reasoning is held in its own buffer and flushed on the same clock. It is
+/// produced at the same rate as the text and costs the same IPC hop and render,
+/// so a thinking model streaming its working uncoalesced is the freeze this
+/// whole arrangement exists to prevent, arriving through a second door.
 struct Pen {
     events: Arc<dyn EventSink>,
     message_id: MessageId,
     channel_id: AgentId,
     held: String,
+    thought: String,
     last: Instant,
 }
 
 impl Pen {
     fn new(events: Arc<dyn EventSink>, message_id: MessageId, channel_id: AgentId) -> Self {
-        Self { events, message_id, channel_id, held: String::new(), last: Instant::now() }
+        Self {
+            events,
+            message_id,
+            channel_id,
+            held: String::new(),
+            thought: String::new(),
+            last: Instant::now(),
+        }
     }
 
-    fn write(&mut self, token: &str) {
-        self.held.push_str(token);
+    fn write(&mut self, token: Token<'_>) {
+        match token {
+            Token::Text(text) => self.held.push_str(text),
+            Token::Reasoning(text) => self.thought.push_str(text),
+        }
         if self.last.elapsed() >= PEN_FLUSH {
             self.flush();
         }
     }
 
     fn flush(&mut self) {
-        if self.held.is_empty() {
+        if self.held.is_empty() && self.thought.is_empty() {
             return;
         }
-        self.events.emit(UiEvent::StreamDelta {
-            message_id: self.message_id,
-            channel_id: self.channel_id,
-            text: std::mem::take(&mut self.held),
-        });
+        // The thought first, in the order it was written: it is what led to the
+        // sentence in the same flush.
+        if !self.thought.is_empty() {
+            self.events.emit(UiEvent::ReasoningDelta {
+                message_id: self.message_id,
+                text: std::mem::take(&mut self.thought),
+            });
+        }
+        if !self.held.is_empty() {
+            self.events.emit(UiEvent::StreamDelta {
+                message_id: self.message_id,
+                channel_id: self.channel_id,
+                text: std::mem::take(&mut self.held),
+            });
+        }
         self.last = Instant::now();
     }
 }

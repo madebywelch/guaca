@@ -660,6 +660,77 @@ async fn streamed_text_matches_the_persisted_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
+    // The whole of the feature: an operator can see what a turn is doing while
+    // it does it, and nothing about it survives the turn. Reasoning that leaked
+    // into the message would be replayed into every later prompt, hashed by the
+    // loop guard, and read back by a peer as something the agent had said.
+    let stub = serve(|_| Script::Thinking {
+        about: "They want the total, so 17 times 23.".into(),
+        say: "391.".into(),
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "what is 17 times 23").unwrap();
+    h.settle(run).await;
+
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+
+    assert_eq!(
+        h.sink.streamed_reasoning(stream_id),
+        "They want the total, so 17 times 23.",
+        "the operator should have seen it working"
+    );
+    assert_eq!(h.sink.streamed_text(stream_id), "391.");
+
+    // And the transcript holds the answer alone.
+    let persisted = h.channel_texts("Manager").pop().unwrap();
+    assert_eq!(persisted, "391.");
+    assert!(!persisted.contains("17 times 23"), "reasoning reached the transcript: {persisted}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_thought_is_coalesced_on_the_same_clock_as_the_text() {
+    // Reasoning is produced as fast as text and costs the same IPC hop and
+    // render. A thinking model streaming its working one token at a time is
+    // the freeze the pen exists to prevent, arriving through a second door.
+    let thinking = "weighing the options carefully. ".repeat(40);
+    let expected = thinking.clone();
+    let stub =
+        serve(move |_| Script::Thinking { about: thinking.clone(), say: "Yes.".into() }).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "decide").unwrap();
+    h.settle(run).await;
+
+    let deltas = h.sink.count_of(|e| matches!(e, UiEvent::ReasoningDelta { .. }));
+    assert!(
+        deltas <= 12,
+        "{deltas} events for reasoning the provider sent in {} pieces",
+        expected.len().div_ceil(9)
+    );
+
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+    // Coalesced, not truncated: the tail is flushed when the call ends.
+    assert_eq!(h.sink.streamed_reasoning(stream_id), expected);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_long_reply_reaches_the_window_in_far_fewer_events_than_tokens() {
     // Every event is an IPC hop and a re-render in the operator's window, and a
     // model writes faster than a screen refreshes. Emitting one per token spent

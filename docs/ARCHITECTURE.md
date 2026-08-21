@@ -169,6 +169,42 @@ Two rules keep it honest:
 What survives all three becomes a notice carrying the `cause` of the turn, which
 is what the operator's "Try again" sends again, as a new run at the original hop.
 
+## A thought is shown and never kept
+
+A turn can spend a minute working through tool results before it writes a word.
+For that minute the operator had a pulsing avatar and the sentence "Manager is
+working", which says a turn is alive and nothing about what it is doing. Where
+the provider publishes the model's own working, that is what the line above the
+composer now shows: the line it is on, replaced as it writes.
+
+Three things keep it from becoming a fourth kind of message.
+
+- **It is carried apart from the text, from the wire onwards.** `Token::Text`
+  and `Token::Reasoning` reach the runtime as separate fragments, and only the
+  first is accumulated. Reasoning is never persisted, never included in the
+  content hash the loop guard compares, and never sent back to a model. Nothing
+  downstream of `stream_chat` holds it, so there is no path by which it could
+  be. Two spellings are read (`reasoning`, `reasoning_content`) because two
+  conventions exist, and a frame carrying both is one thought, not two.
+- **It is addressed to the placeholder, which is what makes it ephemeral for
+  free.** `ReasoningDelta` names a message id and no channel. The webview files
+  it under the agent that opened that stream and drops it when the stream ends,
+  so a thought cannot outlive the turn that had it, and a retry that reopens
+  under a new id discards the half-formed thought of the attempt that broke.
+  The agent is the right key rather than the channel: a turn writing to a peer
+  streams into the peer's channel, while the operator watching it work is
+  reading its own.
+- **It is buffered on the same clock as the text, and stored beside it rather
+  than in it.** Reasoning arrives as fast as an answer and costs the same IPC
+  hop and render, so `Pen` coalesces both to 16ms. In the store it is its own
+  slice: written into the stream buffer, every token would re-render and
+  re-parse the markdown of every live bubble for text that is in none of them.
+  `ChannelView.perf.test.tsx` counts that.
+
+Only the newest line is kept, because there is nowhere to scroll back to. Models
+that publish nothing (Anthropic's, over OpenRouter, unless thinking is asked for)
+leave the line exactly as it was.
+
 ## Trust is a property of the envelope, and it is restated in words
 
 The survey's "tool poisoning" (MCP) and "task injection" (A2A) describe the same
