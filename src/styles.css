@@ -4656,6 +4656,62 @@ button {
   color: var(--mint);
 }
 
+/* The subscription row. Shaped like a preset because it is the same kind of
+   choice, but a div rather than a button: it holds two or three buttons of its
+   own, and a button inside a button is not a thing a browser will render or a
+   screen reader can describe. */
+.preset--plain {
+  align-items: center;
+  cursor: default;
+}
+
+.preset--plain:hover {
+  border-color: var(--edge);
+}
+
+.preset__actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* The code the operator has to carry to a browser.
+   Large and mono because it is copied by eye, one character at a time, and the
+   two failure modes are a mistyped character and giving up. */
+.devicecode {
+  border: 1px solid var(--flesh);
+  background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.8rem;
+  margin: 0.5rem 0 0.25rem;
+}
+
+.devicecode__lede {
+  margin: 0 0 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+
+.devicecode__code {
+  margin: 0 0 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  letter-spacing: 0.18em;
+  color: var(--text);
+  /* Selectable on purpose: retyping is where a fifteen-minute code is lost. */
+  user-select: all;
+}
+
+.devicecode__url {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* The shortcuts table. A definition list, because that is what it is. */
 .keys {
   margin: 0 0 1.1rem;

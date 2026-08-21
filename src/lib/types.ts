@@ -311,6 +311,17 @@ export interface GuardLimits {
   maxToolRounds: number;
 }
 
+/**
+ * How a turn is paid for.
+ *
+ * `compatible` is an endpoint and a key the operator pasted. `chatgpt` is a
+ * subscription signed in to on this machine, which has its own endpoint, its own
+ * models and no per-call price. They are two providers rather than one with a
+ * flag for the same reason the Rust side says so: almost nothing about a call is
+ * the same between them.
+ */
+export type Provider = "compatible" | "chatgpt";
+
 export interface Settings {
   /** What agents call you. Empty means they say "the operator". */
   operatorName: string;
@@ -321,12 +332,19 @@ export interface Settings {
   kernelKeyHint: string;
   browserIdleMinutes: number;
   browserStealth: boolean;
+  provider: Provider;
   baseUrl: string;
+  /** The model used when a pasted key is paying. */
   defaultModel: string;
+  /** The model used when a subscription is paying. Kept apart so switching
+   *  providers does not overwrite either. */
+  subscriptionModel: string;
   apiKeySet: boolean;
   apiKeyHint: string;
   requestTimeoutSecs: number;
   limits: GuardLimits;
+  /** What a subscription can run, as the backend spells them. */
+  subscriptionModels: string[];
 }
 
 /** Absent fields are left unchanged. An empty `apiKey` clears the key. */
@@ -337,11 +355,37 @@ export interface SettingsPatch {
   kernelApiKey?: string;
   browserIdleMinutes?: number;
   browserStealth?: boolean;
+  provider?: Provider;
   baseUrl?: string;
   apiKey?: string;
   defaultModel?: string;
+  subscriptionModel?: string;
   requestTimeoutSecs?: number;
   limits?: GuardLimits;
+}
+
+/**
+ * Whether a ChatGPT subscription is signed in, and whose.
+ *
+ * No token, and no field one could arrive in: the webview never holds a
+ * credential. The email is here because "signed in" alone does not tell an
+ * operator whether they signed in to the account they meant to.
+ */
+export interface SubscriptionStatus {
+  signedIn: boolean;
+  email: string;
+  /** As the service spells it: `plus`, `pro`, `team`, `enterprise`, `free`. */
+  plan: string;
+  /** A free plan signs in successfully and then cannot make one call. */
+  includesCodex: boolean;
+}
+
+/** What the operator carries to a browser to finish signing in. */
+export interface DeviceCode {
+  verificationUrl: string;
+  userCode: string;
+  deviceAuthId: string;
+  intervalSecs: number;
 }
 
 export type UiEvent =

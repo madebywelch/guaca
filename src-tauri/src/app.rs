@@ -17,6 +17,7 @@ use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
 use crate::runtime::Runtime;
+use crate::subscription::Subscription;
 use crate::workspace::Workspace;
 
 /// Bridges runtime events onto the webview's event bus.
@@ -206,12 +207,16 @@ pub fn run() {
                 Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
             }
             let app_config = config::load(&config_path)?;
+            // The ChatGPT sign-in, beside the settings rather than inside them.
+            // `subscription.rs` says why: the two files have different writers
+            // and one of them writes in the background.
+            let subscription = Arc::new(Subscription::open(config_dir.join("subscription.json")));
             let sink = Arc::new(TauriSink { app: app.handle().clone() });
 
             let runtime = Runtime::with_handle(
                 handle.clone(),
                 store,
-                LlmClient::new()?,
+                LlmClient::new()?.with_subscription(subscription.clone()),
                 app_config,
                 Workspace::new(workspace_dir.clone()),
                 FileStore::new(files_dir),
@@ -279,7 +284,7 @@ pub fn run() {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| data_dir.clone());
 
-            app.manage(AppState { runtime, config_path, downloads });
+            app.manage(AppState { runtime, config_path, downloads, subscription });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -339,6 +344,10 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,
+            commands::subscription_status,
+            commands::begin_subscription_signin,
+            commands::complete_subscription_signin,
+            commands::sign_out_subscription,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Guac");

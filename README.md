@@ -33,13 +33,31 @@ pnpm app          # dev, with hot reload
 pnpm app:build    # an installable bundle
 ```
 
-Open Settings, put in your name and an OpenRouter key, and press **Test
-connection**, which checks the endpoint, the key and the model separately. You
-find out which one is wrong rather than watching an agent sit silent.
+Open Settings and choose how turns get paid for. Two ways:
 
-The endpoint is configurable, so a local llama.cpp or LM Studio server works
-without a code change. Point **Inference endpoint** at it and leave the key
-blank if it does not need one.
+- **A ChatGPT subscription.** Press **Sign in** on the Provider pane, enter the
+  code it shows you in the browser it opens, and your Plus, Pro, Team or
+  Enterprise plan covers the work with no per-token bill. It needs a paid plan:
+  a free account signs in and then cannot make a single call, which Guaca tells
+  you at the sign-in rather than leaving you to find out.
+- **An endpoint and a key.** OpenRouter by default, and anything
+  OpenAI-compatible after that. A local llama.cpp or LM Studio server works
+  without a code change: point **Inference endpoint** at it and leave the key
+  blank if it does not need one.
+
+Then press **Test connection**, which checks the endpoint, the credential and the
+model separately. You find out which one is wrong rather than watching an agent
+sit silent.
+
+Whichever you choose applies to every agent, and a group can still point itself
+somewhere else. A group that names its own endpoint or key uses those; a group
+that only names a model runs that model on whatever the app is paying with.
+
+**A Claude subscription cannot be used this way, and that is Anthropic's rule
+rather than a missing feature.** Consumer Claude OAuth tokens are restricted to
+Claude Code and Claude.ai, enforced at their servers, and using one elsewhere
+breaches the Consumer Terms and risks the account. Claude models still work here:
+they are what OpenRouter serves by default. `docs/PROTOCOL.md` has the detail.
 
 ## Try the thing it is for
 
@@ -259,14 +277,17 @@ Everything lives in one directory:
 ~/Library/Application Support/com.madebywelch.guac/
   guac.db        agents, groups, messages, routines, usage, permissions
   config.json    settings, written 0600
+  subscription.json  the ChatGPT sign-in, written 0600, absent until you sign in
   workspace/     one markdown file per agent: its memory
   files/         everything you or an agent attached, by content hash
 ```
 
-The API key is stored in `config.json` in plaintext. Guaca is a local app with
-no auth, and a key encrypted with a key sitting beside it would be theatre. The
-honest answer is the OS keychain, and that is a deliberate follow-up rather than
-something faked here.
+The API key is stored in `config.json` in plaintext, and the ChatGPT sign-in in
+`subscription.json` beside it. Guaca is a local app with no auth, and a key
+encrypted with a key sitting beside it would be theatre. The honest answer is the
+OS keychain, and that is a deliberate follow-up rather than something faked here.
+It matters more for the sign-in than for the key: that credential belongs to a
+ChatGPT account with more than Guaca behind it. **Sign out** removes the file.
 
 Deleting an agent is a soft delete: it leaves the rail and can never be messaged
 again, its computer and browser are destroyed along with the browser profile

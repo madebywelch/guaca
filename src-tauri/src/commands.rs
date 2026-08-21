@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tauri::State;
@@ -29,6 +30,7 @@ use crate::kernel::{Browser, KernelClient, KernelError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
+use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
 
 pub struct AppState {
     pub runtime: Runtime,
@@ -37,6 +39,9 @@ pub struct AppState {
     /// the operating system's own downloads folder is the one place a person
     /// already knows to look.
     pub downloads: PathBuf,
+    /// The ChatGPT sign-in. The same one the runtime makes calls with, so a
+    /// sign-in completed here is usable by the next turn without a restart.
+    pub subscription: Arc<Subscription>,
 }
 
 /// A structured error the UI can render as more than a toast.
@@ -138,6 +143,18 @@ impl From<KernelError> for CommandError {
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
         CommandError::new("config", err.to_string())
+    }
+}
+
+impl From<SigninError> for CommandError {
+    fn from(err: SigninError) -> Self {
+        match err {
+            // Its own kind so the dialog can offer to start again rather than
+            // showing a failure for a code the operator simply did not get to
+            // in time. Nothing is wrong and nothing needs fixing.
+            SigninError::TimedOut => CommandError::new("signinExpired", err.to_string()),
+            other => CommandError::new("signin", other.to_string()),
+        }
     }
 }
 
@@ -1073,9 +1090,11 @@ pub struct GroupReset {
 #[serde(rename_all = "camelCase", default)]
 pub struct SettingsPatch {
     pub operator_name: Option<String>,
+    pub provider: Option<config::Provider>,
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub default_model: Option<String>,
+    pub subscription_model: Option<String>,
     pub request_timeout_secs: Option<u64>,
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
@@ -1090,11 +1109,66 @@ pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
     Ok(state.runtime.config().redacted())
 }
 
+// ---- the ChatGPT sign-in -------------------------------------------------
+
+/// Whether a subscription is signed in, and which account it is.
+#[tauri::command]
+pub fn subscription_status(state: State<'_, AppState>) -> Reply<Status> {
+    Ok(state.subscription.status())
+}
+
+/// Asks for a code the operator carries to a browser.
+///
+/// Two commands rather than one because the two halves take wildly different
+/// amounts of time. This returns in a round trip and the dialog draws the code
+/// immediately; the next one waits for a person.
+#[tauri::command]
+pub async fn begin_subscription_signin(state: State<'_, AppState>) -> Reply<DeviceCode> {
+    Ok(state.subscription.begin().await?)
+}
+
+/// Waits for the code to be entered, then stores the sign-in.
+///
+/// Parks for as long as fifteen minutes on purpose. A dialog that has to poll
+/// would need a third command and a place to keep the half-finished sign-in
+/// between calls; awaiting one call keeps the whole flow in one place, and an
+/// operator who closes the dialog abandons it with nothing left behind.
+#[tauri::command]
+pub async fn complete_subscription_signin(
+    state: State<'_, AppState>,
+    code: DeviceCode,
+) -> Reply<Status> {
+    Ok(state.subscription.complete(&code).await?)
+}
+
+/// Forgets the sign-in, and moves off it if it was the one in use.
+///
+/// Both halves, because leaving the provider pointed at a subscription that has
+/// just been signed out gives every agent the same refusal on its next turn,
+/// and the operator's next action would have been to switch it back by hand.
+#[tauri::command]
+pub fn sign_out_subscription(state: State<'_, AppState>) -> Reply<RedactedConfig> {
+    state.subscription.sign_out()?;
+
+    let mut config: AppConfig = state.runtime.config();
+    if config.inference.provider == config::Provider::Chatgpt {
+        config.inference.provider = config::Provider::Compatible;
+        // The endpoint and key were never cleared when the subscription was
+        // chosen, so going back lands on whatever was configured before it.
+        config::save(&state.config_path, &config)?;
+        state.runtime.set_config(config.clone());
+    }
+    Ok(config.redacted())
+}
+
 /// Applies a patch to a config in memory. Shared by saving and testing, so a
 /// tested configuration and a saved one can never diverge.
 fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), CommandError> {
     if let Some(name) = patch.operator_name {
         config.operator_name = name.trim().to_string();
+    }
+    if let Some(provider) = patch.provider {
+        config.inference.provider = provider;
     }
     if let Some(base_url) = patch.base_url {
         config.inference.base_url = config::normalize_base_url(&base_url)?;
@@ -1129,6 +1203,13 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
             return Err(CommandError::new("validation", "default model must not be blank"));
         }
         config.inference.default_model = trimmed.to_string();
+    }
+    if let Some(model) = patch.subscription_model {
+        let trimmed = model.trim();
+        if trimmed.is_empty() {
+            return Err(CommandError::new("validation", "subscription model must not be blank"));
+        }
+        config.inference.subscription_model = trimmed.to_string();
     }
     if let Some(timeout) = patch.request_timeout_secs {
         config.inference.request_timeout_secs = timeout.clamp(5, 900);

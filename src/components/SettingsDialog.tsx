@@ -16,12 +16,19 @@
 import { useEffect, useRef, useState } from "react";
 
 import { applyAppearance, resolveSurface } from "../lib/appearance";
-import { api } from "../lib/ipc";
+import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
 import { NOTIFY_KINDS, type NotifyKind, type SurfaceMode, UI_SCALES } from "../lib/prefs";
-import { PROVIDERS, providerFor, providerReady } from "../lib/providers";
+import { PROVIDERS, planLabel, providerFor, providerReady } from "../lib/providers";
 import { useStore } from "../lib/store";
-import { errorMessage, type GuardLimits } from "../lib/types";
+import {
+  type DeviceCode,
+  errorMessage,
+  type GuardLimits,
+  type Provider as ProviderKind,
+  type SettingsPatch,
+  type SubscriptionStatus,
+} from "../lib/types";
 
 interface Props {
   onClose: () => void;
@@ -133,8 +140,10 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
 
   const [section, setSection] = useState<Section>(opening ?? "general");
   const [operatorName, setOperatorName] = useState(settings?.operatorName ?? "");
+  const [provider, setProvider] = useState<ProviderKind>(settings?.provider ?? "compatible");
   const [baseUrl, setBaseUrl] = useState(settings?.baseUrl ?? "");
   const [model, setModel] = useState(settings?.defaultModel ?? "");
+  const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
   const [apiKey, setApiKey] = useState("");
   const [e2bKey, setE2bKey] = useState("");
   const [idleMinutes, setIdleMinutes] = useState("");
@@ -157,6 +166,14 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // The sign-in, which is three states rather than a boolean: not signed in,
+  // waiting for the operator to enter a code in a browser, and signed in. All
+  // three live here for the reason everything else does — the shell survives a
+  // section change and the pane does not, and a sign-in half finished must not
+  // be discarded by a glance at Limits.
+  const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
+  const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -190,9 +207,14 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     };
   }, []);
 
-  const patch = () => ({
+  const patch = (): SettingsPatch => ({
+    provider,
     baseUrl,
     defaultModel: model,
+    // Both models are always sent, whichever provider is chosen. Each belongs
+    // to one provider and neither is cleared by the other, so an operator who
+    // tries a subscription and goes back finds their endpoint model intact.
+    ...(subscriptionModel.trim() ? { subscriptionModel: subscriptionModel.trim() } : {}),
     // Omitted when blank, so saving without retyping keeps the stored key.
     ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
     ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
@@ -240,12 +262,102 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     }
   };
 
-  const choose = (provider: (typeof PROVIDERS)[number]) => {
-    setBaseUrl(provider.baseUrl);
-    if (provider.model) setModel(provider.model);
+  const choose = (preset: (typeof PROVIDERS)[number]) => {
+    // Choosing an endpoint is also choosing to pay with a key. Leaving the
+    // provider on the subscription would have the operator fill in a URL and a
+    // key that nothing used, with no error to explain why.
+    setProvider("compatible");
+    setBaseUrl(preset.baseUrl);
+    if (preset.model) setModel(preset.model);
   };
 
   const current = providerFor(baseUrl);
+
+  // Read when the pane that shows it is opened, not at startup: nothing else in
+  // the app needs to know, and a status nobody is looking at is a round trip
+  // spent for nothing.
+  useEffect(() => {
+    if (section !== "provider" || subscription) return;
+    let live = true;
+    void api
+      .subscriptionStatus()
+      .then((value) => {
+        if (live) setSubscription(value);
+      })
+      .catch(() => {
+        // A status that cannot be read is drawn as not signed in, which is what
+        // it is as far as anything here can act on.
+        if (live) setSubscription({ signedIn: false, email: "", plan: "", includesCodex: false });
+      });
+    return () => {
+      live = false;
+    };
+  }, [section, subscription]);
+
+  /**
+   * Starts the sign-in and then waits for it, in one action.
+   *
+   * The wait is the whole point of the two-command split: the code is drawn as
+   * soon as the first call returns, and the second is left parked for as long as
+   * the operator takes. Closing the dialog abandons it and leaves nothing behind.
+   */
+  const signIn = async () => {
+    setStatus(null);
+    setBusy(true);
+    let code: DeviceCode;
+    try {
+      code = await api.beginSubscriptionSignin();
+      setPendingCode(code);
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+      setBusy(false);
+      return;
+    }
+
+    // Opened for the operator rather than left as a link to find. It goes to
+    // the system browser: the sign-in belongs to a ChatGPT session this webview
+    // has no business holding.
+    void openExternal(code.verificationUrl).catch(() => {
+      // The URL is on screen beside the code, so a browser that will not open
+      // is a copy-and-paste rather than a dead end.
+    });
+
+    try {
+      const next = await api.completeSubscriptionSignin(code);
+      setSubscription(next);
+      setPendingCode(null);
+      // Chosen on success rather than offered as a further step: nobody signs
+      // in to a subscription in order to keep paying with a key.
+      setProvider("chatgpt");
+      setStatus({
+        tone: next.includesCodex ? "ok" : "error",
+        text: next.includesCodex
+          ? `Signed in as ${next.email || "your ChatGPT account"}. Save to start using it.`
+          : `Signed in as ${next.email || "your ChatGPT account"}, but a ${planLabel(next.plan)} plan does not include Codex. Use an API key instead.`,
+      });
+    } catch (error) {
+      setPendingCode(null);
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const signOut = async () => {
+    setBusy(true);
+    setStatus(null);
+    try {
+      const next = await api.signOutSubscription();
+      setSettings(next);
+      setProvider(next.provider);
+      setSubscription({ signedIn: false, email: "", plan: "", includesCodex: false });
+      setStatus({ tone: "ok", text: "Signed out." });
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="scrim">
@@ -316,24 +428,132 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
               <>
                 <h3 className="settings__title">Provider</h3>
                 <p className="settings__lede">
-                  Any OpenAI-compatible endpoint. The ones below are spelled correctly; choosing one
-                  fills in the two fields under it, and anything else can be typed in.
+                  Two ways to pay for a turn: a subscription you sign in to, or an endpoint and a
+                  key you paste. Whichever is chosen applies to every agent, and a group can still
+                  point itself somewhere else.
                 </p>
 
-                {PROVIDERS.map((provider) => {
-                  const chosen = current?.id === provider.id;
-                  const ready = providerReady(provider, Boolean(settings?.apiKeySet));
+                {/* Its own block, above the endpoint list, because it is not an
+                    endpoint. Nothing here is typed: there is no URL to get
+                    wrong and no key to paste, which is most of what the list
+                    below exists to protect against. */}
+                <div className="preset preset--plain" aria-current={provider === "chatgpt"}>
+                  <span className="preset__text">
+                    <span className="preset__name">ChatGPT subscription</span>
+                    <span className="preset__url">
+                      {subscription?.signedIn
+                        ? `${subscription.email || "signed in"}${
+                            subscription.plan ? ` · ${planLabel(subscription.plan)}` : ""
+                          }`
+                        : "Sign in and your plan pays for turns, with no per-token bill"}
+                    </span>
+                  </span>
+                  {subscription?.signedIn ? (
+                    <span className="preset__actions">
+                      {provider === "chatgpt" ? (
+                        <span className="preset__state" data-ready="true">
+                          In use
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn--small"
+                          disabled={busy}
+                          onClick={() => setProvider("chatgpt")}
+                        >
+                          Use it
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        disabled={busy}
+                        onClick={() => void signOut()}
+                      >
+                        Sign out
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      disabled={busy || pendingCode !== null}
+                      onClick={() => void signIn()}
+                    >
+                      Sign in
+                    </button>
+                  )}
+                </div>
+
+                {/* Shown for as long as the sign-in is parked. The code is the
+                    thing the operator has to carry, so it is the largest thing
+                    here, and the URL is beside it because a browser that did
+                    not open leaves them nothing else to go on. */}
+                {pendingCode && (
+                  <div className="devicecode" role="status">
+                    <p className="devicecode__lede">
+                      Enter this code in the browser window that just opened. It expires in fifteen
+                      minutes.
+                    </p>
+                    <p className="devicecode__code">{pendingCode.userCode}</p>
+                    <p className="devicecode__url">{pendingCode.verificationUrl}</p>
+                    <p className="hint">
+                      Only continue if you started this sign-in here. If anything else gave you this
+                      code, cancel it.
+                    </p>
+                  </div>
+                )}
+
+                {subscription?.signedIn && provider === "chatgpt" && (
+                  <label className="field" style={{ marginTop: "1.1rem" }}>
+                    <span className="field__label">Model</span>
+                    <select
+                      className="input input--mono"
+                      value={subscriptionModel}
+                      onChange={(event) => setSubscriptionModel(event.target.value)}
+                    >
+                      {/* Whatever is stored is listed even if it is not one of
+                          the known ones, so a model chosen before this list
+                          changed is not silently swapped for another. */}
+                      {[
+                        ...new Set(
+                          [...(settings?.subscriptionModels ?? []), subscriptionModel].filter(
+                            Boolean,
+                          ),
+                        ),
+                      ].map((slug) => (
+                        <option key={slug} value={slug}>
+                          {slug}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="field__hint">
+                      Used for new agents. Each agent, and each group, can override it. A
+                      subscription has an hourly quota rather than a per-token bill, so a crew that
+                      talks a lot reaches the ceiling faster than one person would.
+                    </span>
+                  </label>
+                )}
+
+                <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
+                  Or any OpenAI-compatible endpoint. The ones below are spelled correctly; choosing
+                  one fills in the two fields under it, and anything else can be typed in.
+                </p>
+
+                {PROVIDERS.map((preset) => {
+                  const chosen = provider === "compatible" && current?.id === preset.id;
+                  const ready = providerReady(preset, Boolean(settings?.apiKeySet));
                   return (
                     <button
-                      key={provider.id}
+                      key={preset.id}
                       type="button"
                       className="preset"
                       aria-current={chosen}
-                      onClick={() => choose(provider)}
+                      onClick={() => choose(preset)}
                     >
                       <span className="preset__text">
-                        <span className="preset__name">{provider.name}</span>
-                        <span className="preset__url">{provider.baseUrl}</span>
+                        <span className="preset__name">{preset.name}</span>
+                        <span className="preset__url">{preset.baseUrl}</span>
                       </span>
                       {/* Only the row that is actually chosen can say
                           anything about the key, because there is one key and
@@ -343,7 +563,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                           key, is the same sentence repeated until it means
                           nothing. Local endpoints are the exception: wanting no
                           key is a property of the server, not of this setup. */}
-                      {provider.local ? (
+                      {preset.local ? (
                         <span className="preset__state" data-ready="true">
                           On this machine
                         </span>

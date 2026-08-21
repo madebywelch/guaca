@@ -18,15 +18,54 @@ use crate::runtime::guard::GuardLimits;
 pub const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
+/// How a turn is paid for.
+///
+/// Two answers, not one with a flag: a pasted key and a signed-in subscription
+/// differ in the endpoint, the wire protocol, the auth header, the models on
+/// offer and whether a call has a price. Modelling the second as "a base URL
+/// with a different key" would put that whole disagreement behind a string an
+/// operator can type, and the first symptom would be an agent failing on a
+/// parameter nobody set.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Provider {
+    /// Any OpenAI-compatible endpoint, with a key the operator pasted. What
+    /// Guaca has always done, and still the default.
+    #[default]
+    Compatible,
+    /// A ChatGPT subscription, signed in to on this machine. Billed to the plan
+    /// rather than per token.
+    Chatgpt,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceConfig {
+    /// Which of the two places a call goes to. Absent in anything written before
+    /// subscriptions existed, and absent means the endpoint below.
+    #[serde(default)]
+    pub provider: Provider,
     /// Any OpenAI-compatible base. Swappable so a local llama.cpp or LM Studio
     /// endpoint works without a code change.
+    ///
+    /// Ignored when the provider is a subscription, and kept rather than blanked:
+    /// an operator who tries a subscription and goes back should find their
+    /// endpoint and key where they left them.
     pub base_url: String,
     #[serde(default)]
     pub api_key: String,
+    /// The model used when a pasted key is paying.
     pub default_model: String,
+    /// The model used when a subscription is paying.
+    ///
+    /// A second field rather than one shared with the endpoint's, because the
+    /// two providers have disjoint model names and neither will accept the
+    /// other's. Sharing one field meant every switch broke the model, and
+    /// switching back did not put it right: an operator who ran out of
+    /// subscription quota, moved to a key for an hour and moved back would find
+    /// their model replaced both times.
+    #[serde(default = "default_subscription_model")]
+    pub subscription_model: String,
     /// OpenRouter attributes requests by these headers. Harmless elsewhere.
     #[serde(default = "default_referer")]
     pub referer: String,
@@ -48,12 +87,18 @@ fn default_timeout() -> u64 {
     120
 }
 
+fn default_subscription_model() -> String {
+    crate::llm::codex::DEFAULT_MODEL.to_string()
+}
+
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
+            provider: Provider::default(),
             base_url: DEFAULT_BASE_URL.to_string(),
             api_key: String::new(),
             default_model: DEFAULT_MODEL.to_string(),
+            subscription_model: default_subscription_model(),
             referer: default_referer(),
             title: default_title(),
             request_timeout_secs: default_timeout(),
@@ -67,8 +112,40 @@ impl InferenceConfig {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }
 
+    /// Whether a call has any chance of working, as far as settings can tell.
+    ///
+    /// A subscription is not answered here. Whether one is signed in is held by
+    /// the credential store, not by settings, and a config that guessed would
+    /// report a sign-in it cannot see. The transport asks the store and produces
+    /// a refusal that names the actual problem.
     pub fn is_ready(&self) -> bool {
-        !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
+        match self.provider {
+            Provider::Chatgpt => true,
+            Provider::Compatible => {
+                !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
+            }
+        }
+    }
+
+    /// Where a call actually goes, for the one line that reports it.
+    pub fn endpoint(&self) -> &str {
+        match self.provider {
+            Provider::Chatgpt => crate::llm::codex::DEFAULT_BASE_URL,
+            Provider::Compatible => &self.base_url,
+        }
+    }
+
+    /// The model the active provider is set to.
+    ///
+    /// Every reader that is about to make a call wants this rather than either
+    /// field: an agent or a group can still override it afterwards, but the
+    /// value being overridden has to be the one that belongs to the provider
+    /// doing the work.
+    pub fn active_model(&self) -> &str {
+        match self.provider {
+            Provider::Chatgpt => &self.subscription_model,
+            Provider::Compatible => &self.default_model,
+        }
     }
 }
 
@@ -233,12 +310,18 @@ pub struct RedactedConfig {
     pub kernel_key_hint: String,
     pub browser_idle_minutes: u32,
     pub browser_stealth: bool,
+    pub provider: Provider,
     pub base_url: String,
     pub default_model: String,
+    pub subscription_model: String,
     pub api_key_set: bool,
     pub api_key_hint: String,
     pub request_timeout_secs: u64,
     pub limits: GuardLimits,
+    /// The models a subscription can run, so Settings can offer them without
+    /// holding a second copy of the list that drifts from the one the transport
+    /// sends.
+    pub subscription_models: Vec<String>,
 }
 
 impl AppConfig {
@@ -252,12 +335,18 @@ impl AppConfig {
             kernel_key_hint: hint_for(&self.kernel.api_key),
             browser_idle_minutes: self.kernel.idle_minutes,
             browser_stealth: self.kernel.stealth,
+            provider: self.inference.provider,
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
+            subscription_model: self.inference.subscription_model.clone(),
             api_key_set: !self.inference.api_key.trim().is_empty(),
             api_key_hint: hint_for(&self.inference.api_key),
             request_timeout_secs: self.inference.request_timeout_secs,
             limits: self.limits,
+            subscription_models: crate::llm::codex::MODELS
+                .iter()
+                .map(|model| (*model).to_string())
+                .collect(),
         }
     }
 }

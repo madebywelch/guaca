@@ -611,7 +611,7 @@ impl Runtime {
     /// that says nothing.
     pub async fn probe(&self, config: &AppConfig) -> Result<String, LlmError> {
         let request = ChatRequest {
-            model: config.inference.default_model.clone(),
+            model: config.inference.active_model().to_string(),
             messages: vec![
                 ChatMessage::system("Reply with the single word: ok"),
                 ChatMessage::user("ping"),
@@ -622,8 +622,11 @@ impl Runtime {
         let completion = self.inner.llm.stream_chat(&config.inference, &request, |_| {}).await?;
         Ok(format!(
             "Connected to {} using {}. Model replied: {}",
-            config.inference.base_url,
-            config.inference.default_model,
+            // Where the call actually went, which is not the endpoint field when
+            // a subscription is paying: reporting a URL the request never
+            // touched is how a working setup reads as misconfigured.
+            config.inference.endpoint(),
+            config.inference.active_model(),
             completion.content.trim().chars().take(80).collect::<String>()
         ))
     }
