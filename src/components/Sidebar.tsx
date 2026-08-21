@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
+import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
@@ -18,10 +19,6 @@ interface Props {
   onOpenSearch: () => void;
   /** Where the operator right-clicked, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
 /**

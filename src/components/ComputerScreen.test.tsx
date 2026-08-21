@@ -123,6 +123,48 @@ describe("ComputerScreen", () => {
     expect(screen.getByTitle("Cook's computer")).toBe(before);
   });
 
+  it("holds the space the screen had while it covers the window", async () => {
+    // The picture leaves the flow to grow, so something has to stay behind
+    // holding its place. Without it the rest of the panel jumps up the moment
+    // the operator asks for a better look, and back down when they close it.
+    agentComputer.mockResolvedValue(HAS_ONE);
+    const { container } = render(<ComputerScreen agent={card("has-one", "Cook")} />);
+    fireEvent.click(await screen.findByRole("button", { name: /take over/i }));
+
+    const held = container.querySelector(".screen");
+    const stage = screen.getByRole("dialog", { name: "Cook's computer" });
+    expect(held).not.toBe(stage);
+    expect(held?.contains(stage)).toBe(true);
+    expect(held?.getAttribute("data-full")).toBe("true");
+  });
+
+  it("grows out of the picture it came from rather than appearing at full size", async () => {
+    // FLIP: the stage is already covering the window by the time this runs, so
+    // it is put back over the small picture and let go. A change of size that
+    // lands in a single frame reads as a reconnect that never happened.
+    agentComputer.mockResolvedValue(HAS_ONE);
+    render(<ComputerScreen agent={card("has-one", "Cook")} />);
+    const veil = await screen.findByRole("button", { name: /take over/i });
+
+    // jsdom does no layout, so the two measurements the movement is made of are
+    // supplied: the small picture, then the window the stage grew into.
+    const small = { top: 40, left: 100, width: 300, height: 188 } as DOMRect;
+    const whole = { top: 0, left: 0, width: 1200, height: 800 } as DOMRect;
+    const measure = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValueOnce(small)
+      .mockReturnValue(whole);
+    fireEvent.click(veil);
+    measure.mockRestore();
+
+    const stage = screen.getByRole("dialog", { name: "Cook's computer" });
+    expect(stage.style.transform).toBe("translate(100px, 40px) scale(0.25, 0.235)");
+
+    // And then let go, which is what actually plays the movement.
+    await waitFor(() => expect(stage.style.transform).toBe(""));
+    expect(stage.dataset.zooming).toBe("true");
+  });
+
   it("shrinks again on escape, without needing somewhere else to click first", async () => {
     // The desktop swallows key presses once it has focus, so this is listened
     // for on the window rather than on the frame.

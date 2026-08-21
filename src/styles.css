@@ -2964,18 +2964,40 @@ button {
 
 /* --- the screen ----------------------------------------------------------
 
-   One connection, two sizes. Going full screen promotes this same element to
-   fill the window rather than mounting a second one, so the desktop is never
+   One connection, two sizes. Going full screen promotes the stage inside this
+   to fill the window rather than mounting a second one, so the desktop is never
    dropped and reconnected just because the operator wanted a better look. */
 
 .screen {
+  /* Shared with the space held open below, so the picture and the gap it leaves
+     behind cannot disagree about how tall the screen is. */
+  --screen-aspect: 16 / 10;
   margin-bottom: 1.1rem;
+}
+
+/* The stage leaves the flow to cover the window, so this holds the space it had.
+   Without it the panel underneath jumps by the height of the screen the moment
+   the screen opens, and jumps back when it closes. */
+.screen[data-full="true"]::before {
+  content: "";
+  display: block;
+  aspect-ratio: var(--screen-aspect);
+}
+
+/* What grows. The zoom is played from the corner the small picture had, which is
+   also where FLIP puts it back to. */
+.screen__stage {
+  transform-origin: 0 0;
+}
+
+.screen__stage[data-zooming="true"] {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .screen__frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: var(--screen-aspect);
   overflow: hidden;
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
@@ -3043,12 +3065,12 @@ button {
 }
 
 /* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
-   above mounted and the VNC session alive across the change. */
-.screen[data-full="true"] {
+   above mounted and the VNC session alive across the change. The margin stays
+   on the element left behind in the panel, which is still holding the space. */
+.screen[data-full="true"] .screen__stage {
   position: fixed;
   inset: 0;
   z-index: 40;
-  margin: 0;
   display: flex;
   flex-direction: column;
   background: var(--rail-ground);
