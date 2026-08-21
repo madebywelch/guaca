@@ -61,6 +61,21 @@
   box-sizing: border-box;
 }
 
+/* Said, never drawn. `display: none` and `visibility: hidden` both take an
+   element out of the accessibility tree along with the page, which for a live
+   region means it announces nothing at all. */
+.offscreen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 html,
 body,
 #root {
@@ -214,6 +229,14 @@ button {
   gap: 0.45rem;
   margin-left: auto;
   flex: none;
+  /* Sized here rather than inherited from the heading. The same tail hangs off
+     the 0.6rem label in the overview and off the group's own name once the rail
+     is inside it, and inheriting made the member count twice the size in one of
+     them. */
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--rail-muted);
 }
 
 /* The group's pinned model is not drawn here at all. A model id is longer than
@@ -463,6 +486,286 @@ button {
    snapping them is disorienting, especially when several move at once. */
 .agent-row[data-sliding="true"] {
   transition: transform 500ms cubic-bezier(0.2, 0.85, 0.25, 1);
+}
+
+/* ==========================================================================
+   Arranging the rail
+
+   The rail is ordered by hand and lends the top of a section to whoever is
+   working. Dragging is how the arrangement is edited, so while a drag is on the
+   rail draws the arrangement itself and marks the one place a release would
+   land. See lib/rail.ts.
+   ========================================================================== */
+
+/* A rail being rearranged is not a rail being read. Selection is off for the
+   whole of it: the gesture starts on a row whose name is selectable text, and a
+   half-highlighted name left behind reads as something having gone wrong. */
+.rail[data-dragging="true"] {
+  user-select: none;
+  cursor: grabbing;
+}
+
+/* The row the hand is holding. Left in place rather than removed: a list that
+   closes up under the pointer moves every target while it is being aimed at. */
+.agent-row[data-held="true"] {
+  opacity: 0.3;
+}
+
+/* Where it would land. A line above the row rather than a filled block,
+   because a block says "into this" and the answer is "in front of this". */
+.agent-row[data-over="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  right: 0.75rem;
+  top: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--flesh);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--flesh) 55%, transparent);
+}
+
+/* A whole crew as the target, which is what dropping anywhere but on a row
+   means: this group, no particular place in it. */
+.rail__group[data-over="true"],
+.orb[data-over="true"] .orb__ring {
+  background: color-mix(in oklab, var(--flesh) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 45%, transparent);
+}
+
+/* What the hand is holding, at the pointer. Fixed to the window so nothing it
+   passes over can clip it, and transparent to the pointer so the row underneath
+   is still the row being aimed at. */
+.rail__held {
+  position: fixed;
+  z-index: 40;
+  /* Below and to the right of the pointer, not under it. Centred on the pointer
+     it covered the top edge of the row being aimed at, which is exactly where
+     the line saying "it lands here" is drawn. */
+  transform: translate(0.9rem, 0.35rem);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.6rem 0.25rem 0.35rem;
+  border-radius: 0.5rem;
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 35%);
+  opacity: 0.95;
+}
+
+.rail__held-name {
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  color: var(--rail-text);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Groups, as places
+
+   A crew is recognised by who is in it before its name is read, so a group is
+   drawn as a circle of its members' faces. Clicking one takes the rail inside
+   it; dropping an agent on one puts the agent in it. The strip is absent while
+   there is one group, because a choice of one is chrome.
+   ========================================================================== */
+
+.rail__strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem 0.35rem;
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+.orb {
+  flex: none;
+  width: 3.4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem 0 0.3rem;
+  background: none;
+  border: 0;
+  color: inherit;
+  border-radius: 0.5rem;
+}
+
+.orb__ring {
+  position: relative;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--rail-raised);
+  box-shadow: inset 0 0 0 1px var(--rail-edge);
+  transition:
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.orb:hover .orb__ring {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--rail-text) 30%, transparent);
+}
+
+/* The group the rail is inside. The ring is the only permanent mark of it: the
+   heading below says which group by name, and two loud statements of one fact
+   is one too many. */
+.orb[aria-current="true"] .orb__ring {
+  box-shadow: inset 0 0 0 2px var(--flesh);
+}
+
+.orb[aria-current="true"] .orb__name {
+  color: var(--rail-text);
+}
+
+/* Faces, tiled. Four in a square rather than a row of overlaps: a 2.4rem
+   circle is 38px across, and three 1.35rem avatars in a row measure 51px even
+   leaning on each other, so a row either overflowed the ring or hid the faces
+   it was there to show. A square of four fits, and it is what a group of people
+   looks like everywhere else.
+
+   Sized here rather than through the avatar's own scale, because these have to
+   fit a circle rather than sit beside a name. The selector carries the extra
+   class deliberately: `.avatar--xs` is defined further down the file. */
+.orb__faces {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.05rem;
+  place-content: center;
+  width: 1.85rem;
+}
+
+.orb__faces > .avatar {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.orb__faces[data-count="1"] {
+  grid-template-columns: 1fr;
+  width: 1.7rem;
+}
+
+.orb__faces[data-count="2"] {
+  width: 2.1rem;
+}
+
+/* Three in a square leaves the last one in a corner. Spanning both columns
+   centres it, so the shape reads as a group and not as a gap. */
+.orb__faces[data-count="3"] > .avatar:last-child {
+  grid-column: span 2;
+  justify-self: center;
+  width: 50%;
+}
+
+.orb__none {
+  font-family: var(--font-mono);
+  color: var(--rail-muted);
+}
+
+/* The members that did not fit. A number, because four faces at this size is
+   four smudges. */
+.orb__more {
+  position: absolute;
+  right: -0.1rem;
+  bottom: -0.1rem;
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  line-height: 1;
+  padding: 0.12rem 0.2rem;
+  border-radius: 0.35rem;
+  background: var(--rail-ground);
+  box-shadow: inset 0 0 0 1px var(--rail-edge);
+  color: var(--rail-muted);
+}
+
+.orb__all-count {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--rail-muted);
+}
+
+.orb--all[aria-current="true"] .orb__all-count {
+  color: var(--rail-text);
+}
+
+.orb__name {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Somebody in this crew is working. After focusing on one group the strip is
+   the only place the others are still visible, so it has to carry that. */
+.orb[data-state="working"] .orb__ring {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 60%, transparent);
+  animation: orb-breathe 2.6s ease-in-out infinite;
+}
+
+/* And louder for the one state the operator is the fix for. */
+.orb[data-state="asking"] .orb__ring::after {
+  content: "";
+  position: absolute;
+  top: -0.1rem;
+  right: -0.1rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--flesh);
+  box-shadow: 0 0 0 2px var(--rail-ground);
+}
+
+@keyframes orb-breathe {
+  50% {
+    box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--flesh) 75%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb[data-state="working"] .orb__ring {
+    animation: none;
+  }
+}
+
+/* Inside one group. The name and its controls get a line of their own, because
+   here there is one group on screen and the 0.6rem label the overview uses was
+   sized to sit above a list of others. */
+.rail__open-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 0.6rem 0.45rem 1rem;
+}
+
+.rail__open-name {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--rail-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its gear does not wait to be hovered. In the overview the heading is one of
+   several and the gear is noise; here it is the group's own controls. */
+.rail__group--open .rail__gear {
+  opacity: 1;
 }
 
 /* ==========================================================================
@@ -1397,6 +1700,20 @@ button {
   color: var(--pit);
 }
 
+/* A routine coming due.
+   Alone on its row, so it is not held to the 45% two chips have to share: the
+   name of a routine is up to forty-four characters and there is nothing beside
+   it to crowd. Accented in mint to match the clock face it carries, which is
+   the same glyph the schedule panel draws. */
+.wire--routine .wire__chip {
+  max-width: 100%;
+  --accent: var(--mint);
+}
+
+.wire--routine .routine__mark {
+  margin-top: 0;
+}
+
 /* Quieter still: bookkeeping the operator rarely needs, like a directory
    lookup. No rules either side, no click target. */
 .wire--quiet::before,
@@ -1421,6 +1738,176 @@ button {
 
 .wire--notice {
   justify-content: center;
+}
+
+/* ==========================================================================
+   The trail: what an agent did on its own turn
+
+   The quietest thing a channel draws, and by volume it used to be the loudest:
+   a browsing turn spends most of its twenty-four rounds in the browser, and
+   every one of those was a line reading `Chef used browse`. Now a run of calls
+   is chips, one per kind of work, and the calls open underneath in place.
+
+   Deliberately not the burst's shape, even though both collapse. A burst is a
+   conversation with somebody, so it is centred and bracketed by rules like the
+   rest of the traffic. This is the agent's own working, so it sits under the
+   left margin where the agent's words are, at the size of a footnote.
+   ========================================================================== */
+
+.trail {
+  padding: 0.2rem 1.5rem 0.2rem 1.15rem;
+}
+
+/* Wide gaps between chips and tight ones inside. Four of these on a line with
+   the same space either side of every word read as one paragraph of grey
+   monospace, which is exactly the shape the row was collapsed to get away
+   from. */
+.trail__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 1.1rem;
+  /* In line with the message bodies beside it: the gutter is 2.1rem of avatar
+     and 0.75rem of gap, and a footnote that starts at the margin instead reads
+     as a different column of the page. */
+  padding-left: 2.85rem;
+}
+
+.trail__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.08rem 0.3rem;
+  margin: 0 -0.3rem;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.01em;
+  color: var(--faint);
+  text-align: left;
+  transition: border-color 130ms ease, color 130ms ease, background-color 130ms ease;
+}
+
+/* As with a burst chip: "you can open this" is only worth saying to somebody
+   already pointing at it. */
+.trail__chip--open:hover,
+.trail__chip--open[aria-expanded="true"] {
+  background: var(--sunken);
+  border-color: var(--edge);
+  color: var(--text);
+}
+
+.trail__caret {
+  flex: none;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--faint);
+}
+
+.trail__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What came back. Present on a chip only where it belongs to one call: several
+   calls have several answers, and a chip carrying the first of them is a chip
+   that is wrong about the rest. */
+.trail__said {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.72;
+}
+
+/* A credential this command spent, by name. The operator's audit trail for
+   their own tokens, so it is never folded into a count and never behind a
+   click. Pit brown, because it is Guaca saying something rather than the agent.
+   The value is not here and there is no field it could arrive in. */
+.trail__spent {
+  flex: none;
+  padding: 0 0.3rem;
+  border-radius: 99px;
+  background: var(--pit-soft);
+  color: var(--pit);
+  font-size: 0.6rem;
+}
+
+/* Something went wrong, and the row it is on is otherwise a list of things
+   that went right. Given a shape rather than only a colour, for the same reason
+   a refused send is louder than the traffic around it: this is the one chip on
+   the row the operator may have to do something about. */
+.trail__chip[data-failed] {
+  padding: 0.08rem 0.45rem;
+  margin: 0;
+  border-color: color-mix(in oklab, var(--pit) 32%, transparent);
+  background: var(--pit-soft);
+  color: var(--pit);
+}
+
+.trail__chip[data-failed] .trail__said {
+  opacity: 1;
+}
+
+/* Opened. Indented under the chips rather than centred, because these are the
+   calls behind one chip and not a new kind of row. */
+.trail__steps {
+  list-style: none;
+  margin: 0.3rem 0 0.2rem;
+  padding: 0.35rem 0 0.35rem 0.7rem;
+  margin-left: 2.85rem;
+  max-width: 42rem;
+  border-left: 2px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.trail__step[data-failed] {
+  color: var(--pit);
+}
+
+.trail__step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  color: var(--faint);
+}
+
+.trail__step-title {
+  color: var(--muted);
+}
+
+.trail__step[data-failed] .trail__step-title,
+.trail__step[data-failed] .trail__said {
+  color: var(--pit);
+}
+
+/* The command, the URL, the memory that was written: exactly as it was.
+   Never markdown, because this is a record of what happened rather than
+   something written to be read, and a model that could format it could
+   describe a command as something other than the command it ran. */
+.trail__target {
+  margin: 0.15rem 0 0;
+  padding: 0.35rem 0.5rem;
+  max-height: 11rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ==========================================================================
@@ -1913,9 +2400,32 @@ button {
   text-decoration: underline;
 }
 
-.file__size {
+/* Never wraps and never shrinks. This is three or four characters carrying the
+   one fact the name does not, and a size broken across two lines is the row
+   telling the operator its own layout gave up. */
+.file__meta {
   font-size: 0.66rem;
   color: var(--muted);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A file the app has and could not read. Says which reason it was and offers
+   the two ways forward: the store answers 503 while it is opening, so the
+   commonest failure here is one that has already stopped being true. */
+.file__failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.file__failed-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   flex: none;
 }
 
@@ -1933,26 +2443,69 @@ button {
   max-height: calc(100vh - 3rem);
 }
 
+/* Two rows in one grid rather than one row of four things. The name is the
+   only part allowed to run out of room; everything else states a fact in a
+   fixed number of characters and is placed where running out cannot happen to
+   it. */
 .file-view__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.9rem;
   margin-bottom: 0.9rem;
-  min-width: 0;
 }
 
 .file-view__head .dialog__title {
+  grid-column: 1;
+  margin: 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* What it is and how big, under the name. Its own line because it is the line
+   that used to be squeezed between a name that wanted the whole row and a pair
+   of buttons that would not give any of it up: `48 KB` came out as `48` over
+   `KB`, which is a dialog admitting it cannot lay out five characters. */
+.file-view__what {
+  grid-column: 1;
+  margin: 0.1rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .file-view__actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-left: auto;
+  gap: 0.5rem;
+}
+
+/* Its own corner. Beside `Save a copy` it read as the second half of a pair of
+   answers, which is part of why the first one looked like it might change the
+   file rather than copy it out. */
+.file-view__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
   flex: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.file-view__close:hover {
+  background: var(--sunken);
+  color: var(--text);
 }
 
 .file-view__body {
@@ -2695,18 +3248,40 @@ button {
 
 /* --- the screen ----------------------------------------------------------
 
-   One connection, two sizes. Going full screen promotes this same element to
-   fill the window rather than mounting a second one, so the desktop is never
+   One connection, two sizes. Going full screen promotes the stage inside this
+   to fill the window rather than mounting a second one, so the desktop is never
    dropped and reconnected just because the operator wanted a better look. */
 
 .screen {
+  /* Shared with the space held open below, so the picture and the gap it leaves
+     behind cannot disagree about how tall the screen is. */
+  --screen-aspect: 16 / 10;
   margin-bottom: 1.1rem;
+}
+
+/* The stage leaves the flow to cover the window, so this holds the space it had.
+   Without it the panel underneath jumps by the height of the screen the moment
+   the screen opens, and jumps back when it closes. */
+.screen[data-full="true"]::before {
+  content: "";
+  display: block;
+  aspect-ratio: var(--screen-aspect);
+}
+
+/* What grows. The zoom is played from the corner the small picture had, which is
+   also where FLIP puts it back to. */
+.screen__stage {
+  transform-origin: 0 0;
+}
+
+.screen__stage[data-zooming="true"] {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .screen__frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: var(--screen-aspect);
   overflow: hidden;
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
@@ -2774,21 +3349,21 @@ button {
 }
 
 /* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
-   above mounted and the VNC session alive across the change. */
+   above mounted and the VNC session alive across the change. The margin stays
+   on the element left behind in the panel, which is still holding the space. */
 /* Grown to fill the window, but not to the edges of it.
    The title bar is an overlay, so the macOS window controls float over whatever
    is drawn in the top-left corner: at `inset: 0` they landed on the title in
-   this bar and on the picture below it. Insetting the panel leaves that corner
+   this bar and on the picture below it. Insetting the stage leaves that corner
    showing the app, which is where those buttons belong, and has the side
    benefit of keeping the conversation visible around the edge so a maximised
    screen reads as something being worked on rather than as a new window. The
    top inset matches the rail's own, which is how the rest of the app already
    clears those controls. */
-.screen[data-full="true"] {
+.screen[data-full="true"] .screen__stage {
   position: fixed;
   inset: 2.75rem 1rem 1rem;
   z-index: 40;
-  margin: 0;
   display: flex;
   flex-direction: column;
   background: var(--rail-ground);
@@ -2992,6 +3567,27 @@ button {
   background: var(--faint);
 }
 
+/* A trigger that is not a clock: it waits to be told. The hands come off and
+   the ring goes dashed, because a clock face drawn on something that keeps no
+   place in the clock is the wrong thing to say at a glance, and the row beside
+   it has no countdown to back the glyph up. */
+.routine__mark[data-waiting] {
+  border-color: var(--flesh);
+  border-style: dashed;
+}
+
+.routine__mark[data-waiting]::after {
+  display: none;
+}
+
+.routine__mark[data-waiting]::before {
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 50%;
+  background: var(--flesh);
+  transform: translate(-50%, 50%);
+}
+
 /* The countdown is true but restless, and it is not what the row is about. */
 .routine__next {
   opacity: 0.75;
@@ -3108,6 +3704,34 @@ button {
   background: var(--pit-soft);
   border-radius: 999px;
   padding: 0.05rem 0.4rem;
+}
+
+/* What a firing bought. On the row rather than behind a click, because it is
+   the difference between a routine that is working and one whose instruction is
+   being delivered to an agent that never runs, and the two rows are otherwise
+   identical. */
+.history__spend {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+
+.history__cost {
+  color: color-mix(in oklab, var(--mint) 70%, var(--faint));
+}
+
+/* Delivered, and nothing ran. Drawn as a state rather than as "0 tokens": a
+   zero in a column of numbers reads as a cheap run, not as a firing that never
+   reached a model. */
+.history__quiet {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pit);
 }
 
 .history__ago {
@@ -3441,4 +4065,169 @@ button {
   100% {
     background: color-mix(in oklab, var(--flesh) 14%, transparent);
   }
+}
+
+/* ==========================================================================
+   Cafeteria
+
+   A wider dialog than the rest, because this one is browsed rather than filled
+   in: the operator is comparing fourteen agents, and a column that shows three
+   at a time turns a glance into a scroll. The head and the foot are pinned so
+   the group being hired into and the count are readable from anywhere in the
+   list; only the stations move.
+   ========================================================================== */
+
+/* Focus lands here on open so the dialog owns the keyboard, but this is a
+   landing spot rather than a control: the ring belongs on the tiles and the
+   buttons inside, not around the whole panel. */
+.dialog--cafeteria:focus,
+.dialog--cafeteria:focus-visible {
+  outline: none;
+}
+
+.dialog--cafeteria {
+  width: min(58rem, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  padding: 0;
+}
+
+.cafeteria__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.2rem;
+  padding: 1.35rem 1.35rem 1rem;
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.cafeteria__stations {
+  overflow-y: auto;
+  padding: 0.35rem 1.35rem 1rem;
+  flex: 1;
+}
+
+.cafeteria__station {
+  margin-top: 1.1rem;
+}
+
+.cafeteria__station-name {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 0.55rem;
+}
+
+.cafeteria__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+/* One hireable agent. A button rather than a card with a checkbox in it: the
+   whole tile is the target, and `aria-pressed` is what says it is a toggle
+   instead of something that opens. */
+.hire {
+  display: grid;
+  grid-template-columns: 2.6rem 1fr;
+  align-items: start;
+  gap: 0.65rem;
+  text-align: left;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.hire:hover {
+  border-color: color-mix(in oklab, var(--accent) 45%, var(--edge));
+  background: var(--ground);
+}
+
+/* Selection is carried by the agent's own accent, so a picked crew reads as
+   the colours that will be in the rail a moment later. */
+.hire[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 9%, var(--raised));
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.hire__face {
+  display: grid;
+  place-items: center;
+  padding-top: 0.1rem;
+}
+
+.hire__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.hire__name {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.004em;
+  color: var(--text);
+}
+
+/* Said quietly and on purpose. Hiring a second Researcher is a thing operators
+   do deliberately, so this reports what is already there rather than warning
+   about it. */
+.hire__already {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--faint);
+  border: 1px solid var(--edge);
+  border-radius: 99px;
+  padding: 0.05rem 0.35rem;
+}
+
+.hire__tagline {
+  font-size: 0.79rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.hire__skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.15rem;
+}
+
+.hire__skill {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  color: var(--muted);
+  background: var(--sunken);
+  border-radius: 99px;
+  padding: 0.1rem 0.4rem;
+}
+
+.cafeteria__foot {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.9rem 1.35rem;
+  border-top: 1px solid var(--edge);
+  flex: none;
+}
+
+.cafeteria__spacer {
+  margin-left: auto;
 }

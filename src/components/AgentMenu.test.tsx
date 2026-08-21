@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentCard } from "../lib/types";
+import type { AgentCard, Group } from "../lib/types";
 import { AgentMenu } from "./AgentMenu";
 
 function card(over: Partial<AgentCard> = {}): AgentCard {
@@ -18,6 +18,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,
@@ -25,7 +26,20 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
   };
 }
 
-function open(agent: AgentCard, at = { x: 40, y: 40 }) {
+function group(id: string, name: string): Group {
+  return {
+    id,
+    name,
+    agentCount: 1,
+    createdAt: 0,
+    baseUrl: null,
+    defaultModel: null,
+    apiKeySet: false,
+    apiKeyHint: "",
+  };
+}
+
+function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {
   const handlers = {
     onClose: vi.fn(),
     onEditProfile: vi.fn(),
@@ -33,15 +47,25 @@ function open(agent: AgentCard, at = { x: 40, y: 40 }) {
     onTogglePause: vi.fn(),
     onDuplicate: vi.fn(),
     onClearHistory: vi.fn(),
+    onNudge: vi.fn(),
+    onMoveToGroup: vi.fn(),
   };
-  render(<AgentMenu target={{ agent, ...at }} {...handlers} />);
+  render(<AgentMenu target={{ agent, ...at }} groups={groups} {...handlers} />);
   return handlers;
 }
 
 describe("AgentMenu", () => {
   it("offers everything you do to an agent, from either place it opens", () => {
     open(card());
-    for (const name of ["Pause", "Edit profile", "Pin to top", "Duplicate", "Clear history…"]) {
+    for (const name of [
+      "Pause",
+      "Edit profile",
+      "Pin to top",
+      "Move up",
+      "Move down",
+      "Duplicate",
+      "Clear history…",
+    ]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
   });
@@ -64,6 +88,33 @@ describe("AgentMenu", () => {
     open(card({ pinned: true }));
     expect(screen.getByRole("button", { name: "Unpin" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Pin to top" })).toBeNull();
+  });
+
+  it("arranges the rail without a mouse", () => {
+    // A rail that can only be arranged by dragging cannot be arranged from a
+    // keyboard at all, and this menu is already where everything else lives.
+    const handlers = open(card());
+    fireEvent.click(screen.getByRole("button", { name: "Move up" }));
+    expect(handlers.onNudge).toHaveBeenCalledWith(expect.objectContaining({ id: "a1" }), -1);
+  });
+
+  it("offers the crews this agent is not in, and never the one it is", () => {
+    const handlers = open(card(), { x: 40, y: 40 }, [
+      group("g1", "everyone"),
+      group("g2", "research"),
+    ]);
+
+    expect(screen.queryByRole("button", { name: "Move to everyone" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Move to research" }));
+    expect(handlers.onMoveToGroup).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "a1" }),
+      expect.objectContaining({ id: "g2" }),
+    );
+  });
+
+  it("says nothing about groups while there is only one", () => {
+    open(card(), { x: 40, y: 40 }, [group("g1", "everyone")]);
+    expect(screen.queryByText(/^Move to /)).toBeNull();
   });
 
   it("closes as it acts, so the menu is never left over a stale row", () => {

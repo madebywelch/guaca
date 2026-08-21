@@ -24,7 +24,7 @@ use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::now_ms;
-use guac_lib::domain::routine::{RunKind, Trigger};
+use guac_lib::domain::routine::{Cadence, RunKind, Trigger};
 use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
@@ -1333,8 +1333,8 @@ async fn a_routine_that_is_due_wakes_its_agent() {
             h.id("Watcher"),
             "Listings sweep",
             "check the listings",
-            Trigger::Every(3600),
-            now_ms() - 1000,
+            Trigger::Clock(Cadence::Every(3600)),
+            Some(now_ms() - 1000),
         )
         .unwrap();
 
@@ -1348,7 +1348,7 @@ async fn a_routine_that_is_due_wakes_its_agent() {
     let routines = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
     assert_eq!(routines.len(), 1, "a repeat must survive its own run");
     assert!(
-        routines[0].next_run_at > now_ms(),
+        routines[0].next_run_at.expect("a clock routine holds a slot") > now_ms(),
         "and must not still be due, or it fires again on the next tick"
     );
     assert!(routines[0].last_run_at.is_some(), "it should record having run");
@@ -1361,7 +1361,13 @@ async fn a_one_off_routine_does_not_come_due_twice() {
 
     h.runtime
         .store()
-        .create_routine(h.id("Sleeper"), "", "wake up", Trigger::Once, now_ms() - 1000)
+        .create_routine(
+            h.id("Sleeper"),
+            "",
+            "wake up",
+            Trigger::Clock(Cadence::Once),
+            Some(now_ms() - 1000),
+        )
         .unwrap();
 
     h.runtime.start_scheduler();
@@ -1373,6 +1379,63 @@ async fn a_one_off_routine_does_not_come_due_twice() {
     assert!(
         h.runtime.store().agent_routines(h.id("Sleeper")).unwrap().is_empty(),
         "a one-off must be gone once it has run, not left with a time in the past"
+    );
+}
+
+#[tokio::test]
+async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_as_one_line() {
+    // Both halves of the same delivery. The model has to be told exactly what
+    // the routine says, or a schedule does nothing. The operator was being
+    // shown the same several sentences as a chat bubble from Guaca, in the
+    // middle of their own conversation with the agent: the system prompting
+    // their agent, drawn as though somebody had typed it to them.
+    let stub = serve(|_| Script::Say("checked".into())).await;
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the listings and say what is new.",
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() + 60_000),
+        )
+        .unwrap();
+
+    let run = h.runtime.test_routine(&routine).unwrap();
+    h.settle(run).await;
+
+    // What the model was sent: the instruction, unchanged.
+    let sent = h.runtime.store().channel_messages(h.id("Watcher"), 20).unwrap();
+    let fired = sent
+        .iter()
+        .find(|m| m.from == Participant::System)
+        .expect("the routine was delivered from the system");
+    assert_eq!(
+        fired.plain_text(),
+        "Check the listings and say what is new.",
+        "the prompt reads a routine's instruction the same way it reads any text"
+    );
+
+    // What the transcript holds: one part naming the routine, and no loose
+    // text for a bubble to draw.
+    match fired.parts.as_slice() {
+        [Part::Routine { routine_id, name, what }] => {
+            assert_eq!(*routine_id, routine.id, "so the operator can open the routine it names");
+            assert_eq!(name, "Listings sweep");
+            assert_eq!(what, "Check the listings and say what is new.");
+        }
+        other => panic!("a fired routine is one routine part, got {other:?}"),
+    }
+
+    // And the agent still did the work, which is the whole point of the change
+    // being only about how it is drawn.
+    assert!(
+        h.channel_texts("Watcher").iter().any(|t| t.contains("checked")),
+        "the routine fired and the agent said nothing:\n{}",
+        h.transcript()
     );
 }
 
@@ -1392,8 +1455,8 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
             h.id("Watcher"),
             "Sweep",
             "check the listings",
-            Trigger::Once,
-            due_next_week,
+            Trigger::Clock(Cadence::Once),
+            Some(due_next_week),
         )
         .unwrap();
 
@@ -1405,7 +1468,7 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
 
     let after = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
     assert_eq!(after.len(), 1, "a one-shot must survive being tested");
-    assert_eq!(after[0].next_run_at, due_next_week, "and must still be due when it was");
+    assert_eq!(after[0].next_run_at, Some(due_next_week), "and must still be due when it was");
     assert!(after[0].last_run_at.is_none(), "a test is not the routine having run");
 
     // It is in the history, marked as the test it was.
@@ -1441,8 +1504,8 @@ async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
             h.id("Watcher"),
             "Listings sweep",
             "Check the listings and say what is new.",
-            Trigger::Daily,
-            now_ms() - 1000,
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() - 1000),
         )
         .unwrap();
 
@@ -1503,8 +1566,8 @@ async fn a_routine_can_hand_its_work_to_the_specialist_it_belongs_to() {
             h.id("Manager"),
             "Weekly filings",
             "Have the filings checked and report what is new.",
-            Trigger::Weekly,
-            now_ms() - 1000,
+            Trigger::Clock(Cadence::Weekly),
+            Some(now_ms() - 1000),
         )
         .unwrap();
 
@@ -1566,7 +1629,7 @@ async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires(
     assert_eq!(booked.len(), 1, "one standing job is one routine, got {booked:?}");
     assert_eq!(
         booked[0].trigger,
-        Trigger::Weekdays,
+        Trigger::Clock(Cadence::Weekdays),
         "a weekday repeat is a shape on the calendar, not a gap in seconds"
     );
     assert_eq!(
@@ -1603,7 +1666,13 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
     let routine = h
         .runtime
         .store()
-        .create_routine(h.id("Watcher"), "Sweep", "check", Trigger::Daily, now_ms() - 1000)
+        .create_routine(
+            h.id("Watcher"),
+            "Sweep",
+            "check",
+            Trigger::Clock(Cadence::Daily),
+            Some(now_ms() - 1000),
+        )
         .unwrap();
     h.runtime.store().set_routine_active(routine.id, false).unwrap();
 

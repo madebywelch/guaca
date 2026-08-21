@@ -46,6 +46,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 1,
     updatedAt: 1,
@@ -59,6 +60,7 @@ const handlers = {
   onEditGroup: vi.fn(),
   onNewAgent: vi.fn(),
   onNewGroup: vi.fn(),
+  onOpenCafeteria: vi.fn(),
   onOpenSettings: vi.fn(),
 };
 

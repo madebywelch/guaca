@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
+import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
 import { type AgentCard, type Browser, errorMessage } from "../lib/types";
 
@@ -40,6 +41,10 @@ export function BrowserScreen({ agent }: Props) {
   // browser into the new panel.
   const showing = useRef(agent.id);
   const frame = useRef<HTMLIFrameElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  // Where the picture was before it grew. Measured in the click, because by the
+  // time anything can react to the change the stage is already in its new place.
+  const cameFrom = useRef<DOMRect | null>(null);
 
   // Nothing at all until there is a key. Offering to give an agent a browser
   // that cannot be made is worse than not mentioning browsers, and asked from
@@ -97,6 +102,19 @@ export function BrowserScreen({ agent }: Props) {
    */
   const grabKeyboard = () => frame.current?.focus();
 
+  /**
+   * Grows the pane to fill the window, and takes the keyboard with it.
+   *
+   * The same two steps as the computer's, and the same shape deliberately: the
+   * two panes sit one above the other, and one animating while the other
+   * snapped would read as a bug in whichever moved second.
+   */
+  const grow = useCallback(() => {
+    cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
+    setFull(true);
+    grabKeyboard();
+  }, []);
+
   // Escape shrinks it again. On the window rather than the frame, because the
   // live view swallows key presses once it has focus.
   useEffect(() => {
@@ -106,6 +124,35 @@ export function BrowserScreen({ agent }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
+
+  // FLIP: the stage is already covering the window, so it is put back over the
+  // small picture it came from and let go. The live view under it never
+  // reloads, and a change of size that lands in a single frame reads as a
+  // reconnect that did not happen. Only on the way up, for the reason given in
+  // `ComputerScreen`.
+  useLayoutEffect(() => {
+    const node = stage.current;
+    const before = cameFrom.current;
+    cameFrom.current = null;
+    if (!node) return;
+
+    node.dataset.zooming = "false";
+    node.style.transition = "none";
+    node.style.transform = "";
+    if (!before || prefersReducedMotion()) return;
+
+    const after = node.getBoundingClientRect();
+    if (!before.width || !before.height || !after.width || !after.height) return;
+
+    node.style.transform =
+      `translate(${before.left - after.left}px, ${before.top - after.top}px) ` +
+      `scale(${before.width / after.width}, ${before.height / after.height})`;
+    requestAnimationFrame(() => {
+      node.dataset.zooming = "true";
+      node.style.transition = "";
+      node.style.transform = "";
+    });
   }, [full]);
 
   const act = async (run: () => Promise<Browser | null>) => {
@@ -134,110 +181,113 @@ export function BrowserScreen({ agent }: Props) {
     : {};
 
   return (
-    <div className="screen" data-full={full ? "true" : undefined} {...asDialog}>
-      {full && (
-        <div className="screen__bar">
-          <span className="screen__title">{agent.name}'s browser</span>
-          <span className="screen__state" data-state={browser?.state}>
-            {browser?.state}
-          </span>
-          <span style={{ flex: 1 }} />
+    // Two elements, one connection. The outer one stays in the panel and holds
+    // the space the pane had; the inner one is what covers the window. The
+    // frame inside that is the same element in both sizes, which is what keeps
+    // the live view connected across the change.
+    <div className="screen" data-full={full ? "true" : undefined}>
+      <div className="screen__stage" ref={stage} {...asDialog}>
+        {full && (
+          <div className="screen__bar">
+            <span className="screen__title">{agent.name}'s browser</span>
+            <span className="screen__state" data-state={browser?.state}>
+              {browser?.state}
+            </span>
+            <span style={{ flex: 1 }} />
 
-          {confirming ? (
-            <>
-              <button
-                type="button"
-                className="btn btn--small btn--danger"
-                disabled={busy}
-                onClick={() =>
-                  void act(async () => {
-                    await api.stopAgentBrowser(agent.id);
-                    return null;
-                  })
-                }
-              >
-                Close it and save the sign-ins
-              </button>
+            {confirming ? (
+              <>
+                <button
+                  type="button"
+                  className="btn btn--small btn--danger"
+                  disabled={busy}
+                  onClick={() =>
+                    void act(async () => {
+                      await api.stopAgentBrowser(agent.id);
+                      return null;
+                    })
+                  }
+                >
+                  Close it and save the sign-ins
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small btn--ghost"
+                  onClick={() => {
+                    setConfirming(false);
+                    grabKeyboard();
+                  }}
+                >
+                  Keep it open
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
                 className="btn btn--small btn--ghost"
-                onClick={() => {
-                  setConfirming(false);
-                  grabKeyboard();
-                }}
+                disabled={busy}
+                onClick={() => setConfirming(true)}
+                title="Close it. What it is signed in to is saved, and the next one opens signed in."
               >
-                Keep it open
+                Close
               </button>
-            </>
-          ) : (
+            )}
+
+            <div className="screen__actions">
+              <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                Done
+              </button>
+            </div>
+          </div>
+        )}
+
+        {live ? (
+          <div className="screen__frame">
+            <iframe
+              // Keyed on the session alone, never on the size, so growing to fill
+              // the window keeps the same connection. Clipboard is allowed
+              // because signing in means pasting a password out of a manager, and
+              // without it the paste silently does nothing.
+              key={browser.sessionId}
+              ref={frame}
+              title={`${agent.name}'s browser`}
+              src={browser.liveViewUrl ?? ""}
+              allow="autoplay; clipboard-read; clipboard-write"
+            />
+            {!full && (
+              <button
+                type="button"
+                className="screen__veil"
+                onClick={grow}
+                title={`Open ${agent.name}'s browser and take over`}
+                aria-label={`Open ${agent.name}'s browser and take over`}
+              />
+            )}
+          </div>
+        ) : (
+          <div className="screen__frame screen__frame--empty">
+            <p className="screen__note">
+              {error ??
+                (busy
+                  ? "Working on it. This takes a moment."
+                  : browser
+                    ? `Closed. What it was signed in to is saved, so the next one opens signed in
+                       to the same accounts.`
+                    : `No browser yet. Agents get one the first time they use the web. Open it
+                       yourself to sign this agent in to something: that is the one thing an agent
+                       cannot do for itself.`)}
+            </p>
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--small btn--primary"
               disabled={busy}
-              onClick={() => setConfirming(true)}
-              title="Close it. What it is signed in to is saved, and the next one opens signed in."
+              onClick={() => void act(() => api.startAgentBrowser(agent.id))}
             >
-              Close
-            </button>
-          )}
-
-          <div className="screen__actions">
-            <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-              Done
+              {busy ? "Working…" : browser ? "Open another" : "Open one"}
             </button>
           </div>
-        </div>
-      )}
-
-      {live ? (
-        <div className="screen__frame">
-          <iframe
-            // Keyed on the session alone, never on the size, so growing to fill
-            // the window keeps the same connection. Clipboard is allowed
-            // because signing in means pasting a password out of a manager, and
-            // without it the paste silently does nothing.
-            key={browser.sessionId}
-            ref={frame}
-            title={`${agent.name}'s browser`}
-            src={browser.liveViewUrl ?? ""}
-            allow="autoplay; clipboard-read; clipboard-write"
-          />
-          {!full && (
-            <button
-              type="button"
-              className="screen__veil"
-              onClick={() => {
-                setFull(true);
-                grabKeyboard();
-              }}
-              title={`Open ${agent.name}'s browser and take over`}
-              aria-label={`Open ${agent.name}'s browser and take over`}
-            />
-          )}
-        </div>
-      ) : (
-        <div className="screen__frame screen__frame--empty">
-          <p className="screen__note">
-            {error ??
-              (busy
-                ? "Working on it. This takes a moment."
-                : browser
-                  ? `Closed. What it was signed in to is saved, so the next one opens signed in
-                     to the same accounts.`
-                  : `No browser yet. Agents get one the first time they use the web. Open it
-                     yourself to sign this agent in to something: that is the one thing an agent
-                     cannot do for itself.`)}
-          </p>
-          <button
-            type="button"
-            className="btn btn--small btn--primary"
-            disabled={busy}
-            onClick={() => void act(() => api.startAgentBrowser(agent.id))}
-          >
-            {busy ? "Working…" : browser ? "Open another" : "Open one"}
-          </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {!full && (
         <p className="screen__caption">

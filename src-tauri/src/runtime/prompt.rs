@@ -624,6 +624,7 @@ mod tests {
             skills: vec!["delegation".into(), "scheduling".into()],
             lifecycle: Lifecycle::Active,
             pinned: false,
+            rail_order: 0,
             version: 1,
             created_at: 0,
             updated_at: 0,

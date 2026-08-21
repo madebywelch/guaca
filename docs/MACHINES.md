@@ -55,6 +55,28 @@ the pointer is, and an action that hands work to the screen is given a moment to
 settle before the picture is taken. All three are in `e2b.rs` with the failure
 each one closes.
 
+## The frame points at this app's page, not at noVNC's
+
+noVNC narrates its own transport. Every time it connects it slides a bar across
+the top of the picture reading "Connected (unencrypted) to" and the desktop's
+name, and connecting is not a rare event: the frame is rebuilt whenever the
+operator opens a different agent's panel. So the bar arrived in the middle of
+ordinary work and read as a stall that had not happened. It is also wrong about
+the hop that matters, which is TLS from `proxy.rs` to E2B.
+
+The address in the frame is `viewer.html`, which `proxy.rs` answers itself
+rather than relaying. That page frames noVNC from the same origin, which is the
+only way to reach into a document this app does not own, and appends one rule:
+`#noVNC_status.noVNC_status_normal` is hidden. Only the normal kind. The same
+bar carries noVNC's errors, those never time out on their own, and they are the
+only notice an operator gets that a desktop stopped answering.
+
+Two things drift quietly if you let them. The options deciding autoconnect,
+scaling and reconnection live in the address, so the page hands its query
+straight on instead of holding a copy of them; and `e2b.rs` builds that address
+from `proxy::VIEWER_DOCUMENT`, so the two halves cannot disagree about which
+page the frame is pointed at.
+
 ## There is one browser on every machine, and one profile in it
 
 The template ships a second browser, with a binary on `PATH`, a menu entry and

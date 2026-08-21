@@ -19,7 +19,7 @@ use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
-use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
+use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
@@ -70,6 +70,72 @@ fn bootstrap_lock() -> &'static parking_lot::Mutex<()> {
 /// migration's pinned constant so the two can never drift apart.
 fn default_group_id() -> GroupId {
     migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
+}
+
+/// A fresh card from a validated draft. Everything an agent goes on to acquire
+/// (a machine, its tokens, a pin) starts empty: those are things it did, not
+/// things anybody wrote down.
+fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
+    let now = now_ms();
+    AgentCard {
+        id: AgentId::new(),
+        group_id: draft.group_id.unwrap_or_else(default_group_id),
+        name: draft.name.clone(),
+        avatar: draft.avatar.clone(),
+        color: draft.color.clone(),
+        model: draft.model.clone(),
+        system_prompt: draft.system_prompt.clone(),
+        skills: draft.skills.clone(),
+        sandbox_id: None,
+        sandbox_envd_token: None,
+        sandbox_traffic_token: None,
+        browser_id: None,
+        lifecycle: Lifecycle::Active,
+        pinned: false,
+        rail_order,
+        version: 1,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+/// The slot after the last row in the rail.
+///
+/// Read rather than defaulted, and read on whatever connection is doing the
+/// writing: a new agent must not land in the middle of an arrangement the
+/// operator made, and a column default cannot know what the last row is. Taking
+/// it on the transaction is what stops a concurrent create from handing out the
+/// same slot twice.
+fn bottom_of_rail(conn: &rusqlite::Connection) -> Result<i32, StoreError> {
+    let last: i32 =
+        conn.query_row("SELECT coalesce(max(rail_order), -1) FROM agents", [], |row| row.get(0))?;
+    Ok(last.saturating_add(1))
+}
+
+/// Takes a `&Connection` rather than a `&Store` so one insert serves both a
+/// single create and a batch inside a transaction; `Transaction` derefs here.
+fn insert_agent(conn: &rusqlite::Connection, card: &AgentCard) -> Result<(), StoreError> {
+    conn.execute(
+        "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+        params![
+            card.id.to_string(),
+            card.name,
+            card.avatar,
+            card.color,
+            card.model,
+            card.system_prompt,
+            serde_json::to_string(&card.skills).unwrap_or_else(|_| "[]".into()),
+            card.lifecycle.as_str(),
+            card.version,
+            card.created_at,
+            card.updated_at,
+            card.group_id.to_string(),
+            card.rail_order,
+        ],
+    )
+    .map_err(|e| classify(e, &card.name))?;
+    Ok(())
 }
 
 /// Maps SQLite's unique-constraint failure onto a domain error, so callers get
@@ -163,48 +229,37 @@ impl Store {
 
     pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
-        let now = now_ms();
-        let card = AgentCard {
-            id: AgentId::new(),
-            group_id: draft.group_id.unwrap_or_else(default_group_id),
-            name: draft.name.clone(),
-            avatar: draft.avatar.clone(),
-            color: draft.color.clone(),
-            model: draft.model.clone(),
-            system_prompt: draft.system_prompt.clone(),
-            skills: draft.skills.clone(),
-            sandbox_id: None,
-            sandbox_envd_token: None,
-            sandbox_traffic_token: None,
-            browser_id: None,
-            lifecycle: Lifecycle::Active,
-            pinned: false,
-            version: 1,
-            created_at: now,
-            updated_at: now,
-        };
-
-        conn.execute(
-            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
-            params![
-                card.id.to_string(),
-                card.name,
-                card.avatar,
-                card.color,
-                card.model,
-                card.system_prompt,
-                serde_json::to_string(&card.skills).unwrap_or_else(|_| "[]".into()),
-                card.lifecycle.as_str(),
-                card.version,
-                card.created_at,
-                card.updated_at,
-                card.group_id.to_string(),
-            ],
-        )
-        .map_err(|e| classify(e, &card.name))?;
-
+        let card = new_card(draft, bottom_of_rail(&conn)?);
+        insert_agent(&conn, &card)?;
         Ok(card)
+    }
+
+    /// Creates a whole crew, or none of it.
+    ///
+    /// Written in one transaction because the alternative fails halfway. Names
+    /// are unique per group, and the realistic way a batch dies on its fourth
+    /// row is another window taking a name between the check and the write,
+    /// which no amount of validating up front prevents. Leaving three agents
+    /// behind and reporting an error about a fourth gives the operator a
+    /// workspace they did not ask for and no list of what landed.
+    pub fn create_agents(&self, drafts: &[CleanDraft]) -> Result<Vec<AgentCard>, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        // One read, then consecutive slots. Asking for the bottom once per
+        // agent would give a whole crew the same answer, because none of them
+        // is written until the transaction commits, and the rail would then
+        // order them by the tiebreak rather than by the order they were picked.
+        let first = bottom_of_rail(&tx)?;
+        let cards: Vec<AgentCard> = drafts
+            .iter()
+            .enumerate()
+            .map(|(offset, draft)| new_card(draft, first.saturating_add(offset as i32)))
+            .collect();
+        for card in &cards {
+            insert_agent(&tx, card)?;
+        }
+        tx.commit()?;
+        Ok(cards)
     }
 
     /// Applies an operator edit and bumps the card version.
@@ -259,7 +314,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,browser_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -276,7 +331,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,browser_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -301,6 +356,87 @@ impl Store {
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
         }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    /// Puts an agent where the operator dropped it.
+    ///
+    /// One call, because a drag is one gesture that can be both a reorder and a
+    /// move between groups, and doing it as two writes leaves a state where the
+    /// agent has arrived in the group but not in the place it was dropped.
+    ///
+    /// `before` is the row it lands in front of, and `None` means the end of
+    /// `group`. Naming the moved agent itself asks for nothing and does nothing.
+    /// Otherwise honoured only while that row is still live and still in `group`:
+    /// the operator dropped onto something they could see, and a row deleted in
+    /// the meantime must not cost them the half of the intent that still holds.
+    ///
+    /// Renumbers every live agent densely rather than finding a gap between two
+    /// neighbours. A workspace holds tens of agents, so the write is trivial,
+    /// and a scheme with gaps has a state where the gap is used up that this one
+    /// does not have. Not an edit: like `pinned`, this is where a row is drawn,
+    /// so the version does not move and no peer is told.
+    pub fn move_agent(
+        &self,
+        id: AgentId,
+        group: GroupId,
+        before: Option<AgentId>,
+    ) -> Result<AgentCard, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            // The arrangement as it stands, which is what `before` refers to.
+            // Terminated agents are left out and left alone: they are not in the
+            // rail, so numbering them would spend positions on rows nobody can
+            // see and would move them under a later reader.
+            let mut stmt = tx.prepare(
+                "SELECT id, group_id FROM agents
+                  WHERE lifecycle <> 'terminated'
+                  ORDER BY rail_order, created_at, rowid",
+            )?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let moving = id.to_string();
+            if !rows.iter().any(|(row_id, _)| *row_id == moving) {
+                return Err(StoreError::AgentNotFound(id));
+            }
+
+            let target = group.to_string();
+            // A row dropped on itself is not a move. Caught here as well as in
+            // the UI because the fallback for an anchor that is not in the group
+            // is the end of it, so letting this through would spend the
+            // operator's arrangement on a gesture that asked for nothing.
+            if before == Some(id) && rows.iter().any(|(r, g)| *r == moving && *g == target) {
+                return self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id));
+            }
+            let mut order: Vec<(String, String)> =
+                rows.iter().filter(|(row_id, _)| *row_id != moving).cloned().collect();
+
+            let anchor = before.map(|b| b.to_string()).filter(|b| {
+                order.iter().any(|(row_id, row_group)| row_id == b && *row_group == target)
+            });
+
+            let at = match anchor {
+                Some(row) => order.iter().position(|(r, _)| *r == row).unwrap_or(order.len()),
+                // The end of the group rather than the end of the rail: this is
+                // one sequence over every group, and appending past the last
+                // group would put the agent below crews it is not in.
+                None => order
+                    .iter()
+                    .rposition(|(_, row_group)| *row_group == target)
+                    .map_or(order.len(), |last| last + 1),
+            };
+            order.insert(at, (moving.clone(), target.clone()));
+
+            let mut renumber = tx.prepare("UPDATE agents SET rail_order=?2 WHERE id=?1")?;
+            for (position, (row, _)) in order.iter().enumerate() {
+                renumber.execute(params![row, position as i32])?;
+            }
+            tx.execute("UPDATE agents SET group_id=?2 WHERE id=?1", params![moving, target])?;
+        }
+        tx.commit()?;
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
@@ -369,13 +505,18 @@ impl Store {
 
     // ---- routines --------------------------------------------------------
 
+    /// Files a new routine.
+    ///
+    /// `first_run_at` is `None` for a trigger that does not wait on the clock:
+    /// an event routine holds no slot, and the column is NULL rather than a
+    /// date far enough away to look like never.
     pub fn create_routine(
         &self,
         agent: AgentId,
         name: &str,
         what: &str,
         trigger: Trigger,
-        first_run_at: i64,
+        first_run_at: Option<i64>,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let routine = Routine {
@@ -429,7 +570,7 @@ impl Store {
         name: &str,
         what: &str,
         trigger: Trigger,
-        next_run_at: i64,
+        next_run_at: Option<i64>,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -450,8 +591,12 @@ impl Store {
     pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
+            // Soonest first, then whatever holds no slot. NULL sorts before
+            // everything in SQLite, which would put a routine waiting on an
+            // event above one firing in ten minutes.
             "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
-               FROM routines WHERE agent_id=?1 ORDER BY next_run_at",
+               FROM routines WHERE agent_id=?1
+              ORDER BY next_run_at IS NULL, next_run_at, created_at",
         )?;
         let rows = stmt.query_map(params![agent.to_string()], row_to_routine)?;
         let mut out = Vec::new();
@@ -465,6 +610,11 @@ impl Store {
     ///
     /// Only for agents that can still act: a routine belonging to a deleted or
     /// paused agent would otherwise fire into nothing, repeatedly.
+    ///
+    /// A routine with no slot is not due and never will be, which is the whole
+    /// mechanism keeping a trigger that is not a clock out of this sweep: SQL
+    /// compares NULL to nothing, so `next_run_at <= now` excludes it without
+    /// this query needing to know what kinds of trigger exist.
     pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -482,20 +632,29 @@ impl Store {
         Ok(out)
     }
 
-    /// Records that a routine ran, and when it is next due.
+    /// Records that a routine ran, and what became of its slot.
     ///
     /// A one-shot is removed rather than left with a time in the past, so the
     /// scheduler never has to reason about whether something already happened.
+    /// A routine that holds no slot keeps its row: reading "nothing on the
+    /// clock" and "finished" off the same answer would delete an event routine
+    /// the first time it fired.
     pub fn routine_ran(&self, routine: &Routine, now: i64) -> Result<(), StoreError> {
         let conn = self.conn()?;
         match routine.after_running(now) {
-            Some(next) => {
+            NextSlot::Due(next) => {
                 conn.execute(
                     "UPDATE routines SET next_run_at=?2, last_run_at=?3 WHERE id=?1",
                     params![routine.id.to_string(), next, now],
                 )?;
             }
-            None => {
+            NextSlot::Waiting => {
+                conn.execute(
+                    "UPDATE routines SET next_run_at=NULL, last_run_at=?2 WHERE id=?1",
+                    params![routine.id.to_string(), now],
+                )?;
+            }
+            NextSlot::Done => {
                 conn.execute("DELETE FROM routines WHERE id=?1", params![routine.id.to_string()])?;
             }
         }
@@ -542,12 +701,26 @@ impl Store {
         Ok(())
     }
 
-    /// What a routine has done lately, newest first.
+    /// What a routine has done lately, newest first, and what each firing spent.
+    ///
+    /// The spend is joined rather than stored on the row. A firing's cost is
+    /// not known when it is recorded and keeps moving until the run settles, so
+    /// a column would be a snapshot of a number that was still changing; the
+    /// model calls are already filed under the run id. Read at the moment the
+    /// operator looks, it also answers the question the history is actually for:
+    /// a firing that bought no model call is a routine that did not run, and
+    /// nothing else in the row tells the two apart.
     pub fn routine_runs(&self, id: RoutineId, limit: usize) -> Result<Vec<RoutineRun>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT run_id,kind,at FROM routine_runs
-              WHERE routine_id=?1 ORDER BY at DESC LIMIT ?2",
+            "SELECT r.run_id, r.kind, r.at,
+                    COALESCE(SUM(u.prompt),0), COALESCE(SUM(u.completion),0),
+                    SUM(u.cost), COUNT(u.id)
+               FROM routine_runs r
+               LEFT JOIN usage u ON u.run_id = r.run_id
+              WHERE r.routine_id=?1
+              GROUP BY r.id
+              ORDER BY r.at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![id.to_string(), limit as i64], row_to_routine_run)?;
         let mut out = Vec::new();
@@ -1377,7 +1550,7 @@ impl Store {
             r"SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
                 FROM routines
                WHERE what LIKE ?1 ESCAPE '\' OR name LIKE ?1 ESCAPE '\'
-               ORDER BY next_run_at ASC LIMIT ?2",
+               ORDER BY next_run_at IS NULL, next_run_at ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![pattern, limit], row_to_routine)?;
         let mut out = Vec::new();
@@ -1642,7 +1815,8 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             sandbox_envd_token: row.get(13)?,
             sandbox_traffic_token: row.get(14)?,
             pinned: row.get::<_, i64>(15)? != 0,
-            browser_id: row.get(16)?,
+            rail_order: row.get(16)?,
+            browser_id: row.get(17)?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -1723,6 +1897,14 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
             kind: RunKind::parse(&kind_raw)
                 .ok_or_else(|| StoreError::Corrupt(format!("unknown run kind {kind_raw:?}")))?,
             at: row.get(2)?,
+            spent: Tokens {
+                prompt: row.get::<_, i64>(3)? as u64,
+                completion: row.get::<_, i64>(4)? as u64,
+                // NULL where nothing was priced, which is not the same as free
+                // and must not be summed as zero.
+                cost: row.get::<_, Option<f64>>(5)?,
+                calls: row.get::<_, i64>(6)? as u64,
+            },
         })
     })())
 }
@@ -1902,6 +2084,12 @@ mod tests {
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
     use crate::domain::ids::RunId;
+    use crate::domain::routine::{Cadence, EventTrigger};
+
+    /// A trigger on the clock, which is what most of these are about.
+    fn clock(cadence: Cadence) -> Trigger {
+        Trigger::Clock(cadence)
+    }
 
     struct Fixture {
         store: Store,
@@ -2243,8 +2431,8 @@ mod tests {
                 card.id,
                 "Listings sweep",
                 "check the listings",
-                Trigger::Every(3600),
-                1_000_000,
+                clock(Cadence::Every(3600)),
+                Some(1_000_000),
             )
             .unwrap();
 
@@ -2254,21 +2442,162 @@ mod tests {
                 made.id,
                 "Listings sweep",
                 "check the listings and say what is new",
-                Trigger::Every(3600),
+                clock(Cadence::Every(3600)),
                 made.next_run_at,
             )
             .unwrap();
         assert_eq!(fixed.what, "check the listings and say what is new");
         assert_eq!(fixed.next_run_at, made.next_run_at, "the schedule did not move");
-        assert_eq!(fixed.trigger, Trigger::Every(3600));
+        assert_eq!(fixed.trigger, clock(Cadence::Every(3600)));
         assert_eq!(fixed.name, "Listings sweep");
 
         // And a routine that is gone is a clear error rather than a silent
         // success, so an operator editing a stale screen is told.
         f.store.delete_routine(made.id).unwrap();
         assert!(matches!(
-            f.store.update_routine(made.id, "", "anything", Trigger::Once, 1),
+            f.store.update_routine(made.id, "", "anything", clock(Cadence::Once), Some(1)),
             Err(StoreError::RoutineNotFound(_))
+        ));
+    }
+
+    /// The arrangement, read back the way the rail reads it.
+    fn arrangement(f: &Fixture) -> Vec<(String, i32)> {
+        let mut agents: Vec<_> = f
+            .store
+            .list_agents()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.lifecycle != Lifecycle::Terminated)
+            .map(|a| (a.name, a.rail_order, a.created_at))
+            .collect();
+        agents.sort_by_key(|(name, order, created)| (*order, *created, name.clone()));
+        agents.into_iter().map(|(name, order, _)| (name, order)).collect()
+    }
+
+    #[test]
+    fn agents_arrive_at_the_bottom_of_the_rail_in_the_order_they_were_made() {
+        // The rail used to float whoever spoke last, so where a new agent
+        // landed did not matter. It does now: an agent that arrived in the
+        // middle of an arrangement would look like the arrangement moved.
+        let f = fixture();
+        for name in ["First", "Second", "Third"] {
+            f.store.create_agent(&draft(name)).unwrap();
+        }
+        assert_eq!(
+            arrangement(&f),
+            vec![("First".to_string(), 0), ("Second".to_string(), 1), ("Third".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn a_move_puts_a_row_in_front_of_the_one_it_was_dropped_on() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("First")).unwrap();
+        f.store.create_agent(&draft("Second")).unwrap();
+        let c = f.store.create_agent(&draft("Third")).unwrap();
+
+        let moved = f.store.move_agent(c.id, c.group_id, Some(a.id)).unwrap();
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Third", "First", "Second"]
+        );
+
+        // Where a row is drawn, and nothing a peer reads. Same reasoning as a
+        // pin: bumping the version would tell every peer the card was rewritten.
+        assert_eq!(moved.version, c.version, "a move is not an edit");
+        assert_eq!(moved.updated_at, c.updated_at);
+        assert_eq!(moved.rail_order, 0);
+
+        // Densely renumbered, so the next drop has a whole position to land in
+        // rather than a gap that can run out.
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(_, order)| order).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn a_move_with_nothing_to_land_in_front_of_goes_to_the_end_of_that_group() {
+        // Not the end of the rail. One sequence covers every group, so
+        // appending past the last row would file the agent below crews it is
+        // not in and the rail would draw it under their heading.
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+
+        let scout = f.store.create_agent(&draft("Scout")).unwrap();
+        let mut second = draft("Reader");
+        second.group_id = Some(research.id);
+        f.store.create_agent(&second).unwrap();
+        let cook = f.store.create_agent(&draft("Cook")).unwrap();
+
+        // Everyone in the default group, then Research, then Cook back in the
+        // default one: the arrangement interleaves groups until someone moves.
+        let moved = f.store.move_agent(cook.id, research.id, None).unwrap();
+        assert_eq!(moved.group_id, research.id, "one call moved it and placed it");
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Scout", "Reader", "Cook"]
+        );
+
+        // And landing in front of a row in another group ignores the anchor
+        // rather than dragging the agent somewhere it was not dropped.
+        f.store.move_agent(cook.id, research.id, Some(scout.id)).unwrap();
+        assert_eq!(
+            f.store.get_agent(cook.id).unwrap().unwrap().group_id,
+            research.id,
+            "the group half of the intent still holds"
+        );
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Scout", "Reader", "Cook"]
+        );
+    }
+
+    #[test]
+    fn a_row_dropped_on_itself_stays_where_it_is() {
+        // The fallback for an anchor that is not in the group is the end of it,
+        // so a null gesture that reached this far would move the row to the
+        // bottom of the rail: the one outcome the operator did not ask for.
+        let f = fixture();
+        f.store.create_agent(&draft("First")).unwrap();
+        let middle = f.store.create_agent(&draft("Middle")).unwrap();
+        f.store.create_agent(&draft("Last")).unwrap();
+
+        f.store.move_agent(middle.id, middle.group_id, Some(middle.id)).unwrap();
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["First", "Middle", "Last"]
+        );
+    }
+
+    #[test]
+    fn a_move_leaves_terminated_agents_out_of_the_numbering() {
+        // A terminated agent is not in the rail, so a position spent on it is a
+        // position the operator cannot drop into, and renumbering one would move
+        // a row in an old transcript's sidebar order for no reason.
+        let f = fixture();
+        let gone = f.store.create_agent(&draft("Gone")).unwrap();
+        let here = f.store.create_agent(&draft("Here")).unwrap();
+        f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
+
+        f.store.move_agent(here.id, here.group_id, None).unwrap();
+        assert_eq!(f.store.get_agent(here.id).unwrap().unwrap().rail_order, 0);
+        assert_eq!(
+            f.store.get_agent(gone.id).unwrap().unwrap().rail_order,
+            gone.rail_order,
+            "a terminated agent's place was not rewritten"
+        );
+    }
+
+    #[test]
+    fn moving_an_agent_that_is_not_there_is_an_error_rather_than_a_silent_renumber() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let group = card.group_id;
+        f.store.set_lifecycle(card.id, Lifecycle::Terminated).unwrap();
+        assert!(matches!(
+            f.store.move_agent(card.id, group, None),
+            Err(StoreError::AgentNotFound(_))
         ));
     }
 
@@ -2296,12 +2625,15 @@ mod tests {
         // parse would be a schedule that silently never fires again.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        for trigger in
-            [Trigger::Once, Trigger::Weekdays, Trigger::Weekly, Trigger::Monthly, Trigger::Daily]
+        for cadence in
+            [Cadence::Once, Cadence::Weekdays, Cadence::Weekly, Cadence::Monthly, Cadence::Daily]
         {
-            let made = f.store.create_routine(card.id, "", "check", trigger, 1_000_000).unwrap();
+            let made = f
+                .store
+                .create_routine(card.id, "", "check", clock(cadence), Some(1_000_000))
+                .unwrap();
             let read = f.store.get_routine(made.id).unwrap().unwrap();
-            assert_eq!(read.trigger, trigger);
+            assert_eq!(read.trigger, clock(cadence));
             assert_eq!(read.name, "", "a routine an agent set has no name to invent");
         }
     }
@@ -2313,14 +2645,18 @@ mod tests {
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let friday = friday_at_nine();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Weekdays, friday).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Weekdays), Some(friday))
+            .unwrap();
 
         f.store.routine_ran(&made, friday + 1000).unwrap();
 
         let moved = f.store.get_routine(made.id).unwrap().unwrap();
-        assert_eq!(moved.next_run_at, Trigger::Weekdays.next_after(friday, friday + 1000).unwrap());
+        let expected = Cadence::Weekdays.next_after(friday, friday + 1000).unwrap();
+        assert_eq!(moved.next_run_at, Some(expected));
         assert_eq!(moved.last_run_at, Some(friday + 1000));
-        assert!(moved.next_run_at - friday > 2 * 86_400_000, "it skipped the weekend");
+        assert!(expected - friday > 2 * 86_400_000, "it skipped the weekend");
     }
 
     #[test]
@@ -2331,7 +2667,13 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "Sweep", "check the listings", Trigger::Daily, 1_000)
+            .create_routine(
+                card.id,
+                "Sweep",
+                "check the listings",
+                clock(Cadence::Daily),
+                Some(1_000),
+            )
             .unwrap();
         assert!(made.active, "a routine arrives running");
         assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
@@ -2355,7 +2697,10 @@ mod tests {
         // firing look the same in the list.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
 
         let scheduled = RunId::new();
         let tested = RunId::new();
@@ -2375,7 +2720,10 @@ mod tests {
         // ever draw, and the id is free to be reused.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
         f.store.record_routine_run(made.id, RunId::new(), RunKind::Scheduled, 1_000).unwrap();
 
         f.store.delete_routine(made.id).unwrap();
@@ -2383,10 +2731,105 @@ mod tests {
     }
 
     #[test]
+    fn a_routine_waiting_on_an_event_is_never_due_and_survives_firing() {
+        // The scheduler asks one question: what is due. A trigger that is not a
+        // clock has to answer "not me" without the query knowing it exists, and
+        // it must not be deleted like a one-shot when it does fire: it fires
+        // every time its event happens.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let trigger = Trigger::Event(EventTrigger {
+            service: "stripe".into(),
+            topic: "invoice.payment_failed".into(),
+        });
+        let made =
+            f.store.create_routine(card.id, "Dunning", "chase it", trigger.clone(), None).unwrap();
+
+        assert_eq!(made.next_run_at, None, "it holds no slot");
+        assert!(
+            f.store.due_routines(i64::MAX).unwrap().is_empty(),
+            "and no moment, however far ahead, makes it due"
+        );
+
+        // Fired anyway, which today is the operator pressing Test run.
+        f.store.routine_ran(&made, 5_000).unwrap();
+        let after = f.store.get_routine(made.id).unwrap().unwrap();
+        assert_eq!(after.trigger, trigger, "the trigger survives the round trip");
+        assert_eq!(after.next_run_at, None, "still holding no slot");
+        assert_eq!(after.last_run_at, Some(5_000), "and it recorded having run");
+    }
+
+    #[test]
+    fn a_schedule_lists_what_is_due_soonest_and_what_is_waiting_last() {
+        // NULL sorts first in SQLite, so the panel drew a routine waiting on an
+        // event above one firing in ten minutes.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        f.store
+            .create_routine(
+                card.id,
+                "Waiting",
+                "chase it",
+                Trigger::Event(EventTrigger { service: "stripe".into(), topic: "x.y".into() }),
+                None,
+            )
+            .unwrap();
+        f.store.create_routine(card.id, "Later", "b", clock(Cadence::Daily), Some(9_000)).unwrap();
+        f.store.create_routine(card.id, "Sooner", "a", clock(Cadence::Daily), Some(1_000)).unwrap();
+
+        let names: Vec<String> =
+            f.store.agent_routines(card.id).unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["Sooner", "Later", "Waiting"]);
+    }
+
+    #[test]
+    fn a_firing_reports_what_it_spent_and_a_firing_that_did_nothing_says_so() {
+        // The history's job is "has this been working". A delivery that bought
+        // no model call is a routine that did not run, and the row is otherwise
+        // identical to one that did.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
+
+        let worked = RunId::new();
+        let silent = RunId::new();
+        f.store.record_routine_run(made.id, worked, RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, silent, RunKind::Scheduled, 2_000).unwrap();
+        for (prompt, completion, cost) in [(900u32, 100u32, Some(0.002)), (400, 50, Some(0.001))] {
+            f.store
+                .record_usage(&UsageEntry {
+                    agent_id: card.id,
+                    group_id: card.group_id,
+                    run_id: worked,
+                    model: "test/model".into(),
+                    prompt,
+                    completion,
+                    cost,
+                })
+                .unwrap();
+        }
+
+        let history = f.store.routine_runs(made.id, 20).unwrap();
+        assert_eq!(history.len(), 2, "one row per firing, whatever it spent");
+        assert_eq!(history[0].run_id, silent, "newest first");
+        assert_eq!(history[0].spent.calls, 0, "nothing was spent, so nothing ran");
+        assert_eq!(history[0].spent.cost, None, "and unpriced is not free");
+        assert_eq!(history[1].spent.calls, 2, "model calls, not turns");
+        assert_eq!(history[1].spent.total(), 1450);
+        assert_eq!(history[1].spent.cost, Some(0.003));
+    }
+
+    #[test]
     fn a_one_shot_that_fires_leaves_no_row_behind() {
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "wake me", Trigger::Once, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "wake me", clock(Cadence::Once), Some(1_000))
+            .unwrap();
         f.store.routine_ran(&made, 2_000).unwrap();
         assert!(f.store.get_routine(made.id).unwrap().is_none());
     }
@@ -2431,7 +2874,13 @@ mod tests {
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
 
         f.store
-            .create_routine(scholar.id, "", "check the listings", Trigger::Every(3600), 1)
+            .create_routine(
+                scholar.id,
+                "",
+                "check the listings",
+                clock(Cadence::Every(3600)),
+                Some(1),
+            )
             .unwrap();
         f.store
             .record_usage(&UsageEntry {
@@ -2542,6 +2991,80 @@ mod tests {
             matches!(&err, StoreError::DuplicateName(name) if name == "manager"),
             "expected DuplicateName, got {err:?}"
         );
+    }
+
+    #[test]
+    fn a_crew_written_in_one_go_is_readable_as_a_crew() {
+        let f = fixture();
+        let crew = [draft("Manager"), draft("Researcher"), draft("Critic")];
+        let cards = f.store.create_agents(&crew).unwrap();
+
+        assert_eq!(cards.len(), 3);
+        let names: Vec<&str> = cards.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names, ["Manager", "Researcher", "Critic"], "order is the order asked for");
+        assert_eq!(f.store.list_agents().unwrap().len(), 3);
+        // Every one is a real card, not a half-written row.
+        for card in &cards {
+            assert_eq!(f.store.get_agent(card.id).unwrap().as_ref(), Some(card));
+        }
+    }
+
+    #[test]
+    fn a_hired_crew_lands_at_the_bottom_of_the_rail_in_the_order_it_was_picked() {
+        // The rail is an arrangement the operator made by hand, so a crew has
+        // to arrive under it rather than inside it, and every hire needs its own
+        // slot. Asking for the bottom once per agent would hand the whole batch
+        // the same answer, because none of them is written until the commit.
+        let f = fixture();
+        let first = f.store.create_agent(&draft("Chief of Staff")).unwrap();
+        let second = f.store.create_agent(&draft("Executive Assistant")).unwrap();
+
+        let crew = [draft("Paralegal"), draft("Bookkeeper"), draft("QA Tester")];
+        let hired = f.store.create_agents(&crew).unwrap();
+
+        let slots: Vec<i32> = hired.iter().map(|c| c.rail_order).collect();
+        let bottom = second.rail_order;
+        assert_eq!(
+            slots,
+            vec![bottom + 1, bottom + 2, bottom + 3],
+            "a hired crew shared a slot or landed inside the arrangement: {slots:?}"
+        );
+        assert!(slots.iter().all(|slot| *slot > first.rail_order));
+
+        // And the rail agrees: `list_agents` reads back in the arrangement.
+        let order: Vec<String> =
+            f.store.list_agents().unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(
+            order,
+            ["Chief of Staff", "Executive Assistant", "Paralegal", "Bookkeeper", "QA Tester"]
+        );
+    }
+
+    #[test]
+    fn a_crew_that_cannot_be_written_in_full_is_not_written_at_all() {
+        // The realistic failure: a name taken between the check and the write.
+        // Three agents landing plus an error about a fourth is a workspace the
+        // operator did not ask for and no list of what arrived.
+        let f = fixture();
+        f.store.create_agent(&draft("Critic")).unwrap();
+
+        let crew = [draft("Manager"), draft("Researcher"), draft("critic")];
+        let err = f.store.create_agents(&crew).unwrap_err();
+        assert!(
+            matches!(&err, StoreError::DuplicateName(name) if name == "critic"),
+            "expected DuplicateName, got {err:?}"
+        );
+
+        let left: Vec<String> =
+            f.store.list_agents().unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(left, ["Critic"], "the rolled-back hire left agents behind: {left:?}");
+    }
+
+    #[test]
+    fn hiring_nobody_writes_nothing_and_is_not_an_error() {
+        let f = fixture();
+        assert!(f.store.create_agents(&[]).unwrap().is_empty());
+        assert!(f.store.list_agents().unwrap().is_empty());
     }
 
     #[test]
@@ -2784,9 +3307,17 @@ mod tests {
             }),
         ]);
         f.store
-            .create_routine(writer.id, "", "post the budget summary", Trigger::Every(3600), 5_000)
+            .create_routine(
+                writer.id,
+                "",
+                "post the budget summary",
+                clock(Cadence::Every(3600)),
+                Some(5_000),
+            )
             .unwrap();
-        f.store.create_routine(writer.id, "Watering", "the plants", Trigger::Daily, 4_000).unwrap();
+        f.store
+            .create_routine(writer.id, "Watering", "the plants", clock(Cadence::Daily), Some(4_000))
+            .unwrap();
 
         Searchable { f, writer: writer.id }
     }

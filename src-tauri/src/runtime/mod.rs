@@ -941,7 +941,14 @@ impl Runtime {
     /// shows plainly that a schedule fired and nobody typed anything, while
     /// still carrying operator authority: the agent set this for itself, or was
     /// told to.
-    pub fn send_from_routine(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
+    ///
+    /// Carried as [`Part::Routine`] rather than as text. The model reads the
+    /// same instruction either way; what the part buys is a transcript that
+    /// says a routine fired in one line the operator can open, instead of
+    /// several sentences of system prompting drawn as though somebody had
+    /// typed them into the conversation.
+    pub fn send_from_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
+        let to = routine.agent_id;
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
         if card.lifecycle != Lifecycle::Active {
             return Err(RuntimeError::AgentTerminated(card.name));
@@ -954,7 +961,11 @@ impl Runtime {
             channel_id: to,
             from: Participant::System,
             to: Participant::Agent { id: to },
-            parts: vec![Part::text(text.trim())],
+            parts: vec![Part::Routine {
+                routine_id: routine.id,
+                name: routine.name.clone(),
+                what: routine.what.trim().to_string(),
+            }],
             trust: Trust::Operator,
             hop: 0,
             expects_reply: true,
@@ -975,7 +986,7 @@ impl Runtime {
     /// not move `next_run_at` or delete a one-shot: testing a routine must not
     /// be a way to spend the only firing it had.
     pub fn test_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
-        let run = self.send_from_routine(routine.agent_id, &routine.what)?;
+        let run = self.send_from_routine(routine)?;
         self.log_routine_run(routine, run, RunKind::Test, now_ms());
         Ok(run)
     }
@@ -1021,10 +1032,11 @@ impl Runtime {
 
                     tracing::info!(
                         agent = %routine.agent_id.short(),
+                        trigger = %routine.trigger.as_str(),
                         repeats = routine.repeats(),
                         "a routine came due"
                     );
-                    match runtime.send_from_routine(routine.agent_id, &routine.what) {
+                    match runtime.send_from_routine(&routine) {
                         Ok(run) => runtime.log_routine_run(&routine, run, RunKind::Scheduled, now),
                         Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
                     }
@@ -3142,7 +3154,7 @@ impl Runtime {
             }
 
             tools::ScheduleAction::Add { name, what, trigger, in_secs } => {
-                if let Err(err) = validate(name, what, *trigger, *in_secs) {
+                if let Err(err) = validate(name, what, trigger, *in_secs) {
                     return Ok(format!(
                         "Refused: {err}. The shortest repeat is {}.",
                         human_gap(MIN_EVERY_SECS)
@@ -3151,7 +3163,7 @@ impl Runtime {
 
                 let first = trigger.first_run(now_ms(), *in_secs);
                 let routine =
-                    self.inner.store.create_routine(card.id, name, what, *trigger, first)?;
+                    self.inner.store.create_routine(card.id, name, what, trigger.clone(), first)?;
 
                 Ok(format!(
                     "Scheduled: {} ({}). Its id is {}.",
@@ -3591,6 +3603,7 @@ mod tests {
             browser_id: None,
             lifecycle,
             pinned: false,
+            rail_order: 0,
             version: 1,
             created_at: 0,
             updated_at: 0,

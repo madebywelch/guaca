@@ -2,9 +2,11 @@ import { memo } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
+import { routineTitle } from "../lib/routine";
 import { useStore } from "../lib/store";
 import { whenLabel } from "../lib/time";
-import { type Lookups, toPeer } from "../lib/transcript";
+import { type Step, trailStep } from "../lib/trail";
+import type { Lookups } from "../lib/transcript";
 import {
   type AgentCard,
   type AgentId,
@@ -13,11 +15,13 @@ import {
   type MessageId,
   type Part,
   type Participant,
+  type RoutineId,
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
-import { NoticeRow } from "./WireRow";
+import { TrailRow } from "./Trail";
+import { NoticeRow, RoutineRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
@@ -75,6 +79,16 @@ function keyed(message: Envelope) {
 }
 
 /**
+ * Opens the routine a fired-routine chip stands for.
+ *
+ * Imperative for the same reason as {@link onRetry}: the panel that draws a
+ * routine is a sibling of the transcript, and the store is where the two meet.
+ */
+function onOpenRoutine(routineId: RoutineId) {
+  useStore.getState().openRoutine(routineId);
+}
+
+/**
  * Sends a failed turn's message again.
  *
  * Imperative rather than a prop threaded through every message: this is one
@@ -122,8 +136,23 @@ export const MessageItem = memo(function MessageItem({
     return <ApprovalRequest part={asking} agent={lookups.byId(askerId)} />;
   }
 
+  // A schedule firing. Drawn as one line rather than as the several sentences
+  // it carries: the instruction is written for the agent to act on with no
+  // other context, and as a bubble it read as Guaca talking to the operator.
+  const fired = message.parts.find((part) => part.type === "routine");
+  if (fired) {
+    return (
+      <RoutineRow
+        title={routineTitle({ name: fired.name, what: fired.what })}
+        what={fired.what}
+        at={message.createdAt}
+        onOpen={() => onOpenRoutine(fired.routineId)}
+      />
+    );
+  }
+
   if (from.kind === "agent" && to.kind === "system") {
-    return <ActivityRecord message={message} lookups={lookups} />;
+    return <ActivityRecord message={message} />;
   }
 
   return <ChatBubble message={message} byId={lookups.byId} continued={continued} named={named} />;
@@ -137,49 +166,44 @@ export const MessageItem = memo(function MessageItem({
  * row, leaving this the trail around them. A send that named nobody does stay,
  * because there is no peer to file it under and the reason it went nowhere is
  * the whole of what there is to see.
+ *
+ * Tool calls are drawn as one row per run of them rather than one row each: a
+ * turn can make two dozen, and a line apiece buried the operator's own
+ * conversation exactly as peer traffic did before it was collapsed. A notice
+ * ends the run it interrupts, for the reason a tool trail ends a burst in
+ * `transcriptRows`: the notice is usually about the calls either side of it,
+ * and folding across it would put the explanation somewhere other than the
+ * thing it explains.
+ *
+ * A `json` part is the one kind that reaches here and draws nothing. Nothing in
+ * the runtime emits one yet; it is the seam a model-authored artifact would
+ * arrive through, and a renderer for it before there is a producer is surface
+ * with no caller.
  */
-function ActivityRecord({ message, lookups }: { message: Envelope; lookups: Lookups }) {
-  const actorId = message.from.kind === "agent" ? message.from.id : "";
-  const actor = toPeer(lookups.byId(actorId), actorId);
+function ActivityRecord({ message }: { message: Envelope }) {
+  const rows: React.ReactNode[] = [];
+  let run: { steps: Step[]; key: string } | null = null;
 
-  return (
-    <>
-      {keyed(message).map(({ part, key }) => {
-        if (part.type === "notice") {
-          return <NoticeRow key={key} kind={part.kind} text={part.text} />;
-        }
-        if (part.type !== "toolCall") return null;
+  const close = () => {
+    if (run) rows.push(<TrailRow key={run.key} steps={run.steps} />);
+    run = null;
+  };
 
-        // Naming the tools rather than describing whatever came back: a tool
-        // this does not know about should read as a tool nobody has explained
-        // yet, not as a send. `update_notes`, which has no recipients, was once
-        // drawn as "Sent to no one" with the memory body as the message.
-        const outcome = part.outcome;
-        const said =
-          outcome.status === "ok" || outcome.status === "partial"
-            ? outcome.summary
-            : outcome.status === "refused"
-              ? outcome.reason
-              : outcome.error;
-        const what =
-          part.name === "directory"
-            ? "checked who is available"
-            : part.name === "update_notes"
-              ? "updated its memory"
-              : part.name === "create_agent"
-                ? "asked to add an agent"
-                : `used ${part.name}`;
-        return (
-          <div className="wire wire--quiet" key={key}>
-            <span className="wire__quiet-text">
-              {actor.name} {what}
-              {said ? ` — ${said}` : ""}
-            </span>
-          </div>
-        );
-      })}
-    </>
-  );
+  for (const { part, key } of keyed(message)) {
+    if (part.type === "toolCall") {
+      const step = trailStep(part, key);
+      if (run) run.steps.push(step);
+      else run = { steps: [step], key };
+      continue;
+    }
+    close();
+    if (part.type === "notice") {
+      rows.push(<NoticeRow key={key} kind={part.kind} text={part.text} />);
+    }
+  }
+  close();
+
+  return <>{rows}</>;
 }
 
 function ChatBubble({

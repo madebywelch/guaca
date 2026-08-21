@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
+import { prefersReducedMotion } from "./motion";
 import type { Pulse } from "./store";
 import type { AgentId } from "./types";
 
@@ -51,10 +52,6 @@ export interface Choreography {
   inFlight: StagedPulse[];
   /** Every message being animated right now, in any phase. */
   staged: StagedPulse[];
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Routine, RoutineDraft, RoutineRun } from "../lib/types";
 import { RoutineDetail } from "./RoutineDetail";
@@ -24,8 +24,22 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-/** 2025-06-10 at 09:28 local. */
+/** 2025-06-10 at 09:28 local, a Tuesday. The slot every routine here holds. */
 const MORNING = new Date(2025, 5, 10, 9, 28, 0, 0).getTime();
+
+/**
+ * An hour before that slot, and where the clock is pinned.
+ *
+ * Every delay this panel sends is counted from now, so the assertions about
+ * what reaches the backend are only readable against a fixed now. Only `Date`
+ * is faked: `waitFor` and the panel's own clock need real timers.
+ */
+const NOW = MORNING - 3600_000;
+
+/** A firing's spend. Zero calls is the case the history exists to show. */
+function spent(over: Partial<RoutineRun["spent"]> = {}): RoutineRun["spent"] {
+  return { prompt: 0, completion: 0, cost: null, calls: 1, ...over };
+}
 
 function routine(over: Partial<Routine> = {}): Routine {
   return {
@@ -51,6 +65,8 @@ function open(over: Partial<Routine> = {}) {
 
 describe("RoutineDetail", () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     vi.clearAllMocks();
     agentRoutines.mockResolvedValue([routine()]);
     routineRuns.mockResolvedValue([]);
@@ -59,6 +75,10 @@ describe("RoutineDetail", () => {
     setRoutineActive.mockImplementation(async (_id, active) => routine({ active }));
     testRoutine.mockResolvedValue("run-1");
     deleteRoutine.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("shows the whole instruction, which the list deliberately does not", async () => {
@@ -105,13 +125,104 @@ describe("RoutineDetail", () => {
     await screen.findByLabelText("Instruction");
     expect(screen.getByText("No runs yet.")).toBeTruthy();
 
-    routineRuns.mockResolvedValue([{ runId: "run-1", kind: "test", at: MORNING }]);
+    routineRuns.mockResolvedValue([
+      { runId: "run-1", kind: "test", at: MORNING, spent: spent({ calls: 2 }) },
+    ]);
     fireEvent.click(screen.getByRole("button", { name: "Test run" }));
 
     await waitFor(() => expect(testRoutine).toHaveBeenCalledWith("r1"));
     // Marked as a test: a button press and a real firing look identical in the
     // transcript, so "did it run on Tuesday" has to be answered here.
     expect(await screen.findByText("test run")).toBeTruthy();
+  });
+
+  it("says which firings did nothing, and what the others cost", async () => {
+    // A delivered routine whose agent never ran looks exactly like one that
+    // worked, and the operator's next move is not the same.
+    routineRuns.mockResolvedValue([
+      { runId: "run-2", kind: "scheduled", at: MORNING, spent: spent({ calls: 0 }) },
+      {
+        runId: "run-1",
+        kind: "scheduled",
+        at: MORNING - 86_400_000,
+        spent: { prompt: 1200, completion: 300, cost: 0.004, calls: 3 },
+      },
+    ]);
+    open();
+
+    expect(await screen.findByText("nothing ran")).toBeTruthy();
+    expect(screen.getByText("1.5k")).toBeTruthy();
+    // Four places, because a firing costs fractions of a cent and $0.00 reads
+    // as free.
+    expect(screen.getByText("$0.0040")).toBeTruthy();
+  });
+
+  it("asks which weekday a weekly routine keeps", async () => {
+    // The weekday is not stored anywhere but the first firing, so a picker
+    // that cannot say it means "every week" lands on whichever day the
+    // operator happened to be at the keyboard.
+    open({ trigger: "weekly" });
+    const day = (await screen.findByLabelText("Day of the week")) as HTMLSelectElement;
+    // 2025-06-10 is a Tuesday, and that is the day this routine is holding.
+    expect(day.value).toBe("2");
+
+    fireEvent.change(day, { target: { value: "4" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateRoutine).toHaveBeenCalledTimes(1));
+    // Thursday is two days after Tuesday, and the hour it kept is unchanged.
+    expect(updateRoutine.mock.calls[0]![1].inSecs).toBe(2 * 86_400 + 3600);
+  });
+
+  it("asks which day of the month a monthly routine keeps", async () => {
+    open({ trigger: "monthly" });
+    const day = (await screen.findByLabelText("Day of the month")) as HTMLSelectElement;
+    expect(day.value).toBe("10");
+    expect(screen.queryByLabelText("Day of the week")).toBeNull();
+  });
+
+  it("takes a date for a one-off rather than only a time of day", async () => {
+    // A time alone could only mean the next 24 hours: "remind me on the 3rd"
+    // had no way to be said at all.
+    open({ trigger: "once" });
+    const date = (await screen.findByLabelText("Date")) as HTMLInputElement;
+    expect(date.value).toBe("2025-06-10");
+
+    fireEvent.change(date, { target: { value: "2025-06-13" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateRoutine).toHaveBeenCalledTimes(1));
+    expect(updateRoutine.mock.calls[0]![1].inSecs).toBe(3 * 86_400 + 3600);
+  });
+
+  it("refuses to save a one-off whose moment has gone", async () => {
+    // A delay in the past reaches the scheduler as overdue and fires at once,
+    // which is not what picking a date means.
+    open({ trigger: "once" });
+    fireEvent.change(await screen.findByLabelText("Date"), { target: { value: "2020-01-01" } });
+
+    expect(
+      (screen.getByRole("button", { name: "Save changes" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/already passed/)).toBeTruthy();
+  });
+
+  it("draws a routine waiting on an event without inventing a next firing", async () => {
+    // Nothing delivers an event yet, so this is a row a future build writes and
+    // this one has to read. It must not claim a moment it does not hold.
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    await waitFor(() =>
+      expect((screen.getByLabelText("Trigger") as HTMLSelectElement).value).toBe(
+        "event:stripe/invoice.payment_failed",
+      ),
+    );
+    expect(screen.getByText(/keeps no place in the clock/)).toBeTruthy();
+    // No moment to state, so nothing offers to state one.
+    expect(screen.queryByLabelText("Time of day")).toBeNull();
+    expect(screen.queryByLabelText("Date")).toBeNull();
+    // And Test run is still there: it is the only way to fire one today.
+    expect(screen.getByRole("button", { name: "Test run" })).toBeTruthy();
   });
 
   it("does not move the schedule when only the wording changed", async () => {
@@ -126,7 +237,7 @@ describe("RoutineDetail", () => {
     expect(updateRoutine.mock.calls[0]![1].inSecs).toBeNull();
   });
 
-  it("moves the schedule when the time was the thing that changed", async () => {
+  it("moves the schedule when the moment was the thing that changed", async () => {
     open();
     await screen.findByLabelText("Time of day");
     fireEvent.change(screen.getByLabelText("Time of day"), { target: { value: "17:00" } });

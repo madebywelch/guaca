@@ -28,6 +28,7 @@ const MANAGER: AgentCard = {
   skills: [],
   lifecycle: "active",
   pinned: false,
+  railOrder: 0,
   version: 1,
   createdAt: 0,
   updatedAt: 0,

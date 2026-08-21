@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   fileUrl,
+  kindLabel,
   localCopy,
   PREVIEW_BYTES,
   previewKind,
@@ -42,10 +43,22 @@ export function FileCard({ file }: { file: Attachment }) {
           </button>
         )}
         <div className="file__foot">
-          <button type="button" className="file__name" onClick={() => setOpen(true)}>
+          <button
+            type="button"
+            className="file__name"
+            title={file.name}
+            onClick={() => setOpen(true)}
+          >
             {file.name}
           </button>
-          <span className="file__size">{readableSize(file.bytes)}</span>
+          {/* The type only where nothing else says it. A picture, a page and a
+              log announce themselves; a zip is a name and a size and no other
+              fact, which is the row that leaves an operator wondering what the
+              app thinks it is holding. */}
+          <span className="file__meta">
+            {kind === "none" && `${kindLabel(file.mime)} · `}
+            {readableSize(file.bytes)}
+          </span>
           <SaveButton file={file} />
         </div>
       </div>
@@ -94,7 +107,7 @@ function Page({ file }: { file: Attachment }) {
       {copy.url && (
         <iframe className="file__frame" src={copy.url} title={file.name} tabIndex={-1} />
       )}
-      {copy.failed && <p className="hint">This document could not be read.</p>}
+      {copy.failed && <Unreadable file={file} why={copy.failed} onRetry={copy.again} />}
     </div>
   );
 }
@@ -108,12 +121,14 @@ function Page({ file }: { file: Attachment }) {
  */
 function useLocalCopy(file: Attachment, when: boolean) {
   const [url, setUrl] = useState<string | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, again] = useAttempt();
 
   useEffect(() => {
     if (!when) return;
     let live = true;
     let made: string | null = null;
+    setFailed(null);
     localCopy(file)
       .then((copy) => {
         // A copy nobody is waiting for any more is revoked here rather than in
@@ -122,15 +137,61 @@ function useLocalCopy(file: Attachment, when: boolean) {
         made = copy;
         setUrl(copy);
       })
-      .catch(() => live && setFailed(true));
+      .catch((error) => live && setFailed(errorMessage(error)));
     return () => {
       live = false;
       if (made) URL.revokeObjectURL(made);
       setUrl(null);
     };
-  }, [file, when]);
+  }, [file, when, attempt]);
 
-  return { url, failed };
+  return { url, failed, again };
+}
+
+/**
+ * A counter that makes an effect run again.
+ *
+ * Reading a file is the one thing in a transcript that can fail for a reason
+ * that has since stopped being true: the store answers 503 while it is opening,
+ * and a preview that mounted in that window stays broken for the life of the
+ * channel with no way back other than closing it. So every failure offers
+ * another go.
+ */
+function useAttempt() {
+  const [attempt, setAttempt] = useState(0);
+  return [attempt, () => setAttempt((made) => made + 1)] as const;
+}
+
+/**
+ * A file the app has, and could not read.
+ *
+ * Says which of the reasons it was and offers the two ways forward, because
+ * every error the operator can hit in this app says what happened and what to
+ * do about it, and this one used to say neither. "This file could not be read"
+ * is the same sentence whether the store was still opening, the bytes are
+ * missing, or something else entirely went wrong, and those want different
+ * things done about them.
+ */
+function Unreadable({
+  file,
+  why,
+  onRetry,
+}: {
+  file: Attachment;
+  why: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="file__failed">
+      <p className="hint">Could not read this file: {why}.</p>
+      <div className="file__failed-actions">
+        <button type="button" className="btn btn--ghost btn--small" onClick={onRetry}>
+          Try again
+        </button>
+        <SaveButton file={file} />
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -150,19 +211,21 @@ function Snippet({
   sayTrimmed?: boolean;
 }) {
   const [read, setRead] = useState<{ text: string; trimmed: boolean } | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [attempt, again] = useAttempt();
 
   useEffect(() => {
     let live = true;
+    setFailed(null);
     readFileText(file, limit)
       .then((got) => live && setRead(got))
-      .catch(() => live && setFailed(true));
+      .catch((error) => live && setFailed(errorMessage(error)));
     return () => {
       live = false;
     };
-  }, [file, limit]);
+  }, [file, limit, attempt]);
 
-  if (failed) return <p className="hint">This file could not be read.</p>;
+  if (failed) return <Unreadable file={file} why={failed} onRetry={again} />;
   return (
     <>
       <pre className="file__text">{read?.text ?? ""}</pre>
@@ -196,14 +259,29 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
       <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
       <div className="dialog dialog--file" role="dialog" aria-modal="true" aria-label={file.name}>
         <div className="file-view__head">
-          <h2 className="dialog__title" style={{ margin: 0 }}>
+          {/* The name truncates and the whole of it is a hover away. What must
+              never fold is the line under it: `48 KB` broken across two lines
+              is the dialog telling the operator its own layout gave up. */}
+          <h2 className="dialog__title" title={file.name}>
             {file.name}
           </h2>
-          <span className="hint">{readableSize(file.bytes)}</span>
+          <p className="file-view__what">
+            {kindLabel(file.mime)} · {readableSize(file.bytes)}
+          </p>
           <div className="file-view__actions">
             <SaveButton file={file} />
-            <button type="button" className="btn btn--ghost" onClick={onClose}>
-              Close
+            {/* Its own corner rather than a second button beside Save. Side by
+                side they read as a pair of answers to a question nobody asked,
+                which is how "Save" came to look like it might change the file
+                rather than copy it out. */}
+            <button
+              type="button"
+              className="file-view__close"
+              aria-label="Close"
+              title="Close"
+              onClick={onClose}
+            >
+              ×
             </button>
           </div>
         </div>
@@ -217,8 +295,8 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
             <Snippet file={file} limit={PREVIEW_BYTES} sayTrimmed />
           ) : (
             <p className="hint">
-              Nothing here can show this kind of file. Save a copy and open it with something that
-              can.
+              Guaca cannot show a {kindLabel(file.mime).toLowerCase()}. Save a copy and open it with
+              something that can.
             </p>
           )}
         </div>
@@ -231,7 +309,7 @@ export function FilePreview({ file, onClose }: { file: Attachment; onClose: () =
 function Document({ file }: { file: Attachment }) {
   const copy = useLocalCopy(file, true);
 
-  if (copy.failed) return <p className="hint">This document could not be read.</p>;
+  if (copy.failed) return <Unreadable file={file} why={copy.failed} onRetry={copy.again} />;
   return copy.url ? (
     <iframe className="file-view__frame" src={copy.url} title={file.name} />
   ) : (
@@ -246,6 +324,12 @@ function Document({ file }: { file: Attachment }) {
  * has to go looking for has not really been saved. Imperative on the store, as
  * the retry button is, because this is one button on a component that is
  * rendered once per file in a transcript and holds no other state.
+ *
+ * It says what it does. "Save" beside a document is the word every editor uses
+ * for writing changes back, so on a file the operator did not write and cannot
+ * edit it reads as a button whose effect is anybody's guess. This one copies
+ * the file out to the downloads folder and never touches the original, and
+ * three words are cheaper than the guess.
  */
 function SaveButton({ file }: { file: Attachment }) {
   const [saving, setSaving] = useState(false);
@@ -254,6 +338,7 @@ function SaveButton({ file }: { file: Attachment }) {
     <button
       type="button"
       className="btn btn--ghost btn--small"
+      title={`Copy ${file.name} to your downloads folder`}
       disabled={saving}
       onClick={() => {
         setSaving(true);
@@ -266,7 +351,7 @@ function SaveButton({ file }: { file: Attachment }) {
           .finally(() => setSaving(false));
       }}
     >
-      {saving ? "Saving…" : "Save"}
+      {saving ? "Saving…" : "Save a copy"}
     </button>
   );
 }

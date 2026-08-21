@@ -49,6 +49,7 @@ function card(id: string, name: string): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,
@@ -252,13 +253,17 @@ describe("while an agent is working", () => {
     expect(screen.queryByText("Manager is working")).toBeNull();
     // And it stops being a live region while it holds a line that is replaced
     // several times a second, or a screen reader reads out every half sentence
-    // of it over whatever else it was saying.
-    expect(screen.queryByRole("status")).toBeNull();
+    // of it over whatever else it was saying. Asked of this line rather than of
+    // the pane: an arriving message is announced by a region of its own, which
+    // is the one thing here that is meant to be heard.
+    expect(document.querySelector(".working")?.getAttribute("role")).toBeNull();
 
     // The runtime clears it when the stream ends, and the line goes back to
     // saying only that the turn is still going.
     act(() => useStore.setState({ reasoning: {} }));
-    expect(screen.getByRole("status").textContent).toContain("Manager is working");
+    const note = document.querySelector(".working");
+    expect(note?.getAttribute("role")).toBe("status");
+    expect(note?.textContent).toContain("Manager is working");
   });
 
   it("draws another agent's thinking in that agent's channel and not this one", () => {

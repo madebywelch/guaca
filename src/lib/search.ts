@@ -48,7 +48,8 @@ export type SearchAction =
   | { do: "editGroup"; groupId: GroupId }
   | { do: "openSettings" }
   | { do: "newAgent" }
-  | { do: "newGroup" };
+  | { do: "newGroup" }
+  | { do: "openCafeteria" };
 
 export interface SearchResult {
   /** Unique within a result set: the React key, and what selection tracks. */
@@ -275,7 +276,9 @@ export function searchResults(input: SearchInput): SearchResult[] {
       meta: describeTrigger(routine.trigger, routine.nextRunAt),
       // Either column is what somebody would type, and the store matches both.
       score: Math.max(score(routine.name, query), score(routine.what, query)),
-      at: routine.nextRunAt,
+      // When it fires next, for the recency tiebreak. A routine waiting on an
+      // event has no such moment, and when it was set up is the honest stand-in.
+      at: routine.nextRunAt ?? routine.createdAt,
       // The channel, not the profile: a schedule sits in the panel beside the
       // conversation, and the profile dialog no longer has it.
       action: { do: "openChannel", agentId: routine.agentId },
@@ -362,6 +365,14 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
       detail: "A crew that cannot see the others",
       meta: "Action",
       action: { do: "newGroup" },
+    },
+    {
+      key: "action:cafeteria",
+      kind: "actions",
+      title: "Cafeteria",
+      detail: "Hire agents that are already set up",
+      meta: "Action",
+      action: { do: "openCafeteria" },
     },
   );
 

@@ -135,12 +135,34 @@ export const api = {
    */
   duplicateAgent: (id: AgentId) => invoke<AgentCard>("duplicate_agent", { id }),
 
+  /**
+   * Hires a set of preconfigured agents into one group, in one call.
+   *
+   * Batched rather than looped for two reasons. Every create announces itself
+   * and the rail re-reads the whole roster, so six hires done one at a time
+   * redraw the sidebar six times. And a name already taken in the group is
+   * settled on the Rust side against the roster *and* the rest of the batch,
+   * which is the one place that rule can live without being written twice.
+   */
+  hireAgents: (groupId: GroupId, drafts: AgentDraft[]) =>
+    invoke<AgentCard[]>("hire_agents", { groupId, drafts }),
+
   setAgentPaused: (id: AgentId, paused: boolean) =>
     invoke<AgentCard>("set_agent_paused", { id, paused }),
 
   /** Keeps an agent at the top of the rail. Nothing else about it changes. */
   setAgentPinned: (id: AgentId, pinned: boolean) =>
     invoke<AgentCard>("set_agent_pinned", { id, pinned }),
+
+  /**
+   * Puts an agent where the operator dropped it: which group, and which place.
+   *
+   * One call because a drag is one gesture that can be both, and two would
+   * leave a state where the agent has joined the group but not landed in it.
+   * `before` is the row it goes in front of; `null` is the end of the group.
+   */
+  moveAgent: (id: AgentId, groupId: GroupId, before: AgentId | null) =>
+    invoke<AgentCard>("move_agent", { id, groupId, before }),
 
   agentActivity: () => invoke<Record<AgentId, Activity>>("agent_activity"),
 

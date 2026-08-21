@@ -694,9 +694,15 @@ impl E2bClient {
                 // Through the local viewer, never straight at E2B: these
                 // sandboxes refuse public traffic without a header, and the
                 // token that carries it must not reach the webview.
+                //
+                // The page named here is the app's own rather than noVNC's,
+                // which is what lets the frame be rid of noVNC's chrome. It
+                // hands these options straight on, so they are still decided
+                // here.
                 computer.vnc_url = Some(format!(
-                    "http://{VIEWER_HOST}:{viewer_port}/{sandbox}/{VNC_PORT}/vnc.html\
-                     ?autoconnect=1&resize=scale&reconnect=1"
+                    "http://{VIEWER_HOST}:{viewer_port}/{sandbox}/{VNC_PORT}{page}\
+                     ?autoconnect=1&resize=scale&reconnect=1",
+                    page = crate::proxy::VIEWER_DOCUMENT
                 ));
             }
         }

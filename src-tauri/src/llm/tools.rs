@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::envelope::Intent;
-use crate::domain::routine::Trigger;
+use crate::domain::routine::{Cadence, Trigger};
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
 pub const DIRECTORY: &str = "directory";
@@ -884,15 +884,19 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                     // A named repeat beats a gap in seconds when both arrive:
                     // it is the more specific of the two, and a model that
                     // sends "weekdays" alongside 86400 means the weekdays.
+                    //
+                    // Read as a cadence rather than as any trigger: this tool
+                    // sets a clock, and a model that improvised `event:...`
+                    // here would be handed a routine nothing can fire.
                     let trigger = match (repeat, every, delay) {
-                        (Some(named), _, _) => Trigger::parse(named).ok_or_else(|| {
-                            ToolParseError::IncompleteSchedule {
+                        (Some(named), _, _) => Cadence::parse(named)
+                            .map(Trigger::Clock)
+                            .ok_or_else(|| ToolParseError::IncompleteSchedule {
                                 needs: "`repeat` to be one of daily, weekdays, weekly or monthly"
                                     .to_string(),
-                            }
-                        })?,
-                        (None, Some(gap), _) => Trigger::Every(gap),
-                        (None, None, Some(_)) => Trigger::Once,
+                            })?,
+                        (None, Some(gap), _) => Trigger::Clock(Cadence::Every(gap)),
+                        (None, None, Some(_)) => Trigger::Clock(Cadence::Once),
                         (None, None, None) => {
                             return Err(ToolParseError::IncompleteSchedule {
                                 needs: "`repeat` or `every_secs` to keep doing it, or `in_secs` \
@@ -1305,7 +1309,7 @@ mod tests {
                 action: ScheduleAction::Add {
                     name: String::new(),
                     what: "check".into(),
-                    trigger: Trigger::Every(18000),
+                    trigger: Trigger::Clock(Cadence::Every(18000)),
                     in_secs: None
                 }
             })
@@ -1327,7 +1331,7 @@ mod tests {
                 action: ScheduleAction::Add {
                     name: "Standup".into(),
                     what: "check".into(),
-                    trigger: Trigger::Weekdays,
+                    trigger: Trigger::Clock(Cadence::Weekdays),
                     in_secs: None
                 }
             })
@@ -1355,7 +1359,7 @@ mod tests {
                 action: ScheduleAction::Add {
                     name: String::new(),
                     what: "wake me".into(),
-                    trigger: Trigger::Once,
+                    trigger: Trigger::Clock(Cadence::Once),
                     in_secs: Some(3600)
                 }
             })

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::config::{self, AppConfig, RedactedConfig};
-use crate::domain::agent::{copy_name, AgentCard, AgentDraft, Lifecycle};
+use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
@@ -521,6 +521,28 @@ pub fn set_agent_pinned(state: State<'_, AppState>, id: AgentId, pinned: bool) -
     Ok(card)
 }
 
+/// Puts an agent where the operator dropped it: which group, and which place.
+///
+/// One call rather than two, because a drag is one gesture that can be both,
+/// and two writes leave a state where the agent has arrived in the group but
+/// not in the place it was dropped.
+///
+/// `before` is the row it lands in front of; `None` is the end of the group.
+/// Nothing about the agent itself changes, so the card version does not move
+/// and no peer is told: an agent's group is enforced on every turn from a fresh
+/// read, so it is in its new crew's directory from the next message onward.
+#[tauri::command]
+pub fn move_agent(
+    state: State<'_, AppState>,
+    id: AgentId,
+    group_id: GroupId,
+    before: Option<AgentId>,
+) -> Reply<AgentCard> {
+    let card = state.runtime.store().move_agent(id, group_id, before)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(card)
+}
+
 /// Makes a second agent from the same card.
 ///
 /// The card and nothing else: a copy starts with the look, the model, the
@@ -555,6 +577,73 @@ pub fn duplicate_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCa
     state.runtime.start_agent(card.id);
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(card)
+}
+
+/// Hires a set of preconfigured agents into one group.
+///
+/// One command rather than one `create_agent` per agent, and the reason is not
+/// only round trips. Every create emits `AgentsChanged`, and the rail answers
+/// each one by re-reading the whole roster, so a crew of six hired one at a
+/// time redraws the sidebar six times while it is being filled in. Worse, a
+/// draft rejected halfway leaves the operator with three agents and an error
+/// about a fourth, and nothing that says which three.
+///
+/// So the batch is resolved and validated in full before anything is written:
+/// the group has to exist, every name is settled against the roster and against
+/// the rest of the batch by `hire_names`, and every draft has to pass
+/// `validate`. The rows then go in as one transaction, because a name taken by
+/// another window between the check and the write is a failure validation
+/// cannot see. A hire either happens or does not.
+///
+/// `group_id` is required and overrides whatever the drafts carry. The whole
+/// point of the cafeteria is that a crew lands somewhere the operator chose,
+/// and a batch that could scatter across groups is a batch that can arrive
+/// half outside the wall its agents were picked to sit behind.
+#[tauri::command]
+pub fn hire_agents(
+    state: State<'_, AppState>,
+    group_id: GroupId,
+    drafts: Vec<AgentDraft>,
+) -> Reply<Vec<AgentCard>> {
+    if drafts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let store = state.runtime.store();
+    // Checked rather than left to the foreign key, which would surface as an
+    // opaque storage failure on a group the operator picked from a list. The
+    // realistic way to get here is a group deleted while the cafeteria was open.
+    if !store.list_groups()?.iter().any(|g| g.id == group_id) {
+        return Err(CommandError::new(
+            "notFound",
+            "that group no longer exists. Close the cafeteria and pick another one.",
+        ));
+    }
+
+    // Only the group being hired into, and only agents that still hold their
+    // name: a terminated agent frees it. Same rule `duplicate_agent` uses.
+    let taken: Vec<String> = store
+        .list_agents()?
+        .into_iter()
+        .filter(|c| c.group_id == group_id && c.lifecycle != Lifecycle::Terminated)
+        .map(|c| c.name)
+        .collect();
+
+    let wanted: Vec<String> = drafts.iter().map(|d| d.name.clone()).collect();
+    let clean = hire_names(&wanted, &taken)
+        .into_iter()
+        .zip(drafts)
+        .map(|(name, draft)| AgentDraft { group_id: Some(group_id), name, ..draft }.validate())
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let hired = store.create_agents(&clean)?;
+    // Actors start only once the rows are committed. Starting them inside the
+    // write would leave a live agent behind for a hire that rolled back.
+    for card in &hired {
+        state.runtime.start_agent(card.id);
+    }
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(hired)
 }
 
 #[tauri::command]
@@ -798,9 +887,32 @@ impl RoutineDraft {
         let trigger = Trigger::parse(&self.trigger).ok_or_else(|| {
             CommandError::new("validation", format!("no trigger called {:?}", self.trigger))
         })?;
-        routine::validate(&self.name, &self.what, trigger, self.in_secs)
+        routine::validate(&self.name, &self.what, &trigger, self.in_secs)
             .map_err(|e| CommandError::new("validation", e.to_string()))?;
         Ok(trigger)
+    }
+}
+
+/// Where an edited routine's next firing lands.
+///
+/// Three cases, and the difference between them is what the operator did. A
+/// stated time is honoured. An untouched time keeps the slot it was holding,
+/// because correcting a typo must not push the schedule to tomorrow. And a
+/// trigger swapped for one that would never fire at that moment has to move:
+/// "every hour" turned into "every weekday" keeps its hour but cannot keep its
+/// Saturday, or the label and the firing disagree from the moment it is saved.
+///
+/// A trigger that is not a clock lands nowhere at all, whatever was asked for.
+fn next_slot_for(trigger: &Trigger, existing: &Routine, in_secs: Option<u32>) -> Option<i64> {
+    let cadence = trigger.cadence()?;
+    let now = now_ms();
+    match (in_secs, existing.next_run_at) {
+        (Some(_), _) => Some(cadence.first_run(now, in_secs)),
+        // Coming back to the clock from a trigger that held no slot: there is
+        // nothing to keep, so it starts one interval out like a new routine.
+        (None, None) => Some(cadence.first_run(now, None)),
+        (None, Some(slot)) if cadence.accepts(slot) => Some(slot),
+        (None, Some(slot)) => Some(cadence.next_after(slot, now).unwrap_or(slot)),
     }
 }
 
@@ -831,14 +943,7 @@ pub fn update_routine(
         .store()
         .get_routine(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
-    let next = match draft.in_secs {
-        Some(_) => trigger.first_run(now_ms(), draft.in_secs),
-        // The slot only stays put while the trigger does. "Every hour" turned
-        // into "every weekday" keeps its hour but has to move off a Saturday,
-        // or the label and the firing disagree from the moment it is saved.
-        None if trigger.accepts(existing.next_run_at) => existing.next_run_at,
-        None => trigger.next_after(existing.next_run_at, now_ms()).unwrap_or(existing.next_run_at),
-    };
+    let next = next_slot_for(&trigger, &existing, draft.in_secs);
 
     let routine =
         state.runtime.store().update_routine(id, &draft.name, &draft.what, trigger, next)?;

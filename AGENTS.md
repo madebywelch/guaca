@@ -12,7 +12,10 @@ table below says which one to open before changing something.
 ```
 src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
+  lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/search.ts       One ranking over hits from SQLite and from the store.
+  lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/ipc.ts          Every call into Rust.
   components/         One file per surface.
 src-tauri/src/
@@ -57,11 +60,15 @@ repo: the frontend renders state and forwards intent.
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
-| Schedules and triggers | `docs/ROUTINES.md` |
+| Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
+| A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
+| Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
+| The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
+| Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.
@@ -75,7 +82,10 @@ lands on one side fails the build rather than at runtime.
 
 **Migrations are forward-only and numbered.** One has already run against a real
 database by the time you think of an improvement, and editing it leaves that
-database at the same `user_version` with a different schema. Add another.
+database at the same `user_version` with a different schema. Add another. They
+run with foreign key enforcement off, which is what SQLite's own table-rebuild
+procedure wants and what a migration cannot arrange for itself: the pragma is a
+no-op inside a transaction. See `migrations::run`.
 
 **A secret never reaches a model.** A credential's value and a cookie's value do
 not enter a prompt, a transcript, an event or the webview, and there is no field
@@ -115,6 +125,13 @@ the model takes a screenshot to see what `browse` did.
 - **A sign-in is stored against the surface it was found on.** Both are scanned
   independently, so a replace that took the agent's whole set would erase the
   other's findings on every scan.
+- **A fired routine carries `Part::Routine`, not text.** The instruction reaches
+  the model either way, because `as_plain_text` returns it. The part is what
+  keeps the transcript from drawing a schedule firing as Guaca talking to the
+  operator: `docs/ROUTINES.md`.
+- **`Routine::next_run_at` is an `Option` because some triggers have no next
+  run.** A sentinel date would be shown to the operator, and it is one bad
+  comparison away from firing something that was waiting on a connector.
 
 ## Conventions
 
@@ -155,6 +172,11 @@ the source rather than at the end.
 ./scripts/ci.sh rust     # Rust only
 GUAC_LOG=guac=debug pnpm app
 ```
+
+Getting a change on screen has its own file: `.claude/skills/run-guaca`. It
+holds the harness that draws a component in seconds without a Rust build, a key
+or any spend; what to do when the app refuses to start; and the rule about the
+operator's own workspace, which every workspace on the machine shares.
 
 Three suites ask three different questions, and a change can pass one while
 failing the next. *Three test suites, asking different questions* in
