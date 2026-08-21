@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { thoughtLine } from "../lib/reasoning";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
@@ -38,46 +39,15 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   /** The peer whose thread is open over this channel, if any. */
   const [reading, setReading] = useState<AgentId | null>(null);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const pinnedToBottom = useRef(true);
+  // Only ever moves the transcript for somebody who is already watching its
+  // newest line. Yanking the view while they are reading back through a
+  // cascade is worse than a scrollbar that does not move: `lib/follow.ts`.
+  const { ref: scrollRef, node: transcript, follow, pin } = useFollowBottom();
 
   const isActivity = channel === ACTIVITY_CHANNEL;
   const agent = isActivity ? undefined : lookups.byId(channel);
 
-  // Only auto-scroll when the operator is already at the bottom. Yanking the
-  // view while they are reading back through a cascade is worse than a
-  // scrollbar that does not move.
-  //
-  // Re-bound when a thread closes: the transcript is unmounted while one is
-  // open, so the node that comes back is not the node this was listening to.
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (!node) return;
-    const onScroll = () => {
-      pinnedToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-    };
-    node.addEventListener("scroll", onScroll, { passive: true });
-    return () => node.removeEventListener("scroll", onScroll);
-  }, [reading]);
-
-  // Reading `scrollHeight` forces the browser to lay the transcript out, so
-  // this is a real cost rather than a free one. Coalesced into a frame,
-  // because while text is arriving it is asked for far more often than the
-  // screen refreshes.
-  const pending = useRef(0);
-  const follow = useCallback(() => {
-    if (pending.current) return;
-    pending.current = requestAnimationFrame(() => {
-      pending.current = 0;
-      const node = scrollRef.current;
-      if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
-    });
-  }, []);
-
-  useLayoutEffect(() => {
-    const node = scrollRef.current;
-    if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
-  }, [messages]);
+  useLayoutEffect(follow, [follow, messages]);
 
   // A channel switch abandons any thread opened off the old one: a conversation
   // between two other agents is not what you asked for by clicking a third.
@@ -89,11 +59,7 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   // from a thread. Coming back to where you were is not on offer: the
   // transcript was unmounted, so there is no scroll position to come back to,
   // and the top of the history is the one place it must not land.
-  useLayoutEffect(() => {
-    pinnedToBottom.current = true;
-    const node = scrollRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [channel, reading]);
+  useLayoutEffect(pin, [pin, channel, reading]);
 
   // Built once per set of messages rather than per render: it walks every
   // message, and it is what decides which of them are drawn at all.
@@ -111,15 +77,16 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   // behind the row rather than in the channel.
   useEffect(() => {
     if (!focused || messages === undefined) return;
-    const row = scrollRef.current?.querySelector<HTMLElement>(`[data-message~="${focused}"]`);
+    const row = transcript()?.querySelector<HTMLElement>(`[data-message~="${focused}"]`);
     if (!row) return;
-    // Not the newest message any more, so following the bottom would undo this
-    // the moment anything else arrives.
-    pinnedToBottom.current = false;
+    // Nothing here says to stop following. Coming up the transcript to reach
+    // the row is a scroll like any other, and releases the bottom exactly as
+    // the operator's own would; a row that was already at the end moves
+    // nothing, and following the end is what keeps it in view.
     row.scrollIntoView({ block: "center" });
     const timer = window.setTimeout(clearFocus, FLASH_MS);
     return () => window.clearTimeout(timer);
-  }, [focused, messages, clearFocus]);
+  }, [focused, messages, clearFocus, transcript]);
 
   const paused = agent?.lifecycle === "paused";
 
@@ -262,6 +229,12 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
             disabledReason="This agent has been deleted."
             onSend={async (text, files) => {
               if (!agent) return;
+              // Typing into the box is a decision to be at the end of the
+              // transcript, so this is the one thing besides opening a channel
+              // that overrides where the operator was reading. Their own
+              // message landing off screen, with nothing following it, is the
+              // same bug in the other direction.
+              pin();
               try {
                 await api.sendMessage(agent.id, text, files);
               } catch (error) {

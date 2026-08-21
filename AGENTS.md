@@ -19,6 +19,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/ipc.ts          Every call into Rust.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale and surface, as one write to the root element.
+  lib/follow.ts       Whether a transcript may move under the operator.
   lib/notify.ts       When an interruption is warranted. Mostly when it is not.
   lib/announce.ts     What that interruption would say. One event in, one line out.
   lib/keybinds.ts     Every key the app answers to, in one list.
@@ -80,6 +81,7 @@ repo: the frontend renders state and forwards intent.
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
+| Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
@@ -162,6 +164,15 @@ the model takes a screenshot to see what `browse` did.
   again and reports it as the first time.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
   level higher, a single token re-renders every message in the transcript.
+- **A transcript decides where the operator is by comparing the offset, not by
+  listening for a scroll event.** The event is delivered after the fact and a
+  token committing in between arrives first, so anything that waits to be told
+  has already put the view back on the floor: under streaming text a trackpad
+  could not climb out of a channel at all. `lib/follow.ts` remembers the offset
+  it wrote and checks the box is still there before writing again, which is why
+  one pixel is enough and no threshold is. Its listener is bound by a ref
+  callback for the same reason: the node is replaced whenever the pane shows a
+  pair thread or the activity board, and an effect cannot re-bind on that.
 - **The sign-in tests carry real cookie names.** A cookie's presence is not a
   login. Do not loosen them without a fresh capture from a live machine.
 - **All three conditions in `needs_consent` are load-bearing.** Each one alone

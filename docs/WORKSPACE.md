@@ -104,6 +104,50 @@ The region sits outside the log. Inside it, the sentence is a second copy of the
 newest message for anybody reading the transcript itself, which is the cost of
 announcing it to everybody else.
 
+## A transcript follows the end for whoever is at the end, and nobody else
+
+Watching an agent work means watching the bottom of a channel, so a transcript
+that did not keep up would have the operator chasing it. Reading back through a
+cascade means being somewhere else in the same channel, and moving the page
+under a reader is worse than a scrollbar that does not move: a turn writing four
+hundred tokens is four hundred chances to do it.
+
+Both wants are real, so the only question is which of the two the operator is
+doing, and that question has a wrong answer people reach for. **A scroll event
+does not say where the operator is.** It is delivered after the fact, and a
+token committing in between arrives first: a wheel tick up, a token, then the
+event, in that order. Anything waiting to be told has already put the transcript
+back on the floor, and the next tick starts the same race. Under streaming text
+a trackpad could not climb out of a channel at all.
+
+So `lib/follow.ts` compares the offset instead of listening for it. It remembers
+the offset it wrote, and before writing again it checks the box is still there.
+Above it, somebody else moved the box, and the only somebody is the operator: it
+lets go, and writes nothing. The check and the write are one statement, so there
+is no window for a token to land in, and no threshold to tune: one pixel up is a
+decision, because from the operator's side it was one.
+
+Scroll events keep the half of the job that has no race in it, which is noticing
+the operator come back. Nothing is being written by then, so a late event costs
+nothing, and this end is worth being generous about: stopping a few pixels short
+of the end while coming down the page is arriving at the end. A transcript that
+then refused to follow would read as broken in the other direction.
+
+Two things override where the operator was, and both are their own doing.
+Opening a channel lands at the newest message, because the transcript was
+unmounted and there is no position to come back to. And sending a message goes
+to the end: typing into the box is a decision to be at the end, and their own
+message landing off screen with nothing following it is the same complaint
+pointing the other way.
+
+The listener is bound by a ref callback rather than an effect, and that is
+load-bearing. A transcript is unmounted whenever the pane shows something else,
+a pair thread or the activity board, and comes back as a new node with the same
+class. An effect can only re-bind on a dependency it was given, and the node it
+holds is not one: a channel opened from the activity board spent the session
+listening to a node that had been thrown away, which is the shape the report
+arrived in.
+
 ## The rail is arranged by hand, and lends the top of a section out
 
 Two orders, not one. `railOrder` on the card is the arrangement: the operator
