@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
+import { thoughtLine } from "../lib/reasoning";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import { type Activity, type AgentCard, type AgentId, errorMessage } from "../lib/types";
@@ -253,21 +254,34 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
 }
 
 /**
- * That the agent is still going, above the box you would type into.
+ * That the agent is still going, above the box you would type into, and what
+ * it is thinking while it goes.
  *
  * The sidebar already says "typing" beside the name, but the operator watching
  * a channel is looking at the bottom of it, waiting. A silent gap between
  * sending and the first token is the moment the app looks broken, and it is a
  * long one: a turn can spend several model calls on tool results before a word
- * is written for anybody to read.
+ * is written for anybody to read. A pulse says the turn is alive; it does not
+ * say what it is doing, and those are different questions when the wait is
+ * thirty seconds.
  *
- * The name is revealed on hover rather than sat there permanently. Whose
- * channel this is has been established four times over by the time you reach
- * the bottom of it, so the still frame is one moving character and the
- * sentence is there for the moment you want it. It stays in the accessibility
- * tree either way, which is why this is opacity rather than a mount.
+ * So when the model publishes its working, the line shows the line it is on.
+ * Which means it is only ever one line: the thinking is gone the moment the
+ * turn ends and there is nowhere to scroll back to, so anything but the
+ * newest words would be chrome pointing at something the operator cannot
+ * reach. Where the model publishes nothing, this is the sentence it always
+ * was, revealed on hover, because whose channel this is has been established
+ * four times over by the time you reach the bottom of it. It stays in the
+ * accessibility tree either way, which is why that is opacity rather than a
+ * mount.
+ *
+ * Subscribed here rather than in the parent for the same reason `LiveStreams`
+ * is: the thought changes every sixteen milliseconds and the transcript above
+ * it does not.
  */
 function WorkingNote({ agent, state }: { agent: AgentCard; state: Activity | undefined }) {
+  const thought = thoughtLine(useStore((s) => s.reasoning[agent.id]));
+
   // Queued counts: the agent has work it has not read yet, and to the operator
   // that is the same thing as working. Awaiting approval does not: it is
   // waiting on a person, and the request itself is in this channel saying so.
@@ -275,7 +289,15 @@ function WorkingNote({ agent, state }: { agent: AgentCard; state: Activity | und
   if (!working) return null;
 
   return (
-    <div className="working" role="status">
+    // A sentence that appears once is a status worth announcing; a line
+    // replaced several times a second is not. So this is a live region for
+    // exactly as long as it holds the sentence, which is from the moment the
+    // turn starts until the model publishes its first thought.
+    <div
+      className="working"
+      role={thought ? undefined : "status"}
+      data-thinking={thought ? "true" : undefined}
+    >
       <AgentAvatar
         avatar={agent.avatar}
         color={agent.color}
@@ -284,7 +306,7 @@ function WorkingNote({ agent, state }: { agent: AgentCard; state: Activity | und
         activity={{ state: "thinking" }}
         title={`${agent.name} is working`}
       />
-      <span className="working__label">{agent.name} is working</span>
+      <span className="working__label">{thought || `${agent.name} is working`}</span>
     </div>
   );
 }

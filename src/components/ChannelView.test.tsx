@@ -97,6 +97,7 @@ function open(messages: Envelope[]) {
     agents: [card(MANAGER, "Manager"), card(CHEF, "Chef")],
     messages: { [MANAGER]: messages },
     streams: {},
+    reasoning: {},
     activity: {},
     lastActive: {},
     banner: null,
@@ -236,6 +237,36 @@ describe("while an agent is working", () => {
 
     doing({ state: "idle" });
     expect(screen.queryByText("Manager is working")).toBeNull();
+  });
+
+  it("shows what it is thinking, and stops when the thought is dropped", () => {
+    // The complaint this answers: a pulsing avatar says a turn is alive and
+    // nothing says what it is doing, through a wait that can run to a minute
+    // of tool calls.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+
+    act(() => useStore.setState({ reasoning: { [MANAGER]: "**Checking**\n\nthe totals now" } }));
+    expect(screen.getByText("the totals now")).toBeTruthy();
+    expect(screen.queryByText("Manager is working")).toBeNull();
+    // And it stops being a live region while it holds a line that is replaced
+    // several times a second, or a screen reader reads out every half sentence
+    // of it over whatever else it was saying.
+    expect(screen.queryByRole("status")).toBeNull();
+
+    // The runtime clears it when the stream ends, and the line goes back to
+    // saying only that the turn is still going.
+    act(() => useStore.setState({ reasoning: {} }));
+    expect(screen.getByRole("status").textContent).toContain("Manager is working");
+  });
+
+  it("draws another agent's thinking in that agent's channel and not this one", () => {
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() => useStore.setState({ reasoning: { [CHEF]: "not this channel" } }));
+
+    expect(screen.queryByText("not this channel")).toBeNull();
+    expect(screen.getByText("Manager is working")).toBeTruthy();
   });
 
   it("counts unread work as working, and waiting on a person as not", () => {

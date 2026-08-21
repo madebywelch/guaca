@@ -309,6 +309,13 @@ export type UiEvent =
       to: Participant;
     }
   | { type: "streamDelta"; messageId: MessageId; channelId: AgentId; text: string }
+  /**
+   * Part of the model's working, for as long as the turn lasts.
+   *
+   * Addressed to the placeholder and to nothing else: the agent it belongs to
+   * is read from the stream it names, and it goes when that stream ends.
+   */
+  | { type: "reasoningDelta"; messageId: MessageId; text: string }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
   | { type: "channelsCleared"; agents: AgentId[] }

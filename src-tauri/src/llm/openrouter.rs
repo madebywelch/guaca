@@ -186,6 +186,21 @@ pub struct ToolCall {
     pub arguments: String,
 }
 
+/// One fragment of a streamed response, as it arrives.
+///
+/// Reasoning is carried apart from the answer rather than concatenated into it.
+/// It is shown while a turn is running and then dropped: never persisted, never
+/// hashed, never sent back to a model. With a single `&str` callback the two
+/// were the same thing by the time anyone could tell them apart, and the only
+/// way back would be parsing prose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Token<'a> {
+    /// Part of what the model is saying.
+    Text(&'a str),
+    /// Part of how it got there, when the provider publishes any.
+    Reasoning(&'a str),
+}
+
 impl ToolCall {
     /// Parses the argument string, tolerating an empty one.
     ///
@@ -368,8 +383,30 @@ struct StreamChoice {
 struct Delta {
     #[serde(default)]
     content: Option<String>,
+    /// The model's own working, when it publishes any.
+    ///
+    /// Two spellings because two conventions exist: OpenRouter says
+    /// `reasoning`, and the OpenAI-compatible servers that followed DeepSeek
+    /// say `reasoning_content`. Reading only one of them shows a thinking model
+    /// thinking on one endpoint and working in silence on the next. A provider
+    /// that sends both sends the same words twice, which is why they are
+    /// coalesced rather than concatenated.
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
     #[serde(default)]
     tool_calls: Vec<DeltaToolCall>,
+}
+
+impl Delta {
+    /// Whichever spelling of the reasoning this frame used, if either.
+    fn thinking(&self) -> Option<&str> {
+        [self.reasoning.as_deref(), self.reasoning_content.as_deref()]
+            .into_iter()
+            .flatten()
+            .find(|fragment| !fragment.is_empty())
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -459,10 +496,10 @@ impl LlmClient {
         Ok(Self { http })
     }
 
-    /// Streams a completion, calling `on_token` for each text fragment.
+    /// Streams a completion, calling `on_token` for each fragment.
     ///
     /// `on_token` runs on the caller's task and must not block; it exists so
-    /// the UI can render text as it arrives rather than after the turn ends.
+    /// the UI can render a turn as it happens rather than after it ends.
     pub async fn stream_chat<F>(
         &self,
         cfg: &InferenceConfig,
@@ -470,7 +507,7 @@ impl LlmClient {
         mut on_token: F,
     ) -> Result<Completion, LlmError>
     where
-        F: FnMut(&str),
+        F: FnMut(Token<'_>),
     {
         if !cfg.is_ready() {
             return Err(LlmError::NotConfigured);
@@ -532,7 +569,7 @@ impl LlmClient {
         on_token: &mut F,
     ) -> Result<Completion, LlmError>
     where
-        F: FnMut(&str),
+        F: FnMut(Token<'_>),
     {
         let mut decoder = SseDecoder::new();
         let mut accumulator = ToolCallAccumulator::default();
@@ -588,9 +625,15 @@ impl LlmClient {
                 }
 
                 for choice in parsed.choices {
+                    // Ahead of the text, and accumulated nowhere: a model
+                    // reasons its way to what it then says, and nothing
+                    // downstream of this call is allowed to keep the reasoning.
+                    if let Some(fragment) = choice.delta.thinking() {
+                        on_token(Token::Reasoning(fragment));
+                    }
                     if let Some(fragment) = choice.delta.content {
                         if !fragment.is_empty() {
-                            on_token(&fragment);
+                            on_token(Token::Text(&fragment));
                             content.push_str(&fragment);
                         }
                     }
@@ -694,6 +737,19 @@ mod tests {
         serde_json::json!({ "choices": [{ "delta": { "content": content } }] }).to_string()
     }
 
+    /// A reasoning frame, spelled the way the endpoint under test spells it.
+    fn thinking_frame(field: &str, content: &str) -> String {
+        serde_json::json!({ "choices": [{ "delta": { field: content } }] }).to_string()
+    }
+
+    /// Everything a stream reported, tagged, in arrival order.
+    fn collect<'a>(tokens: &'a mut Vec<(&'static str, String)>) -> impl FnMut(Token<'_>) + 'a {
+        |token| match token {
+            Token::Text(text) => tokens.push(("text", text.to_string())),
+            Token::Reasoning(text) => tokens.push(("reasoning", text.to_string())),
+        }
+    }
+
     #[tokio::test]
     async fn streams_text_and_reports_tokens_in_order() {
         let (base, _) = stub(|_| {
@@ -703,13 +759,100 @@ mod tests {
 
         let client = LlmClient::new().unwrap();
         let mut tokens = Vec::new();
-        let completion = client
-            .stream_chat(&cfg(base), &request(), |t| tokens.push(t.to_string()))
-            .await
-            .unwrap();
+        let completion =
+            client.stream_chat(&cfg(base), &request(), collect(&mut tokens)).await.unwrap();
 
         assert_eq!(completion.content, "Hello, world");
-        assert_eq!(tokens, vec!["Hel", "lo, ", "world"], "tokens must surface incrementally");
+        assert_eq!(
+            tokens,
+            vec![("text", "Hel".into()), ("text", "lo, ".into()), ("text", "world".into())],
+            "tokens must surface incrementally"
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_surfaces_apart_from_the_answer_and_never_joins_it() {
+        // A model that publishes its working writes it before the answer, in
+        // frames of the same shape. Concatenating the two would put the
+        // thinking in the transcript, in the prompt of every later turn, and in
+        // the fingerprint the loop guard compares.
+        let (base, _) = stub(|_| {
+            sse(&[
+                &thinking_frame("reasoning", "17 times 20 is 340"),
+                &thinking_frame("reasoning", ", plus 51"),
+                &text_frame("391"),
+                "[DONE]",
+            ])
+        })
+        .await;
+
+        let client = LlmClient::new().unwrap();
+        let mut tokens = Vec::new();
+        let completion =
+            client.stream_chat(&cfg(base), &request(), collect(&mut tokens)).await.unwrap();
+
+        assert_eq!(
+            tokens,
+            vec![
+                ("reasoning", "17 times 20 is 340".into()),
+                ("reasoning", ", plus 51".into()),
+                ("text", "391".into()),
+            ]
+        );
+        assert_eq!(completion.content, "391", "reasoning is not part of what was said");
+    }
+
+    #[tokio::test]
+    async fn reasoning_is_read_under_either_spelling() {
+        // OpenRouter says `reasoning`; the servers that followed DeepSeek say
+        // `reasoning_content`. An operator pointing Guaca at a local endpoint
+        // should not lose the line under the composer.
+        for field in ["reasoning", "reasoning_content"] {
+            let frame = thinking_frame(field, "weighing it up");
+            let (base, _) = stub(move |_| sse(&[&frame, &text_frame("yes"), "[DONE]"])).await;
+
+            let client = LlmClient::new().unwrap();
+            let mut tokens = Vec::new();
+            client.stream_chat(&cfg(base), &request(), collect(&mut tokens)).await.unwrap();
+            assert_eq!(
+                tokens.first(),
+                Some(&("reasoning", "weighing it up".to_string())),
+                "{field} was not read"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_frame_carrying_both_spellings_reports_the_thought_once() {
+        // A provider that fills both fields is saying the same thing twice.
+        // Passing both through doubles every word on screen.
+        let frame = serde_json::json!({"choices":[{"delta":{
+            "reasoning": "checking the total",
+            "reasoning_content": "checking the total",
+        }}]})
+        .to_string();
+        let (base, _) = stub(move |_| sse(&[&frame, &text_frame("done"), "[DONE]"])).await;
+
+        let client = LlmClient::new().unwrap();
+        let mut tokens = Vec::new();
+        client.stream_chat(&cfg(base), &request(), collect(&mut tokens)).await.unwrap();
+        assert_eq!(
+            tokens,
+            vec![("reasoning", "checking the total".into()), ("text", "done".into())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stream_that_only_ever_reasoned_is_still_truncated() {
+        // Thinking is not an answer. A stream cut off after its reasoning has
+        // produced nothing to say, and reporting it as an empty success is how
+        // an agent goes silent with no explanation.
+        let (base, _) =
+            stub(|_| sse(&[&thinking_frame("reasoning", "still working it out")])).await;
+
+        let client = LlmClient::new().unwrap();
+        let err = client.stream_chat(&cfg(base), &request(), |_| {}).await.unwrap_err();
+        assert!(matches!(err, LlmError::Truncated), "got {err:?}");
     }
 
     #[tokio::test]
