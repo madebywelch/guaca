@@ -19,6 +19,7 @@ import { ChannelView } from "./ChannelView";
  */
 
 let rendersOfMessages = 0;
+let rendersOfBubbles = 0;
 let latestBubble = "";
 
 vi.mock("./MessageItem", () => ({
@@ -27,6 +28,7 @@ vi.mock("./MessageItem", () => ({
     return <div />;
   },
   StreamingMessage: ({ text }: { text: string }) => {
+    rendersOfBubbles += 1;
     latestBubble = text;
     return <div>{text}</div>;
   },
@@ -106,12 +108,14 @@ function stream(messageId: string, channelId: string, agentId: string, tokens: n
 describe("ChannelView under streaming load", () => {
   beforeEach(() => {
     rendersOfMessages = 0;
+    rendersOfBubbles = 0;
     latestBubble = "";
     useStore.setState({
       agents: [agent(AGENT, "Manager"), agent(OTHER, "Chef")],
       messages: { [AGENT]: Array.from({ length: 30 }, (_, i) => message(i)) },
       streams: {},
-      activity: {},
+      reasoning: {},
+      activity: { [AGENT]: { state: "thinking" } },
     });
   });
 
@@ -155,5 +159,29 @@ describe("ChannelView under streaming load", () => {
     await feed(stream("00000000-0000-4000-8000-0000000000d2", OTHER, OTHER, 200));
 
     expect(rendersOfMessages).toBe(0);
+  });
+
+  it("does not re-render the transcript or a bubble for a thought", async () => {
+    // Reasoning arrives as fast as text and is drawn in one line above the
+    // composer. Held in the stream buffer it would re-render, and re-parse the
+    // markdown of, every bubble on screen for text that is in none of them.
+    const id = "00000000-0000-4000-8000-0000000000d3";
+    draw();
+    await feed(stream(id, AGENT, AGENT, 1));
+    const bubbles = rendersOfBubbles;
+
+    await feed(
+      Array.from({ length: 200 }, () => ({
+        type: "reasoningDelta" as const,
+        messageId: id as MessageId,
+        text: "thinking ",
+      })),
+    );
+
+    expect(rendersOfMessages).toBe(0);
+    expect(rendersOfBubbles).toBe(bubbles);
+
+    // And the line itself kept up, which is the point of drawing it at all.
+    expect(useStore.getState().reasoning[AGENT]?.endsWith("thinking ")).toBe(true);
   });
 });

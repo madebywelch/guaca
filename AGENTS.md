@@ -208,6 +208,19 @@ then it has an address. One file failing does not refuse the four beside it.
 size and the type on a message are read off the disk, never taken from the
 webview. A staged file that is never sent stays, like every other file here.
 
+**A model's reasoning is shown and never kept, and the placeholder is what
+makes that true.** `ReasoningDelta` names a message id and no channel: the
+webview files it under the agent that opened that stream and drops it when the
+stream ends, so nothing else has to remember to clear it and a retry that
+reopens under a new id throws away the half-formed thought of the attempt that
+broke. It is carried apart from the text from the wire onwards, as
+`Token::Reasoning`, because a single `&str` callback made the two the same
+thing by the time anything could tell them apart, and the answer is the only
+half that may be persisted, hashed by the guard or replayed into a prompt. It
+is also its own slice in the store rather than a field on the stream buffer:
+written there, every thought would re-render and re-parse the markdown of every
+live bubble for text that is in none of them.
+
 **Every event is an IPC hop and a render, so tokens are coalesced before they
 leave.** A model writes faster than a screen refreshes. One event per token
 spent the operator's main thread on work no eye could resolve, and with five

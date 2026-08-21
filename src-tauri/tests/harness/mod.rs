@@ -41,6 +41,9 @@ use guac_lib::workspace::Workspace;
 pub enum Script {
     /// Emit plain text.
     Say(String),
+    /// Publish some working, then say something. What a reasoning model sends:
+    /// the thinking arrives first, in frames of the same shape as the text.
+    Thinking { about: String, say: String },
     /// Emit a `send_message` tool call, declared as a courtesy: what a model
     /// sends when it is being polite, and what most of these scenarios play.
     SendTo { recipients: Vec<String>, text: String },
@@ -90,6 +93,23 @@ pub fn render(script: &Script) -> String {
             // Split into fragments so the streaming path is exercised, not
             // just a single-chunk happy case.
             for piece in text.as_bytes().chunks(7) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(
+                    serde_json::json!({"choices":[{"delta":{"content": piece}}]}),
+                ));
+            }
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+            ));
+        }
+        Script::Thinking { about, say } => {
+            for piece in about.as_bytes().chunks(9) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(
+                    serde_json::json!({"choices":[{"delta":{"reasoning": piece}}]}),
+                ));
+            }
+            for piece in say.as_bytes().chunks(7) {
                 let piece = String::from_utf8_lossy(piece).to_string();
                 body.push_str(&frame(
                     serde_json::json!({"choices":[{"delta":{"content": piece}}]}),
