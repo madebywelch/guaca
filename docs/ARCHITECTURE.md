@@ -378,6 +378,25 @@ and when the action is "act outside the workspace" a standing yes covers every
 future send, submission and purchase. Creating an agent is narrow enough to be
 worth not asking twice; this is not.
 
+**Permission is not access, and the tool is only offered where there is a way
+out of the workspace.** Asked for something that needed a calendar nobody here
+holds an account for, an agent worked out that it had no access and then asked
+the operator for permission to have some. The mechanism did exactly what it is
+for; the question was one no button could answer. Missing and withheld are
+different states, and only the second is a decision: a yes cannot sign an agent
+in, add a credential or produce a tool the workspace does not have. So `specs`
+withholds `request_permission` unless a computer or a browser is configured,
+because nothing else an agent can call leaves the workspace and there would be
+nothing for a grant to be spent on. `ask_to_act` refuses the same case again,
+before a row is written, for the model that calls a tool it was not offered. And
+where the tool does exist the prompt says what a yes does not buy, because a
+machine is not an account: an agent with a computer and no Google session is
+still short of access rather than of permission. What the operator gets instead
+is the sentence: what could not be reached, and what it would take. It is the
+rule the prompt already gives for an account a peer holds, *work that needs an
+account you do not have belongs to the agent that has it*, extended to the case
+where nobody has it.
+
 ## A page that was read this turn cannot quietly press a button
 
 The trust boundary below is words: `Trust` on the envelope, `[OPERATOR]` and
