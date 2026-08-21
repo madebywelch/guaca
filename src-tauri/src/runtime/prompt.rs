@@ -95,12 +95,12 @@ pub fn system_prompt(
            example `google-chrome https://example.com`. The operator sees exactly what you \
            opened.\n\
          - `browse` is how you use the web, and it drives Chrome: the one browser on this \
-           machine, holding whatever accounts you are signed in to. Do not open another one. \
-           A second browser knows none of those accounts, `browse` cannot see it, and you \
-           would be reading one window while clicking another. The browser tells you exactly \
-           where every link, \
-           button and field is, so prefer it over looking at pixels for anything on a web \
-           page: `read` gives you the text and a numbered list of what you can use, then \
+           machine, holding whatever accounts you are signed in to. There is only one, and \
+           any other browser you name opens it. A second browser would know none of those \
+           accounts, `browse` could not see it, and you would be reading one window while \
+           clicking another. The browser tells you exactly where every link, button and \
+           field is, so prefer it over looking at pixels for anything on a web page: \
+           `read` gives you the text and a numbered list of what you can use, then \
            `click` and `type` take those numbers. It is what you want for signing in, \
            reading a feed, filling a form or posting something.\n\
          - `use_screen` is how you work that screen. `look` returns a picture of it; then \
@@ -1080,7 +1080,11 @@ mod tests {
         // see.
         let prompt = prompt_for(&card("Outreach"), &[], "", ReplyMode::ToOperator);
         assert!(!prompt.contains("Firefox"), "{prompt}");
-        assert!(prompt.contains("Do not open another one"), "{prompt}");
+        // What the machine does, rather than a rule it could break. It cannot:
+        // every other browser's name on that machine is a shim onto this one,
+        // so an agent told otherwise would be reading a result it could not
+        // account for.
+        assert!(prompt.contains("any other browser you name opens it"), "{prompt}");
         assert!(
             prompt.contains("reading one window while clicking another"),
             "the reason has to be there, or it reads as an arbitrary rule: {prompt}"

@@ -84,6 +84,26 @@ fn render_page(raw: &str) -> String {
     out
 }
 
+/// What actually opened on an agent's screen, in the words the agent and the
+/// operator both read.
+///
+/// Not the command the machine ran. A browser goes onto the screen with five
+/// flags that put it on the profile holding the accounts, and neither a model
+/// nor a person needs to read those: the model would copy them into its next
+/// command and the operator would get a paragraph where a line will do.
+///
+/// Not the command the agent asked for either. Every browser on that machine is
+/// shimmed onto the one `browse` drives, so an agent that named another one
+/// opened this one, and an agent told otherwise describes a window that is not
+/// there and reaches for it again by the same name.
+fn opened_on_screen(asked: &str) -> String {
+    let opened = crate::e2b::as_chrome(asked);
+    if opened == asked {
+        return opened;
+    }
+    opened.split_whitespace().filter(|arg| !arg.starts_with("--")).collect::<Vec<_>>().join(" ")
+}
+
 /// What one tool call produced: what the model is told, what the transcript
 /// records, and a picture when the tool answers with one.
 struct ToolResult {
@@ -1846,19 +1866,32 @@ impl Runtime {
             }
 
             ToolInvocation::OpenOnDesktop { command } => {
+                // Rewritten here as well as inside `open_on_desktop`, because
+                // what the agent is told has to be what ran: a browser that is
+                // not the one holding the accounts is pointed at the one that
+                // is, and an agent that hears its own words back describes a
+                // window that is not there.
+                let opened = crate::e2b::as_chrome(&command);
+                let shown = opened_on_screen(&command);
                 let outcome = match self.ensure_computer(card).await {
                     Ok((client, sandbox)) => {
-                        client.open_on_desktop(&sandbox.id, &sandbox.envd_token, &command).await
+                        client.open_on_desktop(&sandbox.id, &sandbox.envd_token, &opened).await
                     }
                     Err(err) => Err(err),
                 };
                 let (rendered, outcome) = match outcome {
                     Ok(_) => (
                         format!(
-                            "Opened `{command}` on your screen. The operator can see it. Use \
-                             run_command if you need to read anything back from the machine."
+                            "Opened `{shown}` on your screen. The operator can see it. Use \
+                             run_command if you need to read anything back from the machine.{}",
+                            if shown == command {
+                                ""
+                            } else {
+                                " This machine has one browser, which is the one `browse` drives \
+                                 and the one holding your accounts, so that is what opened."
+                            }
                         ),
-                        ToolOutcome::Ok { summary: format!("opened {command}") },
+                        ToolOutcome::Ok { summary: format!("opened {shown}") },
                     ),
                     Err(err) => (
                         format!("Error: could not open that on your screen ({err})."),
@@ -3105,6 +3138,32 @@ mod tests {
 
         // A reply that is not the driver's JSON at all is still page content.
         assert!(render_page("<html>garbage").starts_with(WEB_LABEL));
+    }
+
+    #[test]
+    fn an_agent_is_told_which_browser_actually_opened() {
+        // Observed: asked to send mail, an agent opened another browser, drove
+        // it by coordinates, and read the page with `browse`, which was on
+        // Chrome the whole time. The machine now shims every browser onto that
+        // one, so the remaining way to strand an agent is to hand it back the
+        // name it asked for: it would go on describing a window nobody can see
+        // and reaching for it again.
+        assert_eq!(
+            opened_on_screen("firefox https://mail.google.com"),
+            "google-chrome https://mail.google.com"
+        );
+        assert_ne!(opened_on_screen("firefox https://x"), "firefox https://x");
+
+        // The flags that put it on the right profile are not part of the
+        // answer. A model reads its own tool results back and copies them.
+        assert_eq!(
+            opened_on_screen("google-chrome https://example.com"),
+            "google-chrome https://example.com"
+        );
+
+        // And a program that is not a browser is reported exactly as asked,
+        // arguments and all.
+        assert_eq!(opened_on_screen("libreoffice --writer /tmp/x"), "libreoffice --writer /tmp/x");
     }
 
     #[test]
