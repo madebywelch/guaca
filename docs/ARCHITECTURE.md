@@ -522,6 +522,27 @@ installed, and a document off an agent's machine is no more trustworthy than the
 message that carried it. Anything else textual stays source: a log is not prose,
 and markdown rules applied to one eat its punctuation.
 
+The full view reuses the card's classes with the bounds taken off, and one of
+those bounds does not look like a bound. A card clips and fades its preview on
+purpose; the reading view lifts the height cap and the mask, and has to lift
+`overflow` with them. A clipping flex item has an automatic minimum size of
+zero, so a document left clipping shrinks to whatever room is going and
+swallows the rest of itself. Nothing then overflows the body above it, so
+nothing scrolls, and a brief opened to be read stops at the height of the
+window with no scrollbar and no way down. The body is the one thing in that
+dialog that scrolls, which means nothing inside it may clip.
+
+The dialog is also wider than an ordinary one, and the rule saying so is
+declared beside the card it enlarges rather than beside `.dialog`, hundreds of
+lines further down. Two single-class selectors: the base rule won `width` on
+source order alone and the reading view opened at the ordinary 38rem, with
+nothing in the diff to look at. `.dialog.dialog--file` is doubled to out-specify
+it, and the trap is waiting for any other modifier declared above the base.
+
+`styles.test.ts` asserts both against the real cascade, because neither is
+visible anywhere else: jsdom does no layout, so all 700-odd tests in this repo
+passed while the reading view could not be read.
+
 Two exceptions, and both are WebKit's.
 
 The first is CORS, and it cost every preview but the picture. A response on a

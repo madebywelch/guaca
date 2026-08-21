@@ -120,6 +120,15 @@ the model takes a screenshot to see what `browse` did.
   An `img` is exempt and is the only preview that is not a `fetch`, so dropping
   the header shows as pictures drawing and every document, log and PDF failing,
   each with the one error message that cannot say which failure it was.
+- **The full file view resets `overflow`, not just the height cap and the mask.**
+  A clipping flex item has an automatic minimum size of zero, so a document left
+  clipping shrinks to fit and eats the rest of itself, nothing overflows the body
+  and the reading view has no scrollbar. The body is the only thing in that
+  dialog that scrolls, so nothing inside it may clip.
+- **`.dialog.dialog--file` is doubled because `.dialog` is declared after it.**
+  A one-class modifier above the base rule loses every property they share on
+  source order, which is invisible in a diff: the reading view opened at the
+  ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
 - **`emit_reply` delivers a reply that carries a file and no text.** Handing over
   a document with nothing typed is normal, and judging the reply empty by its
   text alone drops the thing the turn was spent producing.
