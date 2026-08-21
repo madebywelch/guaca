@@ -51,6 +51,7 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
     id: `id-${name}`,
     groupId,
     sandboxId: null,
+    browserId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

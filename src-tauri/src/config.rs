@@ -106,6 +106,8 @@ pub struct AppConfig {
     pub limits: GuardLimits,
     #[serde(default)]
     pub e2b: E2bConfig,
+    #[serde(default)]
+    pub kernel: KernelConfig,
 }
 
 /// Credentials for the sandboxes agents run their computers in.
@@ -132,6 +134,53 @@ pub fn default_idle_minutes() -> u32 {
 impl Default for E2bConfig {
     fn default() -> Self {
         Self { api_key: String::new(), idle_minutes: default_idle_minutes() }
+    }
+}
+
+/// Credentials for the hosted browsers agents use.
+///
+/// A second provider rather than a second setting on the first, because a
+/// computer and a browser are different products bought from different people.
+/// Either can be configured without the other: an operator who only wants
+/// agents that use the web needs no machines, and one who only wants shells
+/// needs no browsers. App-wide for the same reason as E2B's: it is one account,
+/// and a browser is billed to it whichever crew asked for one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KernelConfig {
+    pub api_key: String,
+    /// Minutes of inactivity before a browser is deleted.
+    ///
+    /// Not the same thing as a machine's sleep. A browser goes to standby on its
+    /// own after a few seconds, which keeps its state and stops the bill; this
+    /// is how long after that it is thrown away. Nothing is lost when it is:
+    /// the cookies were written back to the agent's profile, so the next browser
+    /// opens signed in to the same accounts. Longer therefore costs nothing but
+    /// saves the seconds a fresh one takes to boot.
+    #[serde(default = "default_browser_idle_minutes")]
+    pub idle_minutes: u32,
+    /// Whether browsers are created in stealth mode.
+    ///
+    /// Off by default, and the operator's call rather than Guaca's. On, sites
+    /// that block automation are far more likely to let an agent through, and
+    /// the provider solves the captchas. It also costs more and needs a plan
+    /// that includes it, so switching it on for everyone would make the first
+    /// browser fail to start on accounts that do not have it.
+    #[serde(default)]
+    pub stealth: bool,
+}
+
+pub fn default_browser_idle_minutes() -> u32 {
+    60
+}
+
+impl Default for KernelConfig {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            idle_minutes: default_browser_idle_minutes(),
+            stealth: false,
+        }
     }
 }
 
@@ -180,6 +229,10 @@ pub struct RedactedConfig {
     pub e2b_key_set: bool,
     pub e2b_key_hint: String,
     pub computer_idle_minutes: u32,
+    pub kernel_key_set: bool,
+    pub kernel_key_hint: String,
+    pub browser_idle_minutes: u32,
+    pub browser_stealth: bool,
     pub base_url: String,
     pub default_model: String,
     pub api_key_set: bool,
@@ -195,6 +248,10 @@ impl AppConfig {
             e2b_key_set: !self.e2b.api_key.trim().is_empty(),
             e2b_key_hint: hint_for(&self.e2b.api_key),
             computer_idle_minutes: self.e2b.idle_minutes,
+            kernel_key_set: !self.kernel.api_key.trim().is_empty(),
+            kernel_key_hint: hint_for(&self.kernel.api_key),
+            browser_idle_minutes: self.kernel.idle_minutes,
+            browser_stealth: self.kernel.stealth,
             base_url: self.inference.base_url.clone(),
             default_model: self.inference.default_model.clone(),
             api_key_set: !self.inference.api_key.trim().is_empty(),

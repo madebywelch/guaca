@@ -49,6 +49,7 @@ export function ComputerScreen({ agent }: Props) {
   const showing = useRef(agent.id);
 
   const stage = useRef<HTMLDivElement>(null);
+  const frame = useRef<HTMLIFrameElement>(null);
   // Where the picture was before it grew. Measured in the click, because by the
   // time anything can react to the change the stage is already in its new place.
   const cameFrom = useRef<DOMRect | null>(null);
@@ -56,6 +57,15 @@ export function ComputerScreen({ agent }: Props) {
   const grow = useCallback(() => {
     cameFrom.current = stage.current?.getBoundingClientRect() ?? null;
     setFull(true);
+    // Hands the keyboard to the desktop. A cross-origin frame receives key
+    // events only while it holds focus, and clicking the veil focuses the veil,
+    // which is an element in this document. The mouse works throughout, which
+    // is what makes this read as a broken keyboard rather than a focus problem.
+    //
+    // Here rather than in an effect afterwards, because this webview is WebKit
+    // and WebKit honours a focus change only as part of a user gesture. An
+    // effect on the next render is not one.
+    frame.current?.focus();
   }, []);
 
   // Nothing at all until there is a key. Offering to give an agent a computer
@@ -254,9 +264,11 @@ export function ComputerScreen({ agent }: Props) {
               </>
             )}
 
-            <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
-              Close
-            </button>
+            <div className="screen__actions">
+              <button type="button" className="btn btn--small" onClick={() => setFull(false)}>
+                Done
+              </button>
+            </div>
           </div>
         )}
 
@@ -271,6 +283,7 @@ export function ComputerScreen({ agent }: Props) {
               // reconnecting. The veil below does that job instead, without
               // touching the connection.
               key={computer.sandboxId}
+              ref={frame}
               title={`${agent.name}'s computer`}
               src={computer.vncUrl ?? ""}
             />

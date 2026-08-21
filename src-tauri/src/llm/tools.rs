@@ -28,8 +28,47 @@ pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 
-/// Tool definitions offered on every agent turn.
-pub fn specs() -> Vec<ToolSpec> {
+/// Which of the two places an agent has been given, which decides which tools
+/// it is offered.
+///
+/// A tool for something that does not exist is worse than a missing tool. An
+/// agent offered `browse` with no browser provider configured calls it, is told
+/// no key is set, and reports to the operator that the web is unavailable,
+/// having spent a model call and a turn discovering something the app knew
+/// before the turn started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Surfaces {
+    pub computer: bool,
+    pub browser: bool,
+}
+
+impl Surfaces {
+    pub fn both() -> Self {
+        Surfaces { computer: true, browser: true }
+    }
+
+    pub fn none() -> Self {
+        Surfaces { computer: false, browser: false }
+    }
+}
+
+/// Tool definitions offered on one agent turn.
+///
+/// Filtered by what that agent actually has. Everything not about a computer or
+/// a browser is offered always: messaging, memory and scheduling work with no
+/// provider configured at all.
+pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
+    all_specs()
+        .into_iter()
+        .filter(|spec| match spec.name.as_str() {
+            RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN => surfaces.computer,
+            BROWSE => surfaces.browser,
+            _ => true,
+        })
+        .collect()
+}
+
+fn all_specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
@@ -107,10 +146,11 @@ pub fn specs() -> Vec<ToolSpec> {
                           a person would do in a window: `run_command` fetches text, this shows \
                           the real thing on screen. The program keeps running after this \
                           returns. For the web, that is `google-chrome`: the one browser on this \
-                          machine, the one `browse` drives, and the one holding whatever \
-                          accounts you are signed in to. Any other browser you name opens it \
-                          instead, because a second browser is a window that knows none of your \
-                          accounts and that your other tools cannot see."
+                          machine, and the one holding whatever accounts its screen is signed in \
+                          to. Any other browser you name opens it instead, because a second \
+                          browser is a window that knows none of those accounts and that nothing \
+                          else can see. It is not the browser `browse` uses, which is somewhere \
+                          else entirely."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -181,17 +221,21 @@ pub fn specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            // Named as a place rather than as a mode of the computer, because
+            // it is one. An agent told this was "the browser on your computer"
+            // took a screenshot to find out what it had done, saw its desktop,
+            // and reported that the page had not loaded.
             name: BROWSE.to_string(),
-            description: "Use the web browser on your computer. This is the right tool for \
-                          anything on the web: the browser tells you exactly where every link, \
-                          button and field is, so you never have to guess at a position. `read` \
-                          gives you the page's text and a numbered list of everything you can \
-                          use; `click` and `type` take one of those numbers. Read again after \
-                          anything that changes the page, because the numbers are renumbered \
-                          each time. The operator watches this happen on screen. This drives \
-                          Chrome, which is also the browser holding your accounts: if you have \
-                          another browser open, this is not looking at it, and clicking by \
-                          coordinates with `use_screen` may not be either."
+            description: "Use your browser: a Chrome of your own, separate from your computer and \
+                          its screen. This is the right tool for anything on the web, because the \
+                          browser tells you exactly where every link, button and field is and you \
+                          never have to guess at a position. `read` gives you the page's text and \
+                          a numbered list of everything you can use; `click` and `type` take one \
+                          of those numbers. Read again after anything that changes the page, \
+                          because the numbers are handed out fresh each time. The operator can \
+                          watch this and take over. It is a different browser from the one on \
+                          your computer's screen, with its own accounts, so `use_screen` is not \
+                          looking at this and a screenshot will not show you what happened here."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -220,13 +264,20 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: USE_SCREEN.to_string(),
-            description: "Look at your computer's screen and use it: click, type, press keys and \
-                          scroll, exactly as a person would. Start with `look`, which returns a \
-                          picture of the screen; every coordinate you give afterwards is in that \
-                          picture's pixels, measured from the top left. Look again after anything \
-                          that changes the screen, because you are working from the last picture \
-                          you took, not from what is there now. This is how you read a page, fill \
-                          a form, follow a link, or work in an app you have opened."
+            // The last sentence is the one that changed behaviour most. Every
+            // action answers with a fresh picture, so the instruction is no
+            // longer "remember to look again": there is nothing to remember,
+            // and a model working from a screenshot two actions old was the
+            // commonest way this tool went wrong.
+            description: "Look at your computer's screen and use it: click, type, press keys, \
+                          scroll and drag, exactly as a person would. Coordinates are in the \
+                          pixels of the picture you were last shown, measured from its top left. \
+                          Every action answers with a new picture of the screen, so you are \
+                          always looking at the result of what you just did; `look` on its own is \
+                          for when you have not seen the screen yet. This is how you use anything \
+                          that is not a web page: an application, a file, a dialog, a terminal \
+                          window. For a web page use `browse` instead, which is a browser of its \
+                          own and tells you where things are rather than making you find them."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -234,15 +285,24 @@ pub fn specs() -> Vec<ToolSpec> {
                     "action": {
                         "type": "string",
                         "enum": ["look", "click", "double_click", "right_click", "move",
-                                 "type", "key", "scroll"],
-                        "description": "What to do. `look` first, then act on what you saw."
+                                 "type", "key", "scroll", "drag", "wait"],
+                        "description": "What to do. Every one of them shows you the screen \
+                                        afterwards."
                     },
                     "x": { "type": "integer", "description": "Pixels from the left edge." },
                     "y": { "type": "integer", "description": "Pixels from the top edge." },
+                    "to_x": {
+                        "type": "integer",
+                        "description": "For `drag`: where the pointer finishes, from the left."
+                    },
+                    "to_y": {
+                        "type": "integer",
+                        "description": "For `drag`: where the pointer finishes, from the top."
+                    },
                     "text": { "type": "string", "description": "For `type`: the text to enter." },
                     "keys": {
                         "type": "string",
-                        "description": "For `key`: an xdotool key name or chord, such as \
+                        "description": "For `key`: a key name or a chord joined by `+`, such as \
                                         `Return`, `ctrl+t`, `alt+F4`, `ctrl+shift+Tab`."
                     },
                     "direction": {
@@ -253,6 +313,12 @@ pub fn specs() -> Vec<ToolSpec> {
                     "amount": {
                         "type": "integer",
                         "description": "For `scroll`: how many notches. Three is about a screenful."
+                    },
+                    "ms": {
+                        "type": "integer",
+                        "description": "For `wait`: how long to let the screen settle, in \
+                                        milliseconds. Use it when something is still loading \
+                                        rather than looking twice."
                     }
                 },
                 "required": ["action"],
@@ -496,9 +562,11 @@ pub enum ScreenAction {
     Look,
     Click { x: i32, y: i32, button: u8, count: u8 },
     Move { x: i32, y: i32 },
+    Drag { from: (i32, i32), to: (i32, i32) },
     Type { text: String },
     Key { keys: String },
-    Scroll { down: bool, amount: u8 },
+    Scroll { x: i32, y: i32, down: bool, amount: u8 },
+    Wait { ms: u32 },
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -670,23 +738,113 @@ fn parse_screen_action(value: &serde_json::Value) -> Result<ScreenAction, ToolPa
                 needs: "a non-empty `text`".to_string(),
             }),
         },
-        "key" | "press" => {
-            match value.get("keys").or_else(|| value.get("key")).and_then(|v| v.as_str()) {
-                Some(keys) if !keys.trim().is_empty() => {
-                    Ok(ScreenAction::Key { keys: keys.to_string() })
-                }
+        "key" | "press" | "keypress" => {
+            match value.get("keys").or_else(|| value.get("key")).and_then(as_chord) {
+                Some(keys) if !keys.trim().is_empty() => Ok(ScreenAction::Key { keys }),
                 _ => Err(ToolParseError::IncompleteScreenAction {
                     action: "key".to_string(),
                     needs: "a `keys` name such as `Return` or `ctrl+t`".to_string(),
                 }),
             }
         }
+        "drag" => {
+            let (x, y) = point("drag")?;
+            match (coord("to_x"), coord("to_y")) {
+                (Some(to_x), Some(to_y)) => {
+                    Ok(ScreenAction::Drag { from: (x, y), to: (to_x, to_y) })
+                }
+                _ => Err(ToolParseError::IncompleteScreenAction {
+                    action: "drag".to_string(),
+                    needs: "`x` and `y` to start from, and `to_x` and `to_y` to finish at"
+                        .to_string(),
+                }),
+            }
+        }
+        // Aimed where the model was already looking when it did not say. The
+        // middle of the screen is almost always the page rather than a panel,
+        // which is what a model that omitted the point meant by "scroll down".
         "scroll" => Ok(ScreenAction::Scroll {
+            x: coord("x").unwrap_or(SCREEN_MIDDLE.0),
+            y: coord("y").unwrap_or(SCREEN_MIDDLE.1),
             down: value.get("direction").and_then(|v| v.as_str()).unwrap_or("down") != "up",
             amount: value.get("amount").and_then(|v| v.as_i64()).unwrap_or(3).clamp(1, 15) as u8,
         }),
+        "wait" => Ok(ScreenAction::Wait {
+            ms: value
+                .get("ms")
+                .and_then(|v| v.as_i64())
+                .or_else(|| value.get("seconds").and_then(|v| v.as_i64()).map(|s| s * 1000))
+                .unwrap_or(1000)
+                .clamp(0, 10_000) as u32,
+        }),
         _ => Err(ToolParseError::UnknownScreenAction),
     }
+}
+
+/// Where an unaimed scroll lands: the middle of the screen a machine has.
+///
+/// Spelled as a coordinate rather than read off the last screenshot, because a
+/// scroll can be the first thing an agent does and there may not have been one.
+const SCREEN_MIDDLE: (i32, i32) = (512, 384);
+
+/// Reads a key chord out of whatever shape a model sent it in, in xdotool's
+/// spelling.
+///
+/// Three things happen here, and each is a real call this used to refuse.
+/// Models send an array, because that is the shape both vendors' own
+/// computer-use tools take; they send vendor spellings like `ENTER` and `CTRL`;
+/// and they send `cmd`, because half of them are trained on a Mac. None of
+/// those is a mistake worth a refusal the model has to guess its way out of,
+/// and the machine is Linux, so there is exactly one right answer to translate
+/// them to.
+fn as_chord(value: &serde_json::Value) -> Option<String> {
+    let parts: Vec<String> = match value {
+        // Split on `+` alone. `-` looks like the other chord separator and is
+        // also a key on the keyboard, so splitting on it would turn a request
+        // for the minus key into nothing at all.
+        serde_json::Value::String(text) => {
+            text.split('+').map(|part| part.trim().to_string()).collect()
+        }
+        serde_json::Value::Array(items) => {
+            items.iter().filter_map(|item| item.as_str()).map(str::to_string).collect()
+        }
+        _ => return None,
+    };
+
+    let named: Vec<String> = parts
+        .iter()
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            // Modifiers, including the one that does not exist on this machine.
+            // A model reaching for `cmd+a` means "select all", and the machine
+            // it is aimed at spells that `ctrl`.
+            "ctrl" | "control" | "cmd" | "command" | "meta" | "super" => "ctrl".to_string(),
+            "alt" | "option" => "alt".to_string(),
+            "shift" => "shift".to_string(),
+            // Keys whose vendor spelling is not X11's.
+            "enter" | "return" => "Return".to_string(),
+            "esc" | "escape" => "Escape".to_string(),
+            "tab" => "Tab".to_string(),
+            "space" | "spacebar" => "space".to_string(),
+            "backspace" => "BackSpace".to_string(),
+            "delete" | "del" => "Delete".to_string(),
+            "up" | "arrowup" => "Up".to_string(),
+            "down" | "arrowdown" => "Down".to_string(),
+            "left" | "arrowleft" => "Left".to_string(),
+            "right" | "arrowright" => "Right".to_string(),
+            "pageup" | "page_up" => "Page_Up".to_string(),
+            "pagedown" | "page_down" => "Page_Down".to_string(),
+            "home" => "Home".to_string(),
+            "end" => "End".to_string(),
+            // Anything else is passed through as written. xdotool's own names
+            // are the largest part of this space and a table of them would go
+            // stale; a name it does not know fails with its own message, which
+            // is more use to a model than a refusal from here.
+            _ => part.to_string(),
+        })
+        .collect();
+
+    (!named.is_empty()).then(|| named.join("+"))
 }
 
 pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
@@ -1057,13 +1215,13 @@ mod tests {
     fn the_desktop_tool_names_a_browser_so_the_agent_knows_it_has_one() {
         // The failure this exists to stop: an agent with a working desktop
         // replying that it has no graphical browser.
-        let spec = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
         assert!(spec.description.contains("google-chrome"), "{}", spec.description);
     }
 
     /// The one description under test, by name.
     fn description(name: &str) -> String {
-        specs().into_iter().find(|s| s.name == name).unwrap().description
+        specs(Surfaces::both()).into_iter().find(|s| s.name == name).unwrap().description
     }
 
     #[test]
@@ -1093,8 +1251,11 @@ mod tests {
             "an announcement is legitimate, so the rule has to leave room for one: {spec}"
         );
 
-        let to = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap().parameters
-            ["properties"]["to"]["description"]
+        let to = specs(Surfaces::both())
+            .into_iter()
+            .find(|s| s.name == SEND_MESSAGE)
+            .unwrap()
+            .parameters["properties"]["to"]["description"]
             .as_str()
             .unwrap()
             .to_string();
@@ -1216,15 +1377,14 @@ mod tests {
     #[test]
     fn the_desktop_tool_offers_one_browser_because_only_one_is_wired_up() {
         // Observed: an agent asked to send mail opened firefox, drove it with
-        // `use_screen`, and read the page with `browse`, which was looking at
-        // Chrome the whole time. It then reported the account missing. Only
-        // Chrome is on the profile the accounts live on and the only one
-        // `browse` can drive, so it is the only one worth naming.
-        let desktop = specs().into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        // `use_screen`, and looked for the account somewhere else. Only one
+        // browser on that machine is on the profile the accounts live on, and
+        // it is the only one worth naming.
+        let desktop = spec(OPEN_ON_DESKTOP);
         assert!(!desktop.description.contains("firefox"), "{}", desktop.description);
         assert!(desktop.description.contains("google-chrome"), "{}", desktop.description);
         assert!(
-            desktop.description.contains("knows none of your accounts"),
+            desktop.description.contains("knows none of those accounts"),
             "the reason has to travel with the rule: {}",
             desktop.description
         );
@@ -1236,14 +1396,154 @@ mod tests {
             "{}",
             desktop.description
         );
+    }
 
-        let browse = specs().into_iter().find(|s| s.name == BROWSE).unwrap();
+    #[test]
+    fn the_browser_and_the_screen_say_they_are_not_the_same_place() {
+        // The failure this exists to stop, and it is new: a computer and a
+        // browser used to be one machine, and now they are two. An agent that
+        // reads them as one calls `browse`, takes a screenshot to see what
+        // happened, is shown a desktop, and reports that the page did not load.
+        // Each description has to disclaim the other, because a model reads one
+        // tool at a time.
+        let browse = spec(BROWSE);
         assert!(
-            browse.description.contains("drives\n                          Chrome")
-                || browse.description.contains("drives Chrome"),
-            "browse has to say which browser it is on: {}",
+            browse.description.contains("separate from your computer"),
+            "browse has to say it is somewhere else: {}",
             browse.description
         );
+        assert!(
+            browse.description.contains("`use_screen` is not"),
+            "and name the tool that will not show it: {}",
+            browse.description
+        );
+
+        let screen = spec(USE_SCREEN);
+        assert!(
+            screen.description.contains("For a web page use `browse`"),
+            "the screen has to point at the browser for a page: {}",
+            screen.description
+        );
+    }
+
+    #[test]
+    fn every_screen_action_answers_with_a_picture_and_says_so() {
+        // The tool used to tell the model to look again after anything that
+        // changed the screen, and models did not: they clicked, were told
+        // "clicked at 412, 300", and typed into a form they had last seen two
+        // actions ago. Now there is nothing to remember, and the description has
+        // to say that or a model keeps spending a call on a redundant `look`.
+        let screen = spec(USE_SCREEN);
+        assert!(
+            screen.description.contains("Every action answers with a new picture"),
+            "{}",
+            screen.description
+        );
+        let actions = screen.parameters["properties"]["action"]["enum"].as_array().unwrap();
+        for expected in ["look", "click", "type", "key", "scroll", "drag", "wait"] {
+            assert!(
+                actions.iter().any(|action| action == expected),
+                "{expected} has to be offered: {actions:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_is_not_offered_for_a_place_the_agent_does_not_have() {
+        // A tool for something that does not exist costs a model call and a
+        // turn to discover, and the agent reports the capability as broken
+        // rather than absent.
+        let names = |surfaces: Surfaces| -> Vec<String> {
+            specs(surfaces).into_iter().map(|spec| spec.name).collect()
+        };
+
+        let computer_only = names(Surfaces { computer: true, browser: false });
+        assert!(computer_only.contains(&USE_SCREEN.to_string()));
+        assert!(computer_only.contains(&RUN_COMMAND.to_string()));
+        assert!(!computer_only.contains(&BROWSE.to_string()));
+
+        let browser_only = names(Surfaces { computer: false, browser: true });
+        assert!(browser_only.contains(&BROWSE.to_string()));
+        assert!(!browser_only.contains(&USE_SCREEN.to_string()));
+        assert!(!browser_only.contains(&OPEN_ON_DESKTOP.to_string()));
+
+        // And everything that needs neither is still there, because messaging
+        // and memory work with no provider configured at all.
+        let neither = names(Surfaces::none());
+        for always in [DIRECTORY, SEND_MESSAGE, UPDATE_NOTES, SCHEDULE, CREATE_AGENT] {
+            assert!(neither.contains(&always.to_string()), "{always} needs no provider");
+        }
+        assert_eq!(names(Surfaces::both()).len(), all_specs().len());
+    }
+
+    #[test]
+    fn a_key_arrives_in_whatever_spelling_the_model_used() {
+        // All of these are real shapes models send. Each was previously either
+        // refused or passed to xdotool as a name it does not know, which fails
+        // on the machine and reads to the model as a broken keyboard.
+        let keys = |json: &str| match parse(&call(USE_SCREEN, json)) {
+            Ok(ToolInvocation::UseScreen { action: ScreenAction::Key { keys }, .. }) => keys,
+            other => panic!("{json} parsed as {other:?}"),
+        };
+
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"Return\"}"), "Return");
+        // Vendor spellings.
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"ENTER\"}"), "Return");
+        assert_eq!(keys("{\"action\":\"keypress\",\"keys\":\"Escape\"}"), "Escape");
+        // The array form, which is what both vendors' own computer-use tools
+        // take, so it is what a model trained on them reaches for.
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":[\"ctrl\",\"a\"]}"), "ctrl+a");
+        // And the modifier that does not exist on a Linux machine. A model
+        // asking for `cmd+a` means select all.
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"cmd+a\"}"), "ctrl+a");
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"Control+Shift+Tab\"}"), "ctrl+shift+Tab");
+        // A key that is only a name to xdotool is passed through untouched: a
+        // table of every one of them would go stale, and xdotool's own error is
+        // more use to a model than a refusal from here.
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"F11\"}"), "F11");
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"ctrl+F5\"}"), "ctrl+F5");
+        // `-` is a key, not a separator. Splitting on it turned a request for
+        // the minus key into nothing at all.
+        assert_eq!(keys("{\"action\":\"key\",\"keys\":\"minus\"}"), "minus");
+    }
+
+    #[test]
+    fn a_scroll_lands_on_the_page_when_the_model_did_not_aim() {
+        // A wheel event goes to whatever is under the pointer, which is
+        // wherever the last click left it: a model reading an article scrolled
+        // the sidebar it had clicked a link in.
+        match parse(&call(USE_SCREEN, "{\"action\":\"scroll\",\"direction\":\"down\"}")) {
+            Ok(ToolInvocation::UseScreen {
+                action: ScreenAction::Scroll { x, y, down, .. },
+                ..
+            }) => {
+                assert_eq!((x, y), SCREEN_MIDDLE);
+                assert!(down);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_wait_is_bounded_and_takes_either_unit() {
+        let ms = |json: &str| match parse(&call(USE_SCREEN, json)) {
+            Ok(ToolInvocation::UseScreen { action: ScreenAction::Wait { ms }, .. }) => ms,
+            other => panic!("{json} parsed as {other:?}"),
+        };
+        assert_eq!(ms("{\"action\":\"wait\"}"), 1000);
+        assert_eq!(ms("{\"action\":\"wait\",\"ms\":2500}"), 2500);
+        assert_eq!(ms("{\"action\":\"wait\",\"seconds\":2}"), 2000);
+        // A model asked to be patient will ask for a minute, and the turn it is
+        // spending is the operator's.
+        assert_eq!(ms("{\"action\":\"wait\",\"seconds\":120}"), 10_000);
+    }
+
+    /// One tool's definition, with both places available.
+    fn spec(name: &str) -> ToolSpec {
+        specs(Surfaces::both())
+            .into_iter()
+            .find(|spec| spec.name == name)
+            .unwrap_or_else(|| panic!("no tool named {name}"))
     }
 
     #[test]
@@ -1254,7 +1554,8 @@ mod tests {
         // asker could not take, and the grant landed on the wrong agent. A
         // permission obtained and then relayed is a peer's claim again, which
         // is the thing the agent holding the account was right to refuse.
-        let spec = specs().into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
+        let spec =
+            specs(Surfaces::both()).into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
         assert!(spec.description.contains("what you will do yourself"), "{}", spec.description);
         assert!(
             spec.description.contains("send it the work and let it ask"),
@@ -1265,7 +1566,7 @@ mod tests {
 
     #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
-        let specs = specs();
+        let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
             10,
@@ -1288,7 +1589,7 @@ mod tests {
 
     #[test]
     fn send_message_description_tells_the_model_not_to_block() {
-        let spec = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
         let text = spec.description.to_lowercase();
         assert!(text.contains("non-blocking") || text.contains("asynchronous"));
         assert!(text.contains("do not wait"), "blocking on a reply is the failure mode to prevent");
@@ -1365,7 +1666,7 @@ mod tests {
 
     #[test]
     fn the_send_message_schema_offers_intent_as_a_closed_choice() {
-        let spec = specs().into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
         let intent = &spec.parameters["properties"]["intent"];
         assert_eq!(intent["enum"], serde_json::json!(["work", "courtesy"]));
         assert!(
@@ -1569,7 +1870,7 @@ mod tests {
     fn the_memory_tool_asks_for_durable_things_and_forbids_a_transcript_dump() {
         // The description is the only control over what an agent writes, so the
         // selective-write instruction has to survive edits.
-        let spec = specs().into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
+        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
         let text = spec.description.to_lowercase();
         // Both words, because the tool is named for one of them and asked for
         // in the other: an agent reading only "notes" here has to guess that
@@ -1670,7 +1971,7 @@ mod tests {
     fn creating_an_agent_offers_no_choice_of_model() {
         // What a new agent costs to run is the operator's call, not a field a
         // model can set on its own behalf.
-        let spec = specs().into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
+        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
         let properties = spec.parameters["properties"].as_object().unwrap();
         assert!(!properties.contains_key("model"), "{properties:?}");
         assert!(!properties.contains_key("group_id"), "an agent must not place one elsewhere");

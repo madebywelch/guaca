@@ -566,6 +566,47 @@ CREATE INDEX routines_due ON routines (next_run_at) WHERE next_run_at IS NOT NUL
 CREATE INDEX routines_agent ON routines (agent_id);
 "#,
     ),
+    (
+        22,
+        r#"
+-- An agent can be given a browser as well as a computer. They are different
+-- things on different providers: the computer is a Linux machine with a screen,
+-- worked by looking and pointing, and the browser is a hosted Chrome, worked by
+-- asking the page. Only the session id is kept. The socket that drives it and
+-- the URL the operator watches both change when a browser is replaced, so a
+-- stored copy of either is a pane pointed at something that has gone.
+ALTER TABLE agents ADD COLUMN browser_id TEXT;
+
+-- And each of those has its own cookie jar, so a sign-in belongs to one of them
+-- rather than to the agent. Rebuilt rather than altered, because the surface has
+-- to join the primary key: an agent signed in to LinkedIn in both places is two
+-- rows, and under the old key the second one could not be written. The scan of
+-- one surface must also replace only that surface's rows, or asking the computer
+-- what it holds would forget everything the browser reported.
+--
+-- Every existing row came from a machine, because that is all there was.
+CREATE TABLE signins_next (
+    agent_id      TEXT    NOT NULL REFERENCES agents(id),
+    surface       TEXT    NOT NULL,
+    domain        TEXT    NOT NULL,
+    service       TEXT    NOT NULL,
+    recognised    INTEGER NOT NULL DEFAULT 0,
+    first_seen_at INTEGER NOT NULL,
+    last_seen_at  INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, surface, domain)
+);
+
+INSERT INTO signins_next (agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at)
+SELECT agent_id,'computer',domain,service,recognised,first_seen_at,last_seen_at FROM signins;
+
+DROP TABLE signins;
+ALTER TABLE signins_next RENAME TO signins;
+
+-- Dropping the table took its index with it. The one question asked of this
+-- table is still "what does this agent reach".
+CREATE INDEX signins_agent ON signins (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

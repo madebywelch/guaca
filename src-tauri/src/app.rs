@@ -192,6 +192,20 @@ pub fn run() {
                 });
             }
 
+            // And the same for browsers, which are a separate provider with a
+            // separate bill: an account can have one configured and not the
+            // other, so a single sweep would leave whichever half it skipped.
+            {
+                let runtime = runtime.clone();
+                tauri::async_runtime::spawn(async move {
+                    match runtime.sweep_browsers().await {
+                        Ok(0) => tracing::debug!("swept: no orphaned browsers"),
+                        Ok(n) => tracing::info!(released = n, "released orphaned browsers"),
+                        Err(err) => tracing::warn!(%err, "could not sweep browsers"),
+                    }
+                });
+            }
+
             tracing::info!(
                 db = %db_path.display(),
                 config = %config_path.display(),
@@ -219,6 +233,9 @@ pub fn run() {
             commands::start_agent_computer,
             commands::stop_agent_computer,
             commands::delete_agent_computer,
+            commands::agent_browser,
+            commands::start_agent_browser,
+            commands::stop_agent_browser,
             commands::group_connectors,
             commands::create_connector,
             commands::delete_connector,

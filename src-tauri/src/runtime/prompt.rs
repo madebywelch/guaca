@@ -15,6 +15,7 @@ use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
+use crate::llm::tools::Surfaces;
 
 /// Resolves agent ids to display names for prompt labelling.
 pub type NameTable = HashMap<AgentId, String>;
@@ -40,6 +41,7 @@ pub enum ReplyMode {
     Assigned,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn system_prompt(
     card: &AgentCard,
     // What this agent calls the person it works for. Empty for "the operator".
@@ -48,11 +50,15 @@ pub fn system_prompt(
     // Credentials this agent's group holds. Operator-supplied, and shared by
     // every machine in the group.
     credentials: &[Connector],
-    // What this agent's own browser turned out to be signed in to. Nobody typed
-    // these: they were read off the machine.
+    // What this agent turned out to be signed in to, in either of its two
+    // places. Nobody typed these: they were read off whatever holds the cookies.
     signins: &[Signin],
     notes: &str,
     mode: ReplyMode,
+    // Which of the two places this agent has. Not a preference: a section
+    // describing a machine that is not configured is a promise the app cannot
+    // keep, and an agent believing it spends a turn discovering otherwise.
+    surfaces: Surfaces,
 ) -> String {
     let mut out = String::new();
 
@@ -82,36 +88,73 @@ pub fn system_prompt(
     // schema does not connect it to what it can do: asked to check the weather,
     // one with a working machine still answered that it had no way to look
     // anything up.
-    out.push_str("\n## Your computer\n");
-    out.push_str(
-        "You have your own Linux machine, and it is not just a shell. It runs a full desktop \
-         with Google Chrome, a file manager and an editor installed, and the operator \
-         can watch that screen and take control of it.\n\n\
-         - `run_command` runs a shell command on it. The filesystem persists between turns and \
-           the internet works, so anything you do not already know you can go and find out \
-           rather than declining. Use it to fetch text, install what you need, and run code.\n\
-         - `open_on_desktop` starts a program on the screen. Use it whenever you are asked to \
-           visit a site, look at a page, or do anything a person would do in a window, for \
-           example `google-chrome https://example.com`. The operator sees exactly what you \
-           opened.\n\
-         - `browse` is how you use the web, and it drives Chrome: the one browser on this \
-           machine, holding whatever accounts you are signed in to. There is only one, and \
-           any other browser you name opens it. A second browser would know none of those \
-           accounts, `browse` could not see it, and you would be reading one window while \
-           clicking another. The browser tells you exactly where every link, button and \
-           field is, so prefer it over looking at pixels for anything on a web page: \
-           `read` gives you the text and a numbered list of what you can use, then \
-           `click` and `type` take those numbers. It is what you want for signing in, \
-           reading a feed, filling a form or posting something.\n\
-         - `use_screen` is how you work that screen. `look` returns a picture of it; then \
-           click, type, press keys and scroll by the coordinates you saw. Look again after \
-           anything that changes the screen, because you are always working from the last \
-           picture you took rather than from what is there now. This is how you read a page, \
-           follow a link, fill a form, or use an app you are already signed into.\n\n\
-         Never say you have no computer, no browser, or no way to look something up. You have \
-         all three. Say what you ran and what it returned rather than presenting a result as \
-         something you simply knew.\n",
-    );
+    //
+    // Two places, said as two places. They used to be one, and the browser was
+    // a window on the machine's own screen; now a computer is a machine and a
+    // browser is somewhere else. An agent that thinks they are one thing takes a
+    // screenshot to check what `browse` just did, sees a desktop, and reports
+    // that the page did not load.
+    if surfaces.computer {
+        out.push_str("\n## Your computer\n");
+        out.push_str(
+            "You have your own Linux machine, and it is not just a shell. It runs a full desktop \
+             with a browser, a file manager and an editor installed, and the operator can watch \
+             that screen and take control of it.\n\n\
+             - `run_command` runs a shell command on it. The filesystem persists between turns \
+               and the internet works, so anything you do not already know you can go and find \
+               out rather than declining. Use it to fetch text, install what you need, and run \
+               code.\n\
+             - `open_on_desktop` starts a program on the screen: an editor, a file manager, a \
+               document, or `google-chrome https://example.com`. The operator sees exactly what \
+               you opened.\n\
+             - `use_screen` is how you work that screen. Every action answers with a fresh \
+               picture of it, so you are always looking at the result of what you just did; \
+               `look` on its own is for when you have not seen it yet. Click, type, press keys, \
+               scroll and drag by the coordinates in the picture. This is how you use anything \
+               that is not a web page.\n",
+        );
+        if surfaces.browser {
+            out.push_str(
+                "\nThe browser on this machine's screen is not the browser `browse` uses. They \
+                 are different browsers in different places with different accounts. Use this one \
+                 when a person would want to watch, and `browse` for everything else on the \
+                 web.\n",
+            );
+        }
+    }
+
+    if surfaces.browser {
+        out.push_str("\n## Your browser\n");
+        out.push_str(
+            "You also have a browser of your own: a Chrome in the cloud, separate from your \
+             computer and from its screen. `browse` is how you use it, and it is what you want \
+             for anything on the web. It tells you exactly where every link, button and field is, \
+             so you never guess at a position: `read` gives you the page's text and a numbered \
+             list of what you can use, then `click` and `type` take those numbers. Read again \
+             after anything that changes the page, because the numbers are handed out fresh each \
+             time. It is what you want for reading a feed, filling a form, following a link or \
+             posting something, and the operator can watch it and take over.\n",
+        );
+    }
+
+    if surfaces.computer || surfaces.browser {
+        out.push_str(
+            "\nNever say you have no way to look something up. Say what you did and what came \
+             back, rather than presenting a result as something you simply knew.\n",
+        );
+    } else {
+        // The honest version of the paragraph above. An agent told it has a
+        // machine when the app has no provider configured spends a turn finding
+        // out, then tells the operator the machine is broken rather than absent.
+        out.push_str("\n## What you can do yourself\n");
+        out.push_str(
+            "You have no computer and no browser: neither is set up in this workspace, so you \
+             cannot run commands, look at a screen or open a web page. Work from what you know \
+             and from what is in the conversation. If a task needs the web or a shell, say so \
+             plainly and say that the operator can add a provider in settings, rather than \
+             guessing at an answer or reporting a failure.\n",
+        );
+    }
 
     // Immediately after the computer, because this is a fact about that
     // machine. An agent that is not told this looks at a signed-in browser and
@@ -120,9 +163,9 @@ pub fn system_prompt(
     out.push_str("\n## What you can reach\n");
     if credentials.is_empty() && signins.is_empty() {
         out.push_str(
-            "Your browser is not signed in to anything, and you have been given no credentials. \
-             You can still browse the open web. If a task needs an account, say which one and ask \
-             the operator to sign you in; you cannot sign yourself in.\n",
+            "You are not signed in to anything, and you have been given no credentials. You can \
+             still read the open web. If a task needs an account, say which one and ask the \
+             operator to sign you in; you cannot sign yourself in.\n",
         );
     } else {
         out.push_str(
@@ -135,11 +178,12 @@ pub fn system_prompt(
 
         if !certain.is_empty() {
             out.push_str(
-                "Your browser is signed in to these, so `browse` reaches them as the account \
-                 holder without any sign-in step:\n",
+                "You are signed in to these already, as the account holder, with no sign-in step. \
+                 Each says where the session is, and that matters: a session in one place cannot \
+                 be used from the other.\n",
             );
             for signin in &certain {
-                out.push_str(&format!("- {}\n", signin.label()));
+                out.push_str(&format!("- {} {}\n", signin.label(), signin.surface.how()));
             }
             out.push('\n');
         }
@@ -155,7 +199,7 @@ pub fn system_prompt(
                  reporting the site as broken.\n",
             );
             for signin in &likely {
-                out.push_str(&format!("- {}\n", signin.label()));
+                out.push_str(&format!("- {} {}\n", signin.label(), signin.surface.how()));
             }
             out.push('\n');
         }
@@ -185,9 +229,9 @@ pub fn system_prompt(
     // nothing, because that is exactly when it matters.
     if roster.iter().any(|entry| !entry.reaches.is_empty()) {
         out.push_str(
-            "\nOther agents' browsers are signed in to things yours is not, listed with them \
-             below. A session on another agent's machine is not yours to use: ask that agent to \
-             do the part that needs it, rather than reporting that it cannot be done.\n",
+            "\nOther agents are signed in to things you are not, listed with them below. A session \
+             belonging to another agent is not yours to use: ask that agent to do the part that \
+             needs it, rather than reporting that it cannot be done.\n",
         );
     }
 
@@ -452,6 +496,7 @@ pub fn build_messages(
     history: &[Envelope],
     inbound: &[Envelope],
     mode: ReplyMode,
+    surfaces: Surfaces,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::system(system_prompt(
         card,
@@ -461,6 +506,7 @@ pub fn build_messages(
         signins,
         notes,
         mode,
+        surfaces,
     ))];
 
     for envelope in history {
@@ -497,7 +543,7 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], notes, mode)
+        system_prompt(card, "", roster, &[], &[], notes, mode, Surfaces::both())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -510,7 +556,19 @@ mod tests {
         inbound: &[Envelope],
         mode: ReplyMode,
     ) -> Vec<ChatMessage> {
-        build_messages(card, "", roster, &[], &[], names, notes, history, inbound, mode)
+        build_messages(
+            card,
+            "",
+            roster,
+            &[],
+            &[],
+            names,
+            notes,
+            history,
+            inbound,
+            mode,
+            Surfaces::both(),
+        )
     }
 
     /// The body of one `##` section, so a test can assert where something is
@@ -548,6 +606,7 @@ mod tests {
     use crate::domain::envelope::Intent;
     use crate::domain::envelope::{Part, Trust};
     use crate::domain::ids::{GroupId, MessageId, RunId};
+    use crate::domain::signin::Surface;
 
     fn card(name: &str) -> AgentCard {
         AgentCard {
@@ -555,6 +614,7 @@ mod tests {
             sandbox_id: None,
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
+            browser_id: None,
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),
@@ -583,8 +643,13 @@ mod tests {
     }
 
     fn signed_in(agent: AgentId, service: &str) -> Signin {
+        signed_in_on(agent, service, Surface::Browser)
+    }
+
+    fn signed_in_on(agent: AgentId, service: &str, surface: Surface) -> Signin {
         Signin {
             agent_id: agent,
+            surface,
             domain: format!("{}.example", service.to_lowercase()),
             service: service.into(),
             recognised: true,
@@ -700,12 +765,20 @@ mod tests {
             &[signed_in(c.id, "LinkedIn")],
             "",
             ReplyMode::ToOperator,
+            Surfaces::both(),
         );
 
         assert!(prompt.contains("- LinkedIn"), "a detected session has to be named");
         assert!(
-            prompt.contains("without any sign-in step"),
+            prompt.contains("with no sign-in step"),
             "the whole point is that it does not go looking for a login form"
+        );
+        // And where the session is. An agent signed in on its computer's screen
+        // and told only "you can reach LinkedIn" calls `browse`, which is a
+        // different browser, and reports the account as broken.
+        assert!(
+            prompt.contains("- LinkedIn in your browser, so `browse` reaches it"),
+            "a session has to say which of the two places holds it: {prompt}"
         );
         assert!(prompt.contains("$GITHUB_TOKEN"), "a credential is named by its variable");
         assert!(
@@ -724,7 +797,8 @@ mod tests {
         let mut hedged = signed_in(c.id, "intranet.example");
         hedged.recognised = false;
 
-        let prompt = system_prompt(&c, "", &[], &[], &[hedged], "", ReplyMode::ToOperator);
+        let prompt =
+            system_prompt(&c, "", &[], &[], &[hedged], "", ReplyMode::ToOperator, Surfaces::both());
         assert!(prompt.contains("may also be signed in"), "a guess has to read as one");
         assert!(
             !prompt.contains("Your browser is signed in to these"),
@@ -744,7 +818,8 @@ mod tests {
         let c = card("Researcher");
         let mut token = credential("GitHub", "madebywelch", "GITHUB_TOKEN");
         token.secret_hint = "...ter2".into();
-        let prompt = system_prompt(&c, "", &[], &[token], &[], "", ReplyMode::ToOperator);
+        let prompt =
+            system_prompt(&c, "", &[], &[token], &[], "", ReplyMode::ToOperator, Surfaces::both());
 
         assert!(prompt.contains("GITHUB_TOKEN"), "the name is what it needs");
         assert!(!prompt.contains("ghp_"), "no value, not even a hint of one");
@@ -775,6 +850,7 @@ mod tests {
             &[signed_in(c.id, "LinkedIn")],
             "",
             ReplyMode::ToOperator,
+            Surfaces::both(),
         );
         assert!(prompt.contains("that session has ended"), "name what a login wall means");
         assert!(prompt.contains("do not ask anyone for a password"));
@@ -793,7 +869,16 @@ mod tests {
         let mut researcher = entry("Researcher", &["web research"]);
         researcher.reaches = vec!["LinkedIn".into()];
 
-        let prompt = system_prompt(&c, "", &[researcher], &[], &[], "", ReplyMode::ToOperator);
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[researcher],
+            &[],
+            &[],
+            "",
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
         assert!(prompt.contains("- Researcher (web research) — signed in to LinkedIn"));
         assert!(
             prompt.contains("ask that agent to do the part that needs it"),
@@ -965,13 +1050,29 @@ mod tests {
         // The operator should never have to say "remember my name": it is one
         // fact about the workspace, not something each agent discovers and
         // keeps privately while its peers stay ignorant.
-        let prompt =
-            system_prompt(&card("Manager"), "Robert", &[], &[], &[], "", ReplyMode::ToOperator);
+        let prompt = system_prompt(
+            &card("Manager"),
+            "Robert",
+            &[],
+            &[],
+            &[],
+            "",
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
         assert!(prompt.contains("Robert"), "the operator's name belongs in every prompt");
 
         // Unnamed operators read exactly as they did before this existed.
-        let anonymous =
-            system_prompt(&card("Manager"), "  ", &[], &[], &[], "", ReplyMode::ToOperator);
+        let anonymous = system_prompt(
+            &card("Manager"),
+            "  ",
+            &[],
+            &[],
+            &[],
+            "",
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
         assert!(!anonymous.contains("is called"), "no name means no claim about one");
     }
 
@@ -1072,24 +1173,67 @@ mod tests {
     }
 
     #[test]
-    fn only_one_browser_is_offered_because_only_one_holds_the_accounts() {
-        // Observed: told to send mail, an agent opened firefox, drove it by
-        // coordinates, and read the page with `browse`, which was on Chrome the
-        // whole time. It then reported the account missing. The accounts live
-        // on Chrome's profile and `browse` drives only Chrome, so a second
-        // browser is a window that knows nothing and that half its tools cannot
-        // see.
+    fn a_computer_and_a_browser_are_described_as_two_different_places() {
+        // They used to be one machine, and the confusion that replaced is
+        // exactly as expensive: an agent that reads them as one calls `browse`,
+        // takes a screenshot to see what happened, is shown a desktop, and
+        // reports that the page did not load.
         let prompt = prompt_for(&card("Outreach"), &[], "", ReplyMode::ToOperator);
-        assert!(!prompt.contains("Firefox"), "{prompt}");
-        // What the machine does, rather than a rule it could break. It cannot:
-        // every other browser's name on that machine is a shim onto this one,
-        // so an agent told otherwise would be reading a result it could not
-        // account for.
-        assert!(prompt.contains("any other browser you name opens it"), "{prompt}");
+        assert!(prompt.contains("## Your computer"), "{prompt}");
+        assert!(prompt.contains("## Your browser"), "{prompt}");
         assert!(
-            prompt.contains("reading one window while clicking another"),
-            "the reason has to be there, or it reads as an arbitrary rule: {prompt}"
+            prompt.contains("not the browser `browse` uses"),
+            "the machine's own browser has to disclaim the other one: {prompt}"
         );
+        assert!(
+            prompt.contains("separate from your computer"),
+            "and the other one has to disclaim the machine: {prompt}"
+        );
+        // No browser is named on the screen except the one that holds the
+        // machine's accounts. Observed: told to send mail, an agent opened
+        // firefox, drove it by coordinates, and looked for the account in a
+        // window that had never seen it.
+        assert!(!prompt.contains("Firefox"), "{prompt}");
+    }
+
+    #[test]
+    fn an_agent_is_not_told_it_has_a_place_that_is_not_configured() {
+        // The overclaim this closes. Every agent used to be told it had a Linux
+        // machine whether or not a provider was configured, so the first time
+        // one was asked to look something up it spent a turn discovering
+        // otherwise and told the operator the machine was broken rather than
+        // absent.
+        let neither = system_prompt(
+            &card("Solo"),
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            ReplyMode::ToOperator,
+            Surfaces::none(),
+        );
+        assert!(!neither.contains("## Your computer"), "{neither}");
+        assert!(!neither.contains("## Your browser"), "{neither}");
+        assert!(neither.contains("You have no computer and no browser"), "{neither}");
+        // And it is told what to do instead, or it invents an answer.
+        assert!(neither.contains("say so"), "{neither}");
+
+        let computer_only = system_prompt(
+            &card("Shell"),
+            "",
+            &[],
+            &[],
+            &[],
+            "",
+            ReplyMode::ToOperator,
+            Surfaces { computer: true, browser: false },
+        );
+        assert!(computer_only.contains("## Your computer"), "{computer_only}");
+        assert!(!computer_only.contains("## Your browser"), "{computer_only}");
+        // With no browser there is no second place to disclaim, and saying
+        // there is would be the overclaim wearing a warning label.
+        assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
     }
 
     #[test]

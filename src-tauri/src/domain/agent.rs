@@ -87,6 +87,16 @@ pub struct AgentCard {
     pub sandbox_envd_token: Option<String>,
     #[serde(skip_serializing)]
     pub sandbox_traffic_token: Option<String>,
+    /// The hosted browser this agent uses, once it has been given one. A
+    /// different thing from the computer above and on a different provider: the
+    /// computer is a machine with a screen, this is a Chrome with a DOM. An
+    /// agent may hold both, one, or neither.
+    ///
+    /// Only the session. The socket that drives it and the URL the operator
+    /// watches are read from the provider when needed, because both change when
+    /// a browser is replaced and a stale copy of either is a pane pointed at
+    /// something that has gone.
+    pub browser_id: Option<String>,
     pub lifecycle: Lifecycle,
     /// Kept at the top of the rail. Where a row is drawn and nothing else: a
     /// pinned agent is addressed, paid for and messaged exactly as before, so
@@ -436,6 +446,7 @@ mod tests {
             sandbox_id: None,
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
+            browser_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
             rail_order: 0,

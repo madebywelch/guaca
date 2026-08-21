@@ -25,6 +25,7 @@ use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
+use crate::kernel::{Browser, KernelClient, KernelError};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -123,6 +124,17 @@ impl From<E2bError> for CommandError {
     }
 }
 
+impl From<KernelError> for CommandError {
+    fn from(err: KernelError) -> Self {
+        match err {
+            // Its own kind, for the same reason the computer has one: never set
+            // up is not a failure, and the UI can offer to open settings.
+            KernelError::NoKey => CommandError::new("browserUnconfigured", err.to_string()),
+            other => CommandError::new("browser", other.to_string()),
+        }
+    }
+}
+
 impl From<config::ConfigError> for CommandError {
     fn from(err: config::ConfigError) -> Self {
         CommandError::new("config", err.to_string())
@@ -209,6 +221,72 @@ pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> R
     };
     computers(&state)?.kill(&sandbox).await?;
     state.runtime.store().set_agent_sandbox(id, None)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+// ---- browsers ------------------------------------------------------------
+
+/// The Kernel client, or a clear reason there is not one.
+fn browsers(state: &State<'_, AppState>) -> Reply<KernelClient> {
+    KernelClient::new(&state.runtime.config().kernel.api_key)
+        .ok_or_else(|| KernelError::NoKey.into())
+}
+
+/// What an agent's browser is doing right now.
+///
+/// `None` means it has never been given one, or the one it had has gone, which
+/// the UI shows as an offer rather than as an error. Gone is the ordinary end of
+/// every browser and costs nothing: the cookies went back to the agent's
+/// profile, so the next one opens signed in to the same accounts.
+#[tauri::command]
+pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Browser>> {
+    let Some(browser) = agent_card(&state, id)?.browser_id else {
+        return Ok(None);
+    };
+    let client = browsers(&state)?;
+
+    match client.get(&browser).await? {
+        Some(session) => Ok(Some(Browser {
+            session_id: session.id,
+            state: "running".to_string(),
+            live_view_url: session.live_view_url,
+        })),
+        None => {
+            // A dangling id is a dead end in the pane. Clearing it turns that
+            // back into an offer to open one.
+            state.runtime.store().set_agent_browser(id, None)?;
+            Ok(None)
+        }
+    }
+}
+
+/// Gives an agent a browser, or hands back the one it has.
+#[tauri::command]
+pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Browser> {
+    let card = agent_card(&state, id)?;
+    let (_, session) = state.runtime.ensure_browser(&card).await?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(Browser {
+        session_id: session.id,
+        state: "running".to_string(),
+        live_view_url: session.live_view_url,
+    })
+}
+
+/// Ends an agent's browser, keeping what it is signed in to.
+///
+/// The counterpart of putting a machine to sleep, and the closest thing a
+/// browser has: deleting is what writes the cookies back to the agent's
+/// profile, so this is how an operator makes a sign-in they just performed
+/// durable rather than waiting for the timeout to do it.
+#[tauri::command]
+pub async fn stop_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let Some(browser) = agent_card(&state, id)?.browser_id else {
+        return Ok(());
+    };
+    browsers(&state)?.delete(&browser).await?;
+    state.runtime.store().set_agent_browser(id, None)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }
@@ -377,6 +455,23 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
     if let (Some(sandbox), Ok(client)) = (card.sandbox_id, computers(&state)) {
         if let Err(err) = client.kill(&sandbox).await {
             tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
+        }
+    }
+    // And its browser, which is a second provider with a second bill. The
+    // profile behind it goes too: it holds the cookies of accounts belonging to
+    // an agent that no longer exists, and a name is free to reuse the moment an
+    // agent is deleted, so whoever takes it next must not inherit its sessions.
+    if let Ok(client) = browsers(&state) {
+        if let Some(browser) = card.browser_id {
+            if let Err(err) = client.delete(&browser).await {
+                tracing::warn!(%err, %browser, "could not destroy the agent's browser");
+            }
+        }
+        // Attempted whether or not a browser was live, because the profile
+        // outlives every browser made against it and is the thing holding the
+        // cookies.
+        if let Err(err) = client.delete_profile(&id.to_string()).await {
+            tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile");
         }
     }
 
@@ -988,6 +1083,9 @@ pub struct SettingsPatch {
     pub limits: Option<GuardLimits>,
     pub e2b_api_key: Option<String>,
     pub computer_idle_minutes: Option<u32>,
+    pub kernel_api_key: Option<String>,
+    pub browser_idle_minutes: Option<u32>,
+    pub browser_stealth: Option<bool>,
 }
 
 #[tauri::command]
@@ -1011,6 +1109,19 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
         // A machine that sleeps after zero minutes can never be used, and one
         // that never sleeps is a bill nobody chose.
         config.e2b.idle_minutes = minutes.clamp(1, 24 * 60);
+    }
+    if let Some(key) = patch.kernel_api_key {
+        config.kernel.api_key = key.trim().to_string();
+    }
+    if let Some(minutes) = patch.browser_idle_minutes {
+        // Wider at the top than the machine's, because a browser on standby
+        // costs nothing and the provider allows three days. Wider at the bottom
+        // is not possible: ten seconds is its floor, which is a fifth of a
+        // minute, so one minute is as short as this can offer.
+        config.kernel.idle_minutes = minutes.clamp(1, 72 * 60);
+    }
+    if let Some(stealth) = patch.browser_stealth {
+        config.kernel.stealth = stealth;
     }
     if let Some(api_key) = patch.api_key {
         config.inference.api_key = api_key.trim().to_string();
