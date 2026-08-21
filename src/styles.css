@@ -371,6 +371,12 @@ button {
   color: var(--rail-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  /* The group header this hangs off is uppercased, and the only letters in a
+     readout are its units: `909k` arrived as `909K`, one glyph away from the
+     `M` that means a thousand times more. Nothing else in the app that draws a
+     token count sits inside an uppercased heading, so the unit is normalised
+     here rather than in the number. */
+  text-transform: none;
 }
 
 .meter[data-busy] .meter__count,
