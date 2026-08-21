@@ -214,6 +214,14 @@ button {
   gap: 0.45rem;
   margin-left: auto;
   flex: none;
+  /* Sized here rather than inherited from the heading. The same tail hangs off
+     the 0.6rem label in the overview and off the group's own name once the rail
+     is inside it, and inheriting made the member count twice the size in one of
+     them. */
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--rail-muted);
 }
 
 /* The group's pinned model is not drawn here at all. A model id is longer than
@@ -463,6 +471,286 @@ button {
    snapping them is disorienting, especially when several move at once. */
 .agent-row[data-sliding="true"] {
   transition: transform 500ms cubic-bezier(0.2, 0.85, 0.25, 1);
+}
+
+/* ==========================================================================
+   Arranging the rail
+
+   The rail is ordered by hand and lends the top of a section to whoever is
+   working. Dragging is how the arrangement is edited, so while a drag is on the
+   rail draws the arrangement itself and marks the one place a release would
+   land. See lib/rail.ts.
+   ========================================================================== */
+
+/* A rail being rearranged is not a rail being read. Selection is off for the
+   whole of it: the gesture starts on a row whose name is selectable text, and a
+   half-highlighted name left behind reads as something having gone wrong. */
+.rail[data-dragging="true"] {
+  user-select: none;
+  cursor: grabbing;
+}
+
+/* The row the hand is holding. Left in place rather than removed: a list that
+   closes up under the pointer moves every target while it is being aimed at. */
+.agent-row[data-held="true"] {
+  opacity: 0.3;
+}
+
+/* Where it would land. A line above the row rather than a filled block,
+   because a block says "into this" and the answer is "in front of this". */
+.agent-row[data-over="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0.6rem;
+  right: 0.75rem;
+  top: -1px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--flesh);
+  box-shadow: 0 0 6px color-mix(in oklab, var(--flesh) 55%, transparent);
+}
+
+/* A whole crew as the target, which is what dropping anywhere but on a row
+   means: this group, no particular place in it. */
+.rail__group[data-over="true"],
+.orb[data-over="true"] .orb__ring {
+  background: color-mix(in oklab, var(--flesh) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 45%, transparent);
+}
+
+/* What the hand is holding, at the pointer. Fixed to the window so nothing it
+   passes over can clip it, and transparent to the pointer so the row underneath
+   is still the row being aimed at. */
+.rail__held {
+  position: fixed;
+  z-index: 40;
+  /* Below and to the right of the pointer, not under it. Centred on the pointer
+     it covered the top edge of the row being aimed at, which is exactly where
+     the line saying "it lands here" is drawn. */
+  transform: translate(0.9rem, 0.35rem);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.25rem 0.6rem 0.25rem 0.35rem;
+  border-radius: 0.5rem;
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  box-shadow: 0 8px 20px rgb(0 0 0 / 35%);
+  opacity: 0.95;
+}
+
+.rail__held-name {
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  color: var(--rail-text);
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Groups, as places
+
+   A crew is recognised by who is in it before its name is read, so a group is
+   drawn as a circle of its members' faces. Clicking one takes the rail inside
+   it; dropping an agent on one puts the agent in it. The strip is absent while
+   there is one group, because a choice of one is chrome.
+   ========================================================================== */
+
+.rail__strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  padding: 0.5rem 0.6rem 0.35rem;
+  border-bottom: 1px solid var(--rail-edge);
+}
+
+.orb {
+  flex: none;
+  width: 3.4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem 0 0.3rem;
+  background: none;
+  border: 0;
+  color: inherit;
+  border-radius: 0.5rem;
+}
+
+.orb__ring {
+  position: relative;
+  width: 2.4rem;
+  height: 2.4rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--rail-raised);
+  box-shadow: inset 0 0 0 1px var(--rail-edge);
+  transition:
+    box-shadow 160ms ease,
+    background 160ms ease;
+}
+
+.orb:hover .orb__ring {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--rail-text) 30%, transparent);
+}
+
+/* The group the rail is inside. The ring is the only permanent mark of it: the
+   heading below says which group by name, and two loud statements of one fact
+   is one too many. */
+.orb[aria-current="true"] .orb__ring {
+  box-shadow: inset 0 0 0 2px var(--flesh);
+}
+
+.orb[aria-current="true"] .orb__name {
+  color: var(--rail-text);
+}
+
+/* Faces, tiled. Four in a square rather than a row of overlaps: a 2.4rem
+   circle is 38px across, and three 1.35rem avatars in a row measure 51px even
+   leaning on each other, so a row either overflowed the ring or hid the faces
+   it was there to show. A square of four fits, and it is what a group of people
+   looks like everywhere else.
+
+   Sized here rather than through the avatar's own scale, because these have to
+   fit a circle rather than sit beside a name. The selector carries the extra
+   class deliberately: `.avatar--xs` is defined further down the file. */
+.orb__faces {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.05rem;
+  place-content: center;
+  width: 1.85rem;
+}
+
+.orb__faces > .avatar {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+}
+
+.orb__faces[data-count="1"] {
+  grid-template-columns: 1fr;
+  width: 1.7rem;
+}
+
+.orb__faces[data-count="2"] {
+  width: 2.1rem;
+}
+
+/* Three in a square leaves the last one in a corner. Spanning both columns
+   centres it, so the shape reads as a group and not as a gap. */
+.orb__faces[data-count="3"] > .avatar:last-child {
+  grid-column: span 2;
+  justify-self: center;
+  width: 50%;
+}
+
+.orb__none {
+  font-family: var(--font-mono);
+  color: var(--rail-muted);
+}
+
+/* The members that did not fit. A number, because four faces at this size is
+   four smudges. */
+.orb__more {
+  position: absolute;
+  right: -0.1rem;
+  bottom: -0.1rem;
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  line-height: 1;
+  padding: 0.12rem 0.2rem;
+  border-radius: 0.35rem;
+  background: var(--rail-ground);
+  box-shadow: inset 0 0 0 1px var(--rail-edge);
+  color: var(--rail-muted);
+}
+
+.orb__all-count {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--rail-muted);
+}
+
+.orb--all[aria-current="true"] .orb__all-count {
+  color: var(--rail-text);
+}
+
+.orb__name {
+  font-family: var(--font-mono);
+  font-size: 0.55rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Somebody in this crew is working. After focusing on one group the strip is
+   the only place the others are still visible, so it has to carry that. */
+.orb[data-state="working"] .orb__ring {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 60%, transparent);
+  animation: orb-breathe 2.6s ease-in-out infinite;
+}
+
+/* And louder for the one state the operator is the fix for. */
+.orb[data-state="asking"] .orb__ring::after {
+  content: "";
+  position: absolute;
+  top: -0.1rem;
+  right: -0.1rem;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  background: var(--flesh);
+  box-shadow: 0 0 0 2px var(--rail-ground);
+}
+
+@keyframes orb-breathe {
+  50% {
+    box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--flesh) 75%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb[data-state="working"] .orb__ring {
+    animation: none;
+  }
+}
+
+/* Inside one group. The name and its controls get a line of their own, because
+   here there is one group on screen and the 0.6rem label the overview uses was
+   sized to sit above a list of others. */
+.rail__open-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.7rem 0.6rem 0.45rem 1rem;
+}
+
+.rail__open-name {
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--rail-text);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its gear does not wait to be hovered. In the overview the heading is one of
+   several and the gear is noise; here it is the group's own controls. */
+.rail__group--open .rail__gear {
+  opacity: 1;
 }
 
 /* ==========================================================================
@@ -2676,18 +2964,40 @@ button {
 
 /* --- the screen ----------------------------------------------------------
 
-   One connection, two sizes. Going full screen promotes this same element to
-   fill the window rather than mounting a second one, so the desktop is never
+   One connection, two sizes. Going full screen promotes the stage inside this
+   to fill the window rather than mounting a second one, so the desktop is never
    dropped and reconnected just because the operator wanted a better look. */
 
 .screen {
+  /* Shared with the space held open below, so the picture and the gap it leaves
+     behind cannot disagree about how tall the screen is. */
+  --screen-aspect: 16 / 10;
   margin-bottom: 1.1rem;
+}
+
+/* The stage leaves the flow to cover the window, so this holds the space it had.
+   Without it the panel underneath jumps by the height of the screen the moment
+   the screen opens, and jumps back when it closes. */
+.screen[data-full="true"]::before {
+  content: "";
+  display: block;
+  aspect-ratio: var(--screen-aspect);
+}
+
+/* What grows. The zoom is played from the corner the small picture had, which is
+   also where FLIP puts it back to. */
+.screen__stage {
+  transform-origin: 0 0;
+}
+
+.screen__stage[data-zooming="true"] {
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .screen__frame {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 10;
+  aspect-ratio: var(--screen-aspect);
   overflow: hidden;
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
@@ -2755,12 +3065,12 @@ button {
 }
 
 /* Full screen. Fixed rather than a new subtree, which is what keeps the iframe
-   above mounted and the VNC session alive across the change. */
-.screen[data-full="true"] {
+   above mounted and the VNC session alive across the change. The margin stays
+   on the element left behind in the panel, which is still holding the space. */
+.screen[data-full="true"] .screen__stage {
   position: fixed;
   inset: 0;
   z-index: 40;
-  margin: 0;
   display: flex;
   flex-direction: column;
   background: var(--rail-ground);

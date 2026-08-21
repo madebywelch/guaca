@@ -59,6 +59,7 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 1,
     updatedAt: 1,
