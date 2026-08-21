@@ -24,6 +24,7 @@ import type {
   GroupUsage,
   MessageId,
   Participant,
+  RoutineId,
   Settings,
   Tokens,
   UiEvent,
@@ -120,6 +121,17 @@ interface State {
    */
   focused: MessageId | null;
 
+  /**
+   * The routine a transcript row asked the panel to open, until it has.
+   *
+   * Held here for the same reason as `focused`: the two ends are in different
+   * columns of the window. A fired routine is drawn in the channel and read in
+   * the panel beside it, and threading a callback from the app root through
+   * every message to get there would put a prop on every row for the sake of
+   * one kind of chip.
+   */
+  openingRoutine: RoutineId | null;
+
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
 
@@ -143,6 +155,9 @@ interface State {
   /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
   clearFocus: () => void;
+  /** Asks the panel beside the transcript to open one routine. */
+  openRoutine: (id: RoutineId) => void;
+  routineOpened: () => void;
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
@@ -207,6 +222,7 @@ export const useStore = create<State>((set, get) => ({
   reasoning: {},
   pulses: [],
   focused: null,
+  openingRoutine: null,
   banner: null,
 
   async bootstrap() {
@@ -254,7 +270,16 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async select(key) {
-    set((state) => ({ selected: key, focused: null, railGroup: keptFocus(state, key) }));
+    // A pending routine request goes with the channel it was asked from, for
+    // the same reason `focused` does: it is about a row on the screen the
+    // operator is leaving, and honouring it later would open something they
+    // asked for somewhere else.
+    set((state) => ({
+      selected: key,
+      focused: null,
+      openingRoutine: null,
+      railGroup: keptFocus(state, key),
+    }));
     await get().loadChannel(key);
   },
 
@@ -399,6 +424,14 @@ export const useStore = create<State>((set, get) => ({
 
   clearFocus() {
     set({ focused: null });
+  },
+
+  openRoutine(id) {
+    set({ openingRoutine: id });
+  },
+
+  routineOpened() {
+    set({ openingRoutine: null });
   },
 
   async refreshUsage() {

@@ -1685,6 +1685,20 @@ button {
   color: var(--pit);
 }
 
+/* A routine coming due.
+   Alone on its row, so it is not held to the 45% two chips have to share: the
+   name of a routine is up to forty-four characters and there is nothing beside
+   it to crowd. Accented in mint to match the clock face it carries, which is
+   the same glyph the schedule panel draws. */
+.wire--routine .wire__chip {
+  max-width: 100%;
+  --accent: var(--mint);
+}
+
+.wire--routine .routine__mark {
+  margin-top: 0;
+}
+
 /* Quieter still: bookkeeping the operator rarely needs, like a directory
    lookup. No rules either side, no click target. */
 .wire--quiet::before,
@@ -3257,6 +3271,27 @@ button {
   background: var(--faint);
 }
 
+/* A trigger that is not a clock: it waits to be told. The hands come off and
+   the ring goes dashed, because a clock face drawn on something that keeps no
+   place in the clock is the wrong thing to say at a glance, and the row beside
+   it has no countdown to back the glyph up. */
+.routine__mark[data-waiting] {
+  border-color: var(--flesh);
+  border-style: dashed;
+}
+
+.routine__mark[data-waiting]::after {
+  display: none;
+}
+
+.routine__mark[data-waiting]::before {
+  width: 0.22rem;
+  height: 0.22rem;
+  border-radius: 50%;
+  background: var(--flesh);
+  transform: translate(-50%, 50%);
+}
+
 /* The countdown is true but restless, and it is not what the row is about. */
 .routine__next {
   opacity: 0.75;
@@ -3373,6 +3408,34 @@ button {
   background: var(--pit-soft);
   border-radius: 999px;
   padding: 0.05rem 0.4rem;
+}
+
+/* What a firing bought. On the row rather than behind a click, because it is
+   the difference between a routine that is working and one whose instruction is
+   being delivered to an agent that never runs, and the two rows are otherwise
+   identical. */
+.history__spend {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--faint);
+}
+
+.history__cost {
+  color: color-mix(in oklab, var(--mint) 70%, var(--faint));
+}
+
+/* Delivered, and nothing ran. Drawn as a state rather than as "0 tokens": a
+   zero in a column of numbers reads as a cheap run, not as a firing that never
+   reached a model. */
+.history__quiet {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pit);
 }
 
 .history__ago {

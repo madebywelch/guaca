@@ -42,6 +42,17 @@ describe("plainText", () => {
     const message = envelope({ parts: [{ type: "notice", kind: "lifecycle", text: "x" }] });
     expect(plainText(message)).toBe("");
   });
+
+  it("counts a fired routine's instruction, which is what the model was sent", () => {
+    // The transcript draws a firing as one line instead of a bubble, and does
+    // it by choosing a row for the part. If that were done by hiding the words
+    // here, the activity board could not say what opened the run.
+    const message = envelope({
+      from: { kind: "system" },
+      parts: [{ type: "routine", routineId: "rt1", name: "Sweep", what: "check the listings" }],
+    });
+    expect(plainText(message)).toBe("check the listings");
+  });
 });
 
 describe("isInterAgent", () => {

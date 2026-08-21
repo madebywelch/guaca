@@ -60,13 +60,38 @@ describe("RoutineList", () => {
     expect(screen.queryByText(/America\/New_York/)).toBeNull();
   });
 
-  it("says which routines are switched off", async () => {
+  it("says which routines are switched off, and when they last ran", async () => {
     // Off is not deleted. It still has to be findable, and it must not claim a
-    // next firing it is never going to make.
-    agentRoutines.mockResolvedValue([routine({ active: false })]);
+    // next firing it is never going to make. When it last ran is the only news
+    // left about it, and the answer to "was this ever working".
+    agentRoutines.mockResolvedValue([
+      routine({ active: false, lastRunAt: MORNING - 2 * 86_400_000 }),
+    ]);
     render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
 
-    expect(await screen.findByText(/· off/)).toBeTruthy();
+    expect(await screen.findByText(/· off, last ran/)).toBeTruthy();
+    expect(screen.queryByText(/next in/)).toBeNull();
+  });
+
+  it("says the day a weekly routine keeps, not just the hour", async () => {
+    // Nothing else on screen records which day it is: the row said "Every week
+    // at 9:28 AM" whichever day that was.
+    agentRoutines.mockResolvedValue([routine({ trigger: "weekly" })]);
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+    expect(await screen.findByText(/Every Tuesday at 9:28/)).toBeTruthy();
+  });
+
+  it("draws a routine waiting on an event without counting down to anything", async () => {
+    // Nothing delivers an event yet, so this is a row a future build writes and
+    // this one has to read. A countdown here would be to a moment nothing is
+    // holding.
+    agentRoutines.mockResolvedValue([
+      routine({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null }),
+    ]);
+    render(<RoutineList agentId="a1" onOpen={vi.fn()} />);
+
+    expect(await screen.findByText(/When Stripe reports invoice.payment_failed/)).toBeTruthy();
+    expect(screen.getByText(/· waiting/)).toBeTruthy();
     expect(screen.queryByText(/next in/)).toBeNull();
   });
 

@@ -13,6 +13,11 @@ vi.mock("../lib/ipc", () => ({
   api: { retryTurn: (agentId: string, messageId: string) => retryTurn(agentId, messageId) },
 }));
 
+const openRoutine = vi.fn<(id: string) => void>();
+vi.mock("../lib/store", () => ({
+  useStore: { getState: () => ({ openRoutine, setBanner: vi.fn() }) },
+}));
+
 function card(id: string, name: string): AgentCard {
   return {
     id,
@@ -339,5 +344,51 @@ describe("redrawing a transcript", () => {
 
     expect(screen.getByText("second")).toBeTruthy();
     expect(screen.queryByText("first")).toBeNull();
+  });
+});
+
+describe("a routine coming due", () => {
+  const fired = (parts?: Part[]) =>
+    envelope({
+      from: { kind: "system" },
+      to: { kind: "agent", id: "manager" },
+      intent: "work",
+      parts: parts ?? [
+        {
+          type: "routine",
+          routineId: "rt1",
+          name: "Listings sweep",
+          what: "Check the listings. America/New_York. Post one copy and say what changed.",
+        },
+      ],
+    });
+
+  it("is one line naming the routine, not the instruction as dialogue", () => {
+    // What this replaces: a chat bubble from "Guaca" carrying several
+    // sentences of instruction, in the middle of the operator's own
+    // conversation with the agent.
+    show(fired());
+
+    expect(screen.getByText("Listings sweep")).toBeTruthy();
+    expect(screen.getByText("routine ran")).toBeTruthy();
+    expect(screen.queryByText(/America\/New_York/)).toBeNull();
+    expect(screen.queryByText("Guaca")).toBeNull();
+  });
+
+  it("titles an unnamed routine by what it says, like the schedule panel does", () => {
+    show(
+      fired([
+        { type: "routine", routineId: "rt1", name: "", what: "Check the listings. Then post." },
+      ]),
+    );
+    expect(screen.getByText("Check the listings")).toBeTruthy();
+  });
+
+  it("opens the routine it names", () => {
+    // The panel that draws a routine is the transcript's sibling, so the click
+    // asks for it through the store rather than through a prop on every row.
+    show(fired());
+    fireEvent.click(screen.getByRole("button"));
+    expect(openRoutine).toHaveBeenCalledWith("rt1");
   });
 });

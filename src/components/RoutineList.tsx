@@ -1,9 +1,33 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api } from "../lib/ipc";
-import { describeTrigger, routineTitle } from "../lib/routine";
+import { describeTrigger, parseTrigger, routineTitle } from "../lib/routine";
 import { relativeTime, useNow } from "../lib/time";
 import { type AgentId, errorMessage, type Routine, type RoutineId } from "../lib/types";
+
+/**
+ * The end of the second line: where this routine stands, right now.
+ *
+ * Three states, and the row has to be honest about all of them. A switched-off
+ * routine must not claim a next firing, and one waiting on an event has no
+ * next firing to claim: a countdown drawn there would be to a moment nothing
+ * is holding. When it last ran carries the weight instead, because on a
+ * routine that is not about to do anything that is the only news left.
+ */
+function standing(routine: Routine, now: number): string {
+  if (!routine.active) {
+    return routine.lastRunAt === null
+      ? " · off"
+      : ` · off, last ran ${relativeTime(routine.lastRunAt, now)}`;
+  }
+  if (routine.nextRunAt !== null) {
+    // Arguments swapped on purpose: this one is ahead of now.
+    return ` · next in ${relativeTime(now, routine.nextRunAt)}`;
+  }
+  return routine.lastRunAt === null
+    ? " · waiting"
+    : ` · waiting, last ran ${relativeTime(routine.lastRunAt, now)}`;
+}
 
 interface Props {
   agentId: AgentId;
@@ -74,20 +98,17 @@ export function RoutineList({ agentId, onOpen }: Props) {
             onClick={() => onOpen(routine.id)}
             title={routine.what}
           >
-            <span aria-hidden="true" className="routine__mark" />
+            <span
+              aria-hidden="true"
+              className="routine__mark"
+              // A clock face is a lie on something that does not wait on one.
+              data-waiting={parseTrigger(routine.trigger).kind === "event" || undefined}
+            />
             <span className="routine__body">
               <span className="routine__name">{routineTitle(routine)}</span>
               <span className="routine__when">
                 {describeTrigger(routine.trigger, routine.nextRunAt)}
-                {routine.active ? (
-                  // Arguments swapped on purpose: this one is ahead of now.
-                  <span className="routine__next">
-                    {" "}
-                    · next in {relativeTime(now, routine.nextRunAt)}
-                  </span>
-                ) : (
-                  <span className="routine__next"> · off</span>
-                )}
+                <span className="routine__next">{standing(routine, now)}</span>
               </span>
             </span>
           </button>

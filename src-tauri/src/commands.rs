@@ -792,9 +792,32 @@ impl RoutineDraft {
         let trigger = Trigger::parse(&self.trigger).ok_or_else(|| {
             CommandError::new("validation", format!("no trigger called {:?}", self.trigger))
         })?;
-        routine::validate(&self.name, &self.what, trigger, self.in_secs)
+        routine::validate(&self.name, &self.what, &trigger, self.in_secs)
             .map_err(|e| CommandError::new("validation", e.to_string()))?;
         Ok(trigger)
+    }
+}
+
+/// Where an edited routine's next firing lands.
+///
+/// Three cases, and the difference between them is what the operator did. A
+/// stated time is honoured. An untouched time keeps the slot it was holding,
+/// because correcting a typo must not push the schedule to tomorrow. And a
+/// trigger swapped for one that would never fire at that moment has to move:
+/// "every hour" turned into "every weekday" keeps its hour but cannot keep its
+/// Saturday, or the label and the firing disagree from the moment it is saved.
+///
+/// A trigger that is not a clock lands nowhere at all, whatever was asked for.
+fn next_slot_for(trigger: &Trigger, existing: &Routine, in_secs: Option<u32>) -> Option<i64> {
+    let cadence = trigger.cadence()?;
+    let now = now_ms();
+    match (in_secs, existing.next_run_at) {
+        (Some(_), _) => Some(cadence.first_run(now, in_secs)),
+        // Coming back to the clock from a trigger that held no slot: there is
+        // nothing to keep, so it starts one interval out like a new routine.
+        (None, None) => Some(cadence.first_run(now, None)),
+        (None, Some(slot)) if cadence.accepts(slot) => Some(slot),
+        (None, Some(slot)) => Some(cadence.next_after(slot, now).unwrap_or(slot)),
     }
 }
 
@@ -825,14 +848,7 @@ pub fn update_routine(
         .store()
         .get_routine(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
-    let next = match draft.in_secs {
-        Some(_) => trigger.first_run(now_ms(), draft.in_secs),
-        // The slot only stays put while the trigger does. "Every hour" turned
-        // into "every weekday" keeps its hour but has to move off a Saturday,
-        // or the label and the firing disagree from the moment it is saved.
-        None if trigger.accepts(existing.next_run_at) => existing.next_run_at,
-        None => trigger.next_after(existing.next_run_at, now_ms()).unwrap_or(existing.next_run_at),
-    };
+    let next = next_slot_for(&trigger, &existing, draft.in_secs);
 
     let routine =
         state.runtime.store().update_routine(id, &draft.name, &draft.what, trigger, next)?;

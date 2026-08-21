@@ -282,6 +282,47 @@ export function WritingRow({ peer }: { peer: WirePeer }) {
 }
 
 /**
+ * A routine coming due, as one line.
+ *
+ * This used to be a chat bubble from "Guaca" carrying the whole instruction,
+ * which is several sentences by design: a routine is written to be acted on
+ * with no other context. An operator reading their own conversation with an
+ * agent was shown the system prompting it, in the shape of somebody talking to
+ * them, and the reflex is to read it as a message meant for you.
+ *
+ * So it is a chip. What it delivered is not lost: the click opens the routine
+ * in the panel, where the instruction is the thing you came to read, and the
+ * agent's answer is the next bubble either way.
+ */
+export function RoutineRow({
+  title,
+  what,
+  at,
+  onOpen,
+}: {
+  title: string;
+  what: string;
+  at: number;
+  onOpen: () => void;
+}) {
+  return (
+    <div className="wire wire--routine">
+      <button
+        type="button"
+        className="wire__chip wire__chip--open"
+        title={`Open this routine. It asked: ${what}`}
+        onClick={onOpen}
+      >
+        <span className="routine__mark" aria-hidden="true" />
+        <span className="wire__label">{title}</span>
+        <span className="wire__why">routine ran</span>
+        <span className="wire__meta">{clockTime(at)}</span>
+      </button>
+    </div>
+  );
+}
+
+/**
  * A centred system line: guard stops, upstream failures, lifecycle notes.
  *
  * `onRetry` is offered only where trying again could plausibly work. The

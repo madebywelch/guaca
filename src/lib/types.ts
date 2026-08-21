@@ -59,6 +59,13 @@ export type Part =
   | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
   | ({ type: "file" } & Attachment)
   /**
+   * A routine coming due, drawn as one line the operator can open rather than
+   * as dialogue. The instruction is in `what` and is what the model was sent;
+   * `name` is the routine's name at the moment it fired, so a routine since
+   * renamed does not rewrite what the transcript said it was.
+   */
+  | { type: "routine"; routineId: RoutineId; name: string; what: string }
+  /**
    * An agent asking the operator for permission. Carries its own wording, so an
    * old channel still says what was asked; what came of it is read from
    * {@link Approval} state by `id`.
@@ -372,11 +379,13 @@ export type RoutineId = string;
 /**
  * What makes a routine fire.
  *
- * `once`, `daily`, `weekdays`, `weekly`, `monthly`, or `every:<seconds>` for a
- * fixed gap. A string rather than a union of literals because `every:N` is
- * open-ended and because the trigger after these is a connector event, which
- * has to be a new value here rather than a new field. Read it with
- * `parseTrigger` in `lib/trigger.ts`; nothing branches on the raw text.
+ * `once`, `daily`, `weekdays`, `weekly`, `monthly`, `every:<seconds>` for a
+ * fixed gap, or `event:<service>/<topic>` for something happening in a
+ * connected service. A string rather than a union of literals because both
+ * `every:N` and `event:x/y` are open-ended, and because the next kind of
+ * trigger should be a new value here rather than a new field. Read it with
+ * `parseTrigger` in `lib/routine.ts`; nothing outside that file branches on
+ * the raw text.
  */
 export type TriggerSpec = string;
 
@@ -391,7 +400,14 @@ export interface Routine {
   trigger: TriggerSpec;
   /** Set up but not running. Everything else about it survives being off. */
   active: boolean;
-  nextRunAt: number;
+  /**
+   * When it next fires, for a routine that waits on the clock.
+   *
+   * Null for one that does not: an event trigger fires when its event arrives
+   * and holds no slot in the meantime. Anything drawing a countdown has to
+   * answer for this case rather than render a date it invented.
+   */
+  nextRunAt: number | null;
   lastRunAt: number | null;
   createdAt: number;
 }
@@ -407,6 +423,14 @@ export interface RoutineRun {
   runId: RunId;
   kind: RunKind;
   at: number;
+  /**
+   * What the firing bought, summed over its model calls.
+   *
+   * `calls: 0` is the one an operator needs: the routine was delivered and
+   * nothing ran. Nothing else about the row tells that apart from a firing
+   * that worked.
+   */
+  spent: Tokens;
 }
 
 /** Absent `inSecs` on an edit leaves the next firing where it was. */
@@ -490,11 +514,18 @@ export function errorMessage(value: unknown): string {
   return "Something went wrong.";
 }
 
-/** Concatenated text of an envelope, matching the Rust `plain_text`. */
+/**
+ * Concatenated text of an envelope, matching the Rust `plain_text`.
+ *
+ * A fired routine's instruction counts, exactly as it does there: it is what
+ * the model was sent, so the activity board naming what opened a run has to be
+ * able to say it. Drawing a firing as a bubble is prevented by the transcript
+ * choosing a row for the part, not by this hiding the words.
+ */
 export function plainText(envelope: Envelope): string {
   return envelope.parts
-    .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text")
-    .map((p) => p.text)
+    .map((part) => (part.type === "text" ? part.text : part.type === "routine" ? part.what : null))
+    .filter((text): text is string => text !== null)
     .join("\n")
     .trim();
 }

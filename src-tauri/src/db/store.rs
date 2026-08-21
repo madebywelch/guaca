@@ -19,7 +19,7 @@ use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
-use crate::domain::routine::{Routine, RoutineRun, RunKind, Trigger};
+use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
@@ -484,13 +484,18 @@ impl Store {
 
     // ---- routines --------------------------------------------------------
 
+    /// Files a new routine.
+    ///
+    /// `first_run_at` is `None` for a trigger that does not wait on the clock:
+    /// an event routine holds no slot, and the column is NULL rather than a
+    /// date far enough away to look like never.
     pub fn create_routine(
         &self,
         agent: AgentId,
         name: &str,
         what: &str,
         trigger: Trigger,
-        first_run_at: i64,
+        first_run_at: Option<i64>,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let routine = Routine {
@@ -544,7 +549,7 @@ impl Store {
         name: &str,
         what: &str,
         trigger: Trigger,
-        next_run_at: i64,
+        next_run_at: Option<i64>,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
@@ -565,8 +570,12 @@ impl Store {
     pub fn agent_routines(&self, agent: AgentId) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
+            // Soonest first, then whatever holds no slot. NULL sorts before
+            // everything in SQLite, which would put a routine waiting on an
+            // event above one firing in ten minutes.
             "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
-               FROM routines WHERE agent_id=?1 ORDER BY next_run_at",
+               FROM routines WHERE agent_id=?1
+              ORDER BY next_run_at IS NULL, next_run_at, created_at",
         )?;
         let rows = stmt.query_map(params![agent.to_string()], row_to_routine)?;
         let mut out = Vec::new();
@@ -580,6 +589,11 @@ impl Store {
     ///
     /// Only for agents that can still act: a routine belonging to a deleted or
     /// paused agent would otherwise fire into nothing, repeatedly.
+    ///
+    /// A routine with no slot is not due and never will be, which is the whole
+    /// mechanism keeping a trigger that is not a clock out of this sweep: SQL
+    /// compares NULL to nothing, so `next_run_at <= now` excludes it without
+    /// this query needing to know what kinds of trigger exist.
     pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
@@ -597,20 +611,29 @@ impl Store {
         Ok(out)
     }
 
-    /// Records that a routine ran, and when it is next due.
+    /// Records that a routine ran, and what became of its slot.
     ///
     /// A one-shot is removed rather than left with a time in the past, so the
     /// scheduler never has to reason about whether something already happened.
+    /// A routine that holds no slot keeps its row: reading "nothing on the
+    /// clock" and "finished" off the same answer would delete an event routine
+    /// the first time it fired.
     pub fn routine_ran(&self, routine: &Routine, now: i64) -> Result<(), StoreError> {
         let conn = self.conn()?;
         match routine.after_running(now) {
-            Some(next) => {
+            NextSlot::Due(next) => {
                 conn.execute(
                     "UPDATE routines SET next_run_at=?2, last_run_at=?3 WHERE id=?1",
                     params![routine.id.to_string(), next, now],
                 )?;
             }
-            None => {
+            NextSlot::Waiting => {
+                conn.execute(
+                    "UPDATE routines SET next_run_at=NULL, last_run_at=?2 WHERE id=?1",
+                    params![routine.id.to_string(), now],
+                )?;
+            }
+            NextSlot::Done => {
                 conn.execute("DELETE FROM routines WHERE id=?1", params![routine.id.to_string()])?;
             }
         }
@@ -657,12 +680,26 @@ impl Store {
         Ok(())
     }
 
-    /// What a routine has done lately, newest first.
+    /// What a routine has done lately, newest first, and what each firing spent.
+    ///
+    /// The spend is joined rather than stored on the row. A firing's cost is
+    /// not known when it is recorded and keeps moving until the run settles, so
+    /// a column would be a snapshot of a number that was still changing; the
+    /// model calls are already filed under the run id. Read at the moment the
+    /// operator looks, it also answers the question the history is actually for:
+    /// a firing that bought no model call is a routine that did not run, and
+    /// nothing else in the row tells the two apart.
     pub fn routine_runs(&self, id: RoutineId, limit: usize) -> Result<Vec<RoutineRun>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT run_id,kind,at FROM routine_runs
-              WHERE routine_id=?1 ORDER BY at DESC LIMIT ?2",
+            "SELECT r.run_id, r.kind, r.at,
+                    COALESCE(SUM(u.prompt),0), COALESCE(SUM(u.completion),0),
+                    SUM(u.cost), COUNT(u.id)
+               FROM routine_runs r
+               LEFT JOIN usage u ON u.run_id = r.run_id
+              WHERE r.routine_id=?1
+              GROUP BY r.id
+              ORDER BY r.at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![id.to_string(), limit as i64], row_to_routine_run)?;
         let mut out = Vec::new();
@@ -1474,7 +1511,7 @@ impl Store {
             r"SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
                 FROM routines
                WHERE what LIKE ?1 ESCAPE '\' OR name LIKE ?1 ESCAPE '\'
-               ORDER BY next_run_at ASC LIMIT ?2",
+               ORDER BY next_run_at IS NULL, next_run_at ASC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![pattern, limit], row_to_routine)?;
         let mut out = Vec::new();
@@ -1820,6 +1857,14 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
             kind: RunKind::parse(&kind_raw)
                 .ok_or_else(|| StoreError::Corrupt(format!("unknown run kind {kind_raw:?}")))?,
             at: row.get(2)?,
+            spent: Tokens {
+                prompt: row.get::<_, i64>(3)? as u64,
+                completion: row.get::<_, i64>(4)? as u64,
+                // NULL where nothing was priced, which is not the same as free
+                // and must not be summed as zero.
+                cost: row.get::<_, Option<f64>>(5)?,
+                calls: row.get::<_, i64>(6)? as u64,
+            },
         })
     })())
 }
@@ -1998,6 +2043,12 @@ mod tests {
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
     use crate::domain::ids::RunId;
+    use crate::domain::routine::{Cadence, EventTrigger};
+
+    /// A trigger on the clock, which is what most of these are about.
+    fn clock(cadence: Cadence) -> Trigger {
+        Trigger::Clock(cadence)
+    }
 
     struct Fixture {
         store: Store,
@@ -2315,8 +2366,8 @@ mod tests {
                 card.id,
                 "Listings sweep",
                 "check the listings",
-                Trigger::Every(3600),
-                1_000_000,
+                clock(Cadence::Every(3600)),
+                Some(1_000_000),
             )
             .unwrap();
 
@@ -2326,20 +2377,20 @@ mod tests {
                 made.id,
                 "Listings sweep",
                 "check the listings and say what is new",
-                Trigger::Every(3600),
+                clock(Cadence::Every(3600)),
                 made.next_run_at,
             )
             .unwrap();
         assert_eq!(fixed.what, "check the listings and say what is new");
         assert_eq!(fixed.next_run_at, made.next_run_at, "the schedule did not move");
-        assert_eq!(fixed.trigger, Trigger::Every(3600));
+        assert_eq!(fixed.trigger, clock(Cadence::Every(3600)));
         assert_eq!(fixed.name, "Listings sweep");
 
         // And a routine that is gone is a clear error rather than a silent
         // success, so an operator editing a stale screen is told.
         f.store.delete_routine(made.id).unwrap();
         assert!(matches!(
-            f.store.update_routine(made.id, "", "anything", Trigger::Once, 1),
+            f.store.update_routine(made.id, "", "anything", clock(Cadence::Once), Some(1)),
             Err(StoreError::RoutineNotFound(_))
         ));
     }
@@ -2509,12 +2560,15 @@ mod tests {
         // parse would be a schedule that silently never fires again.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        for trigger in
-            [Trigger::Once, Trigger::Weekdays, Trigger::Weekly, Trigger::Monthly, Trigger::Daily]
+        for cadence in
+            [Cadence::Once, Cadence::Weekdays, Cadence::Weekly, Cadence::Monthly, Cadence::Daily]
         {
-            let made = f.store.create_routine(card.id, "", "check", trigger, 1_000_000).unwrap();
+            let made = f
+                .store
+                .create_routine(card.id, "", "check", clock(cadence), Some(1_000_000))
+                .unwrap();
             let read = f.store.get_routine(made.id).unwrap().unwrap();
-            assert_eq!(read.trigger, trigger);
+            assert_eq!(read.trigger, clock(cadence));
             assert_eq!(read.name, "", "a routine an agent set has no name to invent");
         }
     }
@@ -2526,14 +2580,18 @@ mod tests {
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let friday = friday_at_nine();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Weekdays, friday).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Weekdays), Some(friday))
+            .unwrap();
 
         f.store.routine_ran(&made, friday + 1000).unwrap();
 
         let moved = f.store.get_routine(made.id).unwrap().unwrap();
-        assert_eq!(moved.next_run_at, Trigger::Weekdays.next_after(friday, friday + 1000).unwrap());
+        let expected = Cadence::Weekdays.next_after(friday, friday + 1000).unwrap();
+        assert_eq!(moved.next_run_at, Some(expected));
         assert_eq!(moved.last_run_at, Some(friday + 1000));
-        assert!(moved.next_run_at - friday > 2 * 86_400_000, "it skipped the weekend");
+        assert!(expected - friday > 2 * 86_400_000, "it skipped the weekend");
     }
 
     #[test]
@@ -2544,7 +2602,13 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "Sweep", "check the listings", Trigger::Daily, 1_000)
+            .create_routine(
+                card.id,
+                "Sweep",
+                "check the listings",
+                clock(Cadence::Daily),
+                Some(1_000),
+            )
             .unwrap();
         assert!(made.active, "a routine arrives running");
         assert_eq!(f.store.due_routines(2_000).unwrap().len(), 1);
@@ -2568,7 +2632,10 @@ mod tests {
         // firing look the same in the list.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
 
         let scheduled = RunId::new();
         let tested = RunId::new();
@@ -2588,7 +2655,10 @@ mod tests {
         // ever draw, and the id is free to be reused.
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "check", Trigger::Daily, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
         f.store.record_routine_run(made.id, RunId::new(), RunKind::Scheduled, 1_000).unwrap();
 
         f.store.delete_routine(made.id).unwrap();
@@ -2596,10 +2666,105 @@ mod tests {
     }
 
     #[test]
+    fn a_routine_waiting_on_an_event_is_never_due_and_survives_firing() {
+        // The scheduler asks one question: what is due. A trigger that is not a
+        // clock has to answer "not me" without the query knowing it exists, and
+        // it must not be deleted like a one-shot when it does fire: it fires
+        // every time its event happens.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let trigger = Trigger::Event(EventTrigger {
+            service: "stripe".into(),
+            topic: "invoice.payment_failed".into(),
+        });
+        let made =
+            f.store.create_routine(card.id, "Dunning", "chase it", trigger.clone(), None).unwrap();
+
+        assert_eq!(made.next_run_at, None, "it holds no slot");
+        assert!(
+            f.store.due_routines(i64::MAX).unwrap().is_empty(),
+            "and no moment, however far ahead, makes it due"
+        );
+
+        // Fired anyway, which today is the operator pressing Test run.
+        f.store.routine_ran(&made, 5_000).unwrap();
+        let after = f.store.get_routine(made.id).unwrap().unwrap();
+        assert_eq!(after.trigger, trigger, "the trigger survives the round trip");
+        assert_eq!(after.next_run_at, None, "still holding no slot");
+        assert_eq!(after.last_run_at, Some(5_000), "and it recorded having run");
+    }
+
+    #[test]
+    fn a_schedule_lists_what_is_due_soonest_and_what_is_waiting_last() {
+        // NULL sorts first in SQLite, so the panel drew a routine waiting on an
+        // event above one firing in ten minutes.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        f.store
+            .create_routine(
+                card.id,
+                "Waiting",
+                "chase it",
+                Trigger::Event(EventTrigger { service: "stripe".into(), topic: "x.y".into() }),
+                None,
+            )
+            .unwrap();
+        f.store.create_routine(card.id, "Later", "b", clock(Cadence::Daily), Some(9_000)).unwrap();
+        f.store.create_routine(card.id, "Sooner", "a", clock(Cadence::Daily), Some(1_000)).unwrap();
+
+        let names: Vec<String> =
+            f.store.agent_routines(card.id).unwrap().into_iter().map(|r| r.name).collect();
+        assert_eq!(names, ["Sooner", "Later", "Waiting"]);
+    }
+
+    #[test]
+    fn a_firing_reports_what_it_spent_and_a_firing_that_did_nothing_says_so() {
+        // The history's job is "has this been working". A delivery that bought
+        // no model call is a routine that did not run, and the row is otherwise
+        // identical to one that did.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .unwrap();
+
+        let worked = RunId::new();
+        let silent = RunId::new();
+        f.store.record_routine_run(made.id, worked, RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, silent, RunKind::Scheduled, 2_000).unwrap();
+        for (prompt, completion, cost) in [(900u32, 100u32, Some(0.002)), (400, 50, Some(0.001))] {
+            f.store
+                .record_usage(&UsageEntry {
+                    agent_id: card.id,
+                    group_id: card.group_id,
+                    run_id: worked,
+                    model: "test/model".into(),
+                    prompt,
+                    completion,
+                    cost,
+                })
+                .unwrap();
+        }
+
+        let history = f.store.routine_runs(made.id, 20).unwrap();
+        assert_eq!(history.len(), 2, "one row per firing, whatever it spent");
+        assert_eq!(history[0].run_id, silent, "newest first");
+        assert_eq!(history[0].spent.calls, 0, "nothing was spent, so nothing ran");
+        assert_eq!(history[0].spent.cost, None, "and unpriced is not free");
+        assert_eq!(history[1].spent.calls, 2, "model calls, not turns");
+        assert_eq!(history[1].spent.total(), 1450);
+        assert_eq!(history[1].spent.cost, Some(0.003));
+    }
+
+    #[test]
     fn a_one_shot_that_fires_leaves_no_row_behind() {
         let f = fixture();
         let card = f.store.create_agent(&draft("Scout")).unwrap();
-        let made = f.store.create_routine(card.id, "", "wake me", Trigger::Once, 1_000).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "wake me", clock(Cadence::Once), Some(1_000))
+            .unwrap();
         f.store.routine_ran(&made, 2_000).unwrap();
         assert!(f.store.get_routine(made.id).unwrap().is_none());
     }
@@ -2644,7 +2809,13 @@ mod tests {
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
 
         f.store
-            .create_routine(scholar.id, "", "check the listings", Trigger::Every(3600), 1)
+            .create_routine(
+                scholar.id,
+                "",
+                "check the listings",
+                clock(Cadence::Every(3600)),
+                Some(1),
+            )
             .unwrap();
         f.store
             .record_usage(&UsageEntry {
@@ -3071,9 +3242,17 @@ mod tests {
             }),
         ]);
         f.store
-            .create_routine(writer.id, "", "post the budget summary", Trigger::Every(3600), 5_000)
+            .create_routine(
+                writer.id,
+                "",
+                "post the budget summary",
+                clock(Cadence::Every(3600)),
+                Some(5_000),
+            )
             .unwrap();
-        f.store.create_routine(writer.id, "Watering", "the plants", Trigger::Daily, 4_000).unwrap();
+        f.store
+            .create_routine(writer.id, "Watering", "the plants", clock(Cadence::Daily), Some(4_000))
+            .unwrap();
 
         Searchable { f, writer: writer.id }
     }
