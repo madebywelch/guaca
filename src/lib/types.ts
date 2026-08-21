@@ -237,6 +237,13 @@ export interface AgentCard {
   lifecycle: Lifecycle;
   /** Kept at the top of the rail. Where the row is drawn, and nothing else. */
   pinned: boolean;
+  /**
+   * Where the operator put this row. Lower is higher up its section.
+   *
+   * The arrangement, not the drawn order: a working agent is lifted to the top
+   * of its section and drops back here when it stops. See `lib/rail.ts`.
+   */
+  railOrder: number;
   version: number;
   createdAt: number;
   updatedAt: number;

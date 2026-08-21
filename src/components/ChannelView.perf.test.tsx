@@ -58,6 +58,7 @@ function agent(id: string, name: string): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     createdAt: 0,
     updatedAt: 0,
     sandboxId: null,

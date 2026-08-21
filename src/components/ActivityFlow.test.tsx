@@ -22,6 +22,7 @@ function card(id: string, name: string, color = "#c7d96b"): AgentCard {
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,

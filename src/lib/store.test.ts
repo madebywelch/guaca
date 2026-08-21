@@ -11,7 +11,11 @@ vi.mock("./ipc", () => ({
     getSettings: vi.fn(async () => null),
     channelMessages: vi.fn(async () => [] as Envelope[]),
     activityFeed: vi.fn(async () => [] as Envelope[]),
+    conversationFlow: vi.fn(async () => [] as Envelope[]),
     usageSummary: vi.fn(async () => []),
+    listGroups: vi.fn(async () => []),
+    moveAgent: vi.fn(async () => null),
+    setAgentPinned: vi.fn(async () => null),
   },
   onRuntimeEvent: vi.fn(),
 }));
@@ -49,6 +53,7 @@ const AGENTS: AgentCard[] = [
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,
@@ -65,6 +70,7 @@ const AGENTS: AgentCard[] = [
     skills: [],
     lifecycle: "active",
     pinned: false,
+    railOrder: 0,
     version: 1,
     createdAt: 0,
     updatedAt: 0,
@@ -85,6 +91,7 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     usage: {},
     pulse: {},
     banner: null,
+    railGroup: null,
   });
 }
 
@@ -333,6 +340,105 @@ describe("sidebar ordering", () => {
     apply({ type: "messageAppended", message: envelope({ id: "a", createdAt: 900 }) });
     apply({ type: "messageAppended", message: envelope({ id: "b", createdAt: 100 }) });
     expect(useStore.getState().lastActive.chef).toBe(900);
+  });
+});
+
+describe("the group the rail is inside", () => {
+  const RESEARCH = "00000000-0000-4000-8000-000000000002";
+
+  it("is left alone while the channel being opened is in it", async () => {
+    reset({ chef: [] });
+    useStore.getState().focusGroup(AGENTS[0]!.groupId);
+    await useStore.getState().select("manager");
+    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
+  });
+
+  it("is left alone by the activity feed, which belongs to no group", async () => {
+    reset({ chef: [] });
+    useStore.getState().focusGroup(AGENTS[0]!.groupId);
+    await useStore.getState().select(ACTIVITY_CHANNEL);
+    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
+  });
+
+  it("is let go when the channel being opened belongs to another crew", async () => {
+    // A search hit or a click on the flow board can land anywhere. A rail still
+    // showing one crew while the pane shows a member of another has the open
+    // channel nowhere on it.
+    reset({ chef: [] });
+    useStore.setState({
+      agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
+    });
+    useStore.getState().focusGroup(RESEARCH);
+
+    await useStore.getState().select("manager");
+    expect(useStore.getState().railGroup).toBeNull();
+  });
+
+  it("is let go by a jump to a message in another crew's channel", async () => {
+    reset({ chef: [] });
+    useStore.setState({
+      agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
+    });
+    useStore.getState().focusGroup(RESEARCH);
+
+    await useStore.getState().openMessage("manager", "m-old");
+    expect(useStore.getState().railGroup).toBeNull();
+  });
+});
+
+describe("one row at a time", () => {
+  it("moves a row up past the one above it", async () => {
+    reset();
+    useStore.setState({
+      agents: [
+        { ...AGENTS[0]!, railOrder: 0 },
+        { ...AGENTS[1]!, railOrder: 1 },
+      ],
+    });
+
+    await useStore.getState().nudgeAgent("chef", -1);
+
+    const { moveAgent } = (await import("./ipc")).api as unknown as {
+      moveAgent: ReturnType<typeof vi.fn>;
+    };
+    expect(moveAgent).toHaveBeenCalledWith("chef", AGENTS[0]!.groupId, "manager");
+  });
+
+  it("orders from the arrangement and not from whoever is mid-turn", async () => {
+    // The keyboard path has to agree with the drag: both edit the arrangement,
+    // so neither may be measured against a rail with somebody lifted on top.
+    reset();
+    useStore.setState({
+      agents: [
+        { ...AGENTS[0]!, railOrder: 0 },
+        { ...AGENTS[1]!, railOrder: 1 },
+      ],
+      activity: { chef: { state: "thinking" } },
+    });
+
+    await useStore.getState().nudgeAgent("chef", -1);
+
+    const { moveAgent } = (await import("./ipc")).api as unknown as {
+      moveAgent: ReturnType<typeof vi.fn>;
+    };
+    expect(moveAgent).toHaveBeenCalledWith("chef", AGENTS[0]!.groupId, "manager");
+  });
+
+  it("asks for nothing at the end of a section", async () => {
+    reset();
+    useStore.setState({
+      agents: [
+        { ...AGENTS[0]!, railOrder: 0 },
+        { ...AGENTS[1]!, railOrder: 1 },
+      ],
+    });
+
+    const { moveAgent } = (await import("./ipc")).api as unknown as {
+      moveAgent: ReturnType<typeof vi.fn>;
+    };
+    moveAgent.mockClear();
+    await useStore.getState().nudgeAgent("manager", -1);
+    expect(moveAgent).not.toHaveBeenCalled();
   });
 });
 

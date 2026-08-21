@@ -164,6 +164,13 @@ impl Store {
     pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
         let now = now_ms();
+        // The bottom of the rail. Read rather than defaulted: a new agent must
+        // not land in the middle of an arrangement the operator made, and a
+        // column default cannot know what the last row is.
+        let last: i32 =
+            conn.query_row("SELECT coalesce(max(rail_order), -1) FROM agents", [], |row| {
+                row.get(0)
+            })?;
         let card = AgentCard {
             id: AgentId::new(),
             group_id: draft.group_id.unwrap_or_else(default_group_id),
@@ -178,14 +185,15 @@ impl Store {
             sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
+            rail_order: last.saturating_add(1),
             version: 1,
             created_at: now,
             updated_at: now,
         };
 
         conn.execute(
-            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,rail_order)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
             params![
                 card.id.to_string(),
                 card.name,
@@ -199,6 +207,7 @@ impl Store {
                 card.created_at,
                 card.updated_at,
                 card.group_id.to_string(),
+                card.rail_order,
             ],
         )
         .map_err(|e| classify(e, &card.name))?;
@@ -258,7 +267,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -275,7 +284,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -300,6 +309,87 @@ impl Store {
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
         }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    /// Puts an agent where the operator dropped it.
+    ///
+    /// One call, because a drag is one gesture that can be both a reorder and a
+    /// move between groups, and doing it as two writes leaves a state where the
+    /// agent has arrived in the group but not in the place it was dropped.
+    ///
+    /// `before` is the row it lands in front of, and `None` means the end of
+    /// `group`. Naming the moved agent itself asks for nothing and does nothing.
+    /// Otherwise honoured only while that row is still live and still in `group`:
+    /// the operator dropped onto something they could see, and a row deleted in
+    /// the meantime must not cost them the half of the intent that still holds.
+    ///
+    /// Renumbers every live agent densely rather than finding a gap between two
+    /// neighbours. A workspace holds tens of agents, so the write is trivial,
+    /// and a scheme with gaps has a state where the gap is used up that this one
+    /// does not have. Not an edit: like `pinned`, this is where a row is drawn,
+    /// so the version does not move and no peer is told.
+    pub fn move_agent(
+        &self,
+        id: AgentId,
+        group: GroupId,
+        before: Option<AgentId>,
+    ) -> Result<AgentCard, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        {
+            // The arrangement as it stands, which is what `before` refers to.
+            // Terminated agents are left out and left alone: they are not in the
+            // rail, so numbering them would spend positions on rows nobody can
+            // see and would move them under a later reader.
+            let mut stmt = tx.prepare(
+                "SELECT id, group_id FROM agents
+                  WHERE lifecycle <> 'terminated'
+                  ORDER BY rail_order, created_at, rowid",
+            )?;
+            let rows = stmt
+                .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+
+            let moving = id.to_string();
+            if !rows.iter().any(|(row_id, _)| *row_id == moving) {
+                return Err(StoreError::AgentNotFound(id));
+            }
+
+            let target = group.to_string();
+            // A row dropped on itself is not a move. Caught here as well as in
+            // the UI because the fallback for an anchor that is not in the group
+            // is the end of it, so letting this through would spend the
+            // operator's arrangement on a gesture that asked for nothing.
+            if before == Some(id) && rows.iter().any(|(r, g)| *r == moving && *g == target) {
+                return self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id));
+            }
+            let mut order: Vec<(String, String)> =
+                rows.iter().filter(|(row_id, _)| *row_id != moving).cloned().collect();
+
+            let anchor = before.map(|b| b.to_string()).filter(|b| {
+                order.iter().any(|(row_id, row_group)| row_id == b && *row_group == target)
+            });
+
+            let at = match anchor {
+                Some(row) => order.iter().position(|(r, _)| *r == row).unwrap_or(order.len()),
+                // The end of the group rather than the end of the rail: this is
+                // one sequence over every group, and appending past the last
+                // group would put the agent below crews it is not in.
+                None => order
+                    .iter()
+                    .rposition(|(_, row_group)| *row_group == target)
+                    .map_or(order.len(), |last| last + 1),
+            };
+            order.insert(at, (moving.clone(), target.clone()));
+
+            let mut renumber = tx.prepare("UPDATE agents SET rail_order=?2 WHERE id=?1")?;
+            for (position, (row, _)) in order.iter().enumerate() {
+                renumber.execute(params![row, position as i32])?;
+            }
+            tx.execute("UPDATE agents SET group_id=?2 WHERE id=?1", params![moving, target])?;
+        }
+        tx.commit()?;
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
@@ -1603,6 +1693,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             sandbox_envd_token: row.get(13)?,
             sandbox_traffic_token: row.get(14)?,
             pinned: row.get::<_, i64>(15)? != 0,
+            rail_order: row.get(16)?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -2204,6 +2295,147 @@ mod tests {
         assert!(matches!(
             f.store.update_routine(made.id, "", "anything", Trigger::Once, 1),
             Err(StoreError::RoutineNotFound(_))
+        ));
+    }
+
+    /// The arrangement, read back the way the rail reads it.
+    fn arrangement(f: &Fixture) -> Vec<(String, i32)> {
+        let mut agents: Vec<_> = f
+            .store
+            .list_agents()
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.lifecycle != Lifecycle::Terminated)
+            .map(|a| (a.name, a.rail_order, a.created_at))
+            .collect();
+        agents.sort_by_key(|(name, order, created)| (*order, *created, name.clone()));
+        agents.into_iter().map(|(name, order, _)| (name, order)).collect()
+    }
+
+    #[test]
+    fn agents_arrive_at_the_bottom_of_the_rail_in_the_order_they_were_made() {
+        // The rail used to float whoever spoke last, so where a new agent
+        // landed did not matter. It does now: an agent that arrived in the
+        // middle of an arrangement would look like the arrangement moved.
+        let f = fixture();
+        for name in ["First", "Second", "Third"] {
+            f.store.create_agent(&draft(name)).unwrap();
+        }
+        assert_eq!(
+            arrangement(&f),
+            vec![("First".to_string(), 0), ("Second".to_string(), 1), ("Third".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn a_move_puts_a_row_in_front_of_the_one_it_was_dropped_on() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("First")).unwrap();
+        f.store.create_agent(&draft("Second")).unwrap();
+        let c = f.store.create_agent(&draft("Third")).unwrap();
+
+        let moved = f.store.move_agent(c.id, c.group_id, Some(a.id)).unwrap();
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Third", "First", "Second"]
+        );
+
+        // Where a row is drawn, and nothing a peer reads. Same reasoning as a
+        // pin: bumping the version would tell every peer the card was rewritten.
+        assert_eq!(moved.version, c.version, "a move is not an edit");
+        assert_eq!(moved.updated_at, c.updated_at);
+        assert_eq!(moved.rail_order, 0);
+
+        // Densely renumbered, so the next drop has a whole position to land in
+        // rather than a gap that can run out.
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(_, order)| order).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn a_move_with_nothing_to_land_in_front_of_goes_to_the_end_of_that_group() {
+        // Not the end of the rail. One sequence covers every group, so
+        // appending past the last row would file the agent below crews it is
+        // not in and the rail would draw it under their heading.
+        let f = fixture();
+        let research = f.store.create_group(&group_named("Research")).unwrap();
+
+        let scout = f.store.create_agent(&draft("Scout")).unwrap();
+        let mut second = draft("Reader");
+        second.group_id = Some(research.id);
+        f.store.create_agent(&second).unwrap();
+        let cook = f.store.create_agent(&draft("Cook")).unwrap();
+
+        // Everyone in the default group, then Research, then Cook back in the
+        // default one: the arrangement interleaves groups until someone moves.
+        let moved = f.store.move_agent(cook.id, research.id, None).unwrap();
+        assert_eq!(moved.group_id, research.id, "one call moved it and placed it");
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Scout", "Reader", "Cook"]
+        );
+
+        // And landing in front of a row in another group ignores the anchor
+        // rather than dragging the agent somewhere it was not dropped.
+        f.store.move_agent(cook.id, research.id, Some(scout.id)).unwrap();
+        assert_eq!(
+            f.store.get_agent(cook.id).unwrap().unwrap().group_id,
+            research.id,
+            "the group half of the intent still holds"
+        );
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["Scout", "Reader", "Cook"]
+        );
+    }
+
+    #[test]
+    fn a_row_dropped_on_itself_stays_where_it_is() {
+        // The fallback for an anchor that is not in the group is the end of it,
+        // so a null gesture that reached this far would move the row to the
+        // bottom of the rail: the one outcome the operator did not ask for.
+        let f = fixture();
+        f.store.create_agent(&draft("First")).unwrap();
+        let middle = f.store.create_agent(&draft("Middle")).unwrap();
+        f.store.create_agent(&draft("Last")).unwrap();
+
+        f.store.move_agent(middle.id, middle.group_id, Some(middle.id)).unwrap();
+        assert_eq!(
+            arrangement(&f).into_iter().map(|(name, _)| name).collect::<Vec<_>>(),
+            vec!["First", "Middle", "Last"]
+        );
+    }
+
+    #[test]
+    fn a_move_leaves_terminated_agents_out_of_the_numbering() {
+        // A terminated agent is not in the rail, so a position spent on it is a
+        // position the operator cannot drop into, and renumbering one would move
+        // a row in an old transcript's sidebar order for no reason.
+        let f = fixture();
+        let gone = f.store.create_agent(&draft("Gone")).unwrap();
+        let here = f.store.create_agent(&draft("Here")).unwrap();
+        f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
+
+        f.store.move_agent(here.id, here.group_id, None).unwrap();
+        assert_eq!(f.store.get_agent(here.id).unwrap().unwrap().rail_order, 0);
+        assert_eq!(
+            f.store.get_agent(gone.id).unwrap().unwrap().rail_order,
+            gone.rail_order,
+            "a terminated agent's place was not rewritten"
+        );
+    }
+
+    #[test]
+    fn moving_an_agent_that_is_not_there_is_an_error_rather_than_a_silent_renumber() {
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let group = card.group_id;
+        f.store.set_lifecycle(card.id, Lifecycle::Terminated).unwrap();
+        assert!(matches!(
+            f.store.move_agent(card.id, group, None),
+            Err(StoreError::AgentNotFound(_))
         ));
     }
 

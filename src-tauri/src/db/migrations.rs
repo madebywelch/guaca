@@ -492,6 +492,31 @@ CREATE INDEX messages_pair
     WHERE from_kind = 'agent' AND to_kind = 'agent';
 "#,
     ),
+    (
+        20,
+        r#"
+-- Where the operator put an agent in the rail.
+--
+-- The rail was ordered entirely by who spoke last, which is an order nobody
+-- chose and one that moves under the hand reaching for it. This column is the
+-- arrangement; activity now lends a row the top of its section while it works
+-- and gives the place back. On the agent for the same reason `pinned` is: it is
+-- a fact about that agent and has to die with it.
+--
+-- Backfilled in creation order, so an upgrade draws the rail it drew before,
+-- and distinct from the start, so the first drag has somewhere to land. Ties
+-- are still legal and are broken by `created_at`; a dense renumber on every
+-- move keeps them rare rather than impossible.
+ALTER TABLE agents ADD COLUMN rail_order INTEGER NOT NULL DEFAULT 0;
+
+UPDATE agents SET rail_order = (
+    SELECT COUNT(*)
+      FROM agents AS earlier
+     WHERE earlier.created_at < agents.created_at
+        OR (earlier.created_at = agents.created_at AND earlier.rowid < agents.rowid)
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -828,6 +853,41 @@ mod tests {
         let pinned: i64 =
             conn.query_row("SELECT pinned FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
         assert_eq!(pinned, 0, "an upgrade must not rearrange the rail");
+    }
+
+    #[test]
+    fn an_upgrade_arranges_the_rail_in_the_order_it_was_already_drawn() {
+        // The rail was ordered by who spoke last, and creation order underneath
+        // that. Backfilling anything else would rearrange a workspace the
+        // operator has been looking at for weeks, on launch, with no gesture.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 20) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let row = "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+                   VALUES (?1,?1,'avocado','#000','m','','[]','active',1,?2,?2,?3)";
+        for (id, made) in [("late", 300), ("early", 100), ("middle", 200)] {
+            conn.execute(row, rusqlite::params![id, made, DEFAULT_GROUP_ID]).unwrap();
+        }
+
+        run(&mut conn).unwrap();
+
+        let arranged: Vec<(String, i64)> = conn
+            .prepare("SELECT id, rail_order FROM agents ORDER BY rail_order")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            arranged,
+            vec![("early".into(), 0), ("middle".into(), 1), ("late".into(), 2)],
+            "an upgrade must draw the rail it drew before, and give every row its own place"
+        );
     }
 
     #[test]

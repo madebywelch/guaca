@@ -92,6 +92,14 @@ pub struct AgentCard {
     /// pinned agent is addressed, paid for and messaged exactly as before, so
     /// no peer is ever told about this.
     pub pinned: bool,
+    /// Where the operator put this row. Lower is higher up its section.
+    ///
+    /// The arrangement, not the drawn order: a working agent is lifted to the
+    /// top of its section by the rail itself and drops back here when it stops.
+    /// Where a row is drawn and nothing else, exactly like `pinned`, so it does
+    /// not bump the version and no peer is told. Ties are legal and are broken
+    /// by `created_at`, which is what an upgrade leaves behind.
+    pub rail_order: i32,
     /// Bumped on every update. A2A's Update phase exists so peers can detect
     /// that a card changed under them; the version is what makes that possible.
     pub version: u32,
@@ -405,6 +413,7 @@ mod tests {
             sandbox_traffic_token: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
+            rail_order: 0,
             version: 1,
             created_at: 0,
             updated_at: 0,

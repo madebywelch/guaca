@@ -426,6 +426,28 @@ pub fn set_agent_pinned(state: State<'_, AppState>, id: AgentId, pinned: bool) -
     Ok(card)
 }
 
+/// Puts an agent where the operator dropped it: which group, and which place.
+///
+/// One call rather than two, because a drag is one gesture that can be both,
+/// and two writes leave a state where the agent has arrived in the group but
+/// not in the place it was dropped.
+///
+/// `before` is the row it lands in front of; `None` is the end of the group.
+/// Nothing about the agent itself changes, so the card version does not move
+/// and no peer is told: an agent's group is enforced on every turn from a fresh
+/// read, so it is in its new crew's directory from the next message onward.
+#[tauri::command]
+pub fn move_agent(
+    state: State<'_, AppState>,
+    id: AgentId,
+    group_id: GroupId,
+    before: Option<AgentId>,
+) -> Reply<AgentCard> {
+    let card = state.runtime.store().move_agent(id, group_id, before)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(card)
+}
+
 /// Makes a second agent from the same card.
 ///
 /// The card and nothing else: a copy starts with the look, the model, the

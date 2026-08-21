@@ -126,6 +126,16 @@ export const api = {
   setAgentPinned: (id: AgentId, pinned: boolean) =>
     invoke<AgentCard>("set_agent_pinned", { id, pinned }),
 
+  /**
+   * Puts an agent where the operator dropped it: which group, and which place.
+   *
+   * One call because a drag is one gesture that can be both, and two would
+   * leave a state where the agent has joined the group but not landed in it.
+   * `before` is the row it goes in front of; `null` is the end of the group.
+   */
+  moveAgent: (id: AgentId, groupId: GroupId, before: AgentId | null) =>
+    invoke<AgentCard>("move_agent", { id, groupId, before }),
+
   agentActivity: () => invoke<Record<AgentId, Activity>>("agent_activity"),
 
   agentLastActive: () => invoke<Record<AgentId, number>>("agent_last_active"),
