@@ -30,6 +30,7 @@ import type {
   ConnectorDraft,
   ConnectorId,
   Decision,
+  DeviceCode,
   Envelope,
   Group,
   GroupDraft,
@@ -49,6 +50,7 @@ import type {
   SettingsPatch,
   Signin,
   Staged,
+  SubscriptionStatus,
   UiEvent,
 } from "./types";
 
@@ -286,6 +288,24 @@ export const api = {
    * API key configured" for a key they can see, which reads as a bug.
    */
   testConnection: (patch?: SettingsPatch) => invoke<string>("test_connection", { patch }),
+
+  subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
+
+  /** Asks for a code to carry to a browser. Returns in one round trip. */
+  beginSubscriptionSignin: () => invoke<DeviceCode>("begin_subscription_signin"),
+
+  /**
+   * Waits for the code to be entered, which takes as long as the operator does.
+   *
+   * Parks for up to fifteen minutes on purpose: the whole sign-in is one call,
+   * so abandoning it leaves nothing half-finished to clean up. The caller has to
+   * keep its own "waiting" state, because this does not resolve until it is over.
+   */
+  completeSubscriptionSignin: (code: DeviceCode) =>
+    invoke<SubscriptionStatus>("complete_subscription_signin", { code }),
+
+  /** Forgets the sign-in, and moves the provider off it if it was in use. */
+  signOutSubscription: () => invoke<Settings>("sign_out_subscription"),
 };
 
 /**

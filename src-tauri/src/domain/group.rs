@@ -143,6 +143,28 @@ impl GroupInference {
     /// before groups existed.
     pub fn apply(&self, base: &crate::config::InferenceConfig) -> crate::config::InferenceConfig {
         let mut out = base.clone();
+
+        // A group that names its own endpoint or its own key has chosen an
+        // endpoint, and an endpoint is not where a subscription is spent. Left
+        // alone, such a group would inherit the app's subscription and have both
+        // of its overrides quietly ignored: the operator would be looking at a
+        // key and a URL that nothing used, with no error to explain it.
+        //
+        // Only these two flip it. Overriding the model alone is a group asking
+        // for a different model on whatever the app is already paying with,
+        // which is the common case and the one that has to keep working.
+        //
+        // First, because the model that gets collapsed below depends on it.
+        if self.base_url.is_some() || self.api_key.is_some() {
+            out.provider = crate::config::Provider::Compatible;
+        }
+
+        // The app keeps a model per provider, and everything downstream of here
+        // reads one field. Collapsing to the resolved provider's model, after
+        // the flip above and before the group's own override, means each of the
+        // three cases lands on the model that provider can actually run.
+        out.default_model = out.active_model().to_string();
+
         if let Some(url) = &self.base_url {
             out.base_url = url.clone();
         }
@@ -152,6 +174,7 @@ impl GroupInference {
         if let Some(model) = &self.default_model {
             out.default_model = model.clone();
         }
+
         out
     }
 }
@@ -217,5 +240,83 @@ mod tests {
         let resolved = pinned.apply(&base);
         assert_eq!(resolved.default_model, "local/qwen");
         assert_eq!(resolved.base_url, base.base_url, "an unset field still inherits");
+    }
+
+    /// App-wide settings with a subscription chosen, and a model set for each
+    /// provider so it is visible which one a resolution picked.
+    fn on_subscription() -> crate::config::InferenceConfig {
+        crate::config::InferenceConfig {
+            provider: crate::config::Provider::Chatgpt,
+            default_model: "anthropic/claude-sonnet-4.5".into(),
+            subscription_model: "gpt-5.6-luna".into(),
+            api_key: "app-key".into(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_group_with_no_overrides_uses_the_subscription_and_its_own_model() {
+        let resolved = GroupInference::default().apply(&on_subscription());
+        assert_eq!(resolved.provider, crate::config::Provider::Chatgpt);
+        // The one field everything downstream reads has to be the subscription's
+        // model, not the endpoint's, or every agent fails on a model the backend
+        // has never heard of.
+        assert_eq!(resolved.default_model, "gpt-5.6-luna");
+    }
+
+    #[test]
+    fn a_group_that_only_overrides_the_model_stays_on_the_subscription() {
+        // The common case: a crew that wants a cheaper model on whatever the app
+        // is already paying with.
+        let resolved =
+            GroupInference { default_model: Some("gpt-5.4-mini".into()), ..Default::default() }
+                .apply(&on_subscription());
+        assert_eq!(resolved.provider, crate::config::Provider::Chatgpt);
+        assert_eq!(resolved.default_model, "gpt-5.4-mini");
+    }
+
+    #[test]
+    fn a_group_that_names_its_own_endpoint_leaves_the_subscription() {
+        let resolved = GroupInference {
+            base_url: Some("http://localhost:1234/v1".into()),
+            ..Default::default()
+        }
+        .apply(&on_subscription());
+
+        // Otherwise the group's endpoint is set, visible in the UI, and used by
+        // nothing, with no error anywhere to explain it.
+        assert_eq!(resolved.provider, crate::config::Provider::Compatible);
+        assert_eq!(resolved.base_url, "http://localhost:1234/v1");
+        // And it gets the endpoint's model, not the subscription's, because the
+        // provider flip happens before the model is collapsed.
+        assert_eq!(resolved.default_model, "anthropic/claude-sonnet-4.5");
+    }
+
+    #[test]
+    fn a_group_that_names_its_own_key_also_leaves_the_subscription() {
+        let resolved = GroupInference { api_key: Some("group-key".into()), ..Default::default() }
+            .apply(&on_subscription());
+        assert_eq!(resolved.provider, crate::config::Provider::Compatible);
+        assert_eq!(resolved.api_key, "group-key");
+        assert_eq!(resolved.default_model, "anthropic/claude-sonnet-4.5");
+    }
+
+    #[test]
+    fn a_group_on_its_own_endpoint_can_still_name_its_own_model() {
+        let resolved = GroupInference {
+            base_url: Some("http://localhost:1234/v1".into()),
+            default_model: Some("local/qwen".into()),
+            ..Default::default()
+        }
+        .apply(&on_subscription());
+        assert_eq!(resolved.provider, crate::config::Provider::Compatible);
+        assert_eq!(resolved.default_model, "local/qwen");
+    }
+
+    #[test]
+    fn a_group_changes_nothing_when_the_app_is_on_an_endpoint() {
+        // The behaviour that existed before subscriptions, unchanged.
+        let base = crate::config::InferenceConfig::default();
+        assert_eq!(GroupInference::default().apply(&base), base);
     }
 }

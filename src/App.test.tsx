@@ -22,6 +22,9 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
   baseUrl: "https://openrouter.ai/api/v1",
   defaultModel: "test/model",
   operatorName: "",
+  provider: "compatible",
+  subscriptionModel: "gpt-5.6-luna",
+  subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
   apiKeySet: true,
   e2bKeySet: false,
   e2bKeyHint: "",
@@ -52,6 +55,9 @@ vi.mock("./lib/ipc", () => ({
         createdAt: 0,
         baseUrl: null,
         defaultModel: null,
+        provider: "compatible",
+        subscriptionModel: "gpt-5.6-luna",
+        subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
         apiKeySet: false,
         e2bKeySet: false,
         e2bKeyHint: "",
@@ -223,6 +229,9 @@ describe("App", () => {
       operatorName: "",
       baseUrl: "https://openrouter.ai/api/v1",
       defaultModel: "test/model",
+      provider: "compatible",
+      subscriptionModel: "gpt-5.6-luna",
+      subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
       apiKeySet: false,
       e2bKeySet: false,
       e2bKeyHint: "",
@@ -243,6 +252,43 @@ describe("App", () => {
     });
     render(<App />);
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
+  });
+
+  it("does not ask for a key when a subscription is what pays", async () => {
+    // There is nothing to paste on a subscription, so this banner asked forever
+    // for something the Provider pane does not offer. The one place the app says
+    // "you are not set up yet" has to keep meaning that.
+    getSettings.mockResolvedValue({
+      operatorName: "",
+      baseUrl: "https://openrouter.ai/api/v1",
+      defaultModel: "test/model",
+      provider: "chatgpt",
+      subscriptionModel: "gpt-5.6-luna",
+      subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
+      apiKeySet: false,
+      e2bKeySet: false,
+      e2bKeyHint: "",
+      computerIdleMinutes: 15,
+      kernelKeySet: false,
+      kernelKeyHint: "",
+      browserIdleMinutes: 60,
+      browserStealth: false,
+      apiKeyHint: "",
+      requestTimeoutSecs: 120,
+      limits: {
+        maxHops: 4,
+        maxStepsPerRun: 40,
+        maxFanoutPerCall: 8,
+        maxSendsPerPair: 3,
+        maxToolRounds: 24,
+      },
+    });
+    listAgents.mockResolvedValue([agent("Manager")]);
+    render(<App />);
+    // Wait for the load that would have produced the banner before asserting it
+    // is absent, or this passes on a render that had no settings yet.
+    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    expect(screen.queryByText(/Add an API key/i)).toBeNull();
   });
 
   it("puts a pinned agent above the rest and leaves it there", async () => {
