@@ -51,6 +51,19 @@ impl Conversation {
 pub enum Fault {
     /// The operator asked for something and was never answered.
     Silent,
+    /// An agent was given work and never said what came of it.
+    ///
+    /// The other direction from every fault below, and the one this suite was
+    /// blind to. A cascade that stops too early leaves the messages it did send
+    /// looking perfectly reasonable: the operator is told something by somebody,
+    /// so `Silent` does not fire, and the agent that was actually handed the
+    /// job simply never appears. Both times this shipped it looked to the
+    /// operator like an agent that had stopped.
+    ///
+    /// Decided from `intent`, which is the only thing on the wire that says an
+    /// agent was given something to do. A tool trail does not count as an
+    /// answer: it is the working, and the operator reads channels, not traces.
+    AssignedAndSaidNothing { agent: String },
     /// Two things said to the operator that are near enough the same words.
     RepeatedToOperator { again: String },
     /// One agent, answering one instruction over and over.
@@ -78,6 +91,9 @@ impl Fault {
     pub fn explain(&self) -> String {
         match self {
             Fault::Silent => "the operator asked for something and was never told anything".into(),
+            Fault::AssignedAndSaidNothing { agent } => {
+                format!("{agent} was given work and never said what came of it")
+            }
             Fault::RepeatedToOperator { again } => {
                 format!("said the same thing to the operator twice: {again:?}")
             }
@@ -168,6 +184,33 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
     if operator_asked && convo.to_operator.is_empty() {
         faults.push(Fault::Silent);
     }
+
+    // Given work, and never heard from. Walked over the whole run rather than
+    // per batch: an agent handed something to do has the rest of the run to
+    // report on it, and reporting late is not the defect.
+    //
+    // Speaking means text somebody reads, to the operator or to a peer. A
+    // `Part::ToolCall` trail is deliberately not enough. The turn that shipped
+    // this bug did call a tool; what the operator saw was a channel with no
+    // words in it and an agent that appeared to have stopped.
+    let mut assigned: Vec<AgentId> = Vec::new();
+    let mut spoke: HashSet<AgentId> = HashSet::new();
+    for envelope in messages {
+        if let Participant::Agent { id } = envelope.to {
+            if envelope.intent.is_work() && !assigned.contains(&id) {
+                assigned.push(id);
+            }
+        }
+        if let Participant::Agent { id } = envelope.from {
+            if !envelope.plain_text().trim().is_empty() {
+                spoke.insert(id);
+            }
+        }
+    }
+    let mut mute: Vec<String> =
+        assigned.into_iter().filter(|id| !spoke.contains(id)).map(&name_of).collect();
+    mute.sort();
+    faults.extend(mute.into_iter().map(|agent| Fault::AssignedAndSaidNothing { agent }));
 
     // One instruction, several answers. An update followed by a result is
     // reasonable; a third is the crew narrating itself.
@@ -330,6 +373,133 @@ mod tests {
             cause: None,
             created_at: 0,
         }
+    }
+
+    /// `msg`, but carrying work. The one field that says an agent was given
+    /// something to do rather than merely spoken to.
+    fn assign(from: Participant, to: Participant, text: &str, hop: u16) -> Envelope {
+        Envelope { intent: Intent::Work, ..msg(from, to, text, hop, false) }
+    }
+
+    #[test]
+    fn an_agent_given_work_that_never_says_what_came_of_it_is_a_fault() {
+        // The bug that shipped twice. An instruction arrives with nobody
+        // waiting on the answer, the agent spends its turn and says nothing,
+        // and the operator watches an agent that appears to have stopped.
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "get the email sent", 0, true),
+            assign(
+                Participant::Agent { id: a },
+                Participant::Agent { id: b },
+                "send the invoice to the client",
+                1,
+            ),
+            msg(Participant::Agent { id: a }, Participant::Human, "Chef is on it", 1, false),
+        ];
+        assert!(
+            faults(&run, &named(a, b))
+                .contains(&Fault::AssignedAndSaidNothing { agent: "Chef".into() }),
+            "Chef was told to send an invoice and never reported back"
+        );
+    }
+
+    #[test]
+    fn the_run_level_silence_check_cannot_see_this() {
+        // Why the fault has to exist at all. The operator was told something by
+        // somebody, so `Silent` is satisfied while the agent that was actually
+        // handed the job never appears.
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "get the email sent", 0, true),
+            assign(
+                Participant::Agent { id: a },
+                Participant::Agent { id: b },
+                "send the invoice to the client",
+                1,
+            ),
+            msg(Participant::Agent { id: a }, Participant::Human, "Chef is on it", 1, false),
+        ];
+        let found = faults(&run, &named(a, b));
+        assert!(
+            !found.contains(&Fault::Silent),
+            "the operator was told something, so this is quiet"
+        );
+        assert!(found.iter().any(|f| matches!(f, Fault::AssignedAndSaidNothing { .. })));
+    }
+
+    #[test]
+    fn an_agent_that_does_the_work_and_reports_it_is_clean() {
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "get the email sent", 0, true),
+            assign(
+                Participant::Agent { id: a },
+                Participant::Agent { id: b },
+                "send the invoice to the client",
+                1,
+            ),
+            msg(
+                Participant::Agent { id: b },
+                Participant::Human,
+                "Sent it to the client",
+                2,
+                false,
+            ),
+            msg(Participant::Agent { id: a }, Participant::Human, "Chef sent it", 1, false),
+        ];
+        assert!(
+            !faults(&run, &named(a, b))
+                .iter()
+                .any(|f| matches!(f, Fault::AssignedAndSaidNothing { .. })),
+            "Chef said what it did, in its own channel, which is where the operator reads"
+        );
+    }
+
+    #[test]
+    fn a_courtesy_nobody_answers_is_not_work_left_undone() {
+        // The asymmetry that terminates cascades depends on an agent being
+        // allowed to read an acknowledgement and say nothing. Flagging that
+        // would make the fault fire on every well-behaved broadcast.
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "introduce yourself", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Agent { id: b }, "hello", 1, true),
+            msg(Participant::Agent { id: b }, Participant::Agent { id: a }, "hi back", 2, false),
+            msg(Participant::Agent { id: a }, Participant::Human, "done", 1, false),
+        ];
+        assert!(
+            !faults(&run, &named(a, b))
+                .iter()
+                .any(|f| matches!(f, Fault::AssignedAndSaidNothing { .. })),
+            "nobody was given work here"
+        );
+    }
+
+    #[test]
+    fn a_tool_trail_is_not_an_answer() {
+        // The turn that shipped this bug did call a tool. What the operator saw
+        // was a channel with no words in it.
+        let (a, b) = agents();
+        let trail = Envelope {
+            parts: vec![Part::ToolCall {
+                name: "run_command".into(),
+                arguments: serde_json::Value::Null,
+                outcome: crate::domain::envelope::ToolOutcome::Ok { summary: "ran it".into() },
+            }],
+            ..msg(Participant::Agent { id: b }, Participant::System, "", 2, false)
+        };
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "get it done", 0, true),
+            assign(Participant::Agent { id: a }, Participant::Agent { id: b }, "do the thing", 1),
+            trail,
+            msg(Participant::Agent { id: a }, Participant::Human, "Chef is on it", 1, false),
+        ];
+        assert!(
+            faults(&run, &named(a, b))
+                .contains(&Fault::AssignedAndSaidNothing { agent: "Chef".into() }),
+            "a tool trail is the working, not the report"
+        );
     }
 
     #[test]

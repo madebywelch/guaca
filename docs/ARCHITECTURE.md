@@ -233,6 +233,43 @@ grant is scoped to an agent and an action, and when the action is "act outside
 the workspace" a standing yes covers every future send, submission and purchase.
 Creating an agent is narrow enough to be worth not asking twice; this is not.
 
+## A page that was read this turn cannot quietly press a button
+
+The trust boundary below is words: `Trust` on the envelope, `[OPERATOR]` and
+`[AGENT "x"]` labels, `WEB_LABEL` in front of every page, and a system prompt
+saying a page is data. All of it is aimed at a model, and an injection is a
+piece of writing aimed at the same model, arguing the opposite. Where the two
+disagree the app had no answer, because nothing in the runtime stopped a turn
+that had just read a page from acting on what it said.
+
+`needs_consent` is the answer, and its whole design is in what it does *not*
+gate. Three conditions have to hold together:
+
+- the browser action changes something (`click`, `type`) rather than reading it,
+- this turn has already taken in a page or a screenshot,
+- the browser is standing on a domain this agent holds a session for.
+
+Any one of them on its own refuses ordinary work. Gating reading means an agent
+cannot report the attack it found. Gating an untainted turn means a dialog in
+front of an agent doing exactly what the operator told it. Gating a site nobody
+is signed in to means every form on the open web is a question. Together they
+describe one situation, and it is the situation BrowseSafe says is worth the
+attacker's time: the agent already holds the operator's account, so the payload
+does not have to obtain access, only to be read.
+
+What happens then is the machinery that already existed for `request_permission`:
+the turn parks, the operator gets a card in the channel they are reading, and
+the answer is read back from the `approvals` row. There is no "always allow",
+for the reason `ActOnBehalf` never had one. A standing yes here would be granted
+once, on one page, and would cover every page after it.
+
+The rule is a pure function and the asking is not, so the rule can be read and
+tested on its own. Two of its tests exist only to fail a careless version:
+`notgmail.com` must not match a `gmail.com` session, and
+`https://gmail.com@evil.com/` must resolve to `evil.com`. A gate that matched
+either would hand an attacker's page the operator's account while looking like
+it had thought about it.
+
 ## Files are references, and what a model gets depends on what they are
 
 Agents exchange documents, and the operator drops them into a channel. Three
@@ -400,6 +437,20 @@ that a prompt change made agents chattier.
 what went wrong, and every fault it reports is decidable from the messages
 rather than judged.
 
+For a long time every fault it knew about pointed the same way. Answered too
+often, said the same thing twice, thanked a thank-you, nagged a peer: all of
+them are a crew talking too much, which is the failure this app was built
+against and the one it is therefore most likely to overcorrect into. The
+opposite failure had exactly one check, `Silent`, and it only fires when the
+operator was told nothing by anybody for the whole run. Both times this app
+shipped an agent that stopped early, somebody else in the run did answer the
+operator, so `Silent` was satisfied and the agent that had actually been given
+the job simply never appeared. `AssignedAndSaidNothing` is that gap: it reads
+`intent` off the wire, and an agent that was handed work and produced no text
+for anyone is named. A tool trail deliberately does not count, because the turn
+that shipped the bug did call a tool and what the operator saw was a channel
+with no words in it.
+
 Both of those read the messages, and there is a class of defect neither can
 see, because it leaves the messages intact. A placeholder that opens and never
 closes is a bubble that stays half-arrived until the window is closed. A settle
@@ -435,7 +486,12 @@ Stated plainly rather than discovered later.
 - **Undelivered messages to an agent deleted mid-run are dropped**, not returned
   to the sender, and the sender is not notified. The run they belonged to ends
   rather than hanging, but nobody is told what was lost.
-- **No search.** Finding an old message means scrolling.
+- **The consent gate is one tool wide.** `needs_consent` covers `browse`,
+  because that is where a signed-in session is spent by pressing something. A
+  turn that reads a page and then runs `curl` through `run_command` reaches the
+  same internet with the same credentials and is not gated, because a command is
+  not addressed to a domain and there is nothing to match a session against.
+  Wording is still the only thing holding that path.
 - **A peer's answer to a follow-up instruction goes to its own channel, not back
   to the agent that instructed it.** `expects_reply` stays false for a message
   to a peer that has already written, because that asymmetry is what makes
