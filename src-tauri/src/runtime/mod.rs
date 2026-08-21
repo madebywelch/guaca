@@ -2618,6 +2618,18 @@ impl Runtime {
         }
     }
 
+    /// Acting outside the workspace, if the operator says so.
+    ///
+    /// Refused before they are asked when the workspace has no computer and no
+    /// browser. `specs` does not offer the tool in that case, and this is the
+    /// same rule where a model that called it anyway meets it: nothing such an
+    /// agent can call leaves the workspace, so a yes would authorise an action
+    /// it has no way to carry out. What it is short of is access, and pressing
+    /// Allow cannot hand it any. The live failure was an agent asked for
+    /// something needing a calendar nobody here holds an account for: it worked
+    /// out that it had no access, then asked to be given some, and the operator
+    /// was handed a decision that changed nothing instead of a sentence saying
+    /// what was missing.
     async fn ask_to_act(
         &self,
         card: &AgentCard,
@@ -2626,6 +2638,25 @@ impl Runtime {
         because: String,
         arguments: serde_json::Value,
     ) -> (String, Part) {
+        let surfaces = self.surfaces();
+        if !surfaces.computer && !surfaces.browser {
+            let reason = "nothing this agent can do reaches outside the workspace".to_string();
+            return (
+                "Refused, and the operator was not asked: this workspace has no computer and no \
+                 browser, so nothing you can call reaches outside it and there is no action here \
+                 for them to authorise. What you are missing is access, not permission, and no \
+                 answer of theirs would give you any. Say in your reply what you could not reach \
+                 and that they can add a provider in settings, then carry on with the part you \
+                 can do from here."
+                    .to_string(),
+                Part::ToolCall {
+                    name: tools::REQUEST_PERMISSION.to_string(),
+                    arguments,
+                    outcome: ToolOutcome::Refused { reason },
+                },
+            );
+        }
+
         let mut detail = vec![DetailField {
             label: format!("What {} will do", card.name),
             value: action.clone(),

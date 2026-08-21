@@ -2100,7 +2100,10 @@ async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instea
     })
     .await;
 
-    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    // A workspace with a machine, because an agent with no way out of the
+    // workspace has nothing for the operator to authorise and is refused
+    // before they are asked.
+    let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
         h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
 
@@ -2158,7 +2161,10 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
     })
     .await;
 
-    let h = harness(&stub, &["Outreach"], GuardLimits::default());
+    // A workspace with a machine, because an agent with no way out of the
+    // workspace has nothing for the operator to authorise and is refused
+    // before they are asked.
+    let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
         h.runtime.send_from_human(h.id("Outreach"), "Manager will tell you what to send.").unwrap();
 
@@ -2172,6 +2178,53 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
     assert!(
         h.channel_texts("Outreach").iter().any(|t| t.contains("did not send")),
         "and the operator still gets an answer:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_operator() {
+    // The live failure. An agent worked out that it could not reach the
+    // operator's calendar, and asked them for permission to have it. This
+    // workspace has no computer and no browser, so there was no action to
+    // authorise and nothing a click could have handed over: what was missing
+    // was access. The operator got a decision that changed nothing instead of a
+    // sentence saying what they would have to add.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say(
+                "I cannot reach your calendar from here. Nothing is connected to it.".into(),
+            )
+        } else {
+            Script::AskOperator {
+                action: "Read the operator's calendar for this week".into(),
+                because: "the task needs their schedule and I have no access to it".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Assistant"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Assistant"), "What is on my calendar tomorrow?").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })),
+        0,
+        "nobody should be asked a question their answer cannot settle"
+    );
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("missing is access, not permission"), "{told}");
+    assert!(
+        told.contains("add a provider"),
+        "a refusal with no way forward gets reworded and retried: {told}"
+    );
+
+    assert!(
+        h.channel_texts("Assistant").iter().any(|t| t.contains("cannot reach your calendar")),
+        "and the operator gets the sentence rather than the modal:\n{}",
         h.transcript()
     );
 }

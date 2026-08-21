@@ -20,7 +20,7 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 
-use guac_lib::config::{AppConfig, InferenceConfig};
+use guac_lib::config::{AppConfig, E2bConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Participant};
@@ -405,6 +405,23 @@ pub fn harness_in_groups(
 /// A crew whose agents differ from each other, which is what a scenario about
 /// delegation needs.
 pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness {
+    build(stub, crew, limits, E2bConfig::default())
+}
+
+/// The same crew, in a workspace that has a computer provider configured.
+///
+/// The scenarios about acting in the operator's name need one. A permission
+/// request from an agent with no computer and no browser is refused before the
+/// operator is asked, because nothing such an agent can call reaches outside
+/// the workspace, so a scenario about sending mail has to be a workspace where
+/// mail could be sent. Nothing here calls E2B: a key set is what decides which
+/// tools an agent is offered, and these tests script the model, not the machine.
+pub fn harness_with_computer(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
+    let crew: Vec<Member> = names.iter().map(|name| Member::new(name, &["testing"])).collect();
+    build(stub, &crew, limits, E2bConfig { api_key: "e2b-test".into(), ..Default::default() })
+}
+
+fn build(stub: &Stub, crew: &[Member], limits: GuardLimits, e2b: E2bConfig) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
@@ -444,7 +461,7 @@ pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness 
             ..Default::default()
         },
         limits,
-        e2b: Default::default(),
+        e2b,
         kernel: Default::default(),
     };
 
