@@ -1,6 +1,7 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { continues, type Lookups, toPeer } from "../lib/transcript";
@@ -38,8 +39,7 @@ export function PairThread({
 }) {
   const setBanner = useStore((s) => s.setBanner);
   const [messages, setMessages] = useState<Envelope[] | undefined>(undefined);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const pinnedToBottom = useRef(true);
+  const { ref: scrollRef, follow } = useFollowBottom();
 
   // Deliberately over-eager. `lastActive` moves for both ends of every message,
   // so this fires for traffic that has nothing to do with this pair, and it
@@ -71,25 +71,12 @@ export function PairThread({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Only while they are at the bottom. This reloads on any activity by either
-  // agent, so without it a reader half way up a long exchange is thrown back
-  // to the end by a message that had nothing to do with what they were reading.
-  useEffect(() => {
-    const node = scrollRef.current;
-    if (!node) return;
-    const onScroll = () => {
-      pinnedToBottom.current = node.scrollHeight - node.scrollTop - node.clientHeight < 80;
-    };
-    node.addEventListener("scroll", onScroll, { passive: true });
-    return () => node.removeEventListener("scroll", onScroll);
-  }, []);
-
   // The newest is what the operator came for: this opens off a row saying
-  // something just happened between these two.
-  useLayoutEffect(() => {
-    const node = scrollRef.current;
-    if (node && pinnedToBottom.current) node.scrollTop = node.scrollHeight;
-  }, [messages]);
+  // something just happened between these two. Only while they are still there,
+  // though. This reloads on any activity by either agent, so without that a
+  // reader half way up a long exchange is thrown back to the end by a message
+  // that had nothing to do with what they were reading.
+  useLayoutEffect(follow, [follow, messages]);
 
   const here = toPeer(lookups.byId(self), self);
   const there = toPeer(lookups.byId(peer), peer);

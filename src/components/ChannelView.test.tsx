@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useStore } from "../lib/store";
+import { ACTIVITY_CHANNEL, useStore } from "../lib/store";
 import type { Activity, AgentCard, Envelope, MessageId, Part } from "../lib/types";
 import { ChannelView } from "./ChannelView";
 
@@ -359,5 +359,122 @@ describe("a message arrived at from search", () => {
     });
     expect(scrolled).toHaveBeenCalled();
     scrolled.mockRestore();
+  });
+});
+
+describe("a transcript scrolled up", () => {
+  /**
+   * jsdom does no layout, so the transcript is given a size here. `scrollTop`
+   * clamps and fires a scroll event exactly as a real box does, which is the
+   * only thing the transcript has to tell it where the operator is looking.
+   */
+  function measure(el: HTMLElement, content: number, viewport: number) {
+    let top = 0;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => content });
+    Object.defineProperty(el, "clientHeight", { configurable: true, get: () => viewport });
+    Object.defineProperty(el, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (next: number) => {
+        const landed = Math.max(0, Math.min(next, content - viewport));
+        if (landed === top) return;
+        top = landed;
+        el.dispatchEvent(new Event("scroll"));
+      },
+    });
+    return {
+      to: (offset: number) => {
+        el.scrollTop = offset;
+      },
+      at: () => top,
+    };
+  }
+
+  it("stays where it was put when a message arrives, even opened from the activity board", () => {
+    // The report: reading back through a cascade and being thrown to the end of
+    // it, at times nobody could name. This was one of them. The transcript is
+    // unmounted while the activity board is up, so the channel opened after it
+    // is a different node, and the listener that noticed the operator scrolling
+    // was still bound to the one that had been thrown away. Nothing reported a
+    // scroll, so nothing had moved, so every message won.
+    const rows = Array.from({ length: 12 }, () => envelope({}));
+    useStore.setState({
+      agents: [card(MANAGER, "Manager"), card(CHEF, "Chef")],
+      messages: { [MANAGER]: rows },
+      streams: {},
+      reasoning: {},
+      activity: {},
+      lastActive: {},
+      banner: null,
+    });
+
+    const { container, rerender } = render(
+      <ChannelView channel={ACTIVITY_CHANNEL} onOpenMenu={() => {}} />,
+    );
+    rerender(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
+
+    const scroller = container.querySelector<HTMLElement>(".pane__scroll");
+    if (!scroller) throw new Error("no transcript to scroll");
+    const box = measure(scroller, 4000, 400);
+    // At the end, and then reading back through it.
+    box.to(3600);
+    box.to(1200);
+
+    act(() => {
+      useStore.setState({ messages: { [MANAGER]: [...rows, fromPeer("and another thing")] } });
+    });
+
+    expect(box.at()).toBe(1200);
+  });
+
+  it("stays where it was put after a pair thread has been read and closed", async () => {
+    // The transcript is unmounted while a thread is up, so what comes back is a
+    // different node. Whatever is watching the operator has to come back with
+    // it, or this channel spends the rest of the session dragging them down.
+    const rows = [
+      envelope({ parts: [{ type: "text", text: "the operator's own message" }] }),
+      fromPeer("hi"),
+    ];
+    const { container } = open(rows);
+
+    fireEvent.click(screen.getByRole("button", { name: /Message from Chef/ }));
+    await screen.findByText(/view-only/);
+    fireEvent.click(screen.getByRole("button", { name: "Close chat" }));
+    await waitFor(() => expect(screen.getByText("the operator's own message")).toBeTruthy());
+
+    const scroller = container.querySelector<HTMLElement>(".pane__scroll");
+    if (!scroller) throw new Error("no transcript to scroll");
+    const box = measure(scroller, 4000, 400);
+    box.to(3600);
+    box.to(900);
+
+    act(() => {
+      useStore.setState({ messages: { [MANAGER]: [...rows, fromPeer("and another thing")] } });
+    });
+
+    expect(box.at()).toBe(900);
+  });
+
+  it("goes to the end when the operator sends a message from where they were", async () => {
+    // The same rule read the other way. Typing into the box is a decision to be
+    // at the end of the transcript: their own message landing off screen, with
+    // nothing following it, is the same complaint pointing the other way.
+    const { container } = open(Array.from({ length: 12 }, () => envelope({})));
+    const scroller = container.querySelector<HTMLElement>(".pane__scroll");
+    if (!scroller) throw new Error("no transcript to scroll");
+    const box = measure(scroller, 4000, 400);
+    box.to(3600);
+    box.to(1200);
+
+    await act(async () => {
+      fireEvent.change(screen.getByPlaceholderText("Message Manager"), {
+        target: { value: "carry on" },
+      });
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    });
+
+    expect(box.at()).toBe(3600);
   });
 });
