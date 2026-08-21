@@ -1,6 +1,8 @@
 # Architecture
 
 Decisions worth explaining, and the reasoning that would otherwise be lost.
+Routines, machines and the workspace have files of their own beside this one,
+and `AGENTS.md` routes between all four.
 
 ## The runtime lives in Rust, not the webview
 
@@ -108,12 +110,21 @@ combination of work with nobody waiting: do it, then file what you did as a note
 in your own channel. The asymmetry that terminates cascades is untouched, because
 what changed is what the recipient is told, not where its answer goes.
 
+The mode follows the work rather than the sender, and the second incident is
+why. The first version matched on who the message came from, and a routine
+coming due comes from neither the operator nor a peer: it matched no arm of that
+match and fell through to the silent mode, so every schedule an agent kept was
+answered by an agent that had just been told nothing was being asked of it.
+Anything carrying work is `Assigned`, whoever sent it. See `ROUTINES.md`.
+
 The field is trusted, and that is deliberate. A model can label a courtesy as
 work, and then the run pays for one extra turn and hits the same per-pair,
 hop and budget limits as before. The alternative was to keep guessing, and the
 guess was already refusing real work. `courtesy` is the default when nothing is
 declared, so a model that ignores the field gets the old, stricter behaviour
-rather than a door quietly opened.
+rather than a door quietly opened. The rule lives in two places and they have to
+agree: `runtime/prompt.rs` tells the model the same thing, in the mode where it
+matters.
 
 Messages that do not expect a reply are batched: an agent waking to four replies
 reads all four in one turn. Because real replies arrive seconds apart rather
@@ -140,6 +151,13 @@ Settings.
 When a limit is hit the agent is told why, in words it can act on, and the
 reason appears on the transcript chip. Nothing is dropped silently.
 
+**A pipeline spends two hops per phase, so the depth limit is four phases, not
+eight.** A coordinator working through specialists in sequence is one hop out
+and one hop back each time, and the next instruction starts from where the last
+answer landed rather than from the operator. That is the arithmetic to do before
+raising or lowering `max_hops`. The eval suite holds both halves: three phases
+reaching hop six, and a fifth phase refused with the depth it had reached.
+
 ## The budget counts model calls, not turns
 
 An early version reserved one unit of budget per agent turn. A turn can make
@@ -150,11 +168,12 @@ and the test that found it is still there.
 
 ## A failed model call is retried before the operator hears about it
 
-`LlmError::is_transient` decides. Rate limits, timeouts, transport failures and
-5xx are worth another attempt; a rejected key or an unknown model is not,
-because it answers the same way every time and retrying only delays the message
-the operator needs to read. Three attempts, one and three seconds apart, or the
-provider's own `Retry-After` capped at twenty seconds.
+`stream_with_retries` is the loop and `LlmError::is_transient` decides. Rate
+limits, timeouts, transport failures and 5xx are worth another attempt; a
+rejected key or an unknown model is not, because it answers the same way every
+time and retrying only delays the message the operator needs to read. Three
+attempts, one and three seconds apart, or the provider's own `Retry-After`
+capped at twenty seconds.
 
 Two rules keep it honest:
 
@@ -181,11 +200,13 @@ Three things keep it from becoming a fourth kind of message.
 
 - **It is carried apart from the text, from the wire onwards.** `Token::Text`
   and `Token::Reasoning` reach the runtime as separate fragments, and only the
-  first is accumulated. Reasoning is never persisted, never included in the
-  content hash the loop guard compares, and never sent back to a model. Nothing
-  downstream of `stream_chat` holds it, so there is no path by which it could
-  be. Two spellings are read (`reasoning`, `reasoning_content`) because two
-  conventions exist, and a frame carrying both is one thought, not two.
+  first is accumulated. A single `&str` callback was tried and made the two the
+  same thing by the time anything downstream could tell them apart. Reasoning is
+  never persisted, never included in the content hash the loop guard compares,
+  and never sent back to a model. Nothing downstream of `stream_chat` holds it,
+  so there is no path by which it could be. Two spellings are read (`reasoning`,
+  `reasoning_content`) because two conventions exist, and a frame carrying both
+  is one thought, not two.
 - **It is addressed to the placeholder, which is what makes it ephemeral for
   free.** `ReasoningDelta` names a message id and no channel. The webview files
   it under the agent that opened that stream and drops it when the stream ends,
@@ -195,11 +216,17 @@ Three things keep it from becoming a fourth kind of message.
   streams into the peer's channel, while the operator watching it work is
   reading its own.
 - **It is buffered on the same clock as the text, and stored beside it rather
-  than in it.** Reasoning arrives as fast as an answer and costs the same IPC
-  hop and render, so `Pen` coalesces both to 16ms. In the store it is its own
-  slice: written into the stream buffer, every token would re-render and
-  re-parse the markdown of every live bubble for text that is in none of them.
-  `ChannelView.perf.test.tsx` counts that.
+  than in it.** A model writes faster than a screen refreshes, and one event per
+  token spent the operator's main thread on work no eye could resolve: with five
+  agents answering at once the window stopped painting at all, which reads as
+  freezing and the text arriving in a lump rather than streaming. `Pen` in
+  `runtime/mod.rs` buffers text and reasoning alike to 16ms and flushes when the
+  call ends. In the store reasoning is its own slice: written into the stream
+  buffer, every token would re-render and re-parse the markdown of every live
+  bubble for text that is in none of them. The same care applies one level out,
+  where only the component drawing the live bubbles subscribes to `streams`:
+  with that subscription any higher, a single token re-rendered every message in
+  the transcript. `ChannelView.perf.test.tsx` counts both.
 
 Only the newest line is kept, because there is nowhere to scroll back to. Models
 that publish nothing (Anthropic's, over OpenRouter, unless thinking is asked for)
@@ -264,19 +291,21 @@ the question where they are already looking.
 
 Two differences from `create_agent`. The heading is the runtime's but the
 sentence being decided is the agent's own, quoted under it, because only the
-agent can describe what it is about to do. And there is no "always allow": a
-grant is scoped to an agent and an action, and when the action is "act outside
-the workspace" a standing yes covers every future send, submission and purchase.
-Creating an agent is narrow enough to be worth not asking twice; this is not.
+agent can describe what it is about to do. And `ProtectedAction::ActOnBehalf`
+deliberately has no "always allow": a grant is scoped to an agent and an action,
+and when the action is "act outside the workspace" a standing yes covers every
+future send, submission and purchase. Creating an agent is narrow enough to be
+worth not asking twice; this is not.
 
 ## A page that was read this turn cannot quietly press a button
 
 The trust boundary below is words: `Trust` on the envelope, `[OPERATOR]` and
-`[AGENT "x"]` labels, `WEB_LABEL` in front of every page, and a system prompt
-saying a page is data. All of it is aimed at a model, and an injection is a
-piece of writing aimed at the same model, arguing the opposite. Where the two
-disagree the app had no answer, because nothing in the runtime stopped a turn
-that had just read a page from acting on what it said.
+`[AGENT "x"]` labels, `WEB_LABEL` in front of every page, and the *Message
+sources* section of the system prompt saying a page is data. All of it is
+aimed at a model, and an injection is a piece of writing aimed at the same
+model, arguing the opposite. Where the two disagree the app had no answer,
+because nothing in the runtime stopped a turn that had just read a page from
+acting on what it said.
 
 `needs_consent` is the answer, and its whole design is in what it does *not*
 gate. Three conditions have to hold together:
@@ -349,16 +378,16 @@ carries is a digest and a name, and the runtime resolves both against its own
 store: the size and the type on the message are read off the disk, not taken
 from the webview.
 
-**The webview reads a file over a URL, not over IPC.** `guacfile://localhost/
-{digest}/{name}` is answered out of the file store by `app.rs`, so a preview is
-fetched once, by the one element drawing it, only while that element is on
-screen, and the webview caches and ranges it. Handing the same bytes back over
-IPC would give up exactly what content-addressing them bought: IPC is where the
-transcript travels, in bulk. The scheme is also narrower than Tauri's asset
-protocol, which opens a scoped part of the disk; nothing is addressable here but
-a digest this app stored, and a digest that is not 64 hex characters is refused
-before it is ever joined onto a path. The name in the URL decides the type of
-the answer and nothing else.
+**The webview reads a file over a URL, not over IPC.** The scheme is
+`guacfile://localhost/{digest}/{name}`, answered out of the file store by
+`app.rs`, so a preview is fetched once, by the one element drawing it, only
+while that element is on screen, and the webview caches and ranges it. Handing
+the same bytes back over IPC would give up exactly what content-addressing
+them bought: IPC is where the transcript travels, in bulk. The scheme is also
+narrower than Tauri's asset protocol, which opens a scoped part of the disk;
+nothing is addressable here but a digest this app stored, and a digest that is
+not 64 hex characters is refused before it is ever joined onto a path. The
+name in the URL decides the type of the answer and nothing else.
 
 A transcript draws what it can of a file rather than naming it: a picture, a
 document's first page in the webview's own viewer, the first lines of anything
@@ -367,13 +396,18 @@ each offers a copy into the downloads folder, whose path is said out loud
 because a file saved somewhere the operator has to go looking for has not really
 been saved.
 
-One exception, and it is WebKit's. A custom scheme is allowed in an `img` and a
-`fetch` if the CSP names it, and refused in a frame however it is named, with no
-violation event and no console line to say so. A PDF is drawn by the webview's
-own viewer and that viewer only runs in a frame, so a document is fetched over
-the scheme like everything else and handed to the frame as a `blob:` URL. That
-is the one place a file's bytes sit in the renderer: the copy is made when the
-frame comes near the viewport and revoked when it leaves.
+One exception, and it is WebKit's. A custom scheme is allowed in an `img` and
+a `fetch` if the CSP names it, and refused in a frame however it is named, as
+a scheme source, as a host, or through `default-src`, with no violation event
+and no console line to say so. A PDF is drawn by the webview's own viewer and
+that viewer only runs in a frame, so `localCopy` fetches the document over the
+scheme like everything else and hands the frame a `blob:` URL. That is the one
+place a file's bytes sit in the renderer: the copy is made when the frame
+comes near the viewport and revoked when it leaves. Do not simplify it back to
+a direct `src`. It will pass every test in this repo and draw an empty
+rectangle. Any other way the renderer is given to reach a file goes through
+the same scheme, and the CSP has to name it or the element silently asks for
+nothing.
 
 Two limits worth knowing: 25 MB in, and 8 MB onto a machine, because bytes reach
 a sandbox as base64 inside a shell command. A real upload endpoint is the fix
@@ -415,8 +449,9 @@ so an agent deleted with work in its inbox used to take those bookings with it:
 the run never settled, its spend was never reconciled against the store, and the
 entry sat in the in-flight table for the life of the process. The booking is now
 made where an envelope is queued and released wherever one is dropped, which is
-the only pair of places that can be kept in step. The trajectory suite found
-this.
+the only pair of places that can be kept in step. Any new path that takes an
+envelope and does not turn it into a turn has to release it too; nothing else
+decrements. The trajectory suite found this.
 
 ## Why there is no Docker image for the app
 
@@ -485,7 +520,9 @@ the job simply never appeared. `AssignedAndSaidNothing` is that gap: it reads
 `intent` off the wire, and an agent that was handed work and produced no text
 for anyone is named. A tool trail deliberately does not count, because the turn
 that shipped the bug did call a tool and what the operator saw was a channel
-with no words in it.
+with no words in it. The runtime half is in `emit_reply`: an `Assigned` turn
+that produces nothing files a notice instead of returning quietly, since a turn
+with no text produced no envelope at all and therefore left no trace of itself.
 
 Both of those read the messages, and there is a class of defect neither can
 see, because it leaves the messages intact. A placeholder that opens and never
