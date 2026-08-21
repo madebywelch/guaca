@@ -37,6 +37,54 @@ const UPSTREAM_SUFFIX: &str = "e2b.app";
 /// either a probe or a mistake, and it should not hold a task forever.
 const HEAD_LIMIT: usize = 32 * 1024;
 
+/// The page the app points its frame at.
+///
+/// Served from here rather than fetched from the machine, which is what lets a
+/// stylesheet reach noVNC without this relay ever having to interpret a
+/// response body. `e2b.rs` builds the address from this same constant, so the
+/// two cannot drift apart.
+pub const VIEWER_DOCUMENT: &str = "/viewer.html";
+
+/// That page.
+///
+/// noVNC is framed from the same origin, which is what lets this reach into it
+/// and turn off the one piece of its chrome an operator should never see: the
+/// bar it slides across the top of the picture on every connect, announcing the
+/// transport. A panel opening is not news, and "unencrypted" is not even true
+/// of the hop that matters: this relay reaches the machine over TLS.
+///
+/// A warning or an error still shows. A desktop that dies quietly is worse than
+/// one that says so.
+///
+/// The options stay in the address so the app keeps deciding them, which is why
+/// the frame's `src` is set here rather than written into the markup.
+const VIEWER_PAGE: &str = r##"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Computer</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  iframe { display: block; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+<iframe id="desktop" title="Desktop"></iframe>
+<script>
+  var frame = document.getElementById("desktop");
+  frame.addEventListener("load", function () {
+    var doc = frame.contentDocument;
+    if (!doc) return;
+    var quiet = doc.createElement("style");
+    quiet.textContent = "#noVNC_status.noVNC_status_normal{display:none!important}";
+    doc.head.appendChild(quiet);
+  });
+  frame.src = "./vnc.html" + location.search;
+</script>
+</body>
+</html>
+"##;
+
 /// Starts the viewer on a loopback port chosen by the OS.
 ///
 /// Bound to 127.0.0.1 deliberately: this holds tokens that reach an agent's
@@ -96,6 +144,13 @@ async fn serve(
         }
     };
 
+    // This app's own page rather than anything on the machine, so it is answered
+    // here. After the token lookup, not before: an address with no machine
+    // behind it should say so rather than paint a frame that never connects.
+    if request.wants_viewer() {
+        return answer(&mut client, VIEWER_PAGE).await;
+    }
+
     let host = format!("{}-{}.{UPSTREAM_SUFFIX}", request.port, request.sandbox);
     let upstream = TcpStream::connect((host.as_str(), 443)).await?;
     let name = ServerName::try_from(host.clone())
@@ -140,6 +195,18 @@ async fn refuse(client: &mut TcpStream, status: &str, message: &str) -> Result<(
     client.write_all(body.as_bytes()).await
 }
 
+async fn answer(client: &mut TcpStream, page: &str) -> Result<(), std::io::Error> {
+    // Not cached: the page ships with the app, and a stale one from an older
+    // build would frame the desktop with last version's rules.
+    let head = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\n\
+         content-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
+        page.len()
+    );
+    client.write_all(head.as_bytes()).await?;
+    client.write_all(page.as_bytes()).await
+}
+
 /// The part of a request this needs to understand: which sandbox, which port,
 /// and the head to pass on with two lines changed.
 #[derive(Debug, PartialEq)]
@@ -158,6 +225,13 @@ struct Request {
 }
 
 impl Request {
+    /// Whether this asks for the viewer's own page rather than for something on
+    /// the machine.
+    fn wants_viewer(&self) -> bool {
+        let path = self.path.split('?').next().unwrap_or_default();
+        path == VIEWER_DOCUMENT
+    }
+
     fn parse(head: &[u8]) -> Option<Self> {
         let text = String::from_utf8_lossy(head);
         let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
@@ -313,6 +387,35 @@ mod tests {
         let out = req.rewritten("6080-sbx.e2b.app", "real");
         assert!(!out.contains("forged"));
         assert!(out.contains("real"));
+    }
+
+    #[test]
+    fn the_page_the_app_frames_is_this_app_s_own() {
+        // Answered here rather than fetched from the machine, which is what lets
+        // noVNC's own chrome be turned off without this relay ever having to
+        // edit a response body.
+        assert!(Request::parse(&head("/sbx/6080/viewer.html?autoconnect=1", "\r\n"))
+            .unwrap()
+            .wants_viewer());
+        assert!(!Request::parse(&head("/sbx/6080/vnc.html", "\r\n")).unwrap().wants_viewer());
+        assert!(
+            !Request::parse(&head("/sbx/6080/app/viewer.html", "\r\n")).unwrap().wants_viewer(),
+            "a similar address under the machine's own tree is still the machine's"
+        );
+    }
+
+    #[test]
+    fn the_viewer_page_passes_its_options_on_and_silences_only_the_chatter() {
+        // The app decides autoconnect, scaling and reconnection in the address,
+        // so the page has to hand the query on rather than hold a copy of it.
+        assert!(VIEWER_PAGE.contains(r#""./vnc.html" + location.search"#));
+        // And only noVNC's normal status goes. The same bar carries the only
+        // notice an operator gets that a desktop stopped answering.
+        assert!(VIEWER_PAGE.contains("#noVNC_status.noVNC_status_normal{display:none!important}"));
+        assert!(
+            !VIEWER_PAGE.contains("#noVNC_status{"),
+            "hiding the bar outright would hide the failures it also carries"
+        );
     }
 
     #[test]
