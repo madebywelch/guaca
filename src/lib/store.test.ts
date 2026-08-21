@@ -356,14 +356,14 @@ describe("the group the rail is inside", () => {
 
   it("is left alone while the channel being opened is in it", async () => {
     reset({ chef: [] });
-    useStore.getState().focusGroup(AGENTS[0]!.groupId);
+    await useStore.getState().focusGroup(AGENTS[0]!.groupId);
     await useStore.getState().select("manager");
     expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 
   it("is left alone by the activity feed, which belongs to no group", async () => {
     reset({ chef: [] });
-    useStore.getState().focusGroup(AGENTS[0]!.groupId);
+    await useStore.getState().focusGroup(AGENTS[0]!.groupId);
     await useStore.getState().select(ACTIVITY_CHANNEL);
     expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
@@ -376,7 +376,7 @@ describe("the group the rail is inside", () => {
     useStore.setState({
       agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
     });
-    useStore.getState().focusGroup(RESEARCH);
+    await useStore.getState().focusGroup(RESEARCH);
 
     await useStore.getState().select("manager");
     expect(useStore.getState().railGroup).toBeNull();
@@ -387,10 +387,70 @@ describe("the group the rail is inside", () => {
     useStore.setState({
       agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
     });
-    useStore.getState().focusGroup(RESEARCH);
+    await useStore.getState().focusGroup(RESEARCH);
 
     await useStore.getState().openMessage("manager", "m-old");
     expect(useStore.getState().railGroup).toBeNull();
+  });
+});
+
+describe("the channel open when the rail goes inside a crew", () => {
+  const RESEARCH = "00000000-0000-4000-8000-000000000002";
+
+  /** The same crew twice, with a namesake in each. */
+  function twoCrews() {
+    reset({ chef: [] });
+    useStore.setState({
+      agents: [AGENTS[1]!, { ...AGENTS[1]!, id: "chef-research", groupId: RESEARCH }],
+    });
+  }
+
+  it("closes when it belongs to the crew being left", async () => {
+    // The reported confusion, and why the name is the same on both: the rail
+    // does not draw the row, so nothing on screen says which crew the pane
+    // belongs to, and a namesake left open from the crew you came from reads as
+    // this crew's, working while nobody here is.
+    twoCrews();
+    useStore.setState({ selected: "chef-research" });
+
+    await useStore.getState().focusGroup(AGENTS[1]!.groupId);
+
+    expect(useStore.getState().selected).toBe(ACTIVITY_CHANNEL);
+    expect(useStore.getState().railGroup).toBe(AGENTS[1]!.groupId);
+    // Landed on rather than merely pointed at: the feed the pane falls back to
+    // is read here, and nowhere else.
+    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toBeDefined();
+  });
+
+  it("stays open when it belongs to the crew being opened", async () => {
+    twoCrews();
+    useStore.setState({ selected: "chef-research" });
+
+    await useStore.getState().focusGroup(RESEARCH);
+
+    expect(useStore.getState().selected).toBe("chef-research");
+    expect(useStore.getState().railGroup).toBe(RESEARCH);
+  });
+
+  it("stays open on the way back out to the overview, which draws everybody", async () => {
+    twoCrews();
+    useStore.setState({ selected: "chef-research" });
+    await useStore.getState().focusGroup(RESEARCH);
+
+    await useStore.getState().focusGroup(null);
+
+    expect(useStore.getState().selected).toBe("chef-research");
+    expect(useStore.getState().railGroup).toBeNull();
+  });
+
+  it("leaves the activity feed alone, because it belongs to no crew", async () => {
+    twoCrews();
+    useStore.setState({ selected: ACTIVITY_CHANNEL });
+
+    await useStore.getState().focusGroup(RESEARCH);
+
+    expect(useStore.getState().selected).toBe(ACTIVITY_CHANNEL);
+    expect(useStore.getState().railGroup).toBe(RESEARCH);
   });
 });
 

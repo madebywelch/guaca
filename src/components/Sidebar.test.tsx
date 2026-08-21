@@ -13,6 +13,10 @@ vi.mock("../lib/ipc", () => ({
   api: {
     listAgents: async () => [],
     listGroups: async () => [],
+    // Clicking a row opens a channel, and going inside a crew can close one:
+    // both read what they are about to draw.
+    channelMessages: async () => [],
+    conversationFlow: async () => [],
     moveAgent: (id: string, groupId: string, before: string | null) =>
       moveAgent(id, groupId, before),
     setAgentPinned: (id: string, pinned: boolean) => setAgentPinned(id, pinned),
@@ -312,6 +316,26 @@ describe("groups as places", () => {
 
     fireEvent.click(screen.getByLabelText("All groups, 2 agents"));
     expect(screen.getByText("Manager")).toBeTruthy();
+  });
+
+  it("closes a channel from the crew being left, and keeps one from the crew opened", async () => {
+    // Two crews can hold two agents with the same name and the same face, and
+    // going inside one does not draw the other's row: a channel left open from
+    // the crew you came from reads as this crew's, working while nobody here is.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Chief"), agent("Chief of research", { groupId: RESEARCH, railOrder: 1 })],
+    );
+    useStore.setState({ selected: "Chief" });
+
+    fireEvent.click(screen.getByLabelText("research, 1 agent"));
+    await vi.waitFor(() => expect(useStore.getState().selected).toBe("activity"));
+
+    fireEvent.click(screen.getByLabelText("All groups, 2 agents"));
+    fireEvent.click(row("Chief of research"));
+    fireEvent.click(screen.getByLabelText("research, 1 agent"));
+    await vi.waitFor(() => expect(useStore.getState().railGroup).toBe(RESEARCH));
+    expect(useStore.getState().selected).toBe("Chief of research");
   });
 
   it("moves an agent into the group whose circle it was dropped on", async () => {

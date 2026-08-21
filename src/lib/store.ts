@@ -109,11 +109,13 @@ interface State {
   /**
    * The group the rail is looking inside, or `null` for all of them.
    *
-   * Here rather than in the sidebar because opening a channel can invalidate
-   * it: an agent reached from search or from the flow board may live in another
-   * crew, and a rail that keeps showing the group you were in has the open
-   * channel nowhere on it. `select` is what knows a channel changed, so `select`
-   * is what lets the focus go.
+   * Here rather than in the sidebar because it and the open channel invalidate
+   * each other, and both are here. An agent reached from search or from the flow
+   * board may live in another crew, and a rail that keeps showing the group you
+   * were in has the open channel nowhere on it; going inside a crew while
+   * somebody else's channel is open is the same mismatch from the other end.
+   * Whichever of the two was just asked for wins: `select` lets the focus go,
+   * and `focusGroup` closes the channel.
    */
   railGroup: GroupId | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
@@ -171,8 +173,11 @@ interface State {
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
-  /** Looks inside one group, or back out at all of them. */
-  focusGroup: (id: GroupId | null) => void;
+  /**
+   * Looks inside one group, or back out at all of them. Closes the open channel
+   * if the crew being opened is not the one it belongs to.
+   */
+  focusGroup: (id: GroupId | null) => Promise<void>;
   /**
    * Puts an agent somewhere: which group, in front of which row, and whether it
    * is pinned. Absent `pinned` leaves the section it is in alone.
@@ -242,6 +247,21 @@ function keptFocus(state: State, key: ChannelKey): GroupId | null {
   if (state.railGroup === null || key === ACTIVITY_CHANNEL) return state.railGroup;
   const agent = state.agents.find((a) => a.id === key);
   return agent && agent.groupId !== state.railGroup ? null : state.railGroup;
+}
+
+/**
+ * Whether the open channel survives the rail going inside a group.
+ *
+ * The same invariant as `keptFocus` read from the other end: the rail has to be
+ * able to draw the channel that is open. Going back out to the overview keeps
+ * whatever was open, because the overview draws everybody. The activity feed
+ * belongs to no group and is never closed.
+ */
+function keptChannel(state: State, group: GroupId | null): boolean {
+  const key = state.selected;
+  if (group === null || key === null || key === ACTIVITY_CHANNEL) return true;
+  const agent = state.agents.find((a) => a.id === key);
+  return agent === undefined || agent.groupId === group;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -324,8 +344,24 @@ export const useStore = create<State>((set, get) => ({
     await get().loadChannel(key);
   },
 
-  focusGroup(id) {
+  /**
+   * A crew, opened.
+   *
+   * A channel from the crew you came from does not stay open behind it. The rail
+   * would not be drawing its row, so there is nothing on screen that says which
+   * crew the pane belongs to, and two crews can hold two agents with the same
+   * name and the same face: one left open from the group you just left reads as
+   * a member of the group you are looking at, working while nobody here is. The
+   * agent goes on working. It is the reading of it that was wrong.
+   *
+   * Through `select` rather than by writing `selected`, so the feed the pane
+   * falls back to is read before it is drawn instead of arriving empty. It
+   * belongs to no group, so the focus set just above survives `keptFocus`.
+   */
+  async focusGroup(id) {
+    const closing = !keptChannel(get(), id);
     set({ railGroup: id });
+    if (closing) await get().select(ACTIVITY_CHANNEL);
   },
 
   /**

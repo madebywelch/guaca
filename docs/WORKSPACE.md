@@ -193,9 +193,25 @@ are in. A choice of one is chrome that never changes and a drop target that
 cannot move anybody anywhere.
 
 The group being looked inside is in the store rather than in the sidebar, because
-opening a channel can invalidate it. A search hit or a click on the flow board
-can land on an agent in another crew, and a rail still showing the group you were
-in has the open channel nowhere on it, so `select` lets the focus go.
+it and the open channel invalidate each other, and both are in the store. A
+search hit or a click on the flow board can land on an agent in another crew, and
+a rail still showing the group you were in has the open channel nowhere on it, so
+`select` lets the focus go. Going inside a crew is the same mismatch from the
+other end, so `focusGroup` closes the channel and the pane falls back to the
+activity feed, which belongs to no crew and is never closed. Whichever of the two
+the operator just asked for is the one that survives.
+
+Closing it is not tidiness. Two crews can hold two agents with the same name and
+the same face, and a rail that is not drawing the row leaves nothing on screen
+saying which crew the pane belongs to: a channel left open from the group you
+came from reads as a member of the group you are looking at, working while nobody
+here is. The agent goes on working either way. Closing a channel is not a control
+on the conversation, only on what you are looking at.
+
+Going back out to the overview keeps whatever was open, because the overview
+draws everybody. Neither does a move close anything: dragging somebody into
+another crew is not a change of view, and the operator who just made the gesture
+is the one person who does not need telling where that row went.
 
 The pinned section is a flag drawn as a place. It spans groups, so a row dropped
 among the pins keeps its own crew: the alternative is a gesture that says "keep
