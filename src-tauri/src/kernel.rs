@@ -310,7 +310,11 @@ impl KernelClient {
     ) -> Result<String, KernelError> {
         let mut page = Page::attach(&session.cdp_ws_url).await?;
 
-        match action {
+        // How long the page is given to finish what the action started. Each
+        // arm does its action and says only that, because the wait and the
+        // description that follows it are the same two steps for every action
+        // and have to be able to happen on a page this socket has lost.
+        let settle_ms = match action {
             "open" => {
                 let url = args["url"].as_str().unwrap_or_default().trim().to_string();
                 if url.is_empty() {
@@ -329,10 +333,11 @@ impl KernelClient {
                     format!("https://{url}")
                 };
                 page.navigate(&url).await?;
-                page.settle(SETTLE_NAVIGATE_MS).await?;
+                SETTLE_NAVIGATE_MS
             }
 
-            "read" => {}
+            // Nothing happened, so there is nothing to wait for.
+            "read" => 0,
 
             "click" => {
                 let target = element(args)?;
@@ -342,7 +347,7 @@ impl KernelClient {
                 ))
                 .await?;
                 page.evaluate(&format!("window.__guacEls[{target}].click()")).await?;
-                page.settle(SETTLE_CLICK_MS).await?;
+                SETTLE_CLICK_MS
             }
 
             "type" => {
@@ -365,9 +370,9 @@ impl KernelClient {
                 page.insert_text(text).await?;
                 if args["submit"].as_bool().unwrap_or(false) {
                     page.press_enter().await?;
-                    page.settle(SETTLE_NAVIGATE_MS).await?;
+                    SETTLE_NAVIGATE_MS
                 } else {
-                    page.settle(SETTLE_SCROLL_MS).await?;
+                    SETTLE_SCROLL_MS
                 }
             }
 
@@ -376,12 +381,12 @@ impl KernelClient {
                 let amount =
                     if args["direction"].as_str() == Some("up") { -amount } else { amount };
                 page.evaluate(&format!("scrollBy(0, {amount})")).await?;
-                page.settle(SETTLE_SCROLL_MS).await?;
+                SETTLE_SCROLL_MS
             }
 
             "back" => {
                 page.evaluate("history.back()").await?;
-                page.settle(SETTLE_NAVIGATE_MS).await?;
+                SETTLE_NAVIGATE_MS
             }
 
             other => {
@@ -390,9 +395,25 @@ impl KernelClient {
                      scroll or back."
                 )))
             }
-        }
+        };
 
-        let collected = page.evaluate(COLLECT).await?;
+        // Attaching again is how the ordinary case survives: a navigation can
+        // replace the target this socket attached to, and Chrome then fails the
+        // wait and the description rather than the navigation that caused them.
+        // An `open` that redirects is enough to do it, and the answer used to be
+        // "Inspected target navigated or closed" on a page that had loaded
+        // perfectly well. An agent that reads that concludes the browser cannot
+        // see the web and goes to work the same page through screenshots.
+        //
+        // Read again, never act again. The action has already happened, and a
+        // click sent a second time is the one mistake this must not make.
+        let collected = match settle_and_collect(&mut page, settle_ms).await {
+            Err(CdpError::TargetGone) => {
+                let mut replacement = Page::attach(&session.cdp_ws_url).await?;
+                settle_and_collect(&mut replacement, settle_ms).await?
+            }
+            other => other?,
+        };
         collected
             .as_str()
             .map(str::to_string)
@@ -410,6 +431,19 @@ impl KernelClient {
         let mut page = Page::attach(&session.cdp_ws_url).await?;
         Ok(BrowserState { cookies: page.cookies().await?, visited: page.visited().await? })
     }
+}
+
+/// Waits for the page to finish, then has it describe itself.
+///
+/// One function because the two are never wanted apart, and because both have
+/// to be repeatable against a page that has been replaced: a description taken
+/// before the page settled is a description of the page before the action, and
+/// a wait with no description afterwards answers nothing.
+async fn settle_and_collect(page: &mut Page, settle_ms: u32) -> Result<Value, CdpError> {
+    if settle_ms > 0 {
+        page.settle(settle_ms).await?;
+    }
+    page.evaluate(COLLECT).await
 }
 
 /// The element a `click` or `type` names, refused clearly when it is missing.
@@ -532,6 +566,13 @@ const COLLECT: &str = r#"
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    use futures_util::{SinkExt, StreamExt};
+    use parking_lot::Mutex;
+    use tokio_tungstenite::tungstenite::Message;
+
     use super::*;
 
     /// Where a live view is served from, and the port it is served on.
@@ -670,5 +711,159 @@ mod tests {
             browser_live_view_url: Some("  ".into()),
         };
         assert_eq!(Session::from(row).live_view_url, None);
+    }
+
+    /// The page the fake browser describes, in the shape `render_page` reads.
+    const FAKE_PAGE: &str = r#"{"url":"https://example.com/after","title":"After","scroll":0,
+        "height":2000,"text":"arrived","elements":[]}"#;
+
+    /// A browser that speaks enough of the protocol for one action.
+    ///
+    /// A real socket rather than a stubbed client, because what is being tested
+    /// is the protocol's own behaviour: a session stops answering the moment the
+    /// page it names is replaced, and nothing but a connection can express
+    /// that. Every expression it is asked to evaluate is kept, which is how a
+    /// test can say an action was not performed twice.
+    struct FakeBrowser {
+        url: String,
+        evaluated: Arc<Mutex<Vec<String>>>,
+        connections: Arc<AtomicUsize>,
+    }
+
+    impl FakeBrowser {
+        /// `lose_first` connections answer the action and then report their
+        /// target as gone, which is what Chrome does when a navigation replaces
+        /// the target underneath an attached session.
+        async fn start_losing(lose_first: usize) -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a port");
+            let address = listener.local_addr().expect("an address");
+            let evaluated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let connections = Arc::new(AtomicUsize::new(0));
+
+            let (recorded, counted) = (evaluated.clone(), connections.clone());
+            tokio::spawn(async move {
+                loop {
+                    let Ok((stream, _)) = listener.accept().await else { return };
+                    let lost = counted.fetch_add(1, Ordering::SeqCst) < lose_first;
+                    let recorded = recorded.clone();
+                    tokio::spawn(async move {
+                        let mut socket =
+                            tokio_tungstenite::accept_async(stream).await.expect("a handshake");
+                        while let Some(Ok(frame)) = socket.next().await {
+                            let Message::Text(text) = frame else { continue };
+                            let call: Value = serde_json::from_str(&text).expect("a call");
+                            let id = call["id"].clone();
+                            let expression =
+                                call["params"]["expression"].as_str().unwrap_or_default();
+                            let reply = match call["method"].as_str().unwrap_or_default() {
+                                "Target.getTargets" => json!({"id": id, "result":
+                                    {"targetInfos": [{"type": "page", "targetId": "T"}]}}),
+                                "Target.attachToTarget" => {
+                                    json!({"id": id, "result": {"sessionId": "S"}})
+                                }
+                                "Page.navigate" => json!({"id": id, "result": {}}),
+                                "Runtime.evaluate" => {
+                                    recorded.lock().push(expression.to_string());
+                                    // The settle and the description of the
+                                    // page, which are what a navigation lands
+                                    // on. Everything before them is the action
+                                    // itself, and it goes through.
+                                    let after = expression.contains("setTimeout")
+                                        || expression.contains("location.href");
+                                    if lost && after {
+                                        json!({"id": id, "error":
+                                            {"message": "Inspected target navigated or closed"}})
+                                    } else if expression.contains("location.href") {
+                                        json!({"id": id, "result": {"result": {"value": FAKE_PAGE}}})
+                                    } else if expression.contains("Boolean(") {
+                                        json!({"id": id, "result": {"result": {"value": true}}})
+                                    } else {
+                                        json!({"id": id, "result": {"result": {"value": 1}}})
+                                    }
+                                }
+                                other => panic!("the fake browser was asked for {other}"),
+                            };
+                            socket.send(Message::text(reply.to_string())).await.expect("a reply");
+                        }
+                    });
+                }
+            });
+
+            FakeBrowser { url: format!("ws://{address}"), evaluated, connections }
+        }
+
+        fn session(&self) -> Session {
+            Session { id: "s".into(), cdp_ws_url: self.url.clone(), live_view_url: None }
+        }
+
+        fn connections(&self) -> usize {
+            self.connections.load(Ordering::SeqCst)
+        }
+    }
+
+    #[tokio::test]
+    async fn a_page_that_navigates_underneath_an_action_is_read_again_not_reported_as_broken() {
+        // The failure this exists for: an `open` that redirects loads a page
+        // perfectly well, and every call after the navigation fails on a
+        // session naming a target that is gone. The agent that met it concluded
+        // its browser could not see the web and went to work the same page
+        // through screenshots, which its model could not even accept.
+        let browser = FakeBrowser::start_losing(1).await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        let page = client
+            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
+            .await
+            .expect("the page loaded, so the action succeeded");
+
+        assert!(page.contains("https://example.com/after"), "{page}");
+        // One that lost its target, one that read the page. Not a loop.
+        assert_eq!(browser.connections(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_click_that_loses_the_page_is_never_sent_a_second_time() {
+        // The whole reason the recovery re-reads instead of retrying. A button
+        // that navigates is the commonest button there is, and pressing it
+        // again because the answer went missing is the one mistake a browser
+        // tool must not make.
+        let browser = FakeBrowser::start_losing(1).await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        let page = client
+            .browse(&browser.session(), "click", &json!({ "id": 3 }))
+            .await
+            .expect("the click went through");
+
+        assert!(page.contains("After"), "{page}");
+        let clicks =
+            browser.evaluated.lock().iter().filter(|seen| seen.contains(".click()")).count();
+        assert_eq!(clicks, 1, "the click was sent again after the page moved");
+    }
+
+    #[tokio::test]
+    async fn an_action_on_a_page_that_stays_put_opens_one_connection() {
+        let browser = FakeBrowser::start_losing(0).await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        client.browse(&browser.session(), "read", &json!({})).await.expect("read the page");
+
+        assert_eq!(browser.connections(), 1, "a working page must not pay for a reconnection");
+    }
+
+    #[tokio::test]
+    async fn a_page_that_will_not_stay_still_says_what_to_do_about_it() {
+        let browser = FakeBrowser::start_losing(usize::MAX).await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        let err = client
+            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
+            .await
+            .expect_err("nothing could be read");
+
+        // Chrome's own wording reaches nobody. What the agent gets is a way
+        // forward, because a refusal that only says no gets retried verbatim.
+        assert!(err.to_string().contains("Read the page again"), "{err}");
+        assert_eq!(browser.connections(), 2, "one retry, not a loop");
     }
 }

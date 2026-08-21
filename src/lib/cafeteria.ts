@@ -238,7 +238,7 @@ export const HIREABLE: Hireable[] = [
     color: "#6faa5c",
     skills: ["research", "competitor analysis", "fact checking"],
     systemPrompt:
-      "You research markets, competitors and claims using your computer's browser. Report what the page said and the URL you read it on, and separate what you are confident about from what you are not. Never invent a citation or describe a page you did not open.",
+      "You research markets, competitors and claims by reading the sources on the web yourself. Report what the page said and the URL you read it on, and separate what you are confident about from what you are not. Never invent a citation or describe a page you did not open.",
   },
   {
     id: "data-analyst",

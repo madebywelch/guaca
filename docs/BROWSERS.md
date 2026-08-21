@@ -101,6 +101,23 @@ between, and a socket held across that is dead in a way nothing notices until an
 action hangs on it. The only thing that has to persist across actions is the
 element numbering, and that is on the page.
 
+## An action is done once, and the page it produced is read until it answers
+
+A navigation can replace the target a session is attached to, and Chrome then
+fails the *wait* and the *description* rather than the navigation that caused
+them. An `open` that redirects is enough to do it. The wording that came back
+was Chrome's own, `Inspected target navigated or closed`, on a page that had
+loaded perfectly well, and it reads to an agent like a browser that cannot see
+the web: one met it, abandoned `browse` for the rest of the run, and went to
+work the same pages by screenshot on its computer instead. `CdpError::TargetGone`
+exists to keep that wording away from a model and to say what to do instead.
+
+So `browse` attaches again and reads again. It never acts again. That asymmetry
+is the whole design: the action has already happened by the time the target can
+go missing, and a click sent a second time because the answer went astray is the
+one mistake a browser tool must not make. `settle_and_collect` is one function
+for exactly this reason, and it runs at most twice.
+
 ## Sign-ins, and the one thing that is weaker here
 
 Detection is the same rule as the machine's, in `domain/signin.rs`, because "a
