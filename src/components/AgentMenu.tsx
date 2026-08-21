@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import type { AgentCard } from "../lib/types";
+import type { AgentCard, Group } from "../lib/types";
 
 export interface MenuTarget {
   agent: AgentCard;
@@ -10,12 +10,17 @@ export interface MenuTarget {
 
 interface Props {
   target: MenuTarget;
+  /** Every group, so the ones this agent is not in can be offered. */
+  groups: Group[];
   onClose: () => void;
   onEditProfile: (agent: AgentCard) => void;
   onTogglePin: (agent: AgentCard) => void;
   onTogglePause: (agent: AgentCard) => void;
   onDuplicate: (agent: AgentCard) => void;
   onClearHistory: (agent: AgentCard) => void;
+  /** One row up or down: the drag, without a mouse. */
+  onNudge: (agent: AgentCard, delta: -1 | 1) => void;
+  onMoveToGroup: (agent: AgentCard, group: Group) => void;
 }
 
 /** Roughly what the menu measures. Only used to keep it inside the window. */
@@ -40,12 +45,15 @@ const MARGIN = 8;
  */
 export function AgentMenu({
   target,
+  groups,
   onClose,
   onEditProfile,
   onTogglePin,
   onTogglePause,
   onDuplicate,
   onClearHistory,
+  onNudge,
+  onMoveToGroup,
 }: Props) {
   const { agent } = target;
   const ref = useRef<HTMLDivElement>(null);
@@ -131,7 +139,18 @@ export function AgentMenu({
         {item(agent.lifecycle === "paused" ? "Resume" : "Pause", () => onTogglePause(agent))}
         {item("Edit profile", () => onEditProfile(agent))}
         {item(agent.pinned ? "Unpin" : "Pin to top", () => onTogglePin(agent))}
+        {/* The same two moves a drag makes, reachable without one. A rail that
+            can only be arranged by dragging cannot be arranged from a keyboard
+            at all, and this menu is already where everything else about an
+            agent lives. */}
+        {item("Move up", () => onNudge(agent, -1))}
+        {item("Move down", () => onNudge(agent, 1))}
         {item("Duplicate", () => onDuplicate(agent))}
+        {/* Absent while there is one group, for the same reason the strip in
+            the rail is: there is nowhere else to go. */}
+        {groups
+          .filter((group) => group.id !== agent.groupId)
+          .map((group) => item(`Move to ${group.name}`, () => onMoveToGroup(agent, group)))}
         <hr className="menu__rule" />
         {confirming ? (
           item("Delete this history", () => onClearHistory(agent), "danger")

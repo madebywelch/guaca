@@ -67,6 +67,9 @@ export default function App() {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const select = useStore((s) => s.select);
   const loadChannel = useStore((s) => s.loadChannel);
+  const groups = useStore((s) => s.groups);
+  const nudgeAgent = useStore((s) => s.nudgeAgent);
+  const dropAgent = useStore((s) => s.dropAgent);
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
@@ -236,9 +239,17 @@ export default function App() {
       {menu && (
         <AgentMenu
           target={menu}
+          groups={groups}
           onClose={() => setMenu(null)}
           onEditProfile={(agent) => setEditing(agent)}
           onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
+          // Both go through the store: it holds the roster and the activity the
+          // rail's order is computed from, so it is the only place that can say
+          // which row is above this one right now.
+          onNudge={(agent, delta) => void onAgent(() => nudgeAgent(agent.id, delta))}
+          onMoveToGroup={(agent, group) =>
+            void onAgent(() => dropAgent(agent.id, { kind: "group", id: group.id }))
+          }
           onTogglePause={(agent) =>
             void onAgent(() => api.setAgentPaused(agent.id, agent.lifecycle !== "paused"))
           }

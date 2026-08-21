@@ -239,6 +239,7 @@ pub fn run() {
             commands::duplicate_agent,
             commands::set_agent_paused,
             commands::set_agent_pinned,
+            commands::move_agent,
             commands::agent_activity,
             commands::agent_last_active,
             commands::agent_notes,
