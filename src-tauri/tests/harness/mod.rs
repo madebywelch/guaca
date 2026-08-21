@@ -473,6 +473,7 @@ fn parts_of(envelope: &Envelope) -> String {
             Part::ToolCall { name, outcome, .. } => format!("[{name} -> {outcome:?}]"),
             Part::File(file) => format!("[file {}]", file.name),
             Part::Approval { summary, .. } => format!("[asks: {summary}]"),
+            Part::Routine { name, what, .. } => format!("[routine {name:?}] {what}"),
             Part::Json { name, .. } => format!("[{name}]"),
         })
         .collect::<Vec<_>>()

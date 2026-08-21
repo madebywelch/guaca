@@ -2,6 +2,7 @@ import { memo } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { api } from "../lib/ipc";
+import { routineTitle } from "../lib/routine";
 import { useStore } from "../lib/store";
 import { whenLabel } from "../lib/time";
 import { type Lookups, toPeer } from "../lib/transcript";
@@ -13,11 +14,12 @@ import {
   type MessageId,
   type Part,
   type Participant,
+  type RoutineId,
 } from "../lib/types";
 import { ApprovalRequest } from "./ApprovalRequest";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
-import { NoticeRow } from "./WireRow";
+import { NoticeRow, RoutineRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
@@ -75,6 +77,16 @@ function keyed(message: Envelope) {
 }
 
 /**
+ * Opens the routine a fired-routine chip stands for.
+ *
+ * Imperative for the same reason as {@link onRetry}: the panel that draws a
+ * routine is a sibling of the transcript, and the store is where the two meet.
+ */
+function onOpenRoutine(routineId: RoutineId) {
+  useStore.getState().openRoutine(routineId);
+}
+
+/**
  * Sends a failed turn's message again.
  *
  * Imperative rather than a prop threaded through every message: this is one
@@ -120,6 +132,21 @@ export const MessageItem = memo(function MessageItem({
   if (asking) {
     const askerId = to.kind === "agent" ? to.id : message.channelId;
     return <ApprovalRequest part={asking} agent={lookups.byId(askerId)} />;
+  }
+
+  // A schedule firing. Drawn as one line rather than as the several sentences
+  // it carries: the instruction is written for the agent to act on with no
+  // other context, and as a bubble it read as Guaca talking to the operator.
+  const fired = message.parts.find((part) => part.type === "routine");
+  if (fired) {
+    return (
+      <RoutineRow
+        title={routineTitle({ name: fired.name, what: fired.what })}
+        what={fired.what}
+        at={message.createdAt}
+        onOpen={() => onOpenRoutine(fired.routineId)}
+      />
+    );
   }
 
   if (from.kind === "agent" && to.kind === "system") {

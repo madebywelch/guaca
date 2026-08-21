@@ -275,7 +275,9 @@ export function searchResults(input: SearchInput): SearchResult[] {
       meta: describeTrigger(routine.trigger, routine.nextRunAt),
       // Either column is what somebody would type, and the store matches both.
       score: Math.max(score(routine.name, query), score(routine.what, query)),
-      at: routine.nextRunAt,
+      // When it fires next, for the recency tiebreak. A routine waiting on an
+      // event has no such moment, and when it was set up is the honest stand-in.
+      at: routine.nextRunAt ?? routine.createdAt,
       // The channel, not the profile: a schedule sits in the panel beside the
       // conversation, and the profile dialog no longer has it.
       action: { do: "openChannel", agentId: routine.agentId },
