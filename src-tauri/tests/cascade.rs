@@ -2142,3 +2142,106 @@ async fn retrying_something_that_is_no_longer_there_says_so() {
         Err(guac_lib::runtime::RuntimeError::NothingToRetry)
     ));
 }
+
+#[tokio::test]
+async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing() {
+    // The shipped bug, from the operator's side, on the path that produces it:
+    // a peer that has already answered is instructed again, so the message
+    // carries work and expects no reply. That is `ReplyMode::Assigned`, whose
+    // own prompt says silence is the one wrong answer. A turn that produced no
+    // text used to produce no envelope either, so there was nothing in Chef's
+    // channel, nothing in the feed, and an agent that to the operator had
+    // simply stopped. The turn may still be silent; it may no longer be silent
+    // invisibly.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if speaker(body) == "Chef" {
+            if text.contains("send the invoice now") {
+                Script::Say(String::new())
+            } else {
+                Script::Say("yes, I can send invoices".into())
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef has been told.".into())
+        } else if text.contains("yes, I can send invoices") {
+            Script::Instruct {
+                recipients: vec!["Chef".into()],
+                text: "send the invoice now".into(),
+            }
+        } else {
+            Script::SendTo {
+                recipients: vec!["Chef".into()],
+                text: "can you send invoices?".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Have Chef send the invoice.").unwrap();
+    h.settle(run).await;
+
+    let instruction = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Chef"), 50)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.plain_text() == "send the invoice now")
+        .expect("the second instruction reached Chef");
+    assert!(instruction.intent.is_work(), "the scenario depends on this arriving as work");
+    assert!(
+        !instruction.expects_reply,
+        "work with nobody waiting is the combination that produces Assigned"
+    );
+
+    // Read as a notice part rather than as text: this is Guaca speaking into
+    // Chef's channel, which is exactly what `plain_text` filters out.
+    let reported = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Chef"), 50)
+        .unwrap()
+        .into_iter()
+        .flat_map(|e| e.parts)
+        .any(|part| {
+            matches!(part, Part::Notice { ref text, .. } if text.contains("without reporting anything"))
+        });
+    assert!(
+        reported,
+        "Chef was given work, said nothing, and the operator was not told:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn an_agent_reading_an_acknowledgement_may_still_say_nothing_quietly() {
+    // The other side of the same line, and the one that must not regress. The
+    // asymmetry that terminates cascades depends on a peer being able to read a
+    // courtesy and write nothing at all. Reporting that as a failure would put
+    // a chip in a channel after every well-behaved broadcast.
+    let stub = serve(|body| {
+        if speaker(body) == "Chef" {
+            Script::Say("good to meet you".into())
+        } else if has_tool_result(body) {
+            Script::Say(String::new())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        !h.transcript().contains("without reporting anything"),
+        "nothing gave Manager work, so its silence is the design working:\n{}",
+        h.transcript()
+    );
+}

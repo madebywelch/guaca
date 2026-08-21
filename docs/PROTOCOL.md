@@ -49,6 +49,18 @@ happens when agent A messages agent B, B replies to A, and A replies to B. That
 is not an edge case; it is the default behaviour of polite language models, and
 it costs real money on every cycle.
 
+That claim was argued from first principles here before anybody had measured
+it. It has since been measured. *Why Do Multi-Agent LLM Systems Fail?*
+([arXiv 2503.13657](https://arxiv.org/abs/2503.13657)) annotated 1642 execution
+traces from seven multi-agent frameworks and built a 14-mode failure taxonomy
+from them. Two of its modes are the ones this section is about: "unaware of
+termination conditions" at 12.4% of failures, and "step repetition" at 15.7%,
+which is the single largest mode in its category. The five limits below are
+aimed at exactly those two, and the content fingerprint is the second one
+directly. The paper's own conclusion is the argument for putting them in the
+runtime rather than in a prompt: these are design failures rather than model
+failures, and better base models do not remove them.
+
 Guaca supplies five independent limits (`runtime::guard`), because each catches a
 different shape of runaway and every one of them alone has a hole:
 
@@ -74,6 +86,20 @@ Two further mechanisms have no analogue in the literature:
   instead, and is returned as a tool result. An agent told "you have already
   sent Chef 3 messages this run" stops. An agent whose message silently vanishes
   retries.
+
+**The same taxonomy names the cost of overdoing this, which is the risk a
+document about termination should state against itself.** "Premature
+termination" is 6.2% of the failures in that dataset, and the paper attributes
+it specifically to a star topology with no predefined workflow, which is this
+app's shape: every agent answers to one operator and nothing prescribes the
+order. Everything above pushes toward stopping, and this app has twice shipped a
+bug that pushed too far: an authorised external send refused because nobody was
+waiting on it, and an agent given work in a mode whose prompt told it silence
+was usually right. `intent` and `ReplyMode::Assigned` are the fixes; the reason
+neither was caught is that the eval suite could only see the noisy direction.
+`Fault::AssignedAndSaidNothing` is the other half, and an `Assigned` turn that
+produces nothing now says so in the channel rather than leaving the operator
+watching an agent that has apparently stopped.
 
 ## Connectors, and the second thing the survey does not cover
 
@@ -141,10 +167,74 @@ a system prompt written thousands of tokens earlier, credentials never enter the
 model's context, and the prompt names the line a signed-in agent stops at.
 Their model-based layers are not reimplemented here and are not claimed.
 
+**All of that is wording, and wording is the layer an injection is written to
+beat.** *Design Patterns for Securing LLM Agents against Prompt Injections*
+([arXiv 2506.08837](https://arxiv.org/abs/2506.08837)) states the principle this
+falls short of: once an agent has ingested untrusted input, it must be
+*impossible* for that input to trigger a consequential action, rather than
+merely discouraged. Guaca had the mechanism for that and was not using it.
+`request_permission` parks a turn on a person and puts two buttons in the
+channel they are already reading, and it fired only when the model chose to call
+it, which is the one decision an injection is in a position to talk it out of.
+
+`runtime::needs_consent` is the structural version, and it is deliberately
+narrow. Three conditions, all of which must hold: the browser action changes
+something rather than reading it, this turn has already taken in a page or a
+screen, and the browser is standing on a site this agent holds a session for.
+Reading is never gated, because an agent that cannot read cannot report the
+attack either, and gating navigation would mean approving a click in order to
+reach the click being approved. What is left is the case this paper and
+BrowseSafe agree is worth paying for: the payload does not need to obtain
+access, it already has the operator's, and the next press is the operator's to
+allow.
+
+The rule is a pure function, separate from the asking, because a security rule
+nobody can read in one sitting is a rule nobody can check. Its tests carry the
+two lookalike tricks that would defeat a careless version, a host that merely
+ends with the signed-in domain and a signed-in domain parked in front of an `@`,
+and both must come back as not that session. A gate that matched either would be
+worse than no gate, because it would look like it had considered them.
+
+The full version of this is CaMeL, *Defeating Prompt Injections by Design*
+([arXiv 2503.18813](https://arxiv.org/abs/2503.18813)), which extracts control
+and data flow from the trusted query so untrusted data can never reach the
+program flow, and enforces capabilities when tools are called. It is not built
+here and should not be: it costs 77% task completion against 84% undefended on
+AgentDojo, and it needs an orchestrator this app has no place for. What is taken
+from it is the shape of the claim. Provable beats persuaded, and where this app
+cannot be provable it asks a person rather than pretending.
+
 **Provenance.** The protocols carry no causality. Guaca's envelope records
 `run_id`, `hop`, and `cause`, which is what makes a cascade reconstructable
 after the fact. This is the first thing you want when five agents have been
 talking and something went wrong.
+
+## Considered and declined
+
+**A verifier agent.** The failure taxonomy above puts task verification at 17.3%
+of failures, split between no verification and incorrect verification, and its
+own intervention study adds a high-level objective check to one framework for
++15.6% task success. Read alone that is a mandate to build one. It is not.
+*MAS-ProVe* ([arXiv 2602.03053](https://arxiv.org/abs/2602.03053)) is the
+systematic version of the same question, across three verification paradigms,
+two granularities, five verifiers and six frameworks, and finds that
+process-level verification does not consistently improve performance and
+frequently has high variance. A verifier that is unreliable in a crew this small
+would spend a model call per step to produce a second opinion nobody can trust,
+and every call it spends is on the operator's bill. The eval and trajectory
+suites verify at test time instead, where being slow and thorough is free.
+
+**A judge in the eval suite.** `eval.rs` decides every fault from the envelopes
+and scores nothing, which was a taste decision when it was written: a fault that
+needs a judgement call is one nobody can act on when it fails. *Gaming the
+Judge* ([arXiv 2601.14691](https://arxiv.org/abs/2601.14691)) is the measured
+argument for it. Rewriting an agent's reasoning while holding its actions and
+observations fixed inflated the false positive rate of state-of-the-art judges
+by up to 90% across 800 trajectories, and their conclusion is that judging has
+to verify claims against observable evidence. An envelope is observable
+evidence. The taxonomy above annotates its own dataset with an LLM judge, which
+is the right trade at 1642 traces and the wrong one for a suite that gates a
+build.
 
 ## Where the survey is wrong
 
@@ -183,7 +273,25 @@ The survey above is what made comparing them tractable, and its
 Creation/Operation/Update/Termination threat framing is used directly in
 `guard.rs` and `prompt.rs`.
 
-Two papers outside that literature shaped connectors:
+Four papers outside that literature shaped the parts the protocols do not
+reach:
+
+- *Why Do Multi-Agent LLM Systems Fail?*, Mert Cemri and others, UC Berkeley,
+  [arXiv 2503.13657](https://arxiv.org/abs/2503.13657). The measurement behind
+  the termination argument, and the one that names the cost of overcorrecting.
+- *Design Patterns for Securing LLM Agents against Prompt Injections*,
+  Beurer-Kellner, Creţu, Debenedetti, Tramèr and others,
+  [arXiv 2506.08837](https://arxiv.org/abs/2506.08837). The principle that made
+  `needs_consent` structural rather than another paragraph of prompt.
+- *Defeating Prompt Injections by Design*, Debenedetti, Shumailov, Carlini,
+  Tramèr and others, [arXiv 2503.18813](https://arxiv.org/abs/2503.18813). The
+  full version of that idea, and the cost of it.
+- *Gaming the Judge: Unfaithful Chain-of-Thought Can Undermine Agent
+  Evaluation*, Khalifa and others,
+  [arXiv 2601.14691](https://arxiv.org/abs/2601.14691). Why `eval.rs` decides
+  rather than scores.
+
+Two more shaped connectors:
 
 - *Beyond Browsing: API-Based Web Agents*, Yueqi Song, Frank Xu, Shuyan Zhou and
   Graham Neubig, [arXiv 2410.16464](https://arxiv.org/abs/2410.16464). The

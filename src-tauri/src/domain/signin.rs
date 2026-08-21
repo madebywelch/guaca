@@ -151,6 +151,33 @@ fn collapse(host: &str) -> String {
     labels[labels.len() - 2..].join(".")
 }
 
+/// The host part of a URL, normalised the same way a cookie's domain is.
+///
+/// Hand-rolled rather than pulled from a URL crate because the only thing
+/// wanted here is the authority, and anything that fails to parse must come
+/// back as nothing rather than as a host that happens to match.
+fn host_in(url: &str) -> Option<String> {
+    let rest = url.trim().split_once("://").map(|(_, rest)| rest).unwrap_or(url.trim());
+    let authority = rest.split(['/', '?', '#']).next()?;
+    // Credentials in the authority are the trick that makes `evil.com` look
+    // like `mail.google.com@evil.com`, so the host is what follows the last
+    // `@`, never what precedes it.
+    let host = authority.rsplit('@').next()?;
+    let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    let host = host_of(host);
+    (!host.is_empty() && host.contains('.')).then_some(host)
+}
+
+/// The session this URL is being read as, if the agent holds one for it.
+///
+/// The question a guard asks before letting a page it has just read drive an
+/// action: acting on a site nobody is logged in to spends the agent's own time,
+/// while acting on one it holds a session for spends the operator's name.
+pub fn session_for<'a>(signins: &'a [Signin], url: &str) -> Option<&'a Signin> {
+    let host = host_in(url)?;
+    signins.iter().find(|signin| under(&host, &signin.domain))
+}
+
 /// Reads a browser's cookie jar and says what it is signed in to.
 ///
 /// `now` is passed rather than read so the result is a pure function of its
@@ -418,5 +445,63 @@ mod tests {
     #[test]
     fn nothing_in_the_jar_means_nothing_claimed() {
         assert!(detect(AgentId::new(), &BrowserState::default(), 100).is_empty());
+    }
+
+    fn signin_for(domain: &str) -> Signin {
+        Signin {
+            agent_id: AgentId::new(),
+            domain: domain.into(),
+            service: domain.into(),
+            recognised: true,
+            first_seen_at: 0,
+            last_seen_at: 0,
+        }
+    }
+
+    #[test]
+    fn a_host_is_read_out_of_a_url_the_way_a_cookie_domain_is() {
+        assert_eq!(
+            host_in("https://www.Mail.Google.com/u/0?x=1").as_deref(),
+            Some("mail.google.com")
+        );
+        assert_eq!(host_in("http://github.com:8080/a/b").as_deref(), Some("github.com"));
+        assert_eq!(host_in("linkedin.com/feed").as_deref(), Some("linkedin.com"));
+    }
+
+    #[test]
+    fn anything_without_a_host_is_nothing_rather_than_a_guess() {
+        // A guard that reads an unparseable URL as "no session" is the safe
+        // way round only because the caller treats None as "not signed in and
+        // therefore not the operator's name". Anything shaped like a host has
+        // to be rejected rather than half-matched.
+        assert_eq!(host_in("about:blank"), None);
+        assert_eq!(host_in(""), None);
+        assert_eq!(host_in("file:///home/user/inbox/report.pdf"), None);
+        assert_eq!(host_in("localhost"), None);
+    }
+
+    #[test]
+    fn credentials_in_the_authority_cannot_borrow_a_session() {
+        // The oldest phishing URL there is. `mail.google.com` before an `@` is
+        // a username, and the host is what follows it. Reading the string from
+        // the left would hand an attacker's page the operator's Gmail session.
+        let held = [signin_for("google.com")];
+        assert_eq!(host_in("https://mail.google.com@evil.com/x").as_deref(), Some("evil.com"));
+        assert!(
+            session_for(&held, "https://mail.google.com@evil.com/x").is_none(),
+            "a session must not be matched against a username"
+        );
+    }
+
+    #[test]
+    fn a_session_covers_its_subdomains_and_nothing_that_merely_ends_with_it() {
+        let held = [signin_for("google.com")];
+        assert!(session_for(&held, "https://mail.google.com/inbox").is_some());
+        assert!(session_for(&held, "https://google.com/").is_some());
+        assert!(
+            session_for(&held, "https://notgoogle.com/").is_none(),
+            "a suffix match without the dot would cover every lookalike domain"
+        );
+        assert!(session_for(&held, "https://example.org/").is_none());
     }
 }
