@@ -61,6 +61,21 @@
   box-sizing: border-box;
 }
 
+/* Said, never drawn. `display: none` and `visibility: hidden` both take an
+   element out of the accessibility tree along with the page, which for a live
+   region means it announces nothing at all. */
+.offscreen {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 html,
 body,
 #root {
@@ -1726,6 +1741,176 @@ button {
 }
 
 /* ==========================================================================
+   The trail: what an agent did on its own turn
+
+   The quietest thing a channel draws, and by volume it used to be the loudest:
+   a browsing turn spends most of its twenty-four rounds in the browser, and
+   every one of those was a line reading `Chef used browse`. Now a run of calls
+   is chips, one per kind of work, and the calls open underneath in place.
+
+   Deliberately not the burst's shape, even though both collapse. A burst is a
+   conversation with somebody, so it is centred and bracketed by rules like the
+   rest of the traffic. This is the agent's own working, so it sits under the
+   left margin where the agent's words are, at the size of a footnote.
+   ========================================================================== */
+
+.trail {
+  padding: 0.2rem 1.5rem 0.2rem 1.15rem;
+}
+
+/* Wide gaps between chips and tight ones inside. Four of these on a line with
+   the same space either side of every word read as one paragraph of grey
+   monospace, which is exactly the shape the row was collapsed to get away
+   from. */
+.trail__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem 1.1rem;
+  /* In line with the message bodies beside it: the gutter is 2.1rem of avatar
+     and 0.75rem of gap, and a footnote that starts at the margin instead reads
+     as a different column of the page. */
+  padding-left: 2.85rem;
+}
+
+.trail__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.08rem 0.3rem;
+  margin: 0 -0.3rem;
+  border: 1px solid transparent;
+  border-radius: 99px;
+  background: none;
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  letter-spacing: 0.01em;
+  color: var(--faint);
+  text-align: left;
+  transition: border-color 130ms ease, color 130ms ease, background-color 130ms ease;
+}
+
+/* As with a burst chip: "you can open this" is only worth saying to somebody
+   already pointing at it. */
+.trail__chip--open:hover,
+.trail__chip--open[aria-expanded="true"] {
+  background: var(--sunken);
+  border-color: var(--edge);
+  color: var(--text);
+}
+
+.trail__caret {
+  flex: none;
+  font-size: 0.62rem;
+  line-height: 1;
+  color: var(--faint);
+}
+
+.trail__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What came back. Present on a chip only where it belongs to one call: several
+   calls have several answers, and a chip carrying the first of them is a chip
+   that is wrong about the rest. */
+.trail__said {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.72;
+}
+
+/* A credential this command spent, by name. The operator's audit trail for
+   their own tokens, so it is never folded into a count and never behind a
+   click. Pit brown, because it is Guaca saying something rather than the agent.
+   The value is not here and there is no field it could arrive in. */
+.trail__spent {
+  flex: none;
+  padding: 0 0.3rem;
+  border-radius: 99px;
+  background: var(--pit-soft);
+  color: var(--pit);
+  font-size: 0.6rem;
+}
+
+/* Something went wrong, and the row it is on is otherwise a list of things
+   that went right. Given a shape rather than only a colour, for the same reason
+   a refused send is louder than the traffic around it: this is the one chip on
+   the row the operator may have to do something about. */
+.trail__chip[data-failed] {
+  padding: 0.08rem 0.45rem;
+  margin: 0;
+  border-color: color-mix(in oklab, var(--pit) 32%, transparent);
+  background: var(--pit-soft);
+  color: var(--pit);
+}
+
+.trail__chip[data-failed] .trail__said {
+  opacity: 1;
+}
+
+/* Opened. Indented under the chips rather than centred, because these are the
+   calls behind one chip and not a new kind of row. */
+.trail__steps {
+  list-style: none;
+  margin: 0.3rem 0 0.2rem;
+  padding: 0.35rem 0 0.35rem 0.7rem;
+  margin-left: 2.85rem;
+  max-width: 42rem;
+  border-left: 2px solid var(--edge);
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.trail__step[data-failed] {
+  color: var(--pit);
+}
+
+.trail__step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: 0.63rem;
+  color: var(--faint);
+}
+
+.trail__step-title {
+  color: var(--muted);
+}
+
+.trail__step[data-failed] .trail__step-title,
+.trail__step[data-failed] .trail__said {
+  color: var(--pit);
+}
+
+/* The command, the URL, the memory that was written: exactly as it was.
+   Never markdown, because this is a record of what happened rather than
+   something written to be read, and a model that could format it could
+   describe a command as something other than the command it ran. */
+.trail__target {
+  margin: 0.15rem 0 0;
+  padding: 0.35rem 0.5rem;
+  max-height: 11rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ==========================================================================
    Permission requests
 
    A card in the transcript rather than a dialog. The agent that asked is parked
@@ -2215,9 +2400,32 @@ button {
   text-decoration: underline;
 }
 
-.file__size {
+/* Never wraps and never shrinks. This is three or four characters carrying the
+   one fact the name does not, and a size broken across two lines is the row
+   telling the operator its own layout gave up. */
+.file__meta {
   font-size: 0.66rem;
   color: var(--muted);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A file the app has and could not read. Says which reason it was and offers
+   the two ways forward: the store answers 503 while it is opening, so the
+   commonest failure here is one that has already stopped being true. */
+.file__failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.file__failed-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   flex: none;
 }
 
@@ -2235,26 +2443,69 @@ button {
   max-height: calc(100vh - 3rem);
 }
 
+/* Two rows in one grid rather than one row of four things. The name is the
+   only part allowed to run out of room; everything else states a fact in a
+   fixed number of characters and is placed where running out cannot happen to
+   it. */
 .file-view__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.9rem;
   margin-bottom: 0.9rem;
-  min-width: 0;
 }
 
 .file-view__head .dialog__title {
+  grid-column: 1;
+  margin: 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* What it is and how big, under the name. Its own line because it is the line
+   that used to be squeezed between a name that wanted the whole row and a pair
+   of buttons that would not give any of it up: `48 KB` came out as `48` over
+   `KB`, which is a dialog admitting it cannot lay out five characters. */
+.file-view__what {
+  grid-column: 1;
+  margin: 0.1rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .file-view__actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-left: auto;
+  gap: 0.5rem;
+}
+
+/* Its own corner. Beside `Save a copy` it read as the second half of a pair of
+   answers, which is part of why the first one looked like it might change the
+   file rather than copy it out. */
+.file-view__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
   flex: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.file-view__close:hover {
+  background: var(--sunken);
+  color: var(--text);
 }
 
 .file-view__body {

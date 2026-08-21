@@ -46,6 +46,32 @@ export function previewKind(mime: string): PreviewKind {
 }
 
 /**
+ * What kind of file this is, in the words a person would use.
+ *
+ * Only ever drawn where nothing else says it: a picture, a page of a document
+ * and the first lines of a log all announce themselves, and a label under one
+ * of those is a caption on a photograph of a cat saying "cat". A zip and a
+ * spreadsheet announce nothing at all, and a row carrying a name and a size and
+ * no other fact is the row that makes an operator ask what the app even thinks
+ * it is holding.
+ *
+ * From the type rather than the extension, because the type is what every
+ * other decision about this file was made from and a label that disagreed with
+ * the preview would be worse than no label.
+ */
+export function kindLabel(mime: string): string {
+  if (mime === "application/pdf") return "PDF";
+  if (mime === "application/zip") return "ZIP archive";
+  if (mime.startsWith("image/")) return `${mime.slice("image/".length).toUpperCase()} image`;
+  if (mime.startsWith("text/")) return mime.slice("text/".length).toUpperCase();
+  if (mime === "application/json") return "JSON";
+  if (mime.includes("wordprocessingml") || mime === "application/msword") return "Word document";
+  if (mime.includes("spreadsheetml") || mime === "application/vnd.ms-excel") return "Spreadsheet";
+  if (mime === "application/octet-stream") return "File";
+  return mime;
+}
+
+/**
  * Where the bytes of a stored file are, as a URL.
  *
  * The name travels with the digest because the type is worked out from it on
@@ -79,8 +105,23 @@ export function readableSize(bytes: number): string {
  */
 export async function localCopy(file: Attachment): Promise<string> {
   const response = await fetch(fileUrl(file));
-  if (!response.ok) throw new Error(`could not read ${file.name}`);
+  if (!response.ok) throw new Error(whyNot(response.status));
   return URL.createObjectURL(await response.blob());
+}
+
+/**
+ * Why the file store turned a preview down, in words the operator can act on.
+ *
+ * `app.rs` answers a preview with one of three things and they mean different
+ * things to the person reading: the store was not open yet, the bytes are not
+ * there, or something else went wrong. "This file could not be read" covered
+ * all three and told nobody which, so the one failure anybody has hit was also
+ * the one nobody could diagnose.
+ */
+export function whyNot(status: number): string {
+  if (status === 404) return "its contents are not in this workspace's file store";
+  if (status === 503) return "the file store was still opening";
+  return `the file store answered ${status}`;
 }
 
 /** What was read of a text file, and whether that was all of it. */
@@ -131,7 +172,7 @@ export function readFileText(file: Attachment, limit: number): Promise<FileText>
 async function read(file: Attachment, limit: number): Promise<FileText> {
   const response = await fetch(fileUrl(file), { headers: { Range: `bytes=0-${limit - 1}` } });
   if (!response.ok && response.status !== 206) {
-    throw new Error(`could not read ${file.name}`);
+    throw new Error(whyNot(response.status));
   }
   const text = await response.text();
   // Against the file's own size rather than the text's: a character can be

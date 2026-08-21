@@ -1,0 +1,204 @@
+import { describe, expect, it } from "vitest";
+
+import { foldTrail, hasDetail, readSpent, type Step, trailStep } from "./trail";
+import type { Part, ToolOutcome } from "./types";
+
+type ToolCall = Extract<Part, { type: "toolCall" }>;
+
+const ok = (summary: string): ToolOutcome => ({ status: "ok", summary });
+
+function call(name: string, args: unknown, outcome: ToolOutcome = ok("done")): ToolCall {
+  return { type: "toolCall", name, arguments: args, outcome };
+}
+
+function steps(...calls: ToolCall[]): Step[] {
+  return calls.map((call, position) => trailStep(call, `m1:${position}`));
+}
+
+describe("what one call was", () => {
+  it("names the site a browser was pointed at, not the tool", () => {
+    // `used browse` is the name of a function in a file the operator does not
+    // have. Where it went is the thing they opened the channel to find out.
+    const [step] = steps(call("browse", { action: "open", url: "https://www.cnn.com/world" }));
+    expect(step?.title).toBe("Opened cnn.com");
+    expect(step?.target).toBe("https://www.cnn.com/world");
+  });
+
+  it("shows a url that will not parse exactly as it was written", () => {
+    // An agent that browsed to `cnn.com` browsed to cnn.com. Reporting nothing
+    // because `new URL` threw describes a different session.
+    const [step] = steps(call("browse", { action: "open", url: "cnn.com" }));
+    expect(step?.title).toBe("Opened cnn.com");
+  });
+
+  it("keeps the command, which is the only interesting part of running one", () => {
+    const [step] = steps(
+      call("run_command", { command: "curl -s wttr.in" }, ok("exit 0, 8 bytes out")),
+    );
+    expect(step?.title).toBe("Ran a command");
+    expect(step?.target).toBe("curl -s wttr.in");
+    expect(step?.said).toBe("exit 0, 8 bytes out");
+  });
+
+  it("reads a screen action as the place it happened", () => {
+    const [step] = steps(call("use_screen", { action: "click", x: 412, y: 96 }));
+    expect(step?.title).toBe("Clicked on its screen");
+    expect(step?.target).toBe("412, 96");
+  });
+
+  it("names a tool it has never heard of rather than guessing", () => {
+    const [step] = steps(call("run_code", { source: "print(1)" }, ok("exit 0")));
+    expect(step?.title).toBe("Used run_code");
+    expect(step?.target).toBeNull();
+  });
+
+  it("carries the reason a call was refused, not the fact that it happened", () => {
+    const [step] = steps(
+      call(
+        "send_message",
+        { text: "hello?" },
+        { status: "refused", reason: "Refused: name a recipient." },
+      ),
+    );
+    expect(step?.failed).toBe(true);
+    expect(step?.said).toBe("Refused: name a recipient.");
+  });
+});
+
+describe("credentials a command spent", () => {
+  // Mirrors `credentials_named_in` in `runtime/mod.rs`. If that wording changes
+  // this test is where it is noticed, rather than a transcript quietly losing
+  // the operator's audit trail for their own tokens.
+  it("reads the names the runtime wrote, and leaves the rest of the summary", () => {
+    const read = readSpent("used Mistral ($MISTRAL_API_KEY) · exit 0, 812 bytes out");
+    expect(read.spent).toEqual(["Mistral ($MISTRAL_API_KEY)"]);
+    expect(read.rest).toBe("exit 0, 812 bytes out");
+  });
+
+  it("reads several", () => {
+    const read = readSpent("used Mistral ($A), GitHub ($B) · exit 0, 4 bytes out");
+    expect(read.spent).toEqual(["Mistral ($A)", "GitHub ($B)"]);
+  });
+
+  it("leaves an ordinary summary alone", () => {
+    expect(readSpent("exit 0, 812 bytes out")).toEqual({
+      spent: [],
+      rest: "exit 0, 812 bytes out",
+    });
+  });
+
+  it("never lets one be folded into a count", () => {
+    // Two commands would ordinarily read as "Ran 2 commands". The one that
+    // spent a token keeps its own chip, because that is the row the operator
+    // audits their own credentials from.
+    const groups = foldTrail(
+      steps(
+        call("run_command", { command: "ls" }, ok("exit 0, 4 bytes out")),
+        call("run_command", { command: "curl $X" }, ok("used Stripe ($X) · exit 0, 9 bytes out")),
+      ),
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[1]?.spent).toEqual(["Stripe ($X)"]);
+  });
+});
+
+describe("folding a turn's work", () => {
+  it("says what a single call was, in full", () => {
+    const groups = foldTrail(steps(call("run_command", { command: "ls" }, ok("exit 0"))));
+    expect(groups.map((group) => group.label)).toEqual(["Ran a command"]);
+  });
+
+  it("counts several of one kind instead of listing them", () => {
+    // The row this replaced: twenty-four lines of `Chef used browse` between
+    // the operator's question and the answer to it.
+    const groups = foldTrail(
+      steps(
+        call("run_command", { command: "ls" }, ok("exit 0")),
+        call("run_command", { command: "pwd" }, ok("exit 0")),
+        call("run_command", { command: "whoami" }, ok("exit 0")),
+      ),
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("Ran 3 commands");
+    expect(groups[0]?.steps).toHaveLength(3);
+  });
+
+  it("names the site when a browsing turn only visited one", () => {
+    // A count that names nothing hides what the operator opened the channel to
+    // find out, which is the same reason a burst draws one chip per peer.
+    const groups = foldTrail(
+      steps(
+        call("browse", { action: "open", url: "https://cnn.com" }),
+        call("browse", { action: "read" }),
+        call("browse", { action: "click", id: 12 }),
+      ),
+    );
+    expect(groups[0]?.label).toBe("3 steps on cnn.com");
+  });
+
+  it("names the site from the step and not from the words on the chip", () => {
+    // The label used to be recovered by slicing the title back apart, so
+    // rewording "Opened cnn.com" silently cost the group its name.
+    const [step] = steps(call("browse", { action: "open", url: "https://cnn.com/world" }));
+    expect(step?.where).toBe("cnn.com");
+    expect(steps(call("browse", { action: "read" }))[0]?.where).toBeNull();
+  });
+
+  it("does not name a site when the turn moved between several", () => {
+    const groups = foldTrail(
+      steps(
+        call("browse", { action: "open", url: "https://cnn.com" }),
+        call("browse", { action: "open", url: "https://bbc.co.uk" }),
+      ),
+    );
+    expect(groups[0]?.label).toBe("2 steps in the browser");
+  });
+
+  it("gathers calls of one kind that a call of another came between", () => {
+    // What the turn did, rather than the order a model happened to interleave
+    // its tools in, which is not something anybody asked about.
+    const groups = foldTrail(
+      steps(
+        call("browse", { action: "read" }),
+        call("run_command", { command: "ls" }, ok("exit 0")),
+        call("browse", { action: "read" }),
+      ),
+    );
+    expect(groups.map((group) => group.label)).toEqual(["2 steps in the browser", "Ran a command"]);
+  });
+
+  it("keeps a failure out of the count, in the place it happened", () => {
+    const groups = foldTrail(
+      steps(
+        call("run_command", { command: "ls" }, ok("exit 0")),
+        call("run_command", { command: "boom" }, { status: "failed", error: "no machine" }),
+        call("run_command", { command: "pwd" }, ok("exit 0")),
+      ),
+    );
+    expect(groups.map((group) => group.label)).toEqual(["Ran 2 commands", "Ran a command"]);
+    expect(groups[1]?.failed).toBe(true);
+    expect(groups[1]?.steps[0]?.said).toBe("no machine");
+  });
+});
+
+describe("whether a chip opens anything", () => {
+  it("does not offer a control over a lookup with nothing behind it", () => {
+    // A button that opens nothing is one the operator stops trusting the rest
+    // of.
+    const groups = foldTrail(steps(call("directory", {}, ok("2 agent(s): Chef, Scribe"))));
+    expect(hasDetail(groups[0]!)).toBe(false);
+  });
+
+  it("opens a command, because the command is not on the chip", () => {
+    const groups = foldTrail(steps(call("run_command", { command: "ls" }, ok("exit 0"))));
+    expect(hasDetail(groups[0]!)).toBe(true);
+  });
+
+  it("opens what an agent wrote to its own memory", () => {
+    const groups = foldTrail(
+      steps(call("update_notes", { content: "Smith handles verification." }, ok("Memory saved."))),
+    );
+    expect(hasDetail(groups[0]!)).toBe(true);
+    expect(groups[0]?.steps[0]?.target).toBe("Smith handles verification.");
+  });
+});

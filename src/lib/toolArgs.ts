@@ -7,7 +7,14 @@
  * recover enough to show the operator what was sent.
  */
 
-function asRecord(value: unknown): Record<string, unknown> {
+/**
+ * A tool call's arguments, read as an object.
+ *
+ * Exported because the trail reads the same arguments back from the same
+ * messages: an argument list that is not an object is a call with no arguments
+ * worth showing, and both readers have to agree on that.
+ */
+export function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};

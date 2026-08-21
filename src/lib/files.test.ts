@@ -98,9 +98,19 @@ describe("readFileText", () => {
     expect(read.trimmed).toBe(false);
   });
 
-  it("fails by name when the file cannot be read", async () => {
+  it("fails with the reason, because the name is already on the row", async () => {
+    // The three answers the file store gives mean different things to the
+    // person reading, and one sentence covering all of them is the reason the
+    // only failure anybody has hit was also the one nobody could diagnose.
     fetched.mockResolvedValue({ ok: false, status: 404, text: async () => "" });
-    await expect(readFileText(file("gone.txt", "text/plain"), 2048)).rejects.toThrow("gone.txt");
+    await expect(readFileText(file("gone.txt", "text/plain"), 2048)).rejects.toThrow(
+      "not in this workspace's file store",
+    );
+
+    fetched.mockResolvedValue({ ok: false, status: 503, text: async () => "" });
+    await expect(readFileText(file("early.txt", "text/plain"), 2048)).rejects.toThrow(
+      "still opening",
+    );
   });
 
   it("reads one file once, however many times the transcript redraws it", async () => {
