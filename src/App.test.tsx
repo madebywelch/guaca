@@ -14,6 +14,7 @@ import type { AgentCard, Routine, Settings } from "./lib/types";
 
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
+const agentActivity = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({}));
 const agentRoutines = vi.fn<() => Promise<Routine[]>>(async () => []);
 const setAgentPinned = vi.fn<(id: string, pinned: boolean) => Promise<AgentCard>>();
 const duplicateAgent = vi.fn<(id: string) => Promise<AgentCard>>();
@@ -54,7 +55,7 @@ vi.mock("./lib/ipc", () => ({
         apiKeyHint: "",
       },
     ],
-    agentActivity: async () => ({}),
+    agentActivity: () => agentActivity(),
     usageSummary: async () => [],
     approvalStates: async () => ({}),
     agentLastActive: () => agentLastActive(),
@@ -79,9 +80,10 @@ vi.mock("./lib/ipc", () => ({
 const { default: App } = await import("./App");
 const { useStore } = await import("./lib/store");
 
-function agent(name: string): AgentCard {
+function agent(name: string, railOrder = 0): AgentCard {
   return {
     id: `id-${name}`,
+    railOrder,
     groupId: "00000000-0000-4000-8000-000000000001",
     sandboxId: null,
     name,
@@ -112,16 +114,24 @@ function railRow(name: string): HTMLElement {
   return row as HTMLElement;
 }
 
+/** Every row in the rail, top to bottom. */
+function railNames(): (string | null)[] {
+  const rail = screen.getByRole("navigation", { name: /agents/i });
+  return [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   listAgents.mockResolvedValue([]);
   agentLastActive.mockResolvedValue({});
+  agentActivity.mockResolvedValue({});
   useStore.setState({
     agents: [],
     activity: {},
     lastActive: {},
     settings: null,
     selected: null,
+    railGroup: null,
     messages: {},
     streams: {},
     pulses: [],
@@ -154,17 +164,31 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByRole("heading", { name: "Manager" })).toBeTruthy());
   });
 
-  it("puts the most recently active agent at the top of the rail", async () => {
-    listAgents.mockResolvedValue([agent("Manager"), agent("Chef"), agent("Host")]);
+  it("draws the rail in the order the operator arranged it", async () => {
+    // Having spoken recently is not a reason to move. The rail used to be
+    // ordered by nothing else, so a conversation rewrote the arrangement and
+    // the row you reached for was the row that had just left.
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Chef", 1), agent("Host", 2)]);
     agentLastActive.mockResolvedValue({ "id-Host": 900, "id-Chef": 500 });
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
-    const rail = screen.getByRole("navigation", { name: /agents/i });
-    const names = [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
-    // Host spoke last, then Chef. Manager has never spoken, so it keeps its
-    // creation position at the bottom.
-    expect(names).toEqual(["Host", "Chef", "Manager"]);
+    expect(railNames()).toEqual(["Manager", "Chef", "Host"]);
+  });
+
+  it("lifts whoever is working to the top, and gives the place back", async () => {
+    listAgents.mockResolvedValue([agent("Manager", 0), agent("Chef", 1), agent("Host", 2)]);
+    agentActivity.mockResolvedValue({ "id-Host": { state: "thinking" } });
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    expect(railNames()).toEqual(["Host", "Manager", "Chef"]);
+
+    // The turn ends, and the row goes back where it was put.
+    useStore
+      .getState()
+      .applyEvent({ type: "activityChanged", agentId: "id-Host", activity: { state: "idle" } });
+    await waitFor(() => expect(railNames()).toEqual(["Manager", "Chef", "Host"]));
   });
 
   it("keeps deleted agents out of the rail", async () => {
@@ -201,20 +225,19 @@ describe("App", () => {
   });
 
   it("puts a pinned agent above the rest and leaves it there", async () => {
-    // The rail floats whoever just spoke to the top. A row pinned so it could
-    // be found in one glance must not join in.
+    // The rail lifts whoever is working to the top of its section. A row pinned
+    // so it could be found in one glance must not join in, wherever it sits in
+    // the arrangement.
     listAgents.mockResolvedValue([
-      agent("Manager"),
-      { ...agent("Chef"), pinned: true },
-      agent("Host"),
+      agent("Manager", 0),
+      { ...agent("Chef", 1), pinned: true },
+      agent("Host", 2),
     ]);
-    agentLastActive.mockResolvedValue({ "id-Host": 900, "id-Manager": 500 });
+    agentActivity.mockResolvedValue({ "id-Chef": { state: "thinking" } });
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
-    const rail = screen.getByRole("navigation", { name: /agents/i });
-    const names = [...rail.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
-    expect(names).toEqual(["Chef", "Host", "Manager"]);
+    expect(railNames()).toEqual(["Chef", "Manager", "Host"]);
     expect(screen.getByText("Pinned")).toBeTruthy();
   });
 

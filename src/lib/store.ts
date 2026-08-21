@@ -10,6 +10,7 @@ import { useCallback, useMemo } from "react";
 import { create } from "zustand";
 
 import { api } from "./ipc";
+import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
 import { keepThought } from "./reasoning";
 import type {
   Activity,
@@ -51,6 +52,15 @@ export interface Pulse {
 /** How long the group meters look back. */
 export const PULSE_WINDOW_MS = 90_000;
 
+/** Where a move leaves an agent. */
+export interface Placement {
+  groupId: GroupId;
+  /** The row it lands in front of. `null` is the end of the group. */
+  before: AgentId | null;
+  /** Absent leaves the section it is in alone. */
+  pinned?: boolean;
+}
+
 interface State {
   agents: AgentCard[];
   groups: Group[];
@@ -77,6 +87,16 @@ interface State {
   approvals: Record<ApprovalId, ApprovalState | undefined>;
 
   selected: ChannelKey | null;
+  /**
+   * The group the rail is looking inside, or `null` for all of them.
+   *
+   * Here rather than in the sidebar because opening a channel can invalidate
+   * it: an agent reached from search or from the flow board may live in another
+   * crew, and a rail that keeps showing the group you were in has the open
+   * channel nowhere on it. `select` is what knows a channel changed, so `select`
+   * is what lets the focus go.
+   */
+  railGroup: GroupId | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
   streams: Record<MessageId, StreamBuffer | undefined>;
   /**
@@ -108,6 +128,17 @@ interface State {
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
+  /** Looks inside one group, or back out at all of them. */
+  focusGroup: (id: GroupId | null) => void;
+  /**
+   * Puts an agent somewhere: which group, in front of which row, and whether it
+   * is pinned. Absent `pinned` leaves the section it is in alone.
+   */
+  moveAgent: (id: AgentId, at: Placement) => Promise<void>;
+  /** One drop, resolved against the rules that drew the rail. */
+  dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
+  /** The same move one row at a time, for an operator who is not dragging. */
+  nudgeAgent: (id: AgentId, delta: -1 | 1) => Promise<void>;
   loadChannel: (key: ChannelKey, through?: MessageId) => Promise<void>;
   /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
@@ -146,6 +177,20 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
   return next;
 }
 
+/**
+ * Whether the rail can stay inside the group it is inside.
+ *
+ * It can, unless the channel being opened belongs to an agent in another one. A
+ * search hit or a click on the flow board can land anywhere, and a rail still
+ * showing one crew while the pane shows a member of another has the open channel
+ * nowhere on it. The activity feed belongs to no group and changes nothing.
+ */
+function keptFocus(state: State, key: ChannelKey): GroupId | null {
+  if (state.railGroup === null || key === ACTIVITY_CHANNEL) return state.railGroup;
+  const agent = state.agents.find((a) => a.id === key);
+  return agent && agent.groupId !== state.railGroup ? null : state.railGroup;
+}
+
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
@@ -156,6 +201,7 @@ export const useStore = create<State>((set, get) => ({
   pulse: {},
   approvals: {},
   selected: null,
+  railGroup: null,
   messages: {},
   streams: {},
   reasoning: {},
@@ -186,7 +232,13 @@ export const useStore = create<State>((set, get) => ({
     // Groups come back with the roster because an agent moving between them
     // changes both counts, and one refresh keeps the two consistent on screen.
     const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
-    set({ agents, groups });
+    // A group the rail was looking inside can be deleted from the group editor,
+    // and a focus on one that is gone draws an empty rail with no way out of it.
+    set((state) => ({
+      agents,
+      groups,
+      railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
+    }));
 
     // If the open channel was just deleted, fall back rather than showing a
     // dead pane.
@@ -202,8 +254,121 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async select(key) {
-    set({ selected: key, focused: null });
+    set((state) => ({ selected: key, focused: null, railGroup: keptFocus(state, key) }));
     await get().loadChannel(key);
+  },
+
+  focusGroup(id) {
+    set({ railGroup: id });
+  },
+
+  /**
+   * The whole of a move, applied.
+   *
+   * Read back rather than patched locally. The runtime renumbers every live row
+   * to close the gap the agent left, so the one card that came back is not the
+   * change: guessing the rest here would leave the rail drawing an arrangement
+   * the database does not have until the next unrelated refresh.
+   *
+   * Pinning first, and only when it differs. It is a separate command because
+   * it is a separate fact, and doing it second would mean a refresh that draws
+   * the row in its new place and its old section.
+   */
+  async moveAgent(id, at) {
+    const current = get().agents.find((a) => a.id === id);
+    if (at.pinned !== undefined && current && current.pinned !== at.pinned) {
+      await api.setAgentPinned(id, at.pinned);
+    }
+    await api.moveAgent(id, at.groupId, at.before);
+    await get().refreshAgents();
+  },
+
+  /**
+   * One drop, resolved.
+   *
+   * Which section the target row belongs to is worked out here rather than
+   * handed in, because the same rules that drew the rail have to decide where
+   * the row lands and a component recomputing them would be a second place for
+   * them to drift.
+   *
+   * The pinned section is a flag and not a place. It spans groups, so a row
+   * dropped among pins keeps its own crew: the alternative is a gesture that
+   * says "keep this where I can see it" and quietly moves the agent to a
+   * different set of peers.
+   */
+  async dropAgent(id, target) {
+    const state = get();
+    const dragged = state.agents.find((a) => a.id === id);
+    if (!dragged) return;
+
+    if (target.kind === "pinned") {
+      if (dragged.pinned) return;
+      await api.setAgentPinned(id, true);
+      await get().refreshAgents();
+      return;
+    }
+
+    const live = state.agents.filter((a) => a.lifecycle !== "terminated");
+
+    if (target.kind === "group") {
+      await get().moveAgent(id, { groupId: target.id, before: null, pinned: false });
+      return;
+    }
+
+    const onto = live.find((a) => a.id === target.id);
+    if (!onto || onto.id === id) return;
+
+    // Dropped among the pins from another crew: pin it, and leave the crew and
+    // the place it already had. There is no position in that section to express,
+    // because the section is drawn from rows the arrangement holds apart.
+    if (onto.pinned && onto.groupId !== dragged.groupId) {
+      if (!dragged.pinned) {
+        await api.setAgentPinned(id, true);
+        await get().refreshAgents();
+      }
+      return;
+    }
+
+    const section = onto.pinned
+      ? live.filter((a) => a.pinned && a.groupId === onto.groupId)
+      : live.filter((a) => a.groupId === onto.groupId && !a.pinned);
+    const order = railOrder(section, {
+      activity: state.activity,
+      lastActive: state.lastActive,
+      frozen: true,
+    });
+    const before = landsBefore(order, id, onto.id);
+    if (before === undefined) return;
+    await get().moveAgent(id, { groupId: onto.groupId, before, pinned: onto.pinned });
+  },
+
+  /**
+   * One row up or down, for an operator who is not holding a mouse.
+   *
+   * Ordered from the same function that draws the rail, and frozen, so this
+   * moves the row within the arrangement rather than within whatever the
+   * arrangement currently looks like with somebody mid-turn on top of it.
+   */
+  async nudgeAgent(id, delta) {
+    const state = get();
+    const agent = state.agents.find((a) => a.id === id);
+    if (!agent) return;
+
+    const live = state.agents.filter((a) => a.lifecycle !== "terminated");
+    // A pinned row moves among the pinned rows: that section spans groups and is
+    // drawn above them, so its neighbours are the other pins and not the crew.
+    const section = agent.pinned
+      ? live.filter((a) => a.pinned)
+      : live.filter((a) => a.groupId === agent.groupId && !a.pinned);
+
+    const order = railOrder(section, {
+      activity: state.activity,
+      lastActive: state.lastActive,
+      frozen: true,
+    });
+    const before = nudgeTarget(order, id, delta);
+    if (before === undefined) return;
+    await get().moveAgent(id, { groupId: agent.groupId, before });
   },
 
   async loadChannel(key, through) {
@@ -224,7 +389,11 @@ export const useStore = create<State>((set, get) => ({
    * the operator sees where they are going rather than a pause.
    */
   async openMessage(channel, message) {
-    set({ selected: channel, focused: message });
+    set((state) => ({
+      selected: channel,
+      focused: message,
+      railGroup: keptFocus(state, channel),
+    }));
     await get().loadChannel(channel, message);
   },
 
@@ -462,11 +631,13 @@ export const useStore = create<State>((set, get) => ({
 }));
 
 /**
- * Agents shown in the rail, most recently active first.
+ * Every agent still in the workspace, in the order the operator arranged them.
  *
- * Agents that have never spoken keep their creation order at the bottom, so a
- * fresh workspace reads in the order you built it and a busy one floats whoever
- * just spoke to the top.
+ * The arrangement and not the drawn order: this is one flat list across every
+ * group, and where a row is lifted for working is a question about one section
+ * of the rail. `lib/rail.ts` answers that, and the sidebar asks it per section.
+ * A caller that just wants the roster, like the composer's mention list, gets
+ * the arrangement, which is the order the operator would look for a name in.
  *
  * Memoized, and that is load-bearing rather than an optimization. `filter`
  * allocates a new array on every render, so an unmemoized result is a fresh
@@ -476,15 +647,14 @@ export const useStore = create<State>((set, get) => ({
  */
 export function useLiveAgents(): AgentCard[] {
   const agents = useStore((s) => s.agents);
-  const lastActive = useStore((s) => s.lastActive);
 
   return useMemo(() => {
     return agents
       .filter((a) => a.lifecycle !== "terminated")
-      .map((agent, order) => ({ agent, order, at: lastActive[agent.id] ?? 0 }))
-      .sort((a, b) => b.at - a.at || a.order - b.order)
+      .map((agent, order) => ({ agent, order }))
+      .sort((a, b) => a.agent.railOrder - b.agent.railOrder || a.order - b.order)
       .map((entry) => entry.agent);
-  }, [agents, lastActive]);
+  }, [agents]);
 }
 
 /**
