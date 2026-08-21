@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Attachment } from "../lib/types";
@@ -65,9 +65,12 @@ describe("FileCard", () => {
   });
 
   it("gives a document its first page, in a frame that does not take the click", async () => {
-    const { unmount } = render(<FileCard file={file("brief.pdf", "application/pdf")} />);
+    const { unmount, container } = render(<FileCard file={file("brief.pdf", "application/pdf")} />);
 
-    const page = (await screen.findByTitle("brief.pdf")) as HTMLIFrameElement;
+    // By tag rather than by title: the name button carries the whole file name
+    // as a tooltip now, because it truncates.
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    const page = container.querySelector("iframe") as HTMLIFrameElement;
     // A copy of the document, not its address: WebKit refuses a custom scheme
     // as a frame source whatever the CSP says, and a document's own viewer only
     // runs in a frame. The bytes still arrive over the scheme.
@@ -87,7 +90,13 @@ describe("FileCard", () => {
     fetched.mockResolvedValue({ ok: false, status: 404, blob: async () => new Blob([]) });
     render(<FileCard file={file("missing.pdf", "application/pdf")} />);
 
-    await waitFor(() => expect(screen.getByText(/could not be read/)).toBeTruthy());
+    // The reason, not just the fact: a preview that fails while the store is
+    // still opening wants trying again, and one whose bytes are missing does
+    // not, and "could not be read" said neither.
+    await waitFor(() =>
+      expect(screen.getByText(/not in this workspace's file store/)).toBeTruthy(),
+    );
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
   });
 
   it("reads the first lines of a text file into the transcript", async () => {
@@ -104,6 +113,10 @@ describe("FileCard", () => {
 
     expect(screen.getByText("archive.zip")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open archive.zip" })).toBeNull();
+    // The one row with no preview to speak for it, so it says what it is. A
+    // name and a size and no other fact is what leaves an operator wondering
+    // what the app thinks it is holding.
+    expect(screen.getByText(/ZIP archive/)).toBeTruthy();
   });
 
   it("opens the full view on the name, whatever the file is", async () => {
@@ -113,8 +126,10 @@ describe("FileCard", () => {
     const dialog = screen.getByRole("dialog");
     expect(dialog.getAttribute("aria-label")).toBe("archive.zip");
     // Clicking a file that cannot be shown has to leave the operator somewhere
-    // better than where they were.
-    expect(screen.getByText(/Save a copy/)).toBeTruthy();
+    // better than where they were: what it is, and the one thing that always
+    // works on a file this app cannot open.
+    expect(within(dialog).getByText(/ZIP archive/)).toBeTruthy();
+    expect(within(dialog).getByRole("button", { name: "Save a copy" })).toBeTruthy();
   });
 
   it("closes the full view on Escape", () => {
@@ -130,7 +145,7 @@ describe("FileCard", () => {
     saveFile.mockResolvedValue("/Users/robert/Downloads/brief.pdf");
     render(<FileCard file={file("brief.pdf", "application/pdf")} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save a copy" }));
 
     await waitFor(() =>
       expect(saveFile).toHaveBeenCalledWith(
@@ -150,7 +165,7 @@ describe("FileCard", () => {
     saveFile.mockRejectedValue({ kind: "file", message: "no file here with that content" });
     render(<FileCard file={file("brief.pdf", "application/pdf")} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save a copy" }));
 
     await waitFor(() =>
       expect(setBanner).toHaveBeenCalledWith({
@@ -161,9 +176,32 @@ describe("FileCard", () => {
   });
 
   it("says a text file could not be read rather than showing an empty box", async () => {
-    fetched.mockRejectedValue(new Error("gone"));
+    fetched.mockRejectedValue(new Error("the file store was still opening"));
     render(<FileCard file={file("unreadable.md", "text/markdown")} />);
 
-    await waitFor(() => expect(screen.getByText(/could not be read/)).toBeTruthy());
+    await waitFor(() =>
+      expect(
+        screen.getByText(/Could not read this file: the file store was still opening/),
+      ).toBeTruthy(),
+    );
+  });
+
+  it("offers another go at a read that failed, and takes it", async () => {
+    // The commonest failure here is one that has already stopped being true by
+    // the time it is on screen: the store answers 503 while it is opening, and
+    // a preview that mounted in that window used to stay broken for the life of
+    // the channel.
+    // Its own name, so its own digest: the read cache is keyed by content and
+    // outlives a test, which is the whole point of it everywhere else.
+    fetched.mockRejectedValueOnce(new Error("the file store was still opening"));
+    const { container } = render(<FileCard file={file("retry.md", "text/markdown")} />);
+
+    const retry = await screen.findByRole("button", { name: "Try again" });
+    fireEvent.click(retry);
+
+    await waitFor(() =>
+      expect(container.querySelector(".file__text")?.textContent).toContain("first line"),
+    );
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 });

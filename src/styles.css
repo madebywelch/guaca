@@ -2400,9 +2400,32 @@ button {
   text-decoration: underline;
 }
 
-.file__size {
+/* Never wraps and never shrinks. This is three or four characters carrying the
+   one fact the name does not, and a size broken across two lines is the row
+   telling the operator its own layout gave up. */
+.file__meta {
   font-size: 0.66rem;
   color: var(--muted);
+  flex: none;
+  white-space: nowrap;
+}
+
+/* A file the app has and could not read. Says which reason it was and offers
+   the two ways forward: the store answers 503 while it is opening, so the
+   commonest failure here is one that has already stopped being true. */
+.file__failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+}
+
+.file__failed-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   flex: none;
 }
 
@@ -2420,26 +2443,69 @@ button {
   max-height: calc(100vh - 3rem);
 }
 
+/* Two rows in one grid rather than one row of four things. The name is the
+   only part allowed to run out of room; everything else states a fact in a
+   fixed number of characters and is placed where running out cannot happen to
+   it. */
 .file-view__head {
-  display: flex;
-  align-items: baseline;
-  gap: 0.6rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.9rem;
   margin-bottom: 0.9rem;
-  min-width: 0;
 }
 
 .file-view__head .dialog__title {
+  grid-column: 1;
+  margin: 0;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* What it is and how big, under the name. Its own line because it is the line
+   that used to be squeezed between a name that wanted the whole row and a pair
+   of buttons that would not give any of it up: `48 KB` came out as `48` over
+   `KB`, which is a dialog admitting it cannot lay out five characters. */
+.file-view__what {
+  grid-column: 1;
+  margin: 0.1rem 0 0;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .file-view__actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-left: auto;
+  gap: 0.5rem;
+}
+
+/* Its own corner. Beside `Save a copy` it read as the second half of a pair of
+   answers, which is part of why the first one looked like it might change the
+   file rather than copy it out. */
+.file-view__close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
   flex: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.file-view__close:hover {
+  background: var(--sunken);
+  color: var(--text);
 }
 
 .file-view__body {

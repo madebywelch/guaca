@@ -153,6 +153,11 @@ the source rather than at the end.
 GUAC_LOG=guac=debug pnpm app
 ```
 
+Getting a change on screen has its own file: `.claude/skills/run-guaca`. It
+holds the harness that draws a component in seconds without a Rust build, a key
+or any spend; what to do when the app refuses to start; and the rule about the
+operator's own workspace, which every workspace on the machine shares.
+
 Three suites ask three different questions, and a change can pass one while
 failing the next. *Three test suites, asking different questions* in
 `docs/ARCHITECTURE.md` is the long version.
