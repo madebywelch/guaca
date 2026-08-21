@@ -908,29 +908,6 @@ impl RoutineDraft {
     }
 }
 
-/// Where an edited routine's next firing lands.
-///
-/// Three cases, and the difference between them is what the operator did. A
-/// stated time is honoured. An untouched time keeps the slot it was holding,
-/// because correcting a typo must not push the schedule to tomorrow. And a
-/// trigger swapped for one that would never fire at that moment has to move:
-/// "every hour" turned into "every weekday" keeps its hour but cannot keep its
-/// Saturday, or the label and the firing disagree from the moment it is saved.
-///
-/// A trigger that is not a clock lands nowhere at all, whatever was asked for.
-fn next_slot_for(trigger: &Trigger, existing: &Routine, in_secs: Option<u32>) -> Option<i64> {
-    let cadence = trigger.cadence()?;
-    let now = now_ms();
-    match (in_secs, existing.next_run_at) {
-        (Some(_), _) => Some(cadence.first_run(now, in_secs)),
-        // Coming back to the clock from a trigger that held no slot: there is
-        // nothing to keep, so it starts one interval out like a new routine.
-        (None, None) => Some(cadence.first_run(now, None)),
-        (None, Some(slot)) if cadence.accepts(slot) => Some(slot),
-        (None, Some(slot)) => Some(cadence.next_after(slot, now).unwrap_or(slot)),
-    }
-}
-
 #[tauri::command]
 pub fn create_routine(
     state: State<'_, AppState>,
@@ -941,7 +918,7 @@ pub fn create_routine(
     let first = trigger.first_run(now_ms(), draft.in_secs);
     let routine =
         state.runtime.store().create_routine(agent_id, &draft.name, &draft.what, trigger, first)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
+    state.runtime.emit(UiEvent::RoutinesChanged { agent_id });
     Ok(routine)
 }
 
@@ -958,11 +935,11 @@ pub fn update_routine(
         .store()
         .get_routine(id)?
         .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
-    let next = next_slot_for(&trigger, &existing, draft.in_secs);
+    let next = routine::next_slot_for(&trigger, &existing, draft.in_secs);
 
     let routine =
         state.runtime.store().update_routine(id, &draft.name, &draft.what, trigger, next)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
+    state.runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
     Ok(routine)
 }
 
@@ -978,7 +955,7 @@ pub fn set_routine_active(
     active: bool,
 ) -> Reply<Routine> {
     let routine = state.runtime.store().set_routine_active(id, active)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
+    state.runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
     Ok(routine)
 }
 
@@ -1007,8 +984,13 @@ pub fn routine_runs(state: State<'_, AppState>, id: RoutineId) -> Reply<Vec<Rout
 
 #[tauri::command]
 pub fn delete_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<()> {
+    // Read before the delete, because the event names the agent whose schedule
+    // changed and afterwards there is nothing left to ask.
+    let whose = state.runtime.store().get_routine(id)?.map(|routine| routine.agent_id);
     state.runtime.store().delete_routine(id)?;
-    state.runtime.emit(UiEvent::AgentsChanged);
+    if let Some(agent_id) = whose {
+        state.runtime.emit(UiEvent::RoutinesChanged { agent_id });
+    }
     Ok(())
 }
 

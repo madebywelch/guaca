@@ -51,8 +51,6 @@ function remembered(): boolean {
 export function Inspector({ agent, onEditProfile }: Props) {
   const [open, setOpen] = useState(remembered);
   const [routine, setRoutine] = useState<RoutineId | "new" | null>(null);
-  // Bumped to make the list read itself again after a routine was edited.
-  const [listVersion, setListVersion] = useState(0);
 
   useEffect(() => {
     try {
@@ -150,11 +148,11 @@ export function Inspector({ agent, onEditProfile }: Props) {
         {/* Hidden rather than unmounted while a routine is open. The screen
             holds a live connection to the agent's desktop, and rebuilding it
             every time somebody looked at a schedule would drop and reconnect
-            it. The list beside it is remounted deliberately, by its key. */}
+            it. */}
         <div className="inspector__level" hidden={routine !== null}>
           <ComputerScreen agent={agent} key={agent.id} />
           <BrowserScreen agent={agent} key={`browser:${agent.id}`} />
-          <RoutineList agentId={agent.id} onOpen={setRoutine} key={`${agent.id}:${listVersion}`} />
+          <RoutineList agentId={agent.id} onOpen={setRoutine} key={agent.id} />
         </div>
 
         {routine !== null && (
@@ -162,12 +160,10 @@ export function Inspector({ agent, onEditProfile }: Props) {
             key={`${agent.id}:${routine}`}
             agentId={agent.id}
             routineId={routine}
-            onBack={() => {
-              setRoutine(null);
-              // A routine can come back renamed, retimed, switched off or
-              // gone, and the list behind this was drawn before any of that.
-              setListVersion((n) => n + 1);
-            }}
+            // A routine can come back renamed, retimed, switched off or gone.
+            // The list behind this reads itself again on the event every one of
+            // those emits, so there is nothing to bump here.
+            onBack={() => setRoutine(null)}
           />
         )}
       </div>

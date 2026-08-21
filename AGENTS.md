@@ -67,6 +67,7 @@ repo: the frontend renders state and forwards intent.
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
+| What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
@@ -146,6 +147,12 @@ the model takes a screenshot to see what `browse` did.
 - **`Routine::next_run_at` is an `Option` because some triggers have no next
   run.** A sentinel date would be shown to the operator, and it is one bad
   comparison away from firing something that was waiting on a connector.
+- **An agent's standing routines are in its prompt, and that is not a duplicate
+  of `schedule` with `list`.** A list behind a tool call arrives after the model
+  has decided what to do, so an agent asked to change something it already keeps
+  wrote a second routine beside the first and reported the change as made. Both
+  fired. `docs/ROUTINES.md` before you take the section out, and note that
+  `update` is what the ids in it are for.
 - **A stop marks a run and releases nothing.** `track_inflight` reads a negative
   delta against a run it is no longer counting as that run reaching zero, and
   emits a second `RunSettled` for it. So a stop that helpfully released the

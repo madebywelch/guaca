@@ -1658,6 +1658,176 @@ async fn a_standing_request_becomes_one_routine_that_does_the_job_when_it_fires(
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_change_to_a_routine_changes_the_one_that_stands_rather_than_adding_a_second() {
+    // The failure this exists for. An operator books something, comes back half
+    // an hour later and asks for it at a different time without saying which
+    // routine they mean. The agent had no way to know it already kept one, and
+    // no verb for changing it: it wrote a second beside the first, said it had
+    // made the change, and both fired from then on.
+    //
+    // The id is read out of the agent's own prompt, so this asserts the whole
+    // path rather than the tool: what it keeps is in front of it, and the way
+    // to change it takes that id.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            return Script::Say("Moved it to every morning.".into());
+        }
+        match standing_id(body) {
+            Some(id) => Script::Retime { id, repeat: "daily".into() },
+            // No id in the prompt is the bug: an agent that cannot see what it
+            // keeps books a second routine instead.
+            None => Script::Book {
+                name: "Listings check".into(),
+                what: "Check the listings and say what is new.".into(),
+                repeat: "daily".into(),
+            },
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    h.runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the listings and say what is new.",
+            Trigger::Clock(Cadence::Weekdays),
+            Some(now_ms() + 3_600_000),
+        )
+        .unwrap();
+
+    let asked = h
+        .runtime
+        .send_from_human(h.id("Watcher"), "Actually make that every day, not just weekdays.")
+        .unwrap();
+    h.settle(asked).await;
+
+    let standing = h.runtime.store().agent_routines(h.id("Watcher")).unwrap();
+    assert_eq!(
+        standing.len(),
+        1,
+        "a change to a standing job is one routine, not two competing ones: {:?}",
+        standing.iter().map(|r| (r.title().to_string(), r.describe())).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        standing[0].trigger,
+        Trigger::Clock(Cadence::Daily),
+        "and it is the change asked for"
+    );
+    assert_eq!(
+        standing[0].name, "Listings sweep",
+        "a field nobody sent is left alone, or retiming a routine loses its name"
+    );
+    assert!(
+        tool_results(&stub).iter().any(|r| r.contains("Updated")),
+        "the reply is the agent's only record of what it did: {:?}",
+        tool_results(&stub)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn one_agent_cannot_retime_or_cancel_another_agents_routine() {
+    // A schedule is not shared. `update` reaches a row by id, and an id that
+    // arrives from anywhere other than this agent's own list has to miss.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            return Script::Say("Could not change it.".into());
+        }
+        // The id is passed in through the instruction, which is the only way an
+        // agent could come by a peer's: read out of a message.
+        let id = body["messages"]
+            .as_array()
+            .and_then(|m| m.last())
+            .and_then(|m| m["content"].as_str())
+            .and_then(|text| text.split("id ").nth(1))
+            .map(|rest| rest.trim().trim_end_matches('.').to_string())
+            .unwrap_or_default();
+        Script::Retime { id, repeat: "monthly".into() }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher", "Scribe"], GuardLimits::default());
+    let theirs = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Scribe"),
+            "Filing",
+            "File yesterday's notes.",
+            Trigger::Clock(Cadence::Weekdays),
+            Some(now_ms() + 3_600_000),
+        )
+        .unwrap();
+
+    let asked = h
+        .runtime
+        .send_from_human(h.id("Watcher"), &format!("Move the filing routine, id {}.", theirs.id))
+        .unwrap();
+    h.settle(asked).await;
+
+    assert_eq!(
+        h.runtime.store().get_routine(theirs.id).unwrap().unwrap().trigger,
+        Trigger::Clock(Cadence::Weekdays),
+        "one agent retimed another's routine"
+    );
+    assert!(
+        tool_results(&stub).iter().any(|r| r.contains("no routine with the id")),
+        "and the refusal has to say so rather than reporting success: {:?}",
+        tool_results(&stub)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_routine_for_a_job_already_standing_is_named_while_the_turn_can_still_fix_it() {
+    // The backstop for the same failure, for a turn that books anyway. Not a
+    // refusal: nothing here can tell "move the sweep" from "sweep twice a day",
+    // and refusing the second would refuse honest work. Said, with both ids,
+    // while the turn that knows which it meant is still running.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            return Script::Say("Booked.".into());
+        }
+        Script::Book {
+            name: "Listings check".into(),
+            what: "Check Zillow listings and email me a summary of anything new.".into(),
+            repeat: "daily".into(),
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    let first = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "Check the new listings and email me a summary.",
+            Trigger::Clock(Cadence::Weekdays),
+            Some(now_ms() + 3_600_000),
+        )
+        .unwrap();
+
+    let asked = h
+        .runtime
+        .send_from_human(h.id("Watcher"), "Check the listings daily and email me.")
+        .unwrap();
+    h.settle(asked).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(
+        told.contains("same job"),
+        "the turn has to be told it now has two routines doing one job: {told}"
+    );
+    assert!(
+        told.contains(&first.id.to_string()),
+        "with the id of the one it already had, or there is nothing it can act on: {told}"
+    );
+    assert!(told.contains("cancel"), "and the way out: {told}");
+}
+
 #[tokio::test]
 async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked() {
     let stub = serve(|_| Script::Say("checked".into())).await;
