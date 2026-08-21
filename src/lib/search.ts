@@ -346,7 +346,7 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
       key: "action:app-settings",
       kind: "actions",
       title: "App settings",
-      detail: "API key, model, limits, computers",
+      detail: "API key, model, limits, computers, appearance, notifications, shortcuts",
       meta: "Action",
       action: { do: "openSettings" },
     },

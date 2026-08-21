@@ -304,6 +304,12 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
  */
 function WorkingNote({ agent, state }: { agent: AgentCard; state: Activity | undefined }) {
   const thought = thoughtLine(useStore((s) => s.reasoning[agent.id]));
+  // One string, so this re-renders when the run changes and not when a token
+  // arrives. Subscribing to `streams` here to find it would undo the whole
+  // reason this component exists.
+  const run = useStore((s) => s.activeRun[agent.id]);
+  const setBanner = useStore((s) => s.setBanner);
+  const [stopping, setStopping] = useState(false);
 
   // Queued counts: the agent has work it has not read yet, and to the operator
   // that is the same thing as working. Awaiting approval does not: it is
@@ -330,6 +336,32 @@ function WorkingNote({ agent, state }: { agent: AgentCard; state: Activity | und
         title={`${agent.name} is working`}
       />
       <span className="working__label">{thought || `${agent.name} is working`}</span>
+      {run && (
+        // Stops the conversation, not the agent. A message that reached four
+        // agents is one run, and stopping only the one on screen would leave
+        // the other three working on the operator's bill: hence the wording,
+        // which is the same distinction the button actually makes.
+        <button
+          type="button"
+          className="btn btn--ghost btn--small working__stop"
+          disabled={stopping}
+          title="Stop this conversation and everything it set off"
+          onClick={async () => {
+            setStopping(true);
+            try {
+              // False means it had already finished, which needs no telling:
+              // the answer is on screen.
+              await api.stopRun(run);
+            } catch (error) {
+              setBanner({ tone: "error", text: errorMessage(error) });
+            } finally {
+              setStopping(false);
+            }
+          }}
+        >
+          Stop
+        </button>
+      )}
     </div>
   );
 }

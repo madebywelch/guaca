@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
@@ -8,11 +8,15 @@ import { ChannelView } from "./components/ChannelView";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
 import { Search } from "./components/Search";
-import { SettingsDialog } from "./components/SettingsDialog";
+import { type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
-import { api, onRuntimeEvent } from "./lib/ipc";
+import { announcementFor } from "./lib/announce";
+import { applyAppearance, watchSystemSurface } from "./lib/appearance";
+import { api, notifyOperator, onRuntimeEvent } from "./lib/ipc";
+import { bindingFor } from "./lib/keybinds";
+import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "./lib/store";
-import { type AgentCard, errorMessage, type Group } from "./lib/types";
+import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
 
 export default function App() {
   const agents = useLiveAgents();
@@ -28,28 +32,71 @@ export default function App() {
   const groups = useStore((s) => s.groups);
   const nudgeAgent = useStore((s) => s.nudgeAgent);
   const dropAgent = useStore((s) => s.dropAgent);
+  const prefs = useStore((s) => s.prefs);
+
+  /**
+   * Raises an operating system notification, when one is warranted.
+   *
+   * Reads the store at the moment of the event rather than closing over it. The
+   * subscription below is made once, on purpose, and a preference or a
+   * selection that has changed since then is the one that has to apply; a
+   * dependency on either would tear the event listener down and rebuild it
+   * every time the operator clicked a different agent.
+   */
+  const announce = useCallback((event: UiEvent) => {
+    const state = useStore.getState();
+    const said = announcementFor(
+      event,
+      (id) => state.agents.find((agent) => agent.id === id)?.name ?? "An agent",
+    );
+    if (!said) return;
+
+    const warranted = shouldNotify(said.kind, state.prefs.notify, {
+      away: away(),
+      // An announcement about no channel in particular is never held back for
+      // being about the wrong one.
+      onScreen: said.channel === null || said.channel === state.selected,
+      quiet: quiet(),
+    });
+    if (!warranted || burst(said.key)) return;
+
+    void notifyOperator(said.title, said.body);
+  }, []);
 
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
 
-  // Both modifiers, on every platform. The app is one window with one find
-  // shortcut, and an operator who learned it on a laptop should not have to
-  // learn it again on a desktop.
+  // The three shortcuts that work wherever the operator is, matched against
+  // the same table the Shortcuts pane draws from, so a key listed there is a key
+  // that works. Everything else in that table belongs to the surface it acts
+  // on: see `lib/keybinds`.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key.toLowerCase() === "k" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        setSearching(true);
-      }
+      const binding = bindingFor(event);
+      if (!binding) return;
+      event.preventDefault();
+
+      if (binding.id === "search") setSearching(true);
+      if (binding.id === "settings") setShowSettings(true);
+      if (binding.id === "shortcuts") setShowSettings("shortcuts");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // The scale and the surface, written to the root element. Done here rather
+  // than where they are chosen so a reload draws them before the first paint of
+  // anything else, and re-run when the OS changes its mind, which only matters
+  // while the surface is set to follow it.
+  useEffect(() => {
+    applyAppearance(prefs.uiScale, prefs.surface);
+    return watchSystemSurface(() => applyAppearance(prefs.uiScale, prefs.surface));
+  }, [prefs.uiScale, prefs.surface]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -63,12 +110,22 @@ export default function App() {
     void (async () => {
       // Subscribe before the first read so nothing that happens during startup
       // is missed.
-      const stop = await onRuntimeEvent(applyEvent);
+      const stop = await onRuntimeEvent((event) => {
+        applyEvent(event);
+        announce(event);
+      });
       if (cancelled) {
         stop();
         return;
       }
       unlisten = stop;
+
+      // Nothing interrupts the operator for the first few seconds. A routine
+      // whose slot passed while the app was closed is overdue and fires on the
+      // first tick, which is correct, but launching after a weekend away should
+      // not announce a weekend of schedule at once. All of it is on screen
+      // immediately either way; only the interruption waits.
+      markQuiet();
 
       try {
         await bootstrap();
@@ -83,7 +140,7 @@ export default function App() {
       cancelled = true;
       unlisten?.();
     };
-  }, [applyEvent, bootstrap, setBanner]);
+  }, [announce, applyEvent, bootstrap, setBanner]);
 
   /**
    * Runs something on one agent and re-reads the roster.
@@ -123,7 +180,9 @@ export default function App() {
         {needsKey && (
           <div className="banner">
             <span>Add an API key before your agents can reply.</span>
-            <button type="button" className="btn" onClick={() => setShowSettings(true)}>
+            {/* Onto the pane that holds the key, rather than onto the first one
+                with the key two sections away. */}
+            <button type="button" className="btn" onClick={() => setShowSettings("provider")}>
               Open settings
             </button>
           </div>
@@ -226,7 +285,12 @@ export default function App() {
         />
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsDialog
+          onClose={() => setShowSettings(null)}
+          section={showSettings === true ? undefined : showSettings}
+        />
+      )}
       {searching && (
         <Search
           onClose={() => setSearching(false)}

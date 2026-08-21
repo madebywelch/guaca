@@ -13,7 +13,7 @@ pub mod events;
 pub mod guard;
 pub mod prompt;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -345,8 +345,27 @@ struct Inbox {
     tx: mpsc::UnboundedSender<Envelope>,
     /// Queue depth, so the sidebar can show a backlog without draining it.
     depth: Arc<AtomicUsize>,
-    /// Woken when a paused agent is resumed.
+    /// Woken when a paused agent is resumed, or when a run it may be holding is
+    /// stopped.
     resume: Arc<Notify>,
+}
+
+/// What is still owed, per run, and which runs the operator has called off.
+///
+/// One structure behind one lock rather than two, because the two facts are
+/// read and written together. A stop is only meaningful for a run with work
+/// outstanding, and a run that settles has to forget it was stopped in the same
+/// critical section it stops being counted in: split across two mutexes there
+/// would be a lock-ordering rule to remember against the guard, and a window in
+/// which a run is marked stopped and already gone.
+#[derive(Default)]
+struct Runs {
+    /// Booked envelopes per run. A run has settled when its count reaches zero.
+    outstanding: HashMap<RunId, usize>,
+    /// Stopped runs, held exactly as long as they are still outstanding, so
+    /// this is the size of what is live rather than of everything this process
+    /// has ever stopped.
+    stopped: HashSet<RunId>,
 }
 
 struct Inner {
@@ -360,8 +379,9 @@ struct Inner {
     guard: Mutex<GuardRegistry>,
     inboxes: Mutex<HashMap<AgentId, Inbox>>,
     activity: Mutex<HashMap<AgentId, Activity>>,
-    /// Outstanding work per run, used to decide when a cascade has settled.
-    inflight: Mutex<HashMap<RunId, usize>>,
+    /// Outstanding work per run, used to decide when a cascade has settled, and
+    /// which of those runs the operator has stopped.
+    runs: Mutex<Runs>,
     /// Turns parked on a permission request, by request id. The row in SQLite
     /// is the record; this is the way back to the agent that is holding.
     waiting: Mutex<HashMap<ApprovalId, tokio::sync::oneshot::Sender<()>>>,
@@ -426,7 +446,7 @@ impl Runtime {
                 guard: Mutex::new(GuardRegistry::new(limits)),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
-                inflight: Mutex::new(HashMap::new()),
+                runs: Mutex::new(Runs::default()),
                 waiting: Mutex::new(HashMap::new()),
                 workspace,
                 files,
@@ -1126,15 +1146,16 @@ impl Runtime {
 
     fn track_inflight(&self, run: RunId, delta: i64) {
         let settled = {
-            let mut map = self.inner.inflight.lock();
-            let entry = map.entry(run).or_insert(0);
+            let mut runs = self.inner.runs.lock();
+            let entry = runs.outstanding.entry(run).or_insert(0);
             if delta >= 0 {
                 *entry += delta as usize;
             } else {
                 *entry = entry.saturating_sub((-delta) as usize);
             }
             if *entry == 0 {
-                map.remove(&run);
+                runs.outstanding.remove(&run);
+                runs.stopped.remove(&run);
                 true
             } else {
                 false
@@ -1210,6 +1231,117 @@ impl Runtime {
         Ok(approval)
     }
 
+    /// True while a stop the operator asked for is still in force.
+    ///
+    /// Read into a `bool` and the lock dropped, because every caller is about
+    /// to await something.
+    fn stopped(&self, run: RunId) -> bool {
+        self.inner.runs.lock().stopped.contains(&run)
+    }
+
+    /// True when any run at all has been stopped and not yet settled.
+    ///
+    /// Asked before doing anything expensive on behalf of a stop, so the
+    /// ordinary case — nothing stopped, which is almost always — costs one
+    /// uncontended lock and no work.
+    fn anything_stopped(&self) -> bool {
+        !self.inner.runs.lock().stopped.is_empty()
+    }
+
+    /// Ends a conversation, and everything it set off, at the next boundary.
+    ///
+    /// **This marks and wakes. It releases nothing.** Every envelope booked
+    /// against a run is released by whatever consumes it, and a stop that
+    /// released as well would settle the run twice over: `track_inflight` reads
+    /// a negative delta against a run it is no longer counting as that run
+    /// reaching zero, and emits a second `RunSettled`. So the mark is the whole
+    /// mechanism, and each of the three boundaries that notice it releases
+    /// through `finish_turn` exactly as an ordinary turn does.
+    ///
+    /// After marking, two things have to be woken, because they are the only
+    /// places a turn waits on something that will otherwise never arrive: a
+    /// permission request nobody is going to answer, and a pause nobody is
+    /// going to lift. Everything else is either running, and will reach a
+    /// boundary on its own, or queued, and will reach one when it is read.
+    ///
+    /// A stop does not interrupt the model call in flight. There is no
+    /// cancellation handle on the streaming client, so the turn that is talking
+    /// finishes talking and stops before it would have called again. That is
+    /// the honest boundary and it is also the one that keeps the budget
+    /// truthful: a call that was paid for is a call that completed.
+    ///
+    /// False when the run has nothing outstanding, which is every run that has
+    /// already finished. That is not an error, and it deliberately writes
+    /// nothing: a notice about a conversation that ended on its own would be a
+    /// line in the transcript describing something that did not happen.
+    pub fn stop_run(&self, run: RunId) -> bool {
+        {
+            let mut runs = self.inner.runs.lock();
+            if !runs.outstanding.contains_key(&run) {
+                return false;
+            }
+            runs.stopped.insert(run);
+        }
+
+        self.release_parked(run);
+
+        // Collected under the lock and notified outside it: `notify_waiters`
+        // is cheap but this is the one place that touches every inbox, and
+        // nothing holds a lock across anything it does not have to.
+        let notifiers: Vec<Arc<Notify>> =
+            self.inner.inboxes.lock().values().map(|inbox| inbox.resume.clone()).collect();
+        for resume in notifiers {
+            resume.notify_waiters();
+        }
+
+        true
+    }
+
+    /// Closes, on the operator's behalf, every permission request a stopped run
+    /// is holding.
+    ///
+    /// A parked turn is waiting on a channel with a ten-minute window and its
+    /// envelope is still booked, so without this the run cannot settle until
+    /// that window runs out. The row moves first and the wake follows: waking
+    /// the turn while the row is still pending leaves a request that nothing
+    /// will ever answer and no event to say it was closed, which is exactly
+    /// what the trajectory suite calls a turn parked without an answer.
+    ///
+    /// Expired rather than denied. The operator stopped a conversation; they
+    /// did not refuse this action, and that difference is what a standing grant
+    /// would be read out of later.
+    fn release_parked(&self, run: RunId) {
+        let pending = match self.inner.store.pending_approvals_for_run(run) {
+            Ok(ids) => ids,
+            Err(err) => {
+                // The stop still stands. The turn comes back on its own window
+                // instead of at once, which is slow rather than wrong.
+                tracing::warn!(%err, "could not read what a stopped run was waiting on");
+                return;
+            }
+        };
+
+        for id in pending {
+            match self.inner.store.settle_approval(id, ApprovalState::Expired) {
+                Ok(approval) => self
+                    .inner
+                    .events
+                    .emit(UiEvent::ApprovalSettled { approval_id: id, state: approval.state }),
+                Err(err) => {
+                    // Leave the waiter alone. A turn woken against a row that
+                    // is still pending reads the row back as its verdict and
+                    // would act on a request nobody answered.
+                    tracing::warn!(%err, %id, "could not close a stopped run's request");
+                    continue;
+                }
+            }
+
+            if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
+                let _ = waiter.send(());
+            }
+        }
+    }
+
     /// Puts a request to the operator and holds the turn until it is answered.
     ///
     /// The verdict is read back from the row rather than from the channel the
@@ -1244,6 +1376,26 @@ impl Runtime {
 
         let (waker, wait) = tokio::sync::oneshot::channel();
         self.inner.waiting.lock().insert(approval.id, waker);
+
+        // After the row exists and the waker is registered, which is what makes
+        // this airtight rather than merely narrow. `stop_run` marks the run
+        // before it sweeps the pending rows, so a request recorded before that
+        // sweep is closed by it, and one recorded after it reads the mark here.
+        // Without this a request created in the instant after the sweep would
+        // park a run the operator has already called off for the full ten
+        // minutes, holding its booking the whole time.
+        if self.stopped(run_id) {
+            self.inner.waiting.lock().remove(&approval.id);
+            if let Ok(expired) =
+                self.inner.store.settle_approval(approval.id, ApprovalState::Expired)
+            {
+                self.inner.events.emit(UiEvent::ApprovalSettled {
+                    approval_id: approval.id,
+                    state: expired.state,
+                });
+            }
+            return Permission::Unanswered;
+        }
 
         self.record_for(
             card.id,
@@ -1341,6 +1493,28 @@ impl Runtime {
             _ if assigned => ReplyMode::Assigned,
             _ => ReplyMode::NoteOnly,
         };
+
+        // Before the prompt, the placeholder and the first call, for the same
+        // reason as the budget check below it: an agent handed work that has
+        // been called off should cost nothing at all. This is the boundary that
+        // catches the whole queued half of a stopped cascade, so a fan-out that
+        // reached eight agents leaves eight channels each saying plainly why
+        // nothing came back, rather than eight messages nobody answered.
+        if self.stopped(run_id) {
+            self.notice(
+                agent_id,
+                run_id,
+                cause,
+                NoticeKind::GuardStop,
+                format!(
+                    "You stopped this conversation, so {} never started this. Nothing was sent on. \
+                     Send it again if you want it done.",
+                    card.name
+                ),
+            );
+            self.finish_turn(agent_id, run_id, batch.len());
+            return;
+        }
 
         // Peek rather than claim: the budget is spent per model call inside the
         // loop below, but there is no point building a prompt or telling the UI
@@ -1455,9 +1629,21 @@ impl Runtime {
         let mut failure: Option<LlmError> = None;
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
+        let mut called_off = false;
 
         let max_rounds = config.limits.sanitized().max_tool_rounds as usize;
         for round in 0..max_rounds {
+            // Before the step is claimed, and that ordering is the whole reason
+            // this check is here rather than a line lower. A run's steps have to
+            // equal the calls it actually made; a step reserved for a call that
+            // a stop then prevents would leave the two disagreeing for the rest
+            // of the run's life, which is the one thing the trajectory suite
+            // reads the budget for.
+            if self.stopped(run_id) {
+                called_off = true;
+                break;
+            }
+
             // One claim per model call. Claiming per turn instead would let a
             // tool-looping turn bill max_rounds times against one unit of
             // budget, which is how a bounded run still runs up a bill.
@@ -1503,6 +1689,16 @@ impl Runtime {
             });
 
             for call in &completion.tool_calls {
+                // Between tool calls, so a turn holding a browse, a send and a
+                // note does not work through all three after being called off.
+                // This is the finest boundary there is: one tool call is a
+                // single unbounded await into a sandbox or a browser, with no
+                // cancellation handle of its own.
+                if self.stopped(run_id) {
+                    called_off = true;
+                    break;
+                }
+
                 let outcome = self
                     .execute_tool(
                         &card,
@@ -1537,12 +1733,34 @@ impl Runtime {
                 }
             }
 
+            if called_off {
+                break;
+            }
+
             if round == max_rounds - 1 {
                 hit_tool_ceiling = true;
             }
         }
 
+        // Every way out of the loop above, not only the two that look on the
+        // way round. A turn whose last call came back with text and no tool
+        // calls leaves by the `break` at the bottom of the round, and a stop
+        // that landed during that call would otherwise reach `emit_reply` with
+        // the mode it started with and write to the peer that was waiting —
+        // which is the one thing a stop exists to prevent. Costs one lock read
+        // per turn.
+        if !called_off && self.stopped(run_id) {
+            called_off = true;
+        }
+
         stream.close(&*self.inner.events);
+
+        // A turn that was called off did not reach the ceiling; it stopped
+        // short of it. Saying both would tell the operator their own stop was
+        // a limit they could raise.
+        if called_off {
+            hit_tool_ceiling = false;
+        }
 
         if hit_tool_ceiling {
             tool_parts.push(Part::Notice {
@@ -1563,6 +1781,17 @@ impl Runtime {
                 ),
             });
         }
+        if called_off {
+            tool_parts.push(Part::Notice {
+                kind: NoticeKind::GuardStop,
+                text: format!(
+                    "You stopped this conversation. {} finished the model call it was already in \
+                     and started nothing else, and nothing was sent on. Send it again if you want \
+                     it finished.",
+                    card.name
+                ),
+            });
+        }
 
         if let Some(err) = failure {
             tracing::warn!(agent = %card.name, error = %err, "inference failed");
@@ -1579,7 +1808,13 @@ impl Runtime {
                 run_id,
                 inbound_hop,
                 cause,
-                mode,
+                // A stopped turn keeps its words and sends them nowhere. As a
+                // note they land in this agent's own channel, where the
+                // operator can read how far it got; as a reply they would go to
+                // the peer that was waiting, book another envelope against a
+                // run that is being wound down, and hand the cascade one more
+                // hop. Not sending on is the whole of what a stop is.
+                if called_off { ReplyMode::NoteOnly } else { mode },
                 reply_target,
                 &addressed,
                 collected_text,
@@ -1596,6 +1831,14 @@ impl Runtime {
     /// The budget is not touched here. A call is one call however many times
     /// the network dropped it, and reserving a step per attempt would bill a
     /// run for requests that never reached a provider.
+    ///
+    /// A stop is not looked at here either, and that is the one place it costs
+    /// something. A step is claimed for the whole call before this is entered,
+    /// so abandoning it partway through would leave the run reporting a step
+    /// against no call and the two would disagree for the rest of its life. A
+    /// stop that lands during a backoff therefore waits it out — up to
+    /// `MAX_RETRY_AFTER` when a provider asked for that long — and is noticed
+    /// at the boundary after the call returns.
     async fn stream_with_retries(
         &self,
         inference: &InferenceConfig,
@@ -3362,12 +3605,14 @@ async fn actor_loop(
     depth: Arc<AtomicUsize>,
     resume: Arc<Notify>,
 ) {
-    // Carries an envelope that was pulled but does not belong in the current
-    // batch, so nothing is lost between iterations.
-    let mut carry: Option<Envelope> = None;
+    // Envelopes pulled off the inbox that do not belong in the current batch,
+    // in the order they arrived, so nothing is lost or reordered between
+    // iterations. `depth` deliberately still counts these: a held envelope is
+    // as queued as one still in the channel, and the rail says so.
+    let mut carry: VecDeque<Envelope> = VecDeque::new();
 
     loop {
-        let first = match carry.take() {
+        let first = match carry.pop_front() {
             Some(envelope) => envelope,
             None => match rx.recv().await {
                 Some(envelope) => envelope,
@@ -3384,6 +3629,7 @@ async fn actor_loop(
         // would wait for a wake-up that can never come, leaking the task and
         // the envelope it is holding for the life of the process.
         let mut abandoned = false;
+        let mut called_off = false;
         loop {
             match runtime.inner.store.get_agent(id).ok().flatten() {
                 None => {
@@ -3395,17 +3641,99 @@ async fn actor_loop(
                     break;
                 }
                 Some(card) if card.lifecycle.accepts_work() => break,
-                Some(_) => {
+                Some(card) => {
+                    // Registered before the stop is read, and that ordering is
+                    // the whole of it. `notify_waiters` only wakes futures that
+                    // are already waiting, so a stop landing between the check
+                    // below and the await at the bottom would be lost and the
+                    // actor would sleep holding a booking nobody can release.
+                    // Enabling the future first closes that window — and closes
+                    // the same one `pause_agent` and `resume_agent` have always
+                    // had, where a resume between the card read and the await
+                    // left an agent parked until the next message arrived.
+                    let waiter = resume.notified();
+                    tokio::pin!(waiter);
+                    waiter.as_mut().enable();
+
+                    // The only place a stopped run has to be noticed before the
+                    // turn: an agent that is not accepting work cannot reach
+                    // `run_turn`, where every other boundary lives, so its
+                    // booking would be held until somebody resumed it.
+                    //
+                    // Inside the loop rather than above it, so an agent that
+                    // was already parked when the stop arrived sees it on the
+                    // wake-up. `stop_run` notifies every inbox for exactly
+                    // this: otherwise the actor re-reads its card, finds itself
+                    // still paused, and parks again holding the booking.
+                    if runtime.stopped(first.run_id) {
+                        runtime.notice(
+                            id,
+                            first.run_id,
+                            Some(first.id),
+                            NoticeKind::GuardStop,
+                            format!(
+                                "You stopped this conversation while {} was paused, so this never ran. Resume {} and send it again if you still want it.",
+                                card.name, card.name
+                            ),
+                        );
+                        called_off = true;
+                        break;
+                    }
+                    // A paused agent holds one envelope and lets the rest
+                    // queue behind it, which is right until one of those queued
+                    // runs is stopped. Nothing else will ever look at them: the
+                    // actor only examines what it is holding, so a stopped run
+                    // whose work is sitting behind somebody else's waits on a
+                    // turn that cannot happen until an agent the operator has
+                    // already called off is resumed.
+                    //
+                    // Only entered when something really is stopped, so an
+                    // ordinary pause moves nothing. Whatever survives keeps its
+                    // place in line in the holding queue.
+                    if runtime.anything_stopped() {
+                        while let Ok(queued) = rx.try_recv() {
+                            if runtime.stopped(queued.run_id) {
+                                depth.fetch_sub(1, Ordering::SeqCst);
+                                runtime.notice(
+                                    id,
+                                    queued.run_id,
+                                    Some(queued.id),
+                                    NoticeKind::GuardStop,
+                                    format!(
+                                        "You stopped this conversation while {} was paused, so this never ran. Resume {} and send it again if you still want it.",
+                                        card.name, card.name
+                                    ),
+                                );
+                                runtime.finish_turn(id, queued.run_id, 1);
+                            } else {
+                                carry.push_back(queued);
+                            }
+                        }
+                    }
+
                     runtime.set_activity(id, Activity::Paused);
-                    resume.notified().await;
+                    waiter.await;
                 }
             }
+        }
+        if called_off {
+            // `finish_turn`, not `abandon`: it resets the badge as well as
+            // releasing the booking, and a badge left reading "1 queued" for a
+            // queue that is now empty outlives the run for the rest of the
+            // session. The row still reads as paused, which is a lifecycle and
+            // not an activity.
+            runtime.finish_turn(id, first.run_id, 1);
+            continue;
         }
         if abandoned {
             // Everything this inbox is holding dies with the agent, and the
             // run counting on it has to be told. `first` was already taken off
             // the queue; the rest would go silently when `rx` drops.
             runtime.abandon(first.run_id, 1);
+            for held in carry.drain(..) {
+                depth.fetch_sub(1, Ordering::SeqCst);
+                runtime.abandon(held.run_id, 1);
+            }
             while let Ok(orphan) = rx.try_recv() {
                 depth.fetch_sub(1, Ordering::SeqCst);
                 runtime.abandon(orphan.run_id, 1);
@@ -3430,14 +3758,21 @@ async fn actor_loop(
             let run = batch[0].run_id;
             let patience = Instant::now() + BURST_WINDOW;
             while batch.len() < MAX_BATCH {
-                match rx.try_recv() {
+                // The holding queue first: anything in it arrived before
+                // whatever is still in the channel, and batching around it
+                // would put a later message ahead of an earlier one.
+                let pulled = match carry.pop_front() {
+                    Some(held) => Ok(held),
+                    None => rx.try_recv(),
+                };
+                match pulled {
                     Ok(next) if !next.expects_reply && next.run_id == run => {
                         depth.fetch_sub(1, Ordering::SeqCst);
                         batch.push(next);
                         continue;
                     }
                     Ok(next) => {
-                        carry = Some(next);
+                        carry.push_front(next);
                         break;
                     }
                     Err(mpsc::error::TryRecvError::Disconnected) => break,

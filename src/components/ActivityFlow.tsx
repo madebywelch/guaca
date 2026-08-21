@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
+import { ROOT_PX } from "../lib/appearance";
 import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import type { WirePeer } from "../lib/transcript";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
@@ -32,8 +34,16 @@ import { MessageModal } from "./WireRow";
  * newest is first and open. History is still all here, one line each.
  */
 
-/** Width of one participant column. */
-const LANE_W = 72;
+/**
+ * Width of one participant column, as a multiple of the root font size.
+ *
+ * A number rather than a `rem` string because the wires between the lanes are
+ * SVG coordinates in the same space, so the whole board has to be measured in
+ * one unit and that unit has to be pixels. Resolved against the interface scale
+ * at render time instead: the names inside these columns are sized in `rem` and
+ * a column that did not grow with them would crop them.
+ */
+const LANE_REM = 4.5;
 
 const YOU: WirePeer = { id: "human", name: "You", color: "#5b665e", avatar: "plain" };
 
@@ -90,6 +100,10 @@ export function ActivityFlow({ messages, byId }: Props) {
   // for the rest. Storing the exception rather than the state means a new run
   // arriving does not have to be reconciled with anything.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  // Derived from the scale rather than measured off the document: it is the same
+  // arithmetic the stylesheet's root font size does, and doing it here keeps a
+  // layout read out of a render.
+  const laneW = (LANE_REM * ROOT_PX * useStore((s) => s.prefs.uiScale)) / 100;
 
   const blocks = useMemo(() => buildBlocks(messages, byId), [messages, byId]);
 
@@ -138,8 +152,8 @@ export function ActivityFlow({ messages, byId }: Props) {
       <div className="flow__scroll">
         {blocks.map((block, blockIndex) => {
           const isOpen = toggled[block.key] ?? blockIndex === 0;
-          const boardWidth = Math.max(block.lanes.length * LANE_W, LANE_W);
-          const laneX = (i: number) => i * LANE_W + LANE_W / 2;
+          const boardWidth = Math.max(block.lanes.length * laneW, laneW);
+          const laneX = (i: number) => i * laneW + laneW / 2;
           const day = dayLabel(block.startedAt);
 
           return (
@@ -198,7 +212,7 @@ export function ActivityFlow({ messages, byId }: Props) {
                         <div
                           className="flow__lane"
                           key={lane.key}
-                          style={{ width: LANE_W }}
+                          style={{ width: laneW }}
                           data-gone={lane.gone || undefined}
                         >
                           <AgentAvatar
