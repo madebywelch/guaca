@@ -236,6 +236,19 @@ describe("an agent's own record of what it did", () => {
     show(record({ type: "notice", kind: "guardStop", text: "hop limit (8) reached" }));
     expect(screen.getByText("hop limit (8) reached")).toBeTruthy();
   });
+
+  it("draws text the turn trailed as an aside, not as a message to the operator", () => {
+    // A turn that answered its peer through `send_message` and then kept
+    // typing produces text with no recipient. The runtime files it here. Drawn
+    // as a bubble it reads as the agent addressing the operator, which is what
+    // seven agents each saying "I replied to the Chief of Staff" looked like.
+    const { container } = show(
+      record({ type: "text", text: "Replied to Manager confirming how I work." }),
+    );
+    expect(screen.getByText("Replied to Manager confirming how I work.")).toBeTruthy();
+    expect(container.querySelector(".aside")).toBeTruthy();
+    expect(container.querySelector(".msg")).toBeNull();
+  });
 });
 
 describe("a failed turn", () => {

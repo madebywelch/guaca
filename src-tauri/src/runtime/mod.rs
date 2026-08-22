@@ -1991,15 +1991,29 @@ impl Runtime {
 
         // An agent that already answered this peer with `send_message` has said
         // its piece. The text it trails afterwards is commentary on its own
-        // turn, and delivering that as a second message is how one turn put two
-        // near-identical messages in the peer's channel. It goes to the
-        // operator instead, where it is still readable.
+        // turn, and sending it on as well is how one turn put two near-identical
+        // messages in the peer's channel.
+        //
+        // It does not go to the operator either, which is what it used to do.
+        // Nobody in this turn is the operator: they messaged one agent, that
+        // agent asked seven others for something, and each of the seven then
+        // wrote to the operator to say it had answered. An agent the operator
+        // has never spoken to reporting on a conversation they were not in is
+        // not readable-in-passing, it is the flow board filling with mail
+        // addressed to somebody else. So the commentary is filed on this turn's
+        // record, in this agent's own channel, delivered to no one.
+        //
+        // A file is the exception, and the reason is that it is not a
+        // restatement of anything. `send_message` carries its own files, so one
+        // attached afterwards is the only part of the turn that has reached
+        // nobody, and the peer that asked is who it is for.
         let already_answered = matches!(
             reply_target,
             Some(Participant::Agent { id }) if addressed.contains(&id)
         );
+        let commentary = mode == ReplyMode::ToPeer && already_answered && files.is_empty();
 
-        if mode == ReplyMode::ToPeer && !already_answered {
+        if mode == ReplyMode::ToPeer && !commentary {
             if let Some(Participant::Agent { id: peer }) = reply_target {
                 // An automatic reply still travels a hop and still counts
                 // against the pair budget, otherwise two agents could bounce
@@ -2061,6 +2075,14 @@ impl Runtime {
             });
         }
 
+        // Commentary rides the record rather than an envelope of its own. Last,
+        // so it reads in the order the turn happened: the calls, then whatever
+        // the guard or the budget had to say about them, then the agent's own
+        // closing words.
+        if commentary && !text.is_empty() {
+            tool_parts.push(Part::Text { text: text.clone() });
+        }
+
         // The record of what this agent did belongs in this agent's own
         // channel, always. Attaching it to the reply meant that a reply to a
         // peer carried the sender's private working notes into the recipient's
@@ -2084,6 +2106,11 @@ impl Runtime {
             if let Err(err) = self.deliver(record) {
                 tracing::error!(%err, "failed to record agent activity");
             }
+        }
+
+        // Already written down, and there is nobody left to send it to.
+        if commentary {
+            return;
         }
 
         // A file with nothing typed is still an answer, and the one this app

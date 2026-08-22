@@ -250,6 +250,23 @@ describe("an agent's own trail", () => {
       { type: "notice", kind: "guardStop", text: "Reply to Scribe was not delivered" },
     ]);
   });
+
+  it("keeps the text a turn trailed after answering through the tool", () => {
+    // The answer went through `send_message`, so it is peer traffic and lifts
+    // into the burst. What the turn typed afterwards reached nobody and is on
+    // the record instead. Folding it away with the send would delete the only
+    // copy of it there is.
+    const rows = transcriptRows(
+      [record(send(["Chef"], ok), { type: "text", text: "Replied to Chef." })],
+      lookups,
+    );
+
+    expect(rows.map((row) => row.kind)).toEqual(["peers", "message"]);
+    const trail = rows.find((row) => row.kind === "message");
+    expect(trail?.kind === "message" && trail.message.parts).toEqual([
+      { type: "text", text: "Replied to Chef." },
+    ]);
+  });
 });
 
 describe("merging consecutive messages under one header", () => {
