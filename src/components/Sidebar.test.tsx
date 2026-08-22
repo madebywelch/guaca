@@ -98,6 +98,11 @@ function row(name: string): HTMLElement {
   return found;
 }
 
+/** Every row the rail is drawing, top to bottom. */
+function names(): (string | null)[] {
+  return [...document.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
+}
+
 /**
  * One drag, from a row to whatever should catch it.
  *
@@ -199,8 +204,6 @@ describe("arranging the rail", () => {
       { Scribe: { state: "thinking" } },
     );
 
-    const names = () =>
-      [...document.querySelectorAll(".agent-row__name")].map((n) => n.textContent);
     expect(names()).toEqual(["Scribe", "Manager", "Cook"]);
 
     fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 300 });
@@ -232,24 +235,22 @@ describe("arranging the rail", () => {
     expect(moveAgent).not.toHaveBeenCalled();
   });
 
-  it("pins a row dropped on the pinned section and moves it nowhere", async () => {
-    // The section spans groups, so there is no place in it to express. Pinning
-    // is the whole of what the gesture asked for.
+  it("pins a row dropped on a pinned peer, and lands it among the pins", async () => {
+    // The row landed on says both things at once: which crew, and whether the
+    // place aimed at is the band a pin holds or the rest of the crew below it.
     draw(
       [group("everyone")],
-      [agent("Manager", { railOrder: 0, pinned: true }), agent("Cook", { railOrder: 1 })],
+      [
+        agent("Manager", { railOrder: 0, pinned: true }),
+        agent("Chef", { railOrder: 1, pinned: true }),
+        agent("Cook", { railOrder: 2 }),
+      ],
     );
 
-    const pinned = document.querySelector(".rail__group");
-    if (!pinned) throw new Error("the pinned section was not drawn");
-
-    fireEvent.pointerDown(row("Cook"), { button: 0, clientX: 100, clientY: 300 });
-    fireEvent.pointerMove(window, { clientX: 100, clientY: 250 });
-    fireEvent.pointerEnter(pinned, { clientX: 100, clientY: 210 });
-    fireEvent.pointerUp(window, { clientX: 100, clientY: 210 });
+    await dragTo(row("Cook"), row("Chef"));
 
     await vi.waitFor(() => expect(setAgentPinned).toHaveBeenCalledWith("Cook", true));
-    expect(moveAgent).not.toHaveBeenCalled();
+    expect(moveAgent).toHaveBeenCalledWith("Cook", DEFAULT_GROUP, "Chef");
   });
 
   it("unpins a row dragged out of the pins and into a crew", async () => {
@@ -269,6 +270,59 @@ describe("arranging the rail", () => {
     // direction to read and it takes the place of what it was dropped on.
     expect(setAgentPinned).toHaveBeenCalledWith("Manager", false);
     expect(moveAgent).toHaveBeenCalledWith("Manager", DEFAULT_GROUP, "Scribe");
+  });
+});
+
+describe("pins", () => {
+  const RESEARCH = "00000000-0000-4000-8000-000000000002";
+
+  /** The crew, and one other so the strip is drawn and can be clicked. */
+  function crews() {
+    return [group("everyone"), group("research", null, RESEARCH)];
+  }
+
+  function roster() {
+    return [
+      agent("Manager", { railOrder: 0 }),
+      agent("Cook", { railOrder: 1 }),
+      agent("Chef", { railOrder: 2, pinned: true }),
+      agent("Reader", { groupId: RESEARCH, railOrder: 3 }),
+    ];
+  }
+
+  it("heads the crew with its pins, in the overview and inside the crew", () => {
+    // The one that was reported: pinning a row while looking inside a crew did
+    // nothing until the operator went back out to the overview, because the
+    // section a pin moved a row into was only drawn out there.
+    draw(crews(), roster());
+
+    expect(names()).toEqual(["Chef", "Manager", "Cook", "Reader"]);
+    expect(screen.queryByText("Pinned")).toBeNull();
+
+    fireEvent.click(screen.getByLabelText("everyone, 3 agents"));
+    expect(names()).toEqual(["Chef", "Manager", "Cook"]);
+  });
+
+  it("marks the pinned row, because being first is not a state", () => {
+    // A crew whose pin is also the row the operator arranged at the top looks
+    // exactly like a pin that did nothing, and the mark is the only thing on
+    // screen that tells those two apart.
+    draw(crews(), roster());
+
+    expect(row("Chef").querySelector(".agent-row__pin")).toBeTruthy();
+    expect(row("Manager").querySelector(".agent-row__pin")).toBeNull();
+  });
+
+  it("keeps the pin when the agent is moved to another crew", async () => {
+    // A pin is a standing instruction about one agent. Changing who it works
+    // with is not a decision to drop it, and the drop says nothing about the
+    // band either way.
+    draw(crews(), roster());
+
+    await dragTo(row("Chef"), screen.getByLabelText("research, 1 agent"));
+
+    expect(moveAgent).toHaveBeenCalledWith("Chef", RESEARCH, null);
+    expect(setAgentPinned).not.toHaveBeenCalled();
   });
 });
 

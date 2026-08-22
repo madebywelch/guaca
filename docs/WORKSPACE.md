@@ -157,9 +157,10 @@ is lifted to the top of its section for exactly as long as it is working, and th
 place goes back the moment it stops. `awaitingApproval` outranks working, because
 it is the one state the operator is the fix for; `paused` scores nothing, because
 it is not work in progress but a row that will not move until somebody moves it,
-and lifting it would hold the top indefinitely. A pinned row never lifts at all:
-being findable in one glance is what a pin is for, and a row that moves when its
-agent gets busy is the thing a pin exists to stop.
+and lifting it would hold the top indefinitely. A pinned row is above all of
+this: it heads its crew and never lifts at all, because being findable in one
+glance is what a pin is for, and a row that moves when its agent gets busy is the
+thing a pin exists to stop.
 
 Before this, the rail was ordered by who spoke last and by nothing else. That is
 an order nobody chose and one that moves under the hand reaching for it: every
@@ -214,8 +215,10 @@ from a keyboard at all.
 Two views of one rail. In the overview every group has a heading and its members
 under it, which is what it always was. Clicking a group's circle takes the rail
 inside it: one crew, its name and controls given a line of their own, and the
-pins folded to the head of the single list rather than kept in a section of their
-own, because everybody drawn there is in that crew already.
+same list in the same order, because a crew's pins are at the head of it in
+either view. Neither view gives them a heading: everybody drawn under a crew is
+in that crew already, and a heading over one or two rows would divide nothing.
+The mark on the row is what says which rows are pinned.
 
 The circles are faces, not names. A crew is recognised by who is in it long
 before its name is read, and four of these have to fit across a rail that is
@@ -270,10 +273,6 @@ draws everybody. Neither does a move close anything: dragging somebody into
 another crew is not a change of view, and the operator who just made the gesture
 is the one person who does not need telling where that row went.
 
-The pinned section is a flag drawn as a place. It spans groups, so a row dropped
-among the pins keeps its own crew: the alternative is a gesture that says "keep
-this where I can see it" and quietly moves the agent to a different set of peers.
-
 ## Deleting a group deletes the crew, and the machines they were renting
 
 One button, two calls. An empty group loses a row; a group with four agents in
@@ -309,17 +308,38 @@ are not in the crew it takes. Their machines are already destroyed, and handing
 one back would mean a second kill against a sandbox that is not there, which the
 operator would be shown as the failure of the disband.
 
-## Pinning is where a row is drawn and nothing else
+## Pinning is the head of a crew, and nothing else
 
 It does not bump the card version, because the version is how a peer notices a
 card changed under it and nothing a peer can read has. `railOrder` is the same
 kind of fact and is kept the same way, and both live on the agent rather than in
 a preferences blob because they have to die with it: a name is free to reuse the
 moment an agent is deleted, and whoever takes it next must not inherit a pin or a
-place. A pinned agent is lifted out of its group in the rail and still counted in
-it, because it is still in it: same wall, same bill, same peers. Two rows for one
-agent would be two nodes in the sidebar's `rowRefs`, and the wire would have to
-pick one to throw a message at.
+place. A pinned agent is still in its group in every other sense: same wall, same
+bill, same peers, and counted in the crew it heads.
+
+The pins used to be a section of their own, above the groups and spanning them.
+That made a pin the one arrangement that came undone on the way into the crew it
+was arranging: inside a group the rail draws that group and nothing else, so the
+section holding the row was not on screen, and pinning something while looking at
+the list it was in moved nothing until the operator went back out to the
+overview. A pin is a band at the head of a crew now, drawn wherever that crew is
+drawn, which is both views and the same order in each.
+
+The band is why the row that a drag lands on decides both things: the crew it
+joins, and whether it is pinned. Dropping onto a pinned row pins the dragged
+agent, dropping below the band unpins it, and dropping on a group says nothing
+about the band and therefore changes nothing about it. A pin is a standing
+instruction about one agent, and moving somebody between crews is not a decision
+to drop it.
+
+The mark on the row is load-bearing. A crew whose pin is also the row the
+operator arranged at the top looks exactly like a pin that did nothing, and being
+first is not a state anything on screen can say by itself.
+
+An agent is drawn once, wherever it is drawn: two rows for one agent would be two
+nodes in the sidebar's `rowRefs`, and the wire would have to pick one to throw a
+message at.
 
 ## The cafeteria is a copy machine, not a registry
 
