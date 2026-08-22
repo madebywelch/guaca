@@ -274,6 +274,41 @@ The pinned section is a flag drawn as a place. It spans groups, so a row dropped
 among the pins keeps its own crew: the alternative is a gesture that says "keep
 this where I can see it" and quietly moves the agent to a different set of peers.
 
+## Deleting a group deletes the crew, and the machines they were renting
+
+One button, two calls. An empty group loses a row; a group with four agents in
+it loses the four agents, their computers, their browsers and the profiles
+holding those browsers' cookies. Which call a click makes is decided by the
+roster, and the confirmation names the count before it is pressed.
+
+It was two buttons, and the one for a populated group had exactly one outcome:
+an error telling the operator to go and delete four agents by hand and come
+back. That is not a refusal protecting anything. It is the work, described. An
+operator winding a crew down wants the crew gone, and the half-finished state
+that path produces is a group with one agent left in it and no reason to keep
+that one either.
+
+What a disband is not is a bigger *Start fresh*. A reset keeps the crew and
+takes what it accumulated; this takes the crew. They sit next to each other and
+only one of them is reversible in the sense that matters: a computer is rented
+from a provider, and killing it is not a row in a table.
+
+Each agent goes exactly as `delete_agent` sends one, through `retire_agent`,
+which is why they are the same function. Transcripts stay readable, because a
+delete at the scale of a crew is not a different rule about history: a message
+survives its author here for the same reason it does there. What is gone is
+everything the agent held privately, which is its memory, its schedule, its
+sign-ins and any standing permission the operator gave it.
+
+The refusal that remains is the first group, which cannot be deleted because
+every agent has to be in one. `Store::group_for_removal` asks that question
+separately from the emptiness check, and the command asks it *first*: a disband
+that killed four computers and then found the group could not go would have
+spent the irreversible half of the work on a call that fails. Terminated agents
+are not in the crew it takes. Their machines are already destroyed, and handing
+one back would mean a second kill against a sandbox that is not there, which the
+operator would be shown as the failure of the disband.
+
 ## Pinning is where a row is drawn and nothing else
 
 It does not bump the card version, because the version is how a peer notices a
