@@ -1857,6 +1857,23 @@ button {
   justify-content: center;
 }
 
+/* An agent's own closing words, written after it had already answered its peer.
+   Nobody was sent them, so they are neither centred like a system line nor
+   bracketed like traffic: both of those say something passed between two
+   participants. In the trail's column, on the same 2.85rem of gutter, because
+   this belongs with what the turn did rather than with what was said to
+   anybody. */
+.aside {
+  padding: 0.1rem 1.5rem 0.35rem 2.85rem;
+}
+
+.aside .md {
+  border-left: 2px solid var(--edge);
+  padding-left: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--faint);
+}
+
 /* ==========================================================================
    The trail: what an agent did on its own turn
 
