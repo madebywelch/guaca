@@ -17,8 +17,11 @@ use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAct
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
-use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
+use crate::domain::ids::{
+    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
+};
 use crate::domain::now_ms;
+use crate::domain::plugin::{Plugin, PluginKind, PluginTool};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -52,6 +55,8 @@ pub enum StoreError {
     RoutineNotFound(RoutineId),
     #[error("no connector with id {0}")]
     ConnectorNotFound(ConnectorId),
+    #[error("no plugin with id {0}")]
+    PluginNotFound(PluginId),
     #[error("no permission request with id {0}")]
     ApprovalNotFound(ApprovalId),
     #[error("that request was already answered ({})", state.as_str())]
@@ -1054,6 +1059,186 @@ impl Store {
         Ok(conn.execute("DELETE FROM connectors WHERE id=?1", params![id.to_string()])? > 0)
     }
 
+    // ---- plugins ---------------------------------------------------------
+
+    /// The plugins one crew has connected. No grant is on this type and there
+    /// is no command that returns one.
+    pub fn group_plugins(&self, group: GroupId) -> Result<Vec<Plugin>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare(&format!("{PLUGIN_COLUMNS} WHERE group_id=?1 ORDER BY kind, rowid"))?;
+        let rows = stmt.query_map(params![group.to_string()], row_to_plugin)?;
+        let mut out = Vec::new();
+        for row in rows {
+            // A row whose kind is not one this build knows is skipped rather
+            // than raised. It can only come from a newer build writing to the
+            // same file, and a crew losing one tool list is better than every
+            // agent in it losing its turn.
+            if let Some(plugin) = row?? {
+                out.push(plugin);
+            }
+        }
+        Ok(out)
+    }
+
+    /// What the crew can call, with the schemas the model is shown.
+    ///
+    /// Separate from `group_plugins` for the reason `connector_env` is separate
+    /// from `group_connectors`: this is the bulk nothing but the turn needs,
+    /// and it is read on the hot path rather than to draw a list.
+    pub fn plugin_tools(
+        &self,
+        group: GroupId,
+    ) -> Result<Vec<(PluginKind, Vec<PluginTool>)>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare("SELECT kind, tools FROM plugins WHERE group_id=?1 ORDER BY kind, rowid")?;
+        let rows = stmt.query_map(params![group.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (kind, tools) = row?;
+            let Some(kind) = PluginKind::from_slug(&kind) else { continue };
+            let tools: Vec<PluginTool> = serde_json::from_str(&tools)
+                .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind:?}: {e}")))?;
+            out.push((kind, tools));
+        }
+        Ok(out)
+    }
+
+    /// The grant one plugin holds, and the row it belongs to.
+    ///
+    /// The only path a stored token takes out of this table, and it leads
+    /// straight back to the server that issued it. Nothing here reaches a
+    /// prompt, a transcript, an event or the webview.
+    pub fn plugin_grant(
+        &self,
+        group: GroupId,
+        kind: PluginKind,
+    ) -> Result<Option<(PluginId, Option<crate::oauth::Grant>)>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,token_endpoint
+               FROM plugins WHERE group_id=?1 AND kind=?2",
+        )?;
+        let row = stmt
+            .query_row(params![group.to_string(), kind.slug()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })
+            .optional()?;
+
+        let Some((id, access, refresh, expires_at, client_id, client_secret, token_endpoint)) = row
+        else {
+            return Ok(None);
+        };
+        let id = id
+            .parse::<PluginId>()
+            .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
+
+        // An empty access token is a plugin that needed no sign-in, not a
+        // broken one. Clerk's server is public, and reporting it as a grant
+        // with nothing in it would send the operator to a browser to fix
+        // something that is working.
+        let grant = (!access.is_empty()).then(|| crate::oauth::Grant {
+            access_token: access,
+            refresh_token: (!refresh.is_empty()).then_some(refresh),
+            expires_at,
+            client_id,
+            client_secret: (!client_secret.is_empty()).then_some(client_secret),
+            token_endpoint,
+        });
+        Ok(Some((id, grant)))
+    }
+
+    /// Records a connection, replacing whatever was there for that server.
+    ///
+    /// Replace rather than reject: connecting again is how an operator fixes a
+    /// grant that was revoked at the vendor, and the unique index makes an
+    /// insert the wrong shape for that.
+    pub fn save_plugin(
+        &self,
+        group: GroupId,
+        kind: PluginKind,
+        account: &str,
+        tools: &[PluginTool],
+        grant: Option<&crate::oauth::Grant>,
+    ) -> Result<Plugin, StoreError> {
+        let conn = self.conn()?;
+        let id = PluginId::new();
+        let encoded = serde_json::to_string(tools)
+            .map_err(|e| StoreError::Corrupt(format!("tool list will not serialise: {e}")))?;
+
+        conn.execute(
+            "INSERT INTO plugins
+                (id,group_id,kind,account,tools,client_id,client_secret,token_endpoint,
+                 access_token,refresh_token,expires_at,connected_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+             ON CONFLICT(group_id,kind) DO UPDATE SET
+                account=excluded.account,
+                tools=excluded.tools,
+                client_id=excluded.client_id,
+                client_secret=excluded.client_secret,
+                token_endpoint=excluded.token_endpoint,
+                access_token=excluded.access_token,
+                refresh_token=excluded.refresh_token,
+                expires_at=excluded.expires_at,
+                connected_at=excluded.connected_at",
+            params![
+                id.to_string(),
+                group.to_string(),
+                kind.slug(),
+                account,
+                encoded,
+                grant.map(|g| g.client_id.as_str()).unwrap_or_default(),
+                grant.and_then(|g| g.client_secret.as_deref()).unwrap_or_default(),
+                grant.map(|g| g.token_endpoint.as_str()).unwrap_or_default(),
+                grant.map(|g| g.access_token.as_str()).unwrap_or_default(),
+                grant.and_then(|g| g.refresh_token.as_deref()).unwrap_or_default(),
+                grant.and_then(|g| g.expires_at),
+                now_ms(),
+            ],
+        )?;
+
+        self.group_plugins(group)?
+            .into_iter()
+            .find(|plugin| plugin.kind == kind)
+            .ok_or(StoreError::PluginNotFound(id))
+    }
+
+    /// Writes back a renewed grant, leaving everything else alone.
+    pub fn refresh_plugin_grant(
+        &self,
+        id: PluginId,
+        grant: &crate::oauth::Grant,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE plugins SET access_token=?2, refresh_token=?3, expires_at=?4 WHERE id=?1",
+            params![
+                id.to_string(),
+                grant.access_token,
+                grant.refresh_token.clone().unwrap_or_default(),
+                grant.expires_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_plugin(&self, id: PluginId) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute("DELETE FROM plugins WHERE id=?1", params![id.to_string()])? > 0)
+    }
+
     // ---- sign-ins --------------------------------------------------------
 
     /// Records what one of an agent's two places turned out to be signed in to.
@@ -1382,6 +1567,10 @@ impl Store {
         // them would hand another crew credentials nobody gave it, and leaving
         // them would fail the foreign key on the row below.
         conn.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
+        // And its plugins, for both of those reasons and one more: the row
+        // holds a grant against the operator's own Neon or Cloudflare account,
+        // and a disbanded crew is not a reason to keep one.
+        conn.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
         conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         Ok(())
     }
@@ -2138,6 +2327,40 @@ fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
             created_at: row.get(7)?,
             updated_at: row.get(8)?,
         })
+    })())
+}
+
+const PLUGIN_COLUMNS: &str =
+    "SELECT id,group_id,kind,account,tools,access_token,connected_at FROM plugins";
+
+/// `None` for a row naming a plugin this build does not have, which is what a
+/// downgrade leaves behind. Corrupt rows still raise: a tool list that will not
+/// parse is a bug here, not a version skew.
+fn row_to_plugin(row: &Row<'_>) -> RowResult<Option<Plugin>> {
+    let id_raw: String = row.get(0)?;
+    let group_raw: String = row.get(1)?;
+    let kind_raw: String = row.get(2)?;
+    let tools_raw: String = row.get(4)?;
+    let access: String = row.get(5)?;
+
+    Ok((|| {
+        let Some(kind) = PluginKind::from_slug(&kind_raw) else { return Ok(None) };
+        let tools: Vec<PluginTool> = serde_json::from_str(&tools_raw)
+            .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind_raw:?}: {e}")))?;
+
+        Ok(Some(Plugin {
+            id: id_raw
+                .parse::<PluginId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            kind,
+            account: row.get(3)?,
+            tools: tools.into_iter().map(|tool| tool.name).collect(),
+            signed_in: !access.is_empty(),
+            connected_at: row.get(6)?,
+        }))
     })())
 }
 
@@ -4262,5 +4485,57 @@ mod tests {
             f.store.approval_states(500).unwrap().get(&request.id),
             Some(&ApprovalState::Deny)
         );
+    }
+
+    #[test]
+    fn a_plugin_row_naming_something_this_build_has_never_heard_of_is_skipped() {
+        // What a downgrade leaves behind: a newer build connected a plugin this
+        // one has no enum variant for. Raising would cost every agent in the
+        // crew its turn, over a tool list one of them was not going to use.
+        let f = fixture();
+        let group = default_group_id();
+        f.store
+            .conn()
+            .unwrap()
+            .execute(
+                "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+                 VALUES (?1,?2,'sourdough','','[]',0)",
+                params![PluginId::new().to_string(), group.to_string()],
+            )
+            .unwrap();
+
+        assert!(f.store.group_plugins(group).unwrap().is_empty());
+        assert!(f.store.plugin_tools(group).unwrap().is_empty());
+    }
+
+    #[test]
+    fn deleting_a_group_takes_its_plugins_and_their_grants_with_it() {
+        // Two reasons, and the second one bites first: a grant left behind is a
+        // token against the operator's own account with nothing on screen that
+        // owns it, and the row itself fails the foreign key on the delete.
+        let f = fixture();
+        let group = f
+            .store
+            .create_group(&CleanGroup { name: "Crew".into(), ..Default::default() })
+            .unwrap();
+        f.store.save_plugin(group.id, PluginKind::Neon, "", &[], None).unwrap();
+
+        f.store.delete_group(group.id).unwrap();
+        assert!(f.store.group_plugins(group.id).unwrap().is_empty());
+        assert!(f.store.plugin_grant(group.id, PluginKind::Neon).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_plugin_that_needed_no_sign_in_reports_no_grant_rather_than_an_empty_one() {
+        // Clerk's server authorises everybody. A blank access token read back
+        // as a grant would send the operator to a browser to fix something that
+        // is working, and would make every call carry `Bearer `.
+        let f = fixture();
+        let group = default_group_id();
+        f.store.save_plugin(group, PluginKind::Clerk, "", &[], None).unwrap();
+
+        let (_, grant) = f.store.plugin_grant(group, PluginKind::Clerk).unwrap().unwrap();
+        assert!(grant.is_none());
+        assert!(!f.store.group_plugins(group).unwrap()[0].signed_in);
     }
 }

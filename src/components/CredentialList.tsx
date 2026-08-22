@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CATALOG, type CatalogEntry, entryFor } from "../lib/connectorCatalog";
 import { api } from "../lib/ipc";
 import { type Connector, type ConnectorDraft, errorMessage, type GroupId } from "../lib/types";
 
@@ -8,22 +7,20 @@ interface Props {
   groupId: GroupId;
 }
 
-/** The service being added, or `custom` for one the catalog does not list. */
-type Picked = CatalogEntry | "custom" | null;
-
 /**
- * The API credentials a crew holds, managed where they belong: on the group.
+ * The other half of what a crew can reach: a token, in a variable, on a machine.
  *
- * Every machine in the group is handed these as environment variables, so this
- * is a property of the crew rather than of any one agent. The other way an
- * agent reaches an account, a browser that is already logged in, is not managed
- * anywhere: it is detected from the machine and shown on the agent instead.
+ * This used to lead with a grid of twelve brands, each of which filled in a
+ * variable name and a note for a service Guaca knew nothing else about. The
+ * grid is gone. What a crew reaches through a *plugin* is now a short list of
+ * servers that publish their own tools and sign in for themselves, and the
+ * twelve tiles were a worse version of that offer: a logo, and then four
+ * questions the operator had to answer anyway.
  *
- * Adding one is a service and a token, in that order. Everything else about a
- * GitHub credential is already known once you have said GitHub: the variable it
- * belongs in is `GITHUB_TOKEN` on every machine anywhere, and asking the
- * operator to type that, plus an account name, plus a note, is four questions
- * to collect one answer they actually have.
+ * What is left is the escape hatch, and it stays because it is the only way to
+ * reach a service with no plugin. It is also the only thing that can still read
+ * the credentials a workspace already holds: deleting the form would leave
+ * those rows on every machine in the group with nothing on screen to say so.
  *
  * Nothing here has ever held a credential's value. The backend returns whether
  * one is set and its last four characters, and there is no command that would
@@ -31,19 +28,19 @@ type Picked = CatalogEntry | "custom" | null;
  */
 export function CredentialList({ groupId }: Props) {
   const [connectors, setConnectors] = useState<Connector[] | null>(null);
-  const [picked, setPicked] = useState<Picked>(null);
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState({ service: "", envVar: "" });
   const [secret, setSecret] = useState("");
-  const [custom, setCustom] = useState({ service: "", envVar: "" });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const secretRef = useRef<HTMLInputElement>(null);
+  const serviceRef = useRef<HTMLInputElement>(null);
 
-  // Picking a service is a commitment to fill in the one field it revealed, so
-  // the cursor goes there. Done with a ref rather than autoFocus so the timing
-  // is ours, which is the same reason the agent editor does it this way.
+  // Opening the form is a commitment to fill it in, so the cursor goes to the
+  // first field. Done with a ref rather than autoFocus so the timing is ours,
+  // which is the same reason the agent editor does it this way.
   useEffect(() => {
-    if (picked !== null) secretRef.current?.focus();
-  }, [picked]);
+    if (adding) serviceRef.current?.focus();
+  }, [adding]);
 
   const load = useCallback(async () => {
     try {
@@ -60,9 +57,9 @@ export function CredentialList({ groupId }: Props) {
   }, [load]);
 
   const reset = () => {
-    setPicked(null);
+    setAdding(false);
+    setDraft({ service: "", envVar: "" });
     setSecret("");
-    setCustom({ service: "", envVar: "" });
   };
 
   const run = async (action: () => Promise<unknown>) => {
@@ -80,18 +77,26 @@ export function CredentialList({ groupId }: Props) {
     }
   };
 
+  const ready = secret.trim() && draft.service.trim() && draft.envVar.trim();
+  const add = () =>
+    void run(() =>
+      api.createConnector({
+        groupId,
+        service: draft.service,
+        account: "",
+        envVar: draft.envVar,
+        note: "",
+        secret,
+      } satisfies ConnectorDraft),
+    ).then((ok) => ok && reset());
+
   if (connectors === null) return <p className="field__hint">Loading credentials…</p>;
 
-  const held = new Set(connectors.map((connector) => connector.service));
-  const offered = CATALOG.filter((entry) => !held.has(entry.service));
-  const service = picked === "custom" ? custom.service : (picked?.service ?? "");
-  const envVar = picked === "custom" ? custom.envVar : (picked?.envVar ?? "");
-
   return (
-    <div className="connectors">
+    <div className="access">
       <div className="routines__head">
         <span className="field__label">Credentials</span>
-        {picked !== null && (
+        {adding && (
           <button type="button" className="btn btn--ghost btn--small" onClick={reset}>
             Cancel
           </button>
@@ -99,12 +104,11 @@ export function CredentialList({ groupId }: Props) {
       </div>
 
       {connectors.map((connector) => (
-        <div className="connector" key={connector.id}>
-          <div className="connector__row">
-            <Mark entry={entryFor(connector.service)} fallback={connector.service} />
-            <strong className="connector__service">{connector.service}</strong>
-            <span className="connector__where">${connector.envVar}</span>
-            <span className="connector__when">
+        <div className="access__item" key={connector.id}>
+          <div className="access__row">
+            <strong className="access__name">{connector.service}</strong>
+            <span className="access__where">${connector.envVar}</span>
+            <span className="access__when">
               {connector.secretSet ? connector.secretHint : "no value set"}
             </span>
             <button
@@ -120,93 +124,36 @@ export function CredentialList({ groupId }: Props) {
         </div>
       ))}
 
-      {picked === null ? (
-        <>
-          <p className="field__hint">
-            Pick a service and paste its token. Every machine in this group gets it as an
-            environment variable, and the agents are told the name and told not to print it: the
-            value never reaches the model. For anything you log into with a browser, just sign in on
-            an agent's computer instead.
-          </p>
-          <div className="services">
-            {offered.map((entry) => (
-              <button
-                key={entry.service}
-                type="button"
-                className="service"
-                style={{ "--mark": entry.color } as React.CSSProperties}
-                onClick={() => setPicked(entry)}
-              >
-                <Mark entry={entry} fallback={entry.service} />
-                <span className="service__name">{entry.service}</span>
-              </button>
-            ))}
-            <button
-              type="button"
-              className="service service--other"
-              onClick={() => setPicked("custom")}
-            >
-              <span className="mark mark--other" aria-hidden="true">
-                +
-              </span>
-              <span className="service__name">Something else</span>
-            </button>
+      {adding ? (
+        <div className="access__item">
+          <div className="access__row">
+            <input
+              className="input input--slim"
+              placeholder="what it is for"
+              ref={serviceRef}
+              value={draft.service}
+              onChange={(event) => setDraft({ ...draft, service: event.target.value })}
+            />
+            <input
+              className="input input--slim input--mono"
+              placeholder="MY_API_KEY"
+              value={draft.envVar}
+              onChange={(event) => setDraft({ ...draft, envVar: event.target.value })}
+            />
           </div>
-        </>
-      ) : (
-        <div className="connector">
-          {picked === "custom" ? (
-            <>
-              <div className="connector__row">
-                <input
-                  className="input input--slim"
-                  placeholder="what it is for"
-                  value={custom.service}
-                  onChange={(event) => setCustom({ ...custom, service: event.target.value })}
-                />
-                <input
-                  className="input input--slim input--mono"
-                  placeholder="MY_API_KEY"
-                  value={custom.envVar}
-                  onChange={(event) => setCustom({ ...custom, envVar: event.target.value })}
-                />
-              </div>
-              <p className="field__hint">
-                The variable name is what the agent will use, so give it the one the service's own
-                documentation uses.
-              </p>
-            </>
-          ) : (
-            <>
-              <div className="connector__row">
-                <Mark entry={picked} fallback={picked.service} />
-                <strong className="connector__service">{picked.service}</strong>
-                <span className="connector__where">${picked.envVar}</span>
-              </div>
-              <p className="field__hint">Get one at {picked.where}.</p>
-            </>
-          )}
-          <div className="connector__row">
+          <p className="field__hint">
+            The variable name is what the agent will use, so give it the one the service's own
+            documentation uses.
+          </p>
+          <div className="access__row">
             <input
               className="input input--mono"
               type="password"
-              placeholder={`${service || "the"} token`}
+              placeholder={`${draft.service.trim() || "the"} token`}
               value={secret}
-              ref={secretRef}
               onChange={(event) => setSecret(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && secret.trim() && service && envVar) {
-                  void run(() =>
-                    api.createConnector({
-                      groupId,
-                      service,
-                      account: "",
-                      envVar,
-                      note: picked === "custom" ? "" : (picked.note ?? ""),
-                      secret,
-                    } satisfies ConnectorDraft),
-                  ).then((ok) => ok && reset());
-                }
+                if (event.key === "Enter" && ready) add();
               }}
             />
             <button
@@ -215,24 +162,25 @@ export function CredentialList({ groupId }: Props) {
               // The value has to arrive now. There is no edit command to supply
               // one later, and a variable stored empty reads to the agent as a
               // revoked token rather than as unfinished setup.
-              disabled={busy || !secret.trim() || !service.trim() || !envVar.trim()}
-              onClick={() =>
-                void run(() =>
-                  api.createConnector({
-                    groupId,
-                    service,
-                    account: "",
-                    envVar,
-                    note: picked === "custom" ? "" : (picked.note ?? ""),
-                    secret,
-                  } satisfies ConnectorDraft),
-                ).then((ok) => ok && reset())
-              }
+              disabled={busy || !ready}
+              onClick={add}
             >
               Add
             </button>
           </div>
         </div>
+      ) : (
+        <>
+          <p className="field__hint">
+            For a service with no plugin. Every machine in this group gets it as an environment
+            variable, and the agents are told the name and told not to print it: the value never
+            reaches the model. For anything you log into with a browser, just sign in on an agent's
+            computer instead.
+          </p>
+          <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
+            Add a credential
+          </button>
+        </>
       )}
 
       {error && (
@@ -241,32 +189,5 @@ export function CredentialList({ groupId }: Props) {
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * A service's tile: its own mark, in its own colour.
- *
- * The mark is real path data rather than something drawn by eye, because a logo
- * approximated at twenty pixels is just a wrong logo. The few brands with no
- * published icon fall back to an initial, which is why the tile is a neutral
- * chip carrying a coloured glyph rather than a coloured chip: the two kinds sit
- * in one grid without one of them looking like a mistake.
- */
-function Mark({ entry, fallback }: { entry?: CatalogEntry; fallback: string }) {
-  return (
-    <span
-      className="mark"
-      aria-hidden="true"
-      style={{ "--mark": entry?.color ?? "var(--muted)" } as React.CSSProperties}
-    >
-      {entry?.path ? (
-        <svg viewBox="0 0 24 24" className="mark__icon" role="presentation">
-          <path d={entry.path} fill="currentColor" />
-        </svg>
-      ) : (
-        (entry?.mark ?? fallback.slice(0, 1).toUpperCase())
-      )}
-    </span>
   );
 }

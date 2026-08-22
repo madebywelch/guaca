@@ -275,11 +275,9 @@ describe("what the operator is shown", () => {
     expect(field(/Model calls per conversation/).placeholder).toBe("60");
   });
 
-  it("does not offer accounts for a group that does not exist yet", () => {
+  it("does not offer plugins for a group that does not exist yet", () => {
     open(null);
-    expect((screen.getByRole("tab", { name: "Accounts" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect((screen.getByRole("tab", { name: "Plugins" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("refuses to save a group with no name", () => {

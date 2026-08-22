@@ -158,6 +158,15 @@ environment and nowhere else. And there is nowhere to type a password: the
 operator signs in at the real site, on the agent's screen, and Guaca records
 only that it happened.
 
+**A third kind arrived, and it is the one MCP was actually for.** A plugin is a
+server the crew signs in to, which then publishes what it can do. It settles the
+declared-versus-observed argument above by making the question moot: `tools/list`
+is a declaration, but it is the vendor's rather than the operator's, it is
+current because it was fetched at the moment of connecting, and it arrives as
+schemas rather than as prose. The trade is that it only works for services that
+run such a server, which is why there are three of them and a text box for
+everything else. `docs/PLUGINS.md`.
+
 **The threat the survey's tables do not reach.** Its Operation-phase threats are
 about peers. A signed-in agent's larger exposure is the page it is reading:
 *BrowseSafe* ([arXiv 2511.20597](https://arxiv.org/abs/2511.20597)) makes the

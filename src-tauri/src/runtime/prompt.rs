@@ -13,6 +13,7 @@ use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
+use crate::domain::plugin::{PluginKind, PluginTool};
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
@@ -54,6 +55,10 @@ pub fn system_prompt(
     // What this agent turned out to be signed in to, in either of its two
     // places. Nobody typed these: they were read off whatever holds the cookies.
     signins: &[Signin],
+    // The servers this agent's crew has signed in to, and what each offers. A
+    // third kind of reach, and the only one where the agent holds nothing: the
+    // call is made by Guaca with the group's own grant on it.
+    plugins: &[(PluginKind, Vec<PluginTool>)],
     notes: &str,
     // What this agent already has standing, newest firing first. In the prompt
     // rather than behind a tool call: an agent asked to change something it
@@ -167,7 +172,7 @@ pub fn system_prompt(
     // reports that it has no access, which is the whole reason any of this
     // exists: the access was never missing, the knowledge was.
     out.push_str("\n## What you can reach\n");
-    if credentials.is_empty() && signins.is_empty() {
+    if credentials.is_empty() && signins.is_empty() && plugins.is_empty() {
         out.push_str(
             "You are not signed in to anything, and you have been given no credentials. You can \
              still read the open web. If a task needs an account, say which one and ask the \
@@ -219,6 +224,34 @@ pub fn system_prompt(
             out.push_str(
                 "Use one by name, for example `curl -H \"Authorization: Bearer $TOKEN\" …`. \
                  Never print one, never copy one into a message, and never send one to a peer.\n\n",
+            );
+        }
+
+        // Named here as well as offered as tools, and that is not a duplicate.
+        // A tool list is read while deciding how to do something; this is read
+        // while deciding whether it can be done at all, which happens first. An
+        // agent that skims twenty tool definitions and one that knows its crew
+        // has Neon behave differently when asked "can we check the database".
+        if !plugins.is_empty() {
+            out.push_str(
+                "Your crew has these plugins connected. The sign-in behind each one is the \
+                 operator's, held by Guaca: there is nothing for you to authenticate, no key to \
+                 find, and no command to run.\n",
+            );
+            for (kind, tools) in plugins {
+                out.push_str(&format!(
+                    "- {} — {} tool{}, called as `{}{}…`\n",
+                    kind.label(),
+                    tools.len(),
+                    if tools.len() == 1 { "" } else { "s" },
+                    kind.slug(),
+                    crate::llm::tools::PLUGIN_SEPARATOR,
+                ));
+            }
+            out.push_str(
+                "\nThese act on the operator's real account, not a copy of it: a database you \
+                 drop is dropped and a deployment you make is live. Read freely, and stop before \
+                 anything destructive or public that was not asked for.\n\n",
             );
         }
 
@@ -624,6 +657,7 @@ pub fn build_messages(
     roster: &[DirectoryEntry],
     credentials: &[Connector],
     signins: &[Signin],
+    plugins: &[(PluginKind, Vec<PluginTool>)],
     names: &NameTable,
     notes: &str,
     routines: &[Routine],
@@ -638,6 +672,7 @@ pub fn build_messages(
         roster,
         credentials,
         signins,
+        plugins,
         notes,
         routines,
         mode,
@@ -678,7 +713,7 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], notes, &[], mode, Surfaces::both())
+        system_prompt(card, "", roster, &[], &[], &[], notes, &[], mode, Surfaces::both())
     }
 
     /// The prompt for an agent that already keeps a schedule.
@@ -686,6 +721,7 @@ mod tests {
         system_prompt(
             card,
             "",
+            &[],
             &[],
             &[],
             &[],
@@ -710,6 +746,7 @@ mod tests {
             card,
             "",
             roster,
+            &[],
             &[],
             &[],
             names,
@@ -915,6 +952,7 @@ mod tests {
             &[],
             &[credential("GitHub", "madebywelch", "GITHUB_TOKEN")],
             &[signed_in(c.id, "LinkedIn")],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -940,6 +978,81 @@ mod tests {
         );
     }
 
+    /// One connected plugin, as the store would hand it over.
+    fn plugin(kind: PluginKind, tools: &[&str]) -> (PluginKind, Vec<PluginTool>) {
+        (
+            kind,
+            tools
+                .iter()
+                .map(|name| PluginTool {
+                    name: name.to_string(),
+                    description: String::new(),
+                    input_schema: serde_json::json!({ "type": "object" }),
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn an_agent_is_told_which_plugins_its_crew_has_connected() {
+        // Named as well as offered as tools, and that is not a duplicate. A
+        // tool list is read while deciding how to do something; this is read
+        // while deciding whether it can be done at all, which happens first.
+        let c = card("Researcher");
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[],
+            &[plugin(PluginKind::Neon, &["run_sql", "create_branch"])],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::both(),
+        );
+
+        assert!(prompt.contains("- Neon — 2 tools, called as `neon__…`"), "{prompt}");
+        assert!(
+            prompt.contains("nothing for you to authenticate"),
+            "an agent that goes looking for a key it does not need spends a turn on it: {prompt}"
+        );
+        // And the warning that these are not a sandbox.
+        assert!(prompt.contains("operator's real account"), "{prompt}");
+    }
+
+    #[test]
+    fn a_crew_with_only_a_plugin_is_not_told_it_can_reach_nothing() {
+        // The empty case used to be decided by credentials and sign-ins alone,
+        // so an agent whose crew had connected a database was told in the same
+        // paragraph that it had been given no access at all.
+        let c = card("Researcher");
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[],
+            &[plugin(PluginKind::Cloudflare, &["workers_list"])],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::none(),
+        );
+
+        assert!(!prompt.contains("You are not signed in to anything"), "{prompt}");
+        assert!(prompt.contains("Cloudflare"), "{prompt}");
+    }
+
+    #[test]
+    fn a_crew_with_no_plugins_is_told_nothing_about_them() {
+        // A section explaining a mechanism nobody is using is prompt an agent
+        // pays for on every turn.
+        let c = card("Researcher");
+        let prompt = prompt_for(&c, &[], "", ReplyMode::ToOperator);
+        assert!(!prompt.contains("plugins connected"), "{prompt}");
+    }
+
     #[test]
     fn a_guessed_session_is_offered_as_a_guess() {
         // The weaker rule matches a session-shaped cookie on a visited site,
@@ -956,6 +1069,7 @@ mod tests {
             &[],
             &[],
             &[hedged],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -985,6 +1099,7 @@ mod tests {
             "",
             &[],
             &[token],
+            &[],
             &[],
             "",
             &[],
@@ -1019,6 +1134,7 @@ mod tests {
             &[],
             &[],
             &[signed_in(c.id, "LinkedIn")],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -1045,6 +1161,7 @@ mod tests {
             &c,
             "",
             &[researcher],
+            &[],
             &[],
             &[],
             "",
@@ -1357,6 +1474,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             &NameTable::new(),
             "",
             &[],
@@ -1430,6 +1548,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -1441,6 +1560,7 @@ mod tests {
         let anonymous = system_prompt(
             &card("Manager"),
             "  ",
+            &[],
             &[],
             &[],
             &[],
@@ -1585,6 +1705,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -1599,6 +1720,7 @@ mod tests {
         let computer_only = system_prompt(
             &card("Shell"),
             "",
+            &[],
             &[],
             &[],
             &[],
@@ -1650,6 +1772,7 @@ mod tests {
             &[entry("Outreach", &[])],
             &[],
             &[],
+            &[],
             "",
             &[],
             ReplyMode::ToOperator,
@@ -1671,6 +1794,7 @@ mod tests {
             &card("Solo"),
             "",
             &[entry("Outreach", &[])],
+            &[],
             &[],
             &[],
             "",

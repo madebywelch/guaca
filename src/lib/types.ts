@@ -225,6 +225,41 @@ export interface ConnectorDraft {
   secret: string;
 }
 
+export type PluginId = string;
+
+/** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */
+export type PluginKind = "neon" | "cloudflare" | "clerk";
+
+/** A plugin on offer, before anybody has connected it. */
+export interface PluginOffer {
+  kind: PluginKind;
+  name: string;
+  /** One line about what the crew gets. */
+  blurb: string;
+  docs: string;
+  /** Where the sign-in and every later call goes, shown before it is clicked. */
+  endpoint: string;
+}
+
+/**
+ * A plugin a group has connected.
+ *
+ * The grant is never on this side of the boundary: there is no command that
+ * returns an access token, a refresh token or a client secret. `signedIn` is
+ * all the UI ever sees, and it is false for a server that asked for nothing.
+ */
+export interface Plugin {
+  id: PluginId;
+  groupId: GroupId;
+  kind: PluginKind;
+  /** Whose account, when the server said. Usually blank. */
+  account: string;
+  /** What the crew can call, by the server's own name for each. */
+  tools: string[];
+  signedIn: boolean;
+  connectedAt: number;
+}
+
 /**
  * Which of an agent's two places holds a session.
  *

@@ -58,6 +58,9 @@ pub enum Script {
     Attach { tool: String, files: Vec<String> },
     /// Emit a `directory` tool call.
     Directory,
+    /// Call one of a connected plugin's tools, by its prefixed name. Nothing in
+    /// this build knows what those are: the crew's servers said.
+    Plugin { name: String, arguments: serde_json::Value },
     /// Emit an `update_notes` tool call.
     Notes(String),
     /// The same call under the name a model reaches for when it is asked to
@@ -227,6 +230,15 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_dir","type":"function",
                  "function":{"name":"directory","arguments":"{}"}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Plugin { name, arguments } => {
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_plugin","type":"function",
+                 "function":{"name":name,"arguments":arguments.to_string()}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

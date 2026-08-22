@@ -17,6 +17,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
+  lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale and surface, as one write to the root element.
@@ -30,6 +31,7 @@ src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
     group.rs          A crew's wall, and the settings its agents run on.
+    plugin.rs         The three servers a crew can sign in to, and what it got.
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
@@ -38,6 +40,9 @@ src-tauri/src/
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
+  mcp.rs              The client end of MCP. Three methods, one POST each.
+  oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
+  plugins.rs          Where those two meet the store, and a turn spends a grant.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
@@ -82,6 +87,7 @@ repo: the frontend renders state and forwards intent.
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
+| Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
@@ -190,6 +196,23 @@ the model takes a screenshot to see what `browse` did.
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
   pair thread or the activity board, and an effect cannot re-bind on that.
+- **A plugin's tool list is read once and kept.** `tools/list` on every turn is
+  a network round trip in front of every model call, paid by every agent in the
+  crew, to re-learn something that changes when a vendor ships rather than when
+  an agent thinks. The stored list is what the turn is built from; connecting
+  again is what refreshes it.
+- **A plugin tool a provider would refuse is dropped, not renamed.** Providers
+  validate a function name against `[A-Za-z0-9_-]{1,64}`. Renaming to fit needs
+  a mapping back at call time, and a mapping nothing can see is how a call lands
+  on the wrong tool.
+- **`plugins::connect` opens the server with no token first.** That is the only
+  honest way to find out whether it wants one. Clerk's is public, and sending an
+  operator to a browser to authorise a server that authorises everybody is a
+  consent prompt for nothing and a row claiming a sign-in that never happened.
+- **The loopback port is bound before the client is registered.** That ordering
+  is the whole reason a redirect is acceptable here at all, and it is the
+  difference between this flow and the one `subscription.rs` argues against:
+  `docs/PLUGINS.md`.
 - **The sign-in tests carry real cookie names.** A cookie's presence is not a
   login. Do not loosen them without a fresh capture from a live machine.
 - **All three conditions in `needs_consent` are load-bearing.** Each one alone
@@ -344,4 +367,14 @@ failure worth catching is that belief going stale.
 
 ```sh
 ./scripts/subscription.sh    # a real call against your own ChatGPT plan
+```
+
+A fifth, `tests/plugins.rs`, does the same job for MCP: a scripted server that
+publishes the four metadata documents an OAuth sign-in needs, and one runtime
+turn that calls a plugin tool end to end. Its live half asks whether the three
+vendors still publish what this build expects, which is the failure no offline
+test can see. It reaches the internet, authorises nothing and spends nothing.
+
+```sh
+./scripts/plugins.sh
 ```

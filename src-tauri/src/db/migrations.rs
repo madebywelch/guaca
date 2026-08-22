@@ -653,6 +653,48 @@ UPDATE groups
  WHERE trim(coalesce(base_url, '')) <> '' OR trim(coalesce(api_key, '')) <> '';
 "#,
     ),
+    (
+        24,
+        r#"
+-- Plugins: an MCP server a crew has signed in to, and the grant that signing in
+-- produced. Beside `connectors` rather than instead of it, because the two are
+-- different mechanisms with different blast radii: a connector is a secret the
+-- operator pasted that ends up in the environment of a sandbox, and a plugin is
+-- a grant Guaca holds and spends itself, on a call the machine never sees.
+--
+-- The grant columns are the reason this table is never selected whole. Nothing
+-- reads `access_token`, `refresh_token` or `client_secret` except the code that
+-- puts them on the wire back to the server that issued them, in the same way
+-- `connector_env` is the only reader of a connector's secret.
+CREATE TABLE plugins (
+    id             TEXT    PRIMARY KEY,
+    group_id       TEXT    NOT NULL REFERENCES groups(id),
+    -- The slug from `domain::plugin::PluginKind`, not a free-text service name.
+    -- The endpoint the runtime dials is derived from it, so a row naming
+    -- something that is not in that enum is a row nothing can use.
+    kind           TEXT    NOT NULL,
+    account        TEXT    NOT NULL DEFAULT '',
+    -- The server's own tool list, as it stood when the plugin was connected.
+    -- Kept rather than re-read, because `tools/list` on every turn is a network
+    -- round trip in front of every model call in the crew.
+    tools          TEXT    NOT NULL DEFAULT '[]',
+    client_id      TEXT    NOT NULL DEFAULT '',
+    client_secret  TEXT    NOT NULL DEFAULT '',
+    token_endpoint TEXT    NOT NULL DEFAULT '',
+    access_token   TEXT    NOT NULL DEFAULT '',
+    refresh_token  TEXT    NOT NULL DEFAULT '',
+    expires_at     INTEGER,
+    connected_at   INTEGER NOT NULL
+);
+
+CREATE INDEX plugins_group ON plugins (group_id);
+
+-- One of each per crew. Two grants for the same server would put two copies of
+-- every tool in front of the model, under names it cannot tell apart, and which
+-- of the two a call landed on would depend on row order.
+CREATE UNIQUE INDEX plugins_kind_unique ON plugins (group_id, kind);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

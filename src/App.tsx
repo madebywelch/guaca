@@ -196,9 +196,7 @@ export default function App() {
   return (
     <div className="app">
       <Sidebar
-        onNewAgent={() => setEditing("new")}
         onEditAgent={(agent) => setEditing(agent)}
-        onNewGroup={() => setEditingGroup("new")}
         onOpenCafeteria={() => setShowCafeteria(true)}
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
@@ -258,6 +256,8 @@ export default function App() {
           <ChannelView
             channel={selected ?? ACTIVITY_CHANNEL}
             onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+            onNewAgent={() => setEditing("new")}
+            onNewGroup={() => setEditingGroup("new")}
           />
         )}
       </main>

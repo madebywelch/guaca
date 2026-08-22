@@ -1140,6 +1140,39 @@ button {
   background: var(--sunken);
 }
 
+/* The one plus in the app, at the end of the one bar that is always drawn.
+   It carries its own `margin-left: auto` because the activity header has
+   nothing else pushing to the right; on an agent's header the more button has
+   already done that, and a second auto margin there would split the free space
+   between the two and leave the dots floating in the middle of the bar. */
+.pane__new {
+  margin-left: auto;
+  flex: none;
+  border: 1px solid var(--edge);
+  background: var(--raised);
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.24rem 0.5rem;
+  border-radius: var(--radius-sm);
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.pane__more + .pane__new {
+  margin-left: 0;
+}
+
+.pane__new:hover,
+.pane__new:focus-visible,
+.pane__new[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--sunken);
+  border-color: var(--flesh);
+}
+
 .pane__scroll {
   flex: 1;
   overflow-y: auto;
@@ -3011,53 +3044,18 @@ button {
   display: block;
 }
 
-.connectors {
+/* Three lists share these rules, and the name is theirs rather than any one of
+   them: a plugin, a standing permission and a detected sign-in are all answers
+   to "what can this reach". The name used to be `.connector`, which was true of
+   one of the three. */
+.access {
   margin-bottom: 1.15rem;
-}
-
-/* The services a credential can be added for. A grid of real tiles: the
-   previous version borrowed the avatar picker, which forces square cells sized
-   for a drawing, so a row of text buttons came out cramped and ragged. */
-.services {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr));
-  gap: 0.4rem;
-  margin-top: 0.5rem;
-}
-
-.service {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0.6rem;
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
-  background: var(--raised);
-  text-align: left;
-  transition:
-    background 120ms ease,
-    border-color 120ms ease;
-}
-
-.service:hover {
-  background: var(--sunken);
-  /* Picks up the brand colour it is about to commit to. */
-  border-color: color-mix(in oklab, var(--mark, var(--flesh)) 45%, var(--edge));
-}
-
-.service__name {
-  font-size: 0.8rem;
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The brand's mark in the brand's colour, on a neutral chip.
    A coloured chip with a white glyph would be the obvious choice and is the
-   wrong one here: several of these brands are black, so their tiles would be
-   four identical squares, and the services with no published icon would sit in
-   the same grid looking like a mistake rather than a fallback. */
+   wrong one here: a brand that publishes a black mark would come out as a black
+   square, which is not a logo. */
 .mark {
   flex: none;
   width: 1.5rem;
@@ -3074,10 +3072,9 @@ button {
   line-height: 1;
 }
 
-/* Four of these brands publish a black mark, and black on a dark chip is not
-   there at all. Mixed toward the foreground rather than replaced, so a brand
-   that does have a colour keeps most of it and the row still reads as a set of
-   different companies. The comment above rules out the other obvious fix. */
+/* A brand that publishes a black mark is not there at all on a dark chip.
+   Mixed toward the foreground rather than replaced, so a brand that does have a
+   colour keeps most of it. The comment above rules out the other obvious fix. */
 :root[data-surface="dark"] .mark {
   color: color-mix(in oklab, var(--mark, var(--muted)) 62%, var(--text));
 }
@@ -3088,14 +3085,16 @@ button {
   display: block;
 }
 
-.mark--other {
-  background: none;
-  border: 1px dashed var(--edge);
-  color: var(--faint);
-  font-size: 0.85rem;
+/* The link under a plugin that is not connected yet. A link rather than a
+   button because it is an address, and the operator is entitled to read where
+   they are about to be sent before they are sent there. */
+.access__docs {
+  color: var(--flesh);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-.connector {
+.access__item {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
@@ -3106,25 +3105,25 @@ button {
   background: var(--sunken);
 }
 
-.connector__row {
+.access__row {
   display: flex;
   align-items: center;
   gap: 0.35rem;
   flex-wrap: wrap;
 }
 
-.connector__service {
+.access__name {
   font-size: 0.78rem;
   font-weight: 600;
 }
 
-.connector__account {
+.access__account {
   font-family: var(--font-mono);
   font-size: 0.62rem;
   color: var(--faint);
 }
 
-.connector__where {
+.access__where {
   font-family: var(--font-mono);
   font-size: 0.58rem;
   color: var(--faint);
@@ -3135,24 +3134,24 @@ button {
   white-space: nowrap;
 }
 
-.connector__when {
+.access__when {
   font-family: var(--font-mono);
   font-size: 0.58rem;
   color: var(--faint);
   margin-left: auto;
 }
 
-.connector__ok,
-.connector__warn {
+.access__ok,
+.access__warn {
   margin: 0;
   font-size: 0.62rem;
 }
 
-.connector__ok {
+.access__ok {
   color: var(--mint);
 }
 
-.connector__warn {
+.access__warn {
   color: var(--alarm);
 }
 
@@ -4039,6 +4038,15 @@ button {
 .menu__item:focus-visible {
   background: var(--sunken);
   outline: none;
+}
+
+/* What the row makes, for the one menu whose items are not verbs on something
+   already named at the top of it. */
+.menu__detail {
+  display: block;
+  margin-top: 0.08rem;
+  font-size: 0.7rem;
+  color: var(--faint);
 }
 
 /* ==========================================================================

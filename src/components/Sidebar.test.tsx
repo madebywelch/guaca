@@ -67,9 +67,7 @@ function draw(groups: Group[], agents: AgentCard[] = [], activity: Record<string
   });
   return render(
     <Sidebar
-      onNewAgent={vi.fn()}
       onEditAgent={vi.fn()}
-      onNewGroup={vi.fn()}
       onEditGroup={vi.fn()}
       onOpenCafeteria={vi.fn()}
       onOpenSettings={vi.fn()}
