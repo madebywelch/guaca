@@ -11,6 +11,9 @@
  * that had just moved and no arrangement could survive a conversation. Keeping
  * both halves is what makes a drag worth doing: the shape you arranged is the
  * shape the rail returns to.
+ *
+ * A pin is a third thing and the shortest: it holds a row at the head of its
+ * crew, in every view that draws that crew, and it never lends the place back.
  */
 
 import type { Activity, AgentCard, AgentId, GroupId } from "./types";
@@ -18,15 +21,11 @@ import type { Activity, AgentCard, AgentId, GroupId } from "./types";
 /**
  * What a dragged row was let go over.
  *
- * Three targets rather than one, because the rail says three different things.
- * A row is a place in an arrangement. A group is a crew, and dropping on one
- * asks for membership without saying where. Pinned is neither: it is a flag on
- * an agent, drawn as a section so it can be aimed at.
+ * Two targets, because the rail says two things. A row is a place in an
+ * arrangement, and it carries whether that place is pinned. A group is a crew,
+ * and dropping on one asks for membership without saying where in it.
  */
-export type DropTarget =
-  | { kind: "row"; id: AgentId }
-  | { kind: "group"; id: GroupId }
-  | { kind: "pinned" };
+export type DropTarget = { kind: "row"; id: AgentId } | { kind: "group"; id: GroupId };
 
 /**
  * How loudly a state asks for the top of its section.
@@ -64,23 +63,23 @@ export interface RailOptions {
    * moment that turn ended.
    */
   frozen?: boolean;
-  /**
-   * Keep pinned members at the head of this section.
-   *
-   * For a section that is a whole group, which is what focusing on one draws. In
-   * the rail's overview the pinned rows are lifted out into their own section
-   * above the groups, so there is nothing to keep at the head of anything.
-   */
-  pinnedFirst?: boolean;
 }
 
-/** Which band of its section a row sits in. Lower is nearer the top. */
-function bandOf(agent: AgentCard, lift: number, pinnedFirst: boolean): number {
-  if (pinnedFirst && agent.pinned) return 0;
-  // A pinned row never floats, wherever it is drawn. It is where it is so it can
-  // be found in one glance, and a row that moves when the agent gets busy is the
-  // one thing a pin is for stopping.
-  if (lift > 0 && !agent.pinned) return 1;
+/**
+ * Which band of its section a row sits in. Lower is nearer the top.
+ *
+ * A pin is the head of the crew, and it is the same head in both views: the
+ * overview draws every group with its pins on top, and going inside one draws
+ * that group and nothing else. A pin that only held in the overview was a
+ * gesture that did nothing to the list the operator was looking at.
+ *
+ * A pinned row never floats either. It is at the head so it can be found in one
+ * glance, and a row that moves when the agent gets busy is the one thing a pin
+ * is for stopping.
+ */
+function bandOf(agent: AgentCard, lift: number): number {
+  if (agent.pinned) return 0;
+  if (lift > 0) return 1;
   return 2;
 }
 
@@ -92,12 +91,12 @@ function bandOf(agent: AgentCard, lift: number, pinnedFirst: boolean): number {
  * accidentally decide where rows go.
  */
 export function railOrder(agents: AgentCard[], options: RailOptions): AgentCard[] {
-  const { activity, lastActive, frozen = false, pinnedFirst = false } = options;
+  const { activity, lastActive, frozen = false } = options;
 
   return agents
     .map((agent, index) => {
       const lift = frozen ? 0 : liftOf(activity[agent.id]);
-      return { agent, index, lift, band: bandOf(agent, lift, pinnedFirst) };
+      return { agent, index, lift, band: bandOf(agent, lift) };
     })
     .sort((a, b) => {
       if (a.band !== b.band) return a.band - b.band;

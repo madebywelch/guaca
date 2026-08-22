@@ -306,16 +306,20 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
     expect(railNames()).toEqual(["Chef", "Manager", "Host"]);
-    expect(screen.getByText("Pinned")).toBeTruthy();
   });
 
-  it("counts a pinned agent in its group even though the row is drawn above", async () => {
-    // It is still in the group, still costs it money, and its peers can still
-    // message it. Only where the row is drawn has changed.
+  it("draws a pinned agent at the head of its crew rather than above the crews", async () => {
+    // The pins had a section of their own above the groups, which made a pin
+    // the one arrangement that came undone on the way into the crew it was
+    // arranging. They are the head of the crew now, and counted in it: a pinned
+    // agent is still in the group, still costs it money, and is still someone
+    // its peers can message.
     listAgents.mockResolvedValue([agent("Manager"), { ...agent("Chef"), pinned: true }]);
     render(<App />);
 
     await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
+    expect(screen.queryByText("Pinned")).toBeNull();
+    expect(railRow("Chef").closest(".rail__group")?.textContent).toContain("Everyone");
     expect(screen.getByText("Everyone").closest(".rail__group-head")?.textContent).toContain("2");
   });
 
