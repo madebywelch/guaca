@@ -18,7 +18,7 @@ use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
-use crate::domain::group::{Group, GroupDraft};
+use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
@@ -417,6 +417,41 @@ pub fn update_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) 
     let group = state.runtime.store().update_group(id, &clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(group)
+}
+
+/// Verifies a group's endpoint and key without involving one of its agents.
+///
+/// The group's own answer to `test_connection`, and it has to be a separate
+/// command rather than that one with an id: a group's settings are layered over
+/// the app's, so what is worth testing is the resolution rather than either
+/// half. Takes what is on screen, exactly as the app's does, and starts from the
+/// stored key so a test run without retyping it tests the key that is actually
+/// there. `id` is absent for a group that has not been created yet.
+#[tauri::command]
+pub async fn test_group_connection(
+    state: State<'_, AppState>,
+    id: Option<GroupId>,
+    draft: GroupDraft,
+) -> Reply<String> {
+    let clean = draft.validate()?;
+    let mut resolved = match id {
+        Some(id) => state.runtime.store().group_inference(id)?,
+        None => GroupInference::default(),
+    };
+    if let Some(overrides) = clean.inference {
+        resolved.overrides = overrides;
+    }
+    if let Some(key) = clean.api_key {
+        resolved.api_key = key;
+    }
+
+    let mut config = state.runtime.config();
+    config.inference = resolved.apply(&config.inference);
+    state
+        .runtime
+        .probe(&config)
+        .await
+        .map_err(|err| CommandError::new("inference", err.to_string()))
 }
 
 /// Deletes an empty group. Refused while it still holds agents; see

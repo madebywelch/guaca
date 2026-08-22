@@ -373,36 +373,30 @@ impl RunState {
 /// because "complete" is not observable: an agent may still be mid-inference
 /// when its last peer goes quiet. Holding state a little too long is cheap;
 /// dropping it early re-arms every limit mid-cascade.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GuardRegistry {
     runs: HashMap<RunId, RunState>,
-    default_limits: GuardLimits,
     max_retained: usize,
     retain_for_ms: i64,
 }
 
 impl GuardRegistry {
-    pub fn new(default_limits: GuardLimits) -> Self {
-        Self {
-            runs: HashMap::new(),
-            default_limits: default_limits.sanitized(),
-            max_retained: 256,
-            retain_for_ms: 60 * 60 * 1000,
-        }
+    pub fn new() -> Self {
+        Self { runs: HashMap::new(), max_retained: 256, retain_for_ms: 60 * 60 * 1000 }
     }
 
-    pub fn set_limits(&mut self, limits: GuardLimits) {
-        self.default_limits = limits.sanitized();
-    }
-
-    pub fn default_limits(&self) -> GuardLimits {
-        self.default_limits
-    }
-
-    /// Gets or creates the state for a run, reaping stale entries first.
-    pub fn run(&mut self, id: RunId) -> &mut RunState {
+    /// Gets or creates the state for a run, on the limits of the group it is
+    /// happening in, reaping stale entries first.
+    ///
+    /// The registry holds no limits of its own, because there is no such thing
+    /// as a run outside a group. A run cannot cross one either — a send
+    /// addressed outside a group is refused as an unknown recipient — so every
+    /// caller for a given run passes the same numbers, and it does not matter
+    /// which of them creates the state. They are read on creation and then
+    /// fixed for the life of the run: a limit edited mid-cascade must not move
+    /// the ceiling a conversation is already being measured against.
+    pub fn run_within(&mut self, id: RunId, limits: GuardLimits) -> &mut RunState {
         self.reap();
-        let limits = self.default_limits;
         self.runs.entry(id).or_insert_with(|| RunState::new(limits))
     }
 
@@ -708,33 +702,51 @@ mod tests {
     }
 
     #[test]
+    fn a_run_keeps_the_limits_it_started_on() {
+        // Two groups, two ceilings, one registry. And the second call for a run
+        // does not re-read them: a run measured against a moving number cannot
+        // report what it was allowed to spend.
+        let mut reg = GuardRegistry::new();
+        let (tight, loose) = (RunId::new(), RunId::new());
+
+        let strict = GuardLimits { max_steps_per_run: 2, ..GuardLimits::default() };
+        assert!(reg.run_within(tight, strict).reserve_step());
+        assert!(reg.run_within(loose, GuardLimits::default()).reserve_step());
+
+        assert!(reg.run_within(tight, strict).reserve_step());
+        assert!(!reg.run_within(tight, GuardLimits::default()).reserve_step(), "spent is spent");
+        assert!(reg.run_within(loose, strict).reserve_step(), "the other run is untouched");
+    }
+
+    #[test]
     fn registry_isolates_runs_from_each_other() {
-        let mut reg = GuardRegistry::new(GuardLimits { max_steps_per_run: 1, ..permissive() });
+        let mut reg = GuardRegistry::new();
+        let one_call = GuardLimits { max_steps_per_run: 1, ..permissive() };
         let (r1, r2) = (RunId::new(), RunId::new());
 
-        assert!(reg.run(r1).reserve_step());
-        assert!(!reg.run(r1).reserve_step());
-        assert!(reg.run(r2).reserve_step(), "a fresh run gets its own budget");
+        assert!(reg.run_within(r1, one_call).reserve_step());
+        assert!(!reg.run_within(r1, one_call).reserve_step());
+        assert!(reg.run_within(r2, one_call).reserve_step(), "a fresh run gets its own budget");
     }
 
     #[test]
     fn registry_bounds_retained_runs() {
-        let mut reg = GuardRegistry::new(GuardLimits::default());
+        let mut reg = GuardRegistry::new();
         reg.max_retained = 4;
         for _ in 0..40 {
-            reg.run(RunId::new()).reserve_step();
+            reg.run_within(RunId::new(), GuardLimits::default()).reserve_step();
         }
         assert!(reg.live_runs() <= 5, "expected reaping, got {} runs", reg.live_runs());
     }
 
     #[test]
     fn registry_reaps_by_age() {
-        let mut reg = GuardRegistry::new(GuardLimits::default());
+        let mut reg = GuardRegistry::new();
         let old = RunId::new();
-        reg.run(old).reserve_step();
+        reg.run_within(old, GuardLimits::default()).reserve_step();
         // Backdate past the retention window.
         reg.runs.get_mut(&old).unwrap().last_touched = now_ms() - (2 * 60 * 60 * 1000);
-        reg.run(RunId::new());
+        reg.run_within(RunId::new(), GuardLimits::default());
         assert!(reg.peek(old).is_none(), "stale run should have been reaped");
     }
 

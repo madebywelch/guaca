@@ -31,6 +31,7 @@ use parking_lot::Mutex;
 
 use guac_lib::config::{AppConfig, InferenceConfig, Provider};
 use guac_lib::db::Store;
+use guac_lib::domain::group::{CleanGroup, InferenceOverrides};
 use guac_lib::domain::ids::AgentId;
 use guac_lib::files::FileStore;
 use guac_lib::llm::openrouter::LlmClient;
@@ -324,8 +325,33 @@ impl Signed {
 /// because the flow that produces that file has its own tests and repeating it
 /// here would make every one of these depend on a second stub.
 fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
+    signed_in_where(stub, names, plan, false)
+}
+
+/// The same, with the choice of who pays made by the group rather than the app.
+///
+/// `by_the_group` puts the crew in a group that names the subscription while the
+/// app settings still say a pasted key, which is the arrangement that has to
+/// work: one sign-in on the machine, and each crew deciding whether to spend it.
+/// The app's endpoint is left pointing at a closed port either way, so a
+/// resolution that read the wrong layer fails rather than passing quietly.
+fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) -> Signed {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+    let group = by_the_group.then(|| {
+        store
+            .create_group(&CleanGroup {
+                name: "Subscribers".into(),
+                inference: Some(InferenceOverrides {
+                    provider: Some(Provider::Chatgpt),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .unwrap()
+            .id
+    });
 
     let mut ids = std::collections::HashMap::new();
     for name in names {
@@ -334,6 +360,7 @@ fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
         // model and not the endpoint's.
         let mut d = draft(name, &["testing"]);
         d.model = String::new();
+        d.group_id = group;
         ids.insert((*name).to_string(), store.create_agent(&d).unwrap().id);
     }
 
@@ -363,7 +390,7 @@ fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
         version: guac_lib::config::CURRENT_VERSION,
         operator_name: String::new(),
         inference: InferenceConfig {
-            provider: Provider::Chatgpt,
+            provider: if by_the_group { Provider::Compatible } else { Provider::Chatgpt },
             // Deliberately left pointing at a URL and a model that would fail if
             // either were used. Nothing in a subscription turn may read them.
             base_url: "http://127.0.0.1:1/v1".into(),
@@ -444,6 +471,26 @@ async fn the_call_carries_the_subscription_model_not_the_endpoint_one() {
     // one field. Resolving the wrong one is a turn the backend refuses by name.
     assert_eq!(body["model"], "gpt-5.6-luna");
     assert_eq!(body["store"], false, "a conversation lives in Guaca, not upstream");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_group_can_spend_the_subscription_while_the_app_pays_with_a_key() {
+    // The sign-in is one credential on this machine, so choosing it is a
+    // setting rather than a second account, and a crew can be moved onto it on
+    // its own. The app is left on an endpoint that is not listening: a turn
+    // that resolved the app's provider instead of the group's cannot reach
+    // anything, and this test would fail rather than pass by accident.
+    let stub = serve(|_| Say::Text("On the plan.".into())).await;
+    let app = signed_in_where(&stub, &["Manager"], "pro", true);
+
+    let run = app.ask("Manager", "Say hello.");
+    app.settle(run).await;
+
+    let texts = app.texts("Manager");
+    assert!(texts.iter().any(|t| t.contains("On the plan")), "got {}", app.everything("Manager"));
+
+    let body = stub.bodies().first().cloned().expect("the subscription was called");
+    assert_eq!(body["model"], "gpt-5.6-luna", "the group inherits the app's subscription model");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

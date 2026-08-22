@@ -16,7 +16,7 @@ use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAction};
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
-use crate::domain::group::{CleanGroup, Group, GroupInference};
+use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
 use crate::domain::now_ms;
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
@@ -1175,7 +1175,10 @@ impl Store {
             "SELECT g.id, g.name, g.created_at,
                     (SELECT count(*) FROM agents a
                       WHERE a.group_id = g.id AND a.lifecycle <> 'terminated'),
-                    g.base_url, g.api_key, g.default_model
+                    g.base_url, g.api_key, g.default_model,
+                    g.provider, g.subscription_model, g.request_timeout_secs,
+                    g.max_hops, g.max_steps_per_run, g.max_fanout_per_call,
+                    g.max_sends_per_pair, g.max_tool_rounds
                FROM groups g
               ORDER BY g.created_at, g.rowid",
         )?;
@@ -1190,16 +1193,29 @@ impl Store {
     pub fn create_group(&self, draft: &CleanGroup) -> Result<Group, StoreError> {
         let conn = self.conn()?;
         let id = GroupId::new();
+        let over = draft.inference.clone().unwrap_or_default();
+        let limits = draft.limits.unwrap_or_default();
         conn.execute(
-            "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model)
-             VALUES (?1,?2,?3,?4,?5,?6)",
+            "INSERT INTO groups (id,name,created_at,base_url,api_key,default_model,
+                                 provider,subscription_model,request_timeout_secs,
+                                 max_hops,max_steps_per_run,max_fanout_per_call,
+                                 max_sends_per_pair,max_tool_rounds)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
             params![
                 id.to_string(),
                 draft.name,
                 now_ms(),
-                draft.base_url.clone().flatten(),
+                over.base_url,
                 draft.api_key.clone().flatten(),
-                draft.default_model.clone().flatten(),
+                over.default_model,
+                over.provider.map(|p| p.as_str()),
+                over.subscription_model,
+                over.request_timeout_secs,
+                limits.max_hops,
+                limits.max_steps_per_run,
+                limits.max_fanout_per_call.map(|n| n as i64),
+                limits.max_sends_per_pair,
+                limits.max_tool_rounds,
             ],
         )
         .map_err(|e| classify(e, &draft.name))?;
@@ -1211,23 +1227,45 @@ impl Store {
     /// erasing it on the next save.
     pub fn update_group(&self, id: GroupId, draft: &CleanGroup) -> Result<Group, StoreError> {
         let conn = self.conn()?;
+        // Each block is written or left alone as a whole, which is what the
+        // draft's two rules say. Per-column CASEs inside a block would let a
+        // caller half-write a group's settings, and the second half of a save
+        // that failed halfway is not a state anything here can report.
+        let over = draft.inference.clone().unwrap_or_default();
+        let limits = draft.limits.unwrap_or_default();
         let changed = conn
             .execute(
                 "UPDATE groups
                     SET name=?2,
-                        base_url      = CASE WHEN ?3 THEN ?4 ELSE base_url END,
-                        api_key       = CASE WHEN ?5 THEN ?6 ELSE api_key END,
-                        default_model = CASE WHEN ?7 THEN ?8 ELSE default_model END
+                        base_url             = CASE WHEN ?3 THEN ?4  ELSE base_url END,
+                        default_model        = CASE WHEN ?3 THEN ?5  ELSE default_model END,
+                        provider             = CASE WHEN ?3 THEN ?6  ELSE provider END,
+                        subscription_model   = CASE WHEN ?3 THEN ?7  ELSE subscription_model END,
+                        request_timeout_secs = CASE WHEN ?3 THEN ?8  ELSE request_timeout_secs END,
+                        api_key              = CASE WHEN ?9 THEN ?10 ELSE api_key END,
+                        max_hops             = CASE WHEN ?11 THEN ?12 ELSE max_hops END,
+                        max_steps_per_run    = CASE WHEN ?11 THEN ?13 ELSE max_steps_per_run END,
+                        max_fanout_per_call  = CASE WHEN ?11 THEN ?14 ELSE max_fanout_per_call END,
+                        max_sends_per_pair   = CASE WHEN ?11 THEN ?15 ELSE max_sends_per_pair END,
+                        max_tool_rounds      = CASE WHEN ?11 THEN ?16 ELSE max_tool_rounds END
                   WHERE id=?1",
                 params![
                     id.to_string(),
                     draft.name,
-                    draft.base_url.is_some(),
-                    draft.base_url.clone().flatten(),
+                    draft.inference.is_some(),
+                    over.base_url,
+                    over.default_model,
+                    over.provider.map(|p| p.as_str()),
+                    over.subscription_model,
+                    over.request_timeout_secs,
                     draft.api_key.is_some(),
                     draft.api_key.clone().flatten(),
-                    draft.default_model.is_some(),
-                    draft.default_model.clone().flatten(),
+                    draft.limits.is_some(),
+                    limits.max_hops,
+                    limits.max_steps_per_run,
+                    limits.max_fanout_per_call.map(|n| n as i64),
+                    limits.max_sends_per_pair,
+                    limits.max_tool_rounds,
                 ],
             )
             .map_err(|e| classify(e, &draft.name))?;
@@ -1245,13 +1283,50 @@ impl Store {
         let conn = self.conn()?;
         let found = conn
             .query_row(
-                "SELECT base_url, api_key, default_model FROM groups WHERE id=?1",
+                "SELECT base_url, api_key, default_model, provider, subscription_model,
+                        request_timeout_secs
+                   FROM groups WHERE id=?1",
                 params![id.to_string()],
                 |row| {
+                    let provider: Option<String> = row.get(3)?;
                     Ok(GroupInference {
-                        base_url: row.get(0)?,
+                        overrides: InferenceOverrides {
+                            base_url: row.get(0)?,
+                            default_model: row.get(2)?,
+                            provider: provider.as_deref().and_then(crate::config::Provider::parse),
+                            subscription_model: row.get(4)?,
+                            request_timeout_secs: row.get(5)?,
+                        },
                         api_key: row.get(1)?,
-                        default_model: row.get(2)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(found.unwrap_or_default())
+    }
+
+    /// A group's loop limits, unresolved. A field it does not set is `None`,
+    /// and the runtime layers what is left over the app's.
+    ///
+    /// Its own query rather than a field on the one above: this is read on
+    /// every send and every model call, and the inference settings are read
+    /// once a turn. Reading either does not want to carry the other's cost, and
+    /// the key must not be read into memory on a path that does not need it.
+    pub fn group_limits(&self, id: GroupId) -> Result<GroupLimits, StoreError> {
+        let conn = self.conn()?;
+        let found = conn
+            .query_row(
+                "SELECT max_hops, max_steps_per_run, max_fanout_per_call, max_sends_per_pair,
+                        max_tool_rounds
+                   FROM groups WHERE id=?1",
+                params![id.to_string()],
+                |row| {
+                    Ok(GroupLimits {
+                        max_hops: row.get(0)?,
+                        max_steps_per_run: row.get(1)?,
+                        max_fanout_per_call: row.get::<_, Option<i64>>(2)?.map(|n| n as usize),
+                        max_sends_per_pair: row.get(3)?,
+                        max_tool_rounds: row.get(4)?,
                     })
                 },
             )
@@ -2054,6 +2129,7 @@ fn row_to_signin(row: &Row<'_>) -> RowResult<Signin> {
 fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
     let id_raw: String = row.get(0)?;
     let api_key: Option<String> = row.get(5)?;
+    let provider: Option<String> = row.get(7)?;
 
     Ok((|| {
         Ok(Group {
@@ -2063,10 +2139,22 @@ fn row_to_group(row: &Row<'_>) -> RowResult<Group> {
             name: row.get(1)?,
             created_at: row.get(2)?,
             agent_count: row.get::<_, i64>(3)?.max(0) as u32,
-            base_url: row.get(4)?,
-            default_model: row.get(6)?,
+            inference: InferenceOverrides {
+                base_url: row.get(4)?,
+                default_model: row.get(6)?,
+                provider: provider.as_deref().and_then(crate::config::Provider::parse),
+                subscription_model: row.get(8)?,
+                request_timeout_secs: row.get(9)?,
+            },
             api_key_set: api_key.as_deref().is_some_and(|k| !k.trim().is_empty()),
             api_key_hint: crate::config::hint_for(api_key.as_deref().unwrap_or_default()),
+            limits: GroupLimits {
+                max_hops: row.get(10)?,
+                max_steps_per_run: row.get(11)?,
+                max_fanout_per_call: row.get::<_, Option<i64>>(12)?.map(|n| n as usize),
+                max_sends_per_pair: row.get(13)?,
+                max_tool_rounds: row.get(14)?,
+            },
         })
     })())
 }
@@ -2175,7 +2263,7 @@ mod tests {
     }
 
     fn group_named(name: &str) -> CleanGroup {
-        CleanGroup { name: name.into(), base_url: None, default_model: None, api_key: None }
+        CleanGroup { name: name.into(), ..Default::default() }
     }
 
     fn key_for(group: GroupId, env_var: &str, secret: &str) -> CleanConnector {
@@ -2385,12 +2473,7 @@ mod tests {
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
         let group = store
-            .create_group(&CleanGroup {
-                name: "Research".into(),
-                base_url: None,
-                default_model: None,
-                api_key: None,
-            })
+            .create_group(&CleanGroup { name: "Research".into(), ..Default::default() })
             .unwrap();
 
         for name in ["One", "Two", "Three"] {
@@ -2892,12 +2975,7 @@ mod tests {
         let f = fixture();
         let other = f
             .store
-            .create_group(&CleanGroup {
-                name: "Research".into(),
-                base_url: None,
-                default_model: None,
-                api_key: None,
-            })
+            .create_group(&CleanGroup { name: "Research".into(), ..Default::default() })
             .unwrap();
 
         let mut d = draft("Scholar");
@@ -2960,19 +3038,139 @@ mod tests {
     fn a_group_with_live_agents_still_refuses_to_go() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
-        let group = store
-            .create_group(&CleanGroup {
-                name: "Busy".into(),
-                base_url: None,
-                default_model: None,
-                api_key: None,
-            })
-            .unwrap();
+        let group =
+            store.create_group(&CleanGroup { name: "Busy".into(), ..Default::default() }).unwrap();
         let mut d = draft("Busy One");
         d.group_id = Some(group.id);
         store.create_agent(&d).unwrap();
 
         assert!(matches!(store.delete_group(group.id), Err(StoreError::GroupNotEmpty { .. })));
+    }
+
+    #[test]
+    fn a_groups_settings_round_trip_and_the_key_only_travels_one_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+        let group = store
+            .create_group(&CleanGroup {
+                name: "Local".into(),
+                inference: Some(InferenceOverrides {
+                    provider: Some(crate::config::Provider::Compatible),
+                    base_url: Some("http://localhost:1234/v1".into()),
+                    default_model: Some("local/qwen".into()),
+                    subscription_model: Some("gpt-5.4".into()),
+                    request_timeout_secs: Some(600),
+                }),
+                api_key: Some(Some("sk-group-9999".into())),
+                limits: Some(GroupLimits { max_steps_per_run: Some(9), ..Default::default() }),
+            })
+            .unwrap();
+
+        assert_eq!(group.inference.provider, Some(crate::config::Provider::Compatible));
+        assert_eq!(group.inference.base_url.as_deref(), Some("http://localhost:1234/v1"));
+        assert_eq!(group.inference.subscription_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(group.inference.request_timeout_secs, Some(600));
+        assert_eq!(group.limits.max_steps_per_run, Some(9));
+        assert_eq!(group.limits.max_hops, None, "an unset limit inherits");
+
+        // The card the UI sees says a key is set and nothing more, and the
+        // runtime's read is the only place the value exists.
+        assert!(group.api_key_set);
+        assert_eq!(group.api_key_hint, "...9999");
+        let json = serde_json::to_string(&group).unwrap();
+        assert!(!json.contains("sk-group"), "a group card leaked its key: {json}");
+        assert_eq!(
+            store.group_inference(group.id).unwrap().api_key.as_deref(),
+            Some("sk-group-9999")
+        );
+        assert_eq!(store.group_limits(group.id).unwrap().max_steps_per_run, Some(9));
+    }
+
+    #[test]
+    fn an_absent_block_leaves_that_half_of_a_groups_settings_alone() {
+        // What lets the editor save a name without holding the key, and what
+        // stops a caller that knows nothing about limits from clearing them.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+        let group = store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                inference: Some(InferenceOverrides {
+                    default_model: Some("local/qwen".into()),
+                    ..Default::default()
+                }),
+                api_key: Some(Some("sk-group-9999".into())),
+                limits: Some(GroupLimits { max_hops: Some(3), ..Default::default() }),
+            })
+            .unwrap();
+
+        let renamed = store
+            .update_group(group.id, &CleanGroup { name: "Reading".into(), ..Default::default() })
+            .unwrap();
+
+        assert_eq!(renamed.name, "Reading");
+        assert_eq!(renamed.inference.default_model.as_deref(), Some("local/qwen"));
+        assert_eq!(renamed.limits.max_hops, Some(3));
+        assert!(renamed.api_key_set);
+    }
+
+    #[test]
+    fn a_present_block_of_nulls_puts_a_group_back_on_the_app_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+        let group = store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                inference: Some(InferenceOverrides {
+                    provider: Some(crate::config::Provider::Chatgpt),
+                    subscription_model: Some("gpt-5.4".into()),
+                    ..Default::default()
+                }),
+                limits: Some(GroupLimits { max_hops: Some(3), ..Default::default() }),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let cleared = store
+            .update_group(
+                group.id,
+                &CleanGroup {
+                    name: "Research".into(),
+                    inference: Some(InferenceOverrides::default()),
+                    limits: Some(GroupLimits::default()),
+                    api_key: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(cleared.inference, InferenceOverrides::default());
+        assert_eq!(cleared.limits, GroupLimits::default());
+        assert_eq!(store.group_inference(group.id).unwrap(), GroupInference::default());
+        assert_eq!(store.group_limits(group.id).unwrap(), GroupLimits::default());
+    }
+
+    #[test]
+    fn a_provider_written_by_a_newer_build_reads_as_inherit() {
+        // A group whose provider nothing here recognises has to keep working on
+        // the app settings. Refusing to read the row would take a whole crew
+        // offline over a column this build has never heard of.
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&dir.path().join("guac.db")).unwrap();
+        let group = store.create_group(&group_named("Future")).unwrap();
+        store
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE groups SET provider='anthropic-native' WHERE id=?1",
+                params![group.id.to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(store.get_group(group.id).unwrap().unwrap().inference.provider, None);
+        assert_eq!(store.group_inference(group.id).unwrap().overrides.provider, None);
     }
 
     #[test]

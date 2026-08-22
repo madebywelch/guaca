@@ -141,19 +141,49 @@ export interface Group {
   /** Live agents in it. Terminated ones are excluded. */
   agentCount: number;
   createdAt: number;
-  /** `null` means inherit the app default. Settings resolve agent → group → app. */
-  baseUrl: string | null;
-  defaultModel: string | null;
+  /** How this group's turns are paid for and answered. Settings resolve agent →
+   *  group → app, so `null` anywhere in here means the app decides. */
+  inference: InferenceOverrides;
   apiKeySet: boolean;
   apiKeyHint: string;
+  /** How far a conversation started in this group may run. */
+  limits: GroupLimits;
 }
 
-/** Absent fields are left as they were; empty strings clear the override. */
+/** Every field `null` is a group that runs on the app settings. */
+export interface InferenceOverrides {
+  provider: Provider | null;
+  baseUrl: string | null;
+  /** The model used when a key is paying. */
+  defaultModel: string | null;
+  /** The model used when the subscription is paying. Two fields for the reason
+   *  the app keeps two: the providers have disjoint model names. */
+  subscriptionModel: string | null;
+  requestTimeoutSecs: number | null;
+}
+
+/** Per-field overrides of the app's loop guard. `null` inherits. */
+export interface GroupLimits {
+  maxHops: number | null;
+  maxStepsPerRun: number | null;
+  maxFanoutPerCall: number | null;
+  maxSendsPerPair: number | null;
+  maxToolRounds: number | null;
+}
+
+/**
+ * What an operator can set on a group.
+ *
+ * Each block is all-or-nothing: absent leaves every override in it as it was,
+ * and present replaces the lot, with a null field inside meaning inherit. The
+ * key is the exception, because it is the one setting that cannot be read back:
+ * absent keeps the stored one and `""` clears it.
+ */
 export interface GroupDraft {
   name: string;
-  baseUrl?: string;
-  defaultModel?: string;
+  inference?: InferenceOverrides;
   apiKey?: string;
+  limits?: GroupLimits;
 }
 
 export type ConnectorId = string;

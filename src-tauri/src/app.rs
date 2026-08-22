@@ -362,6 +362,7 @@ pub fn run() {
             commands::list_groups,
             commands::create_group,
             commands::update_group,
+            commands::test_group_connection,
             commands::delete_group,
             commands::approval_states,
             commands::decide_approval,

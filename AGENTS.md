@@ -23,10 +23,12 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/notify.ts       When an interruption is warranted. Mostly when it is not.
   lib/announce.ts     What that interruption would say. One event in, one line out.
   lib/keybinds.ts     Every key the app answers to, in one list.
+  lib/limits.ts       The five bounds a conversation runs inside, in words.
   components/         One file per surface.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
+    group.rs          A crew's wall, and the settings its agents run on.
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
@@ -67,6 +69,7 @@ repo: the frontend renders state and forwards intent.
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
+| What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
@@ -86,6 +89,7 @@ repo: the frontend renders state and forwards intent.
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.
@@ -134,6 +138,17 @@ the model takes a screenshot to see what `browse` did.
 
 ## What looks like a simplification and is not
 
+- **A group's settings are two blocks, and each is all-or-nothing.** A draft
+  that mentions `inference` or `limits` replaces every override in that block,
+  and one that leaves it out changes none of them. Per-field "absent means leave
+  alone" would let a caller half-write a crew's settings, and would make a UI
+  that renders what it read back clear a field by forgetting to mention it. The
+  API key is the one exception and has the opposite rule — absent keeps the
+  stored key — because it is the one setting that cannot be read back.
+- **Every setting a group can hold is `None` when it is inherited, all the way
+  down.** In the draft, in the column, and in the resolved overrides. An empty
+  string is a field an operator blanked, which also means inherit, and it is
+  normalised to `None` on the way in so the two can never disagree.
 - **A thread between two agents is `pair_messages`.** A send is filed under the
   recipient and the answer under the sender, so a thread assembled from one
   channel's rows is missing messages nobody can account for.

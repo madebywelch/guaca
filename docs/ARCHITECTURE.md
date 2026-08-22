@@ -138,7 +138,10 @@ answered and were finishing their own notes.
 
 The guard is the backstop, not the mechanism. Each limit catches a different
 shape of runaway, so weakening one is not a local change. All are adjustable in
-Settings.
+Settings, and any group can override any of them: a pair drafting a document
+needs a handful of model calls, and a crew working a browser through a long form
+needs an order of magnitude more, so one number for both is either an open wallet
+or a crew that stops halfway and reports nothing.
 
 | Limit | Default | Stops |
 |---|---|---|
@@ -150,6 +153,14 @@ Settings.
 
 When a limit is hit the agent is told why, in words it can act on, and the
 reason appears on the transcript chip. Nothing is dropped silently.
+
+**A run is measured against the limits of the group it happens in, read once.**
+A run cannot cross a group, because a send addressed outside one is refused as an
+unknown recipient, so every part of the runtime that asks the guard about a run
+resolves the same numbers for it. `GuardRegistry::run_within` reads them when it
+creates the run's state and never again: a limit edited mid-cascade must not move
+the ceiling a conversation is already being measured against, or a run reports
+having spent more than it was allowed. The next run gets the new number.
 
 **A pipeline spends two hops per phase, so the depth limit is four phases, not
 eight.** A coordinator working through specialists in sequence is one hop out
@@ -308,15 +319,23 @@ set rotates on refresh, which is Guaca writing in the background, while
 writers on one file lose a refreshed token to a stale in-memory copy, and the
 symptom is a sign-in that works until an unrelated setting changes.
 
-**A group that names its own endpoint or key leaves the subscription.**
-`GroupInference::apply` flips the provider back to the endpoint, because an
-endpoint is not where a subscription is spent. Without it such a group inherits
-the app's subscription and has both of its overrides silently ignored: the
-operator is looking at a URL and a key that nothing used, with no error to
-explain it. Overriding only the model does not flip it, since that is a group
-asking for a different model on whatever the app is already paying with. The flip
-happens before the model is collapsed, so each case lands on a model its own
-provider can run.
+**A group chooses its own provider, and the sign-in is still one credential.**
+Which of the two is paying is a setting, not an account, so a group can be moved
+onto the ChatGPT subscription while the app settings still say a pasted key, and
+another group can stay on a local endpoint. The sign-in itself belongs to the
+app: there is one on this machine, performed in Settings, and a group only
+decides whether to spend it. `GroupInference::apply` resolves the provider
+first, then lays both model overrides on top, then collapses to the resolved
+provider's model, so every case lands on a model its own provider can run.
+
+**Nothing about who pays is inferred.** A group that named an endpoint used to be
+taken to have chosen one, because until the provider column there was no way for
+it to say so. That guess could not be argued with: an endpoint left in the box
+outvoted an operator choosing to follow the app settings, with nothing on screen
+to explain it. Migration 23 wrote the reading down for every group it was true
+of, and `apply` now reads a column instead of guessing. What replaces the guess
+is the UI: choosing an endpoint preset also chooses to pay with a key, exactly
+as it does in Settings.
 
 **Only OpenAI offers this.** Anthropic prohibits it. Consumer Claude OAuth tokens
 are restricted to Claude Code and Claude.ai, enforced server-side, so a Claude
