@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { AgentCard, Group } from "../lib/types";
 
@@ -150,7 +150,14 @@ export function AgentMenu({
             the rail is: there is nowhere else to go. */}
         {groups
           .filter((group) => group.id !== agent.groupId)
-          .map((group) => item(`Move to ${group.name}`, () => onMoveToGroup(agent, group)))}
+          .map((group) => (
+            // Keyed on the crew, not on its name: two crews may be called the
+            // same thing, and the row that moves an agent has to be the row
+            // for the crew it names.
+            <Fragment key={group.id}>
+              {item(`Move to ${group.name}`, () => onMoveToGroup(agent, group))}
+            </Fragment>
+          ))}
         <hr className="menu__rule" />
         {confirming ? (
           item("Delete this history", () => onClearHistory(agent), "danger")
