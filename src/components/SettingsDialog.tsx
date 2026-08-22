@@ -18,8 +18,9 @@ import { useEffect, useRef, useState } from "react";
 import { applyAppearance, resolveSurface } from "../lib/appearance";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
+import { LIMITS } from "../lib/limits";
 import { NOTIFY_KINDS, type NotifyKind, type SurfaceMode, UI_SCALES } from "../lib/prefs";
-import { PROVIDERS, planLabel, providerFor, providerReady } from "../lib/providers";
+import { type Provider as Preset, planLabel } from "../lib/providers";
 import { useStore } from "../lib/store";
 import {
   type DeviceCode,
@@ -29,6 +30,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 
 interface Props {
   onClose: () => void;
@@ -60,52 +62,6 @@ const SECTION_LABELS: Record<Section, string> = {
   shortcuts: "Shortcuts",
   about: "About",
 };
-
-interface LimitField {
-  key: keyof GuardLimits;
-  label: string;
-  hint: string;
-  min: number;
-  max: number;
-}
-
-const LIMITS: LimitField[] = [
-  {
-    key: "maxStepsPerRun",
-    label: "Model calls per conversation",
-    hint: "The hard ceiling on spend. One conversation is your message plus everything it sets off.",
-    min: 1,
-    max: 500,
-  },
-  {
-    key: "maxToolRounds",
-    label: "Tool calls per turn",
-    hint: "How many times an agent can act and look again within one turn. Working a browser is a loop of read, click, read again, so this needs room.",
-    min: 1,
-    max: 100,
-  },
-  {
-    key: "maxHops",
-    label: "Relay depth",
-    hint: "How far a message can travel from you. A relays to B relays to C is two hops.",
-    min: 1,
-    max: 16,
-  },
-  {
-    key: "maxSendsPerPair",
-    label: "Messages between any two agents",
-    hint: "Stops two agents from talking to each other indefinitely.",
-    min: 1,
-    max: 50,
-  },
-  {
-    key: "maxFanoutPerCall",
-    label: "Recipients per send",
-    hint: "How many agents one message can go to at once.",
-    min: 1,
-    max: 64,
-  },
-];
 
 const SURFACE_LABELS: Record<SurfaceMode, string> = {
   light: "Paper",
@@ -267,7 +223,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     }
   };
 
-  const choose = (preset: (typeof PROVIDERS)[number]) => {
+  const choose = (preset: Preset) => {
     // Choosing an endpoint is also choosing to pay with a key. Leaving the
     // provider on the subscription would have the operator fill in a URL and a
     // key that nothing used, with no error to explain why.
@@ -275,8 +231,6 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     setBaseUrl(preset.baseUrl);
     if (preset.model) setModel(preset.model);
   };
-
-  const current = providerFor(baseUrl);
 
   // Read when the pane that shows it is opened, not at startup: nothing else in
   // the app needs to know, and a status nobody is looking at is a round trip
@@ -434,8 +388,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                 <h3 className="settings__title">Provider</h3>
                 <p className="settings__lede">
                   Two ways to pay for a turn: a subscription you sign in to, or an endpoint and a
-                  key you paste. Whichever is chosen applies to every agent, and a group can still
-                  point itself somewhere else.
+                  key you paste. What is chosen here is the default. Any group can pay its own way,
+                  and one that does is not affected by anything on this page.
                 </p>
 
                 {/* Its own block, above the endpoint list, because it is not an
@@ -510,34 +464,12 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                 )}
 
                 {subscription?.signedIn && provider === "chatgpt" && (
-                  <label className="field" style={{ marginTop: "1.1rem" }}>
-                    <span className="field__label">Model</span>
-                    <select
-                      className="input input--mono"
-                      value={subscriptionModel}
-                      onChange={(event) => setSubscriptionModel(event.target.value)}
-                    >
-                      {/* Whatever is stored is listed even if it is not one of
-                          the known ones, so a model chosen before this list
-                          changed is not silently swapped for another. */}
-                      {[
-                        ...new Set(
-                          [...(settings?.subscriptionModels ?? []), subscriptionModel].filter(
-                            Boolean,
-                          ),
-                        ),
-                      ].map((slug) => (
-                        <option key={slug} value={slug}>
-                          {slug}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="field__hint">
-                      Used for new agents. Each agent, and each group, can override it. A
-                      subscription has an hourly quota rather than a per-token bill, so a crew that
-                      talks a lot reaches the ceiling faster than one person would.
-                    </span>
-                  </label>
+                  <SubscriptionModel
+                    value={subscriptionModel}
+                    models={settings?.subscriptionModels ?? []}
+                    onChange={setSubscriptionModel}
+                    hint="The default model for any group that does not name one, and any agent that does not name one. A subscription has an hourly quota rather than a per-token bill, so a crew that talks a lot reaches the ceiling faster than one person would."
+                  />
                 )}
 
                 <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
@@ -545,43 +477,12 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   one fills in the two fields under it, and anything else can be typed in.
                 </p>
 
-                {PROVIDERS.map((preset) => {
-                  const chosen = provider === "compatible" && current?.id === preset.id;
-                  const ready = providerReady(preset, Boolean(settings?.apiKeySet));
-                  return (
-                    <button
-                      key={preset.id}
-                      type="button"
-                      className="preset"
-                      aria-current={chosen}
-                      onClick={() => choose(preset)}
-                    >
-                      <span className="preset__text">
-                        <span className="preset__name">{preset.name}</span>
-                        <span className="preset__url">{preset.baseUrl}</span>
-                      </span>
-                      {/* Only the row that is actually chosen can say
-                          anything about the key, because there is one key and
-                          it belongs to the endpoint in the field below. Saying
-                          "key stored" against six providers the operator has
-                          never used, on the strength of a seventh provider's
-                          key, is the same sentence repeated until it means
-                          nothing. Local endpoints are the exception: wanting no
-                          key is a property of the server, not of this setup. */}
-                      {preset.local ? (
-                        <span className="preset__state" data-ready="true">
-                          On this machine
-                        </span>
-                      ) : (
-                        chosen && (
-                          <span className="preset__state" data-ready={ready ? "true" : undefined}>
-                            {ready ? "Key stored" : "Needs a key"}
-                          </span>
-                        )
-                      )}
-                    </button>
-                  );
-                })}
+                <ProviderPresets
+                  baseUrl={baseUrl}
+                  active={provider === "compatible"}
+                  keySet={Boolean(settings?.apiKeySet)}
+                  onChoose={choose}
+                />
 
                 <label className="field" style={{ marginTop: "1.1rem" }}>
                   <span className="field__label">Inference endpoint</span>
@@ -625,7 +526,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                     onChange={(event) => setModel(event.target.value)}
                   />
                   <span className="field__hint">
-                    Used for new agents. Each agent, and each group, can override it.
+                    The default model for any group that does not name one, and any agent that does
+                    not name one.
                   </span>
                 </label>
 
@@ -658,7 +560,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                 <h3 className="settings__title">Limits</h3>
                 <p className="settings__lede">
                   Agents that message each other do not stop on their own. These bounds decide when
-                  a conversation ends, and every agent is told why when it hits one.
+                  a conversation ends, and every agent is told why when it hits one. A group can set
+                  its own; these are what it falls back to.
                 </p>
 
                 {LIMITS.map((field) => (

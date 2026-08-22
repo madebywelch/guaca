@@ -431,12 +431,7 @@ fn build(stub: &Stub, crew: &[Member], limits: GuardLimits, e2b: E2bConfig) -> H
         let group_id = member.group.map(|label| {
             *groups.entry(label).or_insert_with(|| {
                 store
-                    .create_group(&CleanGroup {
-                        name: label.to_string(),
-                        base_url: None,
-                        default_model: None,
-                        api_key: None,
-                    })
+                    .create_group(&CleanGroup { name: label.to_string(), ..Default::default() })
                     .expect("group name is unique in a fresh store")
                     .id
             })
