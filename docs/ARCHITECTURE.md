@@ -126,6 +126,24 @@ rather than a door quietly opened. The rule lives in two places and they have to
 agree: `runtime/prompt.rs` tells the model the same thing, in the mode where it
 matters.
 
+**A turn that has already answered has nothing left to deliver, and the operator
+is not the fallback.** Models answer their correspondent by calling
+`send_message` at them rather than by replying in plain text, and then keep
+typing. The trailing text is not a second answer: sending it on as well put two
+near-identical messages in the peer's channel. It went to the operator instead,
+on the reasoning that it was still readable there, and that was worse. A crew
+being introduced produced it seven times over: the operator had messaged one
+agent, and four wrote back, three of them agents they had never spoken to,
+each reporting that it had replied to somebody else. Being the one participant
+an envelope can always be addressed to is not the same as being the audience.
+Trailing text is now filed on that turn's own record, in the sending agent's
+channel, delivered to nobody.
+
+A file is the exception, and the reason is that it is not a restatement of
+anything. `send_message` carries its own files, so one attached after the answer
+went is the only part of the turn that has reached nobody at all, and the agent
+that asked for the work is who it belongs to. It goes to them, guard and all.
+
 Messages that do not expect a reply are batched: an agent waking to four replies
 reads all four in one turn. Because real replies arrive seconds apart rather
 than together, an agent will also wait briefly for replies it is still owed,
