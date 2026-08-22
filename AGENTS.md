@@ -13,6 +13,7 @@ table below says which one to open before changing something.
 src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
+  lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
@@ -86,7 +87,8 @@ repo: the frontend renders state and forwards intent.
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
-| The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
+| The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
+| Deleting a group, deleting an agent, what goes with either | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `retire_agent` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
@@ -143,8 +145,8 @@ the model takes a screenshot to see what `browse` did.
   and one that leaves it out changes none of them. Per-field "absent means leave
   alone" would let a caller half-write a crew's settings, and would make a UI
   that renders what it read back clear a field by forgetting to mention it. The
-  API key is the one exception and has the opposite rule — absent keeps the
-  stored key — because it is the one setting that cannot be read back.
+  API key is the one exception and has the opposite rule (absent keeps the
+  stored key), because it is the one setting that cannot be read back.
 - **Every setting a group can hold is `None` when it is inherited, all the way
   down.** In the draft, in the column, and in the resolved overrides. An empty
   string is a field an operator blanked, which also means inherit, and it is

@@ -528,6 +528,16 @@ button {
   background: var(--accent, var(--flesh));
 }
 
+/* The name and its pin as one cell, rather than a fourth column. A column that
+   is empty on every unpinned row still takes its gap, so the names in a crew
+   would line up with each other and with nothing else in the rail. */
+.agent-row__title {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
 .agent-row__name {
   font-family: var(--font-display);
   font-size: 0.88rem;
@@ -537,6 +547,16 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Quiet, and after the name so the name is what truncates. A pin is read once,
+   when the operator wonders why this row is at the top; the row it is on is
+   already carrying a face, a name and a state. */
+.agent-row__pin {
+  flex: none;
+  width: 0.68rem;
+  height: 0.68rem;
+  color: var(--rail-muted);
 }
 
 .agent-row[data-lifecycle="paused"] .agent-row__name {
@@ -708,57 +728,78 @@ button {
   color: var(--rail-text);
 }
 
-/* Faces, tiled. Four in a square rather than a row of overlaps: a 2.4rem
-   circle is 38px across, and three 1.35rem avatars in a row measure 51px even
-   leaning on each other, so a row either overflowed the ring or hid the faces
-   it was there to show. A square of four fits, and it is what a group of people
-   looks like everywhere else.
+/* Faces, standing in a ring. Where each one goes is `lib/orb.ts`: a crew of
+   two, of four and of six have to draw three different badges, or a strip of
+   crews is one badge repeated and the faces in it are decoration. A square of
+   four was what every crew of two or more drew, and it read as the app's own
+   mark rather than as these four agents.
 
-   Sized here rather than through the avatar's own scale, because these have to
-   fit a circle rather than sit beside a name. The selector carries the extra
-   class deliberately: `.avatar--xs` is defined further down the file. */
+   Every number arrives as a custom property in fractions of this box, so the
+   ring can be resized on the rule above without a constant in the module having
+   to be changed to agree with it. Sized here rather than through the avatar's
+   own scale, because these have to fill a circle rather than sit beside a name:
+   the selector carries the extra class deliberately, `.avatar--xs` being
+   defined further down the file. */
 .orb__faces {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 0.05rem;
-  place-content: center;
-  width: 1.85rem;
+  position: absolute;
+  inset: 0;
+  /* Opens the ring a little under the pointer. The crew is a drop target as
+     well as a place, so it is worth answering before it is clicked. */
+  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.orb__faces > .avatar {
+.orb:hover .orb__faces {
+  transform: scale(1.06);
+}
+
+.orb__face {
+  position: absolute;
+  left: var(--seat-x);
+  top: var(--seat-y);
+  width: var(--seat-size);
+  /* The lean is on this wrapper and not on the avatar: the avatar's own
+     transform is where looking up or down at a peer is expressed. */
+  transform: translate(-50%, -50%) rotate(var(--seat-tilt, 0deg));
+  line-height: 0;
+}
+
+.orb__face > .avatar {
   width: 100%;
   height: auto;
   aspect-ratio: 1;
 }
 
-.orb__faces[data-count="1"] {
-  grid-template-columns: 1fr;
-  width: 1.7rem;
+@media (prefers-reduced-motion: reduce) {
+  .orb__faces {
+    transition: none;
+  }
+
+  .orb:hover .orb__faces {
+    transform: none;
+  }
 }
 
-.orb__faces[data-count="2"] {
-  width: 2.1rem;
-}
-
-/* Three in a square leaves the last one in a corner. Spanning both columns
-   centres it, so the shape reads as a group and not as a gap. */
-.orb__faces[data-count="3"] > .avatar:last-child {
-  grid-column: span 2;
-  justify-self: center;
-  width: 50%;
-}
-
+/* An empty crew. Centred by hand, because everything else in the ring is
+   placed absolutely and there is no flow left to sit in the middle of. */
 .orb__none {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
   font-family: var(--font-mono);
   color: var(--rail-muted);
 }
 
-/* The members that did not fit. A number, because four faces at this size is
-   four smudges. */
+/* The members that did not fit. A number, because a seventh face on this ring
+   is a smudge and it makes the six already there smaller.
+
+   Hung off the rim rather than laid on it. A ring with a seat in every quarter
+   has nowhere inside it for an opaque chip to sit that is not somebody's face,
+   and the crew is what the circle is for. */
 .orb__more {
   position: absolute;
-  right: -0.1rem;
-  bottom: -0.1rem;
+  right: -0.3rem;
+  bottom: -0.2rem;
   font-family: var(--font-mono);
   font-size: 0.52rem;
   line-height: 1;
@@ -1834,6 +1875,23 @@ button {
 
 .wire--notice {
   justify-content: center;
+}
+
+/* An agent's own closing words, written after it had already answered its peer.
+   Nobody was sent them, so they are neither centred like a system line nor
+   bracketed like traffic: both of those say something passed between two
+   participants. In the trail's column, on the same 2.85rem of gutter, because
+   this belongs with what the turn did rather than with what was said to
+   anybody. */
+.aside {
+  padding: 0.1rem 1.5rem 0.35rem 2.85rem;
+}
+
+.aside .md {
+  border-left: 2px solid var(--edge);
+  padding-left: 0.7rem;
+  font-size: 0.85rem;
+  color: var(--faint);
 }
 
 /* ==========================================================================

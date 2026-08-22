@@ -56,8 +56,8 @@ pub struct Group {
 /// The inference settings an operator can put on a group. `None` inherits.
 ///
 /// The API key is deliberately not here. It is the one setting the UI cannot
-/// read back, so it has its own rule on the way in — absent keeps the stored
-/// one — and this struct is the shape where absent means inherit. Keeping the
+/// read back, so it has its own rule on the way in (absent keeps the stored
+/// one), and this struct is the shape where absent means inherit. Keeping the
 /// two rules in two types is what stops a redacted key ever being written back
 /// as a value.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -551,7 +551,7 @@ mod tests {
     fn a_model_set_for_the_other_provider_is_kept_and_not_used() {
         // Each model belongs to one provider. A group holding an endpoint model
         // while the subscription is paying is a group that has been switched
-        // over, not a group whose model was ignored by mistake — and switching
+        // over, not a group whose model was ignored by mistake, and switching
         // back has to find it intact.
         let resolved = only(InferenceOverrides {
             default_model: Some("local/qwen".into()),

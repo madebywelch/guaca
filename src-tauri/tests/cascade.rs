@@ -952,6 +952,131 @@ async fn a_reply_sent_through_the_tool_does_not_demand_another() {
 }
 
 #[tokio::test]
+async fn a_peer_that_answered_through_the_tool_does_not_then_write_to_the_operator() {
+    // Found in a real workspace. The operator asked one agent to introduce
+    // itself to the crew, it messaged seven, and three of the seven then wrote
+    // to the operator: "I replied to the Chief of Staff confirming how I work".
+    // The operator had spoken to one agent and got mail from four.
+    //
+    // The turn shape that produces it is ordinary: answer the peer with
+    // `send_message`, then keep typing. The trailing text is not a second
+    // answer, so it was sent to the operator instead, who is the one
+    // participant an envelope can always be addressed to. Being addressable is
+    // not the same as being the audience.
+    let stub = serve(|body| {
+        if speaker(body) == "Chef" {
+            if has_tool_result(body) {
+                Script::Say("Replied to Manager confirming how I work.".into())
+            } else {
+                Script::SendTo {
+                    recipients: vec!["Manager".into()],
+                    text: "Glad to be aboard.".into(),
+                }
+            }
+        } else if has_tool_result(body) || reading_peer_replies(body) {
+            Script::Say("Chef is introduced.".into())
+        } else {
+            Script::SendTo { recipients: vec!["Chef".into()], text: "hello from manager".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Introduce yourself to Chef.").unwrap();
+    h.settle(run).await;
+
+    let chef = h.runtime.store().channel_messages(h.id("Chef"), 200).unwrap();
+    let to_operator: Vec<String> = chef
+        .iter()
+        .filter(|e| e.from.is_agent() && e.to == Participant::Human)
+        .map(guac_lib::domain::envelope::Envelope::plain_text)
+        .collect();
+    assert!(
+        to_operator.is_empty(),
+        "Chef was answering Manager and wrote to the operator, who was never in it: \
+         {to_operator:?}"
+    );
+
+    // Not delivered is not the same as thrown away. It is on the record of the
+    // turn that wrote it, in Chef's own channel, where the operator can read
+    // what their agent did without being handed a message about it.
+    let recorded: Vec<String> = chef
+        .iter()
+        .filter(|e| e.to == Participant::System)
+        .map(guac_lib::domain::envelope::Envelope::plain_text)
+        .collect();
+    assert!(
+        recorded.iter().any(|t| t.contains("Replied to Manager")),
+        "the trailing text has to be written down somewhere: {recorded:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked() {
+    // The carve-out in the rule above, and the reason it is not "drop whatever
+    // a turn trails". Text written after the answer went is a restatement of
+    // it; a file is not. `send_message` carries its own files, so one attached
+    // afterwards has reached nobody at all, and the agent that asked for the
+    // work is who it belongs to. Silently filing it as commentary would lose
+    // the only thing the turn produced.
+    let stub = serve(|body| {
+        let calls = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+
+        if speaker(body) == "Chef" {
+            match calls {
+                // Answer the way the real models do, then hand the document
+                // over afterwards, then say so.
+                0 => Script::SendTo { recipients: vec!["Manager".into()], text: "On it.".into() },
+                1 => Script::Attach { tool: "attach_file".into(), files: vec!["menu.md".into()] },
+                _ => Script::Say("Tidied and attached.".into()),
+            }
+        } else if calls > 0 || reading_peer_replies(body) {
+            Script::Say("Chef has it.".into())
+        } else {
+            Script::SendFiles {
+                recipients: vec!["Chef".into()],
+                text: "tidy this up".into(),
+                files: vec!["menu.md".into()],
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let menu = h.runtime.files().put("menu.md", b"soup, then fish").unwrap();
+    let run = h
+        .runtime
+        .send_from_human_with(h.id("Manager"), "Have Chef tidy the menu.", vec![menu])
+        .unwrap();
+    h.settle(run).await;
+
+    // In Manager's channel and from Chef: that is a document delivered to the
+    // agent that asked, rather than one filed in the sender's own record.
+    let handed_back: Vec<String> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 200)
+        .unwrap()
+        .iter()
+        .filter(|e| e.from == Participant::Agent { id: h.id("Chef") })
+        .flat_map(|e| e.parts.clone())
+        .filter_map(|part| match part {
+            Part::File(file) => Some(file.name),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        handed_back,
+        vec!["menu.md".to_string()],
+        "the document never reached the agent that asked for it:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
 async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
     // The refusal is read mid-turn by the model that caused it, and it is the
     // only thing standing between "stop being polite at each other" and a
@@ -1967,35 +2092,41 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
 }
 
 #[test]
-fn a_schedule_that_cannot_be_read_does_not_starve_the_runtime() {
-    // A store error on the schedule used to skip the sleep at the bottom of the
-    // scheduler's loop, so a database that stayed broken turned the tick into
-    // a hot loop: one worker pinned on synchronous SQLite calls and a warning
-    // written as fast as it could be. On a single-threaded runtime that task
-    // never yields, so this runs the runtime on its own thread and gives it a
-    // deadline; a hang here is the bug, and a hang is not a test failure
-    // unless something is watching the clock.
-    let (done_tx, done_rx) = std::sync::mpsc::channel();
+fn a_schedule_that_cannot_be_read_parks_until_the_next_tick() {
+    // The scheduler shares its runtime with every agent, so a pass that returns
+    // without waiting is not a slow scheduler: it is a worker nobody else gets
+    // back. Paused time is what makes that observable rather than merely slow.
+    // Tokio only advances a paused clock once every task is parked on a timer,
+    // so a scheduler spinning on a store it cannot read holds the clock still
+    // and the minute below never elapses. One thread, because on a multi-thread
+    // runtime the spin has somewhere else to go and the bug hides.
+    let (finished, watch) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .start_paused(true)
+            .build()
+            .unwrap();
         rt.block_on(async {
-            let stub = serve(|_| Script::Say("unused".into())).await;
+            let stub = serve(|_| Script::Say("never called".into())).await;
             let h = harness(&stub, &["Watcher"], GuardLimits::default());
+            // The one failure the scheduler cannot read its way out of, and the
+            // one that stays broken for as long as the process runs.
             h.runtime.store().conn().unwrap().execute_batch("DROP TABLE routines").unwrap();
 
             h.runtime.start_scheduler();
 
-            // The scheduler is the only other task on this runtime. If it
-            // does not sleep between failed reads, this never returns.
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            // Several ticks' worth, and it costs no real time: the clock jumps
+            // the moment this task and the scheduler are both on a timer.
+            tokio::time::sleep(Duration::from_secs(60)).await;
         });
-        let _ = done_tx.send(());
+        let _ = finished.send(());
     });
 
     assert!(
-        done_rx.recv_timeout(Duration::from_secs(10)).is_ok(),
-        "the scheduler kept the runtime to itself: a schedule it cannot read has to wait for \
-         the next tick like a schedule it can"
+        watch.recv_timeout(Duration::from_secs(10)).is_ok(),
+        "the clock never moved, so the scheduler never parked: a schedule it cannot read has to \
+         wait out the tick like one it can"
     );
 }
 

@@ -389,8 +389,8 @@ impl GuardRegistry {
     /// happening in, reaping stale entries first.
     ///
     /// The registry holds no limits of its own, because there is no such thing
-    /// as a run outside a group. A run cannot cross one either — a send
-    /// addressed outside a group is refused as an unknown recipient — so every
+    /// as a run outside a group. A run cannot cross one either, since a send
+    /// addressed outside a group is refused as an unknown recipient, so every
     /// caller for a given run passes the same numbers, and it does not matter
     /// which of them creates the state. They are read on creation and then
     /// fixed for the life of the run: a limit edited mid-cascade must not move

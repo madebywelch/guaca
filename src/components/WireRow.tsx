@@ -323,6 +323,29 @@ export function RoutineRow({
 }
 
 /**
+ * What an agent wrote after it had already answered.
+ *
+ * A turn that replies to its peer through `send_message` and then keeps typing
+ * has produced text with no recipient: the peer has been answered, and the
+ * operator was never in that conversation. The runtime files it here rather
+ * than delivering it, so this is deliberately not a bubble. A bubble in this
+ * channel means the operator was addressed, and seven agents each posting one
+ * to say they had replied to somebody else is exactly what that used to look
+ * like.
+ *
+ * In the trail's column rather than the transcript's, because it is the same
+ * kind of thing as the tool calls above it: what the turn did, not what it said
+ * to anyone.
+ */
+export function AsideRow({ text }: { text: string }) {
+  return (
+    <div className="aside">
+      <Markdown>{text}</Markdown>
+    </div>
+  );
+}
+
+/**
  * A centred system line: guard stops, upstream failures, lifecycle notes.
  *
  * `onRetry` is offered only where trying again could plausibly work. The

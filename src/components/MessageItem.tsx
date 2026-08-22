@@ -21,7 +21,7 @@ import { ApprovalRequest } from "./ApprovalRequest";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
 import { TrailRow } from "./Trail";
-import { NoticeRow, RoutineRow } from "./WireRow";
+import { AsideRow, NoticeRow, RoutineRow } from "./WireRow";
 
 interface Props {
   message: Envelope;
@@ -175,6 +175,10 @@ export const MessageItem = memo(function MessageItem({
  * and folding across it would put the explanation somewhere other than the
  * thing it explains.
  *
+ * Text reaches here in one case: a turn that answered its peer through
+ * `send_message` and then carried on typing. That text has no recipient, so it
+ * is drawn as an aside rather than as anything addressed to the operator.
+ *
  * A `json` part is the one kind that reaches here and draws nothing. Nothing in
  * the runtime emits one yet; it is the seam a model-authored artifact would
  * arrive through, and a renderer for it before there is a producer is surface
@@ -199,6 +203,9 @@ function ActivityRecord({ message }: { message: Envelope }) {
     close();
     if (part.type === "notice") {
       rows.push(<NoticeRow key={key} kind={part.kind} text={part.text} />);
+    }
+    if (part.type === "text") {
+      rows.push(<AsideRow key={key} text={part.text} />);
     }
   }
   close();

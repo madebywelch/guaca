@@ -463,6 +463,47 @@ pub fn delete_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
     Ok(())
 }
 
+/// Deletes a group and the crew inside it.
+///
+/// The other half of `delete_group`, which refuses while anyone is still in
+/// there. An operator winding a crew down had to delete each agent by hand and
+/// then the group, and stopping halfway left a group with three agents in it
+/// and no reason to keep any of them.
+///
+/// Every agent goes exactly as `delete_agent` sends one: its computer killed,
+/// its browser and profile destroyed, its memory, schedule, sign-ins and
+/// standing permission gone. What each of them said stays readable, because a
+/// disband is a delete at the scale of a crew and not a different rule about
+/// history.
+///
+/// Refused before anything irreversible. `group_for_removal` asks the one
+/// question that does not depend on the crew: killing four computers and then
+/// discovering the group itself cannot go would leave the operator with neither
+/// the crew nor the deletion.
+///
+/// Past that point a failure stops where it is and is reported. Retrying is
+/// safe and picks up where it left off, because the crew is read fresh and the
+/// agents already retired are no longer in it.
+#[tauri::command]
+pub async fn disband_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
+    state.runtime.store().group_for_removal(id)?;
+
+    let outcome = async {
+        for card in state.runtime.store().group_crew(id)? {
+            retire_agent(&state, &card).await?;
+        }
+        state.runtime.store().delete_group(id)?;
+        Ok(())
+    }
+    .await;
+
+    // Emitted either way. A disband that stopped part-way has still deleted
+    // whoever it reached, and a rail left drawing them is rows the operator can
+    // click on to open channels belonging to agents that are gone.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    outcome
+}
+
 // ---- agents --------------------------------------------------------------
 
 #[tauri::command]
@@ -491,21 +532,26 @@ pub fn update_agent(
     Ok(card)
 }
 
-/// Deletes an agent.
+/// Everything one agent takes with it, in the order that leaves nothing
+/// running and nothing billing.
 ///
-/// A soft delete: the agent leaves the sidebar and the directory immediately
-/// and can never be messaged again, but what it already said stays readable in
-/// the other agents' channels. Hard-deleting would punch holes in transcripts
-/// that had nothing to do with this agent.
-#[tauri::command]
-pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+/// Shared by deleting a single agent and disbanding a whole crew, because the
+/// two are the same act at different scales: a disband that only marked the
+/// rows would leave a group's worth of sandboxes and browser profiles alive
+/// with nothing left on screen pointing at them.
+///
+/// A provider that refuses is logged and stepped over. The rows are the record
+/// the operator sees, and stopping halfway through would leave an agent that is
+/// still in the rail and has already lost its memory.
+async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()> {
+    let id = card.id;
     // The machine goes first. A deleted agent cannot be asked to tidy up after
     // itself, and a sandbox nobody holds a reference to keeps billing.
-    let card = agent_card(&state, id)?;
+    //
     // A missing key means no machine was ever made through this build, so there
     // is nothing to release.
-    if let (Some(sandbox), Ok(client)) = (card.sandbox_id, computers(&state)) {
-        if let Err(err) = client.kill(&sandbox).await {
+    if let (Some(sandbox), Ok(client)) = (card.sandbox_id.as_ref(), computers(state)) {
+        if let Err(err) = client.kill(sandbox).await {
             tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
         }
     }
@@ -513,9 +559,9 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
     // profile behind it goes too: it holds the cookies of accounts belonging to
     // an agent that no longer exists, and a name is free to reuse the moment an
     // agent is deleted, so whoever takes it next must not inherit its sessions.
-    if let Ok(client) = browsers(&state) {
-        if let Some(browser) = card.browser_id {
-            if let Err(err) = client.delete(&browser).await {
+    if let Ok(client) = browsers(state) {
+        if let Some(browser) = card.browser_id.as_ref() {
+            if let Err(err) = client.delete(browser).await {
                 tracing::warn!(%err, %browser, "could not destroy the agent's browser");
             }
         }
@@ -543,6 +589,19 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
     // reuse the moment an agent is deleted, and whoever takes it next must not
     // inherit a standing grant given to somebody else.
     let _ = state.runtime.store().delete_agent_approvals(id);
+    Ok(())
+}
+
+/// Deletes an agent.
+///
+/// A soft delete: the agent leaves the sidebar and the directory immediately
+/// and can never be messaged again, but what it already said stays readable in
+/// the other agents' channels. Hard-deleting would punch holes in transcripts
+/// that had nothing to do with this agent.
+#[tauri::command]
+pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let card = agent_card(&state, id)?;
+    retire_agent(&state, &card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

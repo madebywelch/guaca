@@ -147,6 +147,13 @@ export const api = {
   /** Refused while the group still holds agents; the error carries which. */
   deleteGroup: (id: GroupId) => invoke<void>("delete_group", { id }),
 
+  /**
+   * The group and everybody in it: every agent deleted, every computer and
+   * browser destroyed with them. Refused for the default group, before
+   * anything is taken.
+   */
+  disbandGroup: (id: GroupId) => invoke<void>("disband_group", { id }),
+
   listAgents: () => invoke<AgentCard[]>("list_agents"),
 
   createAgent: (draft: AgentDraft) => invoke<AgentCard>("create_agent", { draft }),

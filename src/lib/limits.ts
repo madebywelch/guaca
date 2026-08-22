@@ -7,7 +7,7 @@
  * whose consequence is money.
  *
  * The ranges are the ones `GuardLimits::sanitized` clamps to. They are advisory
- * here — a typed or pasted number sails past a `max` on an input — and the
+ * here, since a typed or pasted number sails past a `max` on an input, and the
  * runtime clamps whatever arrives, which is why both dialogs read their limits
  * back after saving rather than leaving what was typed on screen.
  */

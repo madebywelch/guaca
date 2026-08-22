@@ -139,6 +139,9 @@ export function GroupEditor({ group, onClose }: Props) {
     },
   });
 
+  /** Live agents. Terminated ones are not in the count and are not deleted twice. */
+  const crew = group?.agentCount ?? 0;
+
   const save = async () => {
     setBusy(true);
     setStatus(null);
@@ -199,17 +202,33 @@ export function GroupEditor({ group, onClose }: Props) {
     }
   };
 
+  /**
+   * The group, and whoever is still standing in it.
+   *
+   * One button rather than two, because "delete this crew" is one intent an
+   * operator arrives with and an empty group is the same act with nothing in
+   * the way. Two buttons would mean the one for a populated group had a single
+   * outcome, which was an error telling the operator to go and delete four
+   * agents by hand first.
+   *
+   * What changes is the confirmation, which names the count before it is
+   * pressed. The count is the roster's, so a group emptied elsewhere since the
+   * dialog opened takes the plain delete and a stale zero is refused by the
+   * runtime rather than quietly widened.
+   */
   const remove = async () => {
     if (!group) return;
     setBusy(true);
     setStatus(null);
     try {
-      await api.deleteGroup(group.id);
+      if (crew > 0) await api.disbandGroup(group.id);
+      else await api.deleteGroup(group.id);
       await refreshAgents();
       onClose();
     } catch (caught) {
-      // The usual failure is a group that still holds agents. The message from
-      // Rust already says how many and what to do, so it is shown as written.
+      // The remaining failure is the first group, which cannot go because every
+      // agent has to be in one. The message from Rust says so, and is shown as
+      // written.
       setStatus({ tone: "error", text: errorMessage(caught) });
       setBusy(false);
     }
@@ -538,6 +557,19 @@ export function GroupEditor({ group, onClose }: Props) {
           </div>
         </div>
 
+        {/* What the second click costs, written where the operator is already
+            looking. The button below carries the count; this is the part a
+            count does not say: the machines are rented, and destroying them is
+            the half of a disband that cannot be undone. */}
+        {group && confirmDelete && crew > 0 && (
+          <div className="banner banner--error" style={{ margin: "0.75rem 1.35rem 0" }}>
+            <span>
+              {crew} agent{crew === 1 ? "" : "s"} go with the group: their computers, browsers,
+              memories and schedules are destroyed. What they said stays readable.
+            </span>
+          </div>
+        )}
+
         {status && (
           <div
             className={status.tone === "error" ? "banner banner--error" : "banner banner--ok"}
@@ -557,7 +589,9 @@ export function GroupEditor({ group, onClose }: Props) {
                   disabled={busy}
                   onClick={() => void remove()}
                 >
-                  Delete {group.name}
+                  {crew > 0
+                    ? `Delete ${group.name} and ${crew} agent${crew === 1 ? "" : "s"}`
+                    : `Delete ${group.name}`}
                 </button>
                 <button
                   type="button"
@@ -572,6 +606,11 @@ export function GroupEditor({ group, onClose }: Props) {
                 type="button"
                 className="btn btn--danger"
                 onClick={() => setConfirmDelete(true)}
+                title={
+                  crew > 0
+                    ? "Deletes the group and every agent in it, along with their computers and browsers. What they said stays readable."
+                    : "Deletes the group. It holds no agents."
+                }
               >
                 Delete
               </button>

@@ -12,6 +12,10 @@ import { aGroup } from "../test-fixtures";
  * arrive as null; a key nobody retyped has to be absent, because an empty one
  * clears the stored key; and a group following the app must not send a provider
  * at all. None of that is visible on screen, which is exactly why it is here.
+ *
+ * The other risk is the delete button, which is two different calls behind one
+ * word. An empty group loses a row in a table; a group with a crew in it loses
+ * four agents, their computers and their browsers, and none of that comes back.
  */
 
 const KITCHEN = "00000000-0000-4000-8000-000000000001";
@@ -52,6 +56,7 @@ function signedIn(): SubscriptionStatus {
 const updateGroup = vi.fn<(id: string, draft: GroupDraft) => Promise<Group>>(async () => aGroup());
 const createGroup = vi.fn<(draft: GroupDraft) => Promise<Group>>(async () => aGroup());
 const deleteGroup = vi.fn<(id: string) => Promise<void>>(async () => {});
+const disbandGroup = vi.fn<(id: string) => Promise<void>>(async () => {});
 const clearGroup = vi.fn<(id: string) => Promise<GroupReset>>(async () => ({
   messages: 0,
   routines: 0,
@@ -74,6 +79,7 @@ vi.mock("../lib/ipc", () => ({
     updateGroup: (id: string, draft: GroupDraft) => updateGroup(id, draft),
     createGroup: (draft: GroupDraft) => createGroup(draft),
     deleteGroup: (id: string) => deleteGroup(id),
+    disbandGroup: (id: string) => disbandGroup(id),
     clearGroup: (id: string) => clearGroup(id),
     testGroupConnection: (id: string | null, draft: GroupDraft) => testGroupConnection(id, draft),
     subscriptionStatus: () => subscriptionStatus(),
@@ -279,5 +285,94 @@ describe("what the operator is shown", () => {
   it("refuses to save a group with no name", () => {
     open(null);
     expect(button("Create").disabled).toBe(true);
+  });
+});
+
+describe("deleting a group", () => {
+  it("takes two clicks to delete anything", () => {
+    open();
+    fireEvent.click(button("Delete"));
+    expect(deleteGroup).not.toHaveBeenCalled();
+    expect(disbandGroup).not.toHaveBeenCalled();
+  });
+
+  it("deletes an empty group without disbanding anybody", async () => {
+    open(aGroup({ id: KITCHEN, name: "Research" }));
+    fireEvent.click(button("Delete"));
+    fireEvent.click(button("Delete Research"));
+
+    await waitFor(() => expect(deleteGroup).toHaveBeenCalledWith(KITCHEN));
+    expect(disbandGroup).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("says how many agents go, and what goes with them", () => {
+    // The count is on the button because that is what the operator is about to
+    // press. The machines are in the banner because a count does not say that
+    // anything was rented, and destroying a computer is the half of this that
+    // cannot be undone.
+    open(aGroup({ id: KITCHEN, name: "Research", agentCount: 4 }));
+    fireEvent.click(button("Delete"));
+
+    expect(button("Delete Research and 4 agents")).toBeTruthy();
+    expect(screen.getByText(/computers, browsers/)).toBeTruthy();
+  });
+
+  it("counts one agent as one agent", () => {
+    open(aGroup({ id: KITCHEN, name: "Research", agentCount: 1 }));
+    fireEvent.click(button("Delete"));
+    expect(button("Delete Research and 1 agent")).toBeTruthy();
+  });
+
+  it("disbands a group that still holds a crew", async () => {
+    open(aGroup({ id: KITCHEN, name: "Research", agentCount: 4 }));
+    fireEvent.click(button("Delete"));
+    fireEvent.click(button("Delete Research and 4 agents"));
+
+    await waitFor(() => expect(disbandGroup).toHaveBeenCalledWith(KITCHEN));
+    // The plain delete would be refused for a group with agents in it, and
+    // refusing is all it could do: nothing about that error is what was asked
+    // for here.
+    expect(deleteGroup).not.toHaveBeenCalled();
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("keeps the crew when the second click is Keep", () => {
+    open(aGroup({ id: KITCHEN, name: "Research", agentCount: 4 }));
+    fireEvent.click(button("Delete"));
+    fireEvent.click(button("Keep"));
+
+    expect(disbandGroup).not.toHaveBeenCalled();
+    expect(screen.queryByText(/computers, browsers/)).toBeNull();
+    expect(button("Delete")).toBeTruthy();
+  });
+
+  it("leaves the dialog open on a refusal, with the reason from the runtime", async () => {
+    // The first group cannot be deleted, because every agent has to be in one.
+    // A dialog that closed on that would look like it had worked.
+    disbandGroup.mockRejectedValueOnce({
+      kind: "groupNotEmpty",
+      message: "every agent has to be in a group, so the first one cannot be deleted",
+    });
+    open(aGroup({ id: KITCHEN, name: "Research", agentCount: 2 }));
+    fireEvent.click(button("Delete"));
+    fireEvent.click(button("Delete Research and 2 agents"));
+
+    expect(await screen.findByText(/cannot be deleted/)).toBeTruthy();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not offer to reset a group it is already deleting", () => {
+    // Two destructive confirmations open at once is a click on the wrong one.
+    open();
+    expect(button("Start fresh")).toBeTruthy();
+    fireEvent.click(button("Delete"));
+    expect(screen.queryByText("Start fresh")).toBeNull();
+  });
+
+  it("offers nothing to delete on a group that does not exist yet", () => {
+    open(null);
+    expect(screen.queryByText("Delete")).toBeNull();
+    expect(screen.queryByText("Start fresh")).toBeNull();
   });
 });
