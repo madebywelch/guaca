@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, AgentDraft, Group } from "../lib/types";
+import { aGroup } from "../test-fixtures";
 
 /**
  * The cafeteria, over a mocked store.
@@ -34,16 +35,7 @@ const { useStore } = await import("../lib/store");
 const { HIREABLE, STARTER_CREW } = await import("../lib/cafeteria");
 
 function group(id: string, name: string): Group {
-  return {
-    id,
-    name,
-    baseUrl: null,
-    defaultModel: null,
-    apiKeySet: false,
-    apiKeyHint: "",
-    agentCount: 0,
-    createdAt: 1,
-  };
+  return aGroup({ id, name, agentCount: 0, createdAt: 1 });
 }
 
 function agent(name: string, groupId = KITCHEN): AgentCard {

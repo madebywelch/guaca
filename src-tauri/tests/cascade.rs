@@ -22,7 +22,7 @@ use guac_lib::domain::agent::Lifecycle;
 use guac_lib::domain::approval::{Decision, ProtectedAction};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
-use guac_lib::domain::group::CleanGroup;
+use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
 use guac_lib::domain::now_ms;
 use guac_lib::domain::routine::{Cadence, RunKind, Trigger};
 use guac_lib::domain::signin::{Signin, Surface};
@@ -1370,9 +1370,11 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
     let pinned = store
         .create_group(&CleanGroup {
             name: "Local".into(),
-            base_url: None,
-            default_model: Some(Some("local/qwen".into())),
-            api_key: None,
+            inference: Some(InferenceOverrides {
+                default_model: Some("local/qwen".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
         })
         .unwrap();
 
@@ -1439,6 +1441,107 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         models.contains(&"app/default".to_string()),
         "a group with no model must still inherit the app default, got {models:?}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
+    // A limit is a statement about one crew's work, not about the app. The stub
+    // answers every call with another tool call, so each agent runs until
+    // something stops it, and the model name on the request is what says which
+    // group's ceiling did.
+    let stub = serve(|_| Script::Notes("still working".into())).await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("guac.db")).unwrap();
+
+    let careful = store
+        .create_group(&CleanGroup {
+            name: "Careful".into(),
+            inference: Some(InferenceOverrides {
+                default_model: Some("careful/model".into()),
+                ..Default::default()
+            }),
+            limits: Some(GroupLimits { max_steps_per_run: Some(2), ..Default::default() }),
+            ..Default::default()
+        })
+        .unwrap();
+    let roomy = store
+        .create_group(&CleanGroup {
+            name: "Roomy".into(),
+            inference: Some(InferenceOverrides {
+                default_model: Some("roomy/model".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+    let mut thrifty = draft("Thrifty", &["testing"]);
+    thrifty.group_id = Some(careful.id);
+    thrifty.model = String::new();
+    let thrifty = store.create_agent(&thrifty).unwrap();
+
+    let mut busy = draft("Busy", &["testing"]);
+    busy.group_id = Some(roomy.id);
+    busy.model = String::new();
+    let busy = store.create_agent(&busy).unwrap();
+
+    let config = AppConfig {
+        version: guac_lib::config::CURRENT_VERSION,
+        operator_name: String::new(),
+        inference: InferenceConfig {
+            base_url: stub.base_url.clone(),
+            api_key: "sk-test".into(),
+            default_model: "app/default".into(),
+            request_timeout_secs: 10,
+            ..Default::default()
+        },
+        limits: GuardLimits { max_steps_per_run: 6, ..GuardLimits::default() },
+        e2b: Default::default(),
+        kernel: Default::default(),
+    };
+    let sink = RecordingSink::new();
+    let runtime = Runtime::new(
+        store,
+        LlmClient::new().unwrap(),
+        config,
+        Workspace::new(dir.path().join("workspace")),
+        guac_lib::files::FileStore::new(dir.path().join("files")),
+        sink.clone(),
+    );
+    runtime.start_all().unwrap();
+    let h = Harness { runtime, sink, ids: HashMap::new(), _dir: dir };
+
+    for id in [thrifty.id, busy.id] {
+        let run = h.runtime.send_from_human(id, "get to work").unwrap();
+        h.settle(run).await;
+    }
+
+    let models: Vec<String> = stub
+        .transcript
+        .lock()
+        .iter()
+        .filter_map(|body| body["model"].as_str().map(|s| s.to_string()))
+        .collect();
+    let calls = |model: &str| models.iter().filter(|m| m.as_str() == model).count();
+
+    assert_eq!(
+        calls("careful/model"),
+        2,
+        "the group's budget is the one that binds, got {models:?}"
+    );
+    assert_eq!(calls("roomy/model"), 6, "a group that sets no budget runs on the app's");
+
+    // And the crew that stopped is told why, in the group's own numbers.
+    let said: String = h
+        .runtime
+        .store()
+        .channel_messages(thrifty.id, 200)
+        .unwrap()
+        .iter()
+        .map(|e| serde_json::to_string(&e.parts).unwrap())
+        .collect();
+    assert!(said.contains("budget of 2 model calls"), "the operator must be told: {said}");
 }
 
 // ---- routines ------------------------------------------------------------

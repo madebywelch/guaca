@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, SearchHits } from "../lib/types";
+import { aGroup } from "../test-fixtures";
 
 /**
  * The palette, over a mocked store.
@@ -67,18 +68,7 @@ const handlers = {
 function open(agents: AgentCard[] = [agent("Manager"), agent("Chef")]) {
   useStore.setState({
     agents,
-    groups: [
-      {
-        id: GROUP,
-        name: "Kitchen",
-        agentCount: agents.length,
-        createdAt: 0,
-        baseUrl: null,
-        defaultModel: null,
-        apiKeySet: false,
-        apiKeyHint: "",
-      },
-    ],
+    groups: [aGroup({ id: GROUP, name: "Kitchen", agentCount: agents.length })],
     lastActive: {},
     selected: null,
     messages: {},

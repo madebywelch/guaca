@@ -38,6 +38,32 @@ pub enum Provider {
     Chatgpt,
 }
 
+impl Provider {
+    /// How a provider is spelled in SQLite, which is the same as on the wire.
+    ///
+    /// Not `Display`: the point is that the stored spelling and the IPC one
+    /// cannot drift, and a formatting impl is where a friendlier name would
+    /// eventually be written.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Provider::Compatible => "compatible",
+            Provider::Chatgpt => "chatgpt",
+        }
+    }
+
+    /// Reads one back. Anything unrecognised is `None`, which every caller
+    /// already has a meaning for: inherit. A column written by a newer build
+    /// must leave a crew running on the app settings rather than refusing to
+    /// load the group.
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "compatible" => Some(Provider::Compatible),
+            "chatgpt" => Some(Provider::Chatgpt),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InferenceConfig {
@@ -455,6 +481,20 @@ fn restrict_permissions(_path: &Path) -> Result<(), ConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_provider_is_spelled_the_same_way_in_sqlite_and_on_the_wire() {
+        // Two spellings of one value, and the second is a `serde` attribute
+        // nothing else would notice changing. If they ever disagree, a group's
+        // stored provider reads as inherit and a whole crew quietly moves onto
+        // the app's settings.
+        for provider in [Provider::Compatible, Provider::Chatgpt] {
+            let wire = serde_json::to_value(provider).unwrap();
+            assert_eq!(wire, serde_json::Value::String(provider.as_str().to_string()));
+            assert_eq!(Provider::parse(provider.as_str()), Some(provider));
+        }
+        assert_eq!(Provider::parse("anthropic-native"), None, "a future value is inherit");
+    }
 
     #[test]
     fn chat_url_is_built_without_a_double_slash() {

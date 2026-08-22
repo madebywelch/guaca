@@ -455,14 +455,13 @@ impl Runtime {
         files: FileStore,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        let limits = config.limits;
         Self {
             inner: Arc::new(Inner {
                 handle,
                 store,
                 llm,
                 config: RwLock::new(config),
-                guard: Mutex::new(GuardRegistry::new(limits)),
+                guard: Mutex::new(GuardRegistry::new()),
                 inboxes: Mutex::new(HashMap::new()),
                 activity: Mutex::new(HashMap::new()),
                 runs: Mutex::new(Runs::default()),
@@ -502,12 +501,7 @@ impl Runtime {
     }
 
     pub fn set_config(&self, config: AppConfig) {
-        self.inner.guard.lock().set_limits(config.limits);
         *self.inner.config.write() = config;
-    }
-
-    pub fn limits(&self) -> GuardLimits {
-        self.inner.guard.lock().default_limits()
     }
 
     // ---- lifecycle -------------------------------------------------------
@@ -1188,8 +1182,12 @@ impl Runtime {
     }
 
     /// Replies this agent is still owed in this run.
+    ///
+    /// A peek, so asking cannot be what creates a run's state. The limits that
+    /// state is created on belong to the asking agent's group, and this is the
+    /// one question about a run that is asked without one to hand.
     fn awaiting_replies(&self, run: RunId, me: AgentId) -> usize {
-        self.inner.guard.lock().run(run).awaiting(me)
+        self.inner.guard.lock().peek(run).map(|state| state.awaiting(me)).unwrap_or(0)
     }
 
     fn track_inflight(&self, run: RunId, delta: i64) {
@@ -1592,9 +1590,9 @@ impl Runtime {
         // Peek rather than claim: the budget is spent per model call inside the
         // loop below, but there is no point building a prompt or telling the UI
         // a message is coming if the run is already finished.
-        let has_budget = { self.inner.guard.lock().run(run_id).has_budget() };
+        let limits = self.limits_for(&card);
+        let has_budget = { self.inner.guard.lock().run_within(run_id, limits).has_budget() };
         if !has_budget {
-            let limits = self.limits();
             self.notice(
                 agent_id,
                 run_id,
@@ -1602,7 +1600,7 @@ impl Runtime {
                 NoticeKind::GuardStop,
                 format!(
                     "{} did not run: this conversation already used its budget of {} model calls. \
-                     Raise it in Settings if the work is genuinely this large.",
+                     Raise it in this group's settings if the work is genuinely this large.",
                     card.name, limits.max_steps_per_run
                 ),
             );
@@ -1718,7 +1716,7 @@ impl Runtime {
         let mut budget_exhausted = false;
         let mut called_off = false;
 
-        let max_rounds = config.limits.sanitized().max_tool_rounds as usize;
+        let max_rounds = limits.max_tool_rounds as usize;
         for round in 0..max_rounds {
             // Before the step is claimed, and that ordering is the whole reason
             // this check is here rather than a line lower. A run's steps have to
@@ -1734,7 +1732,7 @@ impl Runtime {
             // One claim per model call. Claiming per turn instead would let a
             // tool-looping turn bill max_rounds times against one unit of
             // budget, which is how a bounded run still runs up a bill.
-            let reserved = { self.inner.guard.lock().run(run_id).reserve_step() };
+            let reserved = { self.inner.guard.lock().run_within(run_id, limits).reserve_step() };
             if !reserved {
                 budget_exhausted = true;
                 break;
@@ -1860,7 +1858,6 @@ impl Runtime {
             });
         }
         if budget_exhausted {
-            let limits = self.limits();
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
@@ -2052,8 +2049,9 @@ impl Runtime {
                     .map(|c| c.name)
                     .unwrap_or_else(|| "that agent".to_string());
 
+                let limits = self.limits_for(card);
                 let verdict = {
-                    self.inner.guard.lock().run(run_id).evaluate(&SendRequest {
+                    self.inner.guard.lock().run_within(run_id, limits).evaluate(&SendRequest {
                         from: card.id,
                         to: peer,
                         to_name: peer_name.clone(),
@@ -3168,9 +3166,14 @@ impl Runtime {
         intent: Intent,
         files: &[Attachment],
     ) -> Vec<Delivery> {
+        // Resolved once for the whole call: every recipient is inside the
+        // sender's group, so they are all measured against the same numbers.
+        let limits = self.limits_for(card);
+
         // Fan-out width is checked before any recipient, so a blast at the
         // whole roster is refused as one thing rather than partly delivered.
-        let too_wide = { self.inner.guard.lock().run(run_id).check_fanout(recipients.len()) };
+        let too_wide =
+            { self.inner.guard.lock().run_within(run_id, limits).check_fanout(recipients.len()) };
         if let Some(refusal) = too_wide {
             return recipients
                 .iter()
@@ -3218,7 +3221,7 @@ impl Runtime {
             };
 
             let verdict = {
-                self.inner.guard.lock().run(run_id).evaluate(&SendRequest {
+                self.inner.guard.lock().run_within(run_id, limits).evaluate(&SendRequest {
                     from: card.id,
                     to: target.id,
                     to_name: target.name.clone(),
@@ -3254,8 +3257,13 @@ impl Runtime {
                     // inbox, so three peers answering at once can be split
                     // across turns. Two of them then looked like agents this
                     // one had never met, and got messages demanding answers.
-                    let heard_from =
-                        { self.inner.guard.lock().run(run_id).has_written(target.id, card.id) };
+                    let heard_from = {
+                        self.inner
+                            .guard
+                            .lock()
+                            .run_within(run_id, limits)
+                            .has_written(target.id, card.id)
+                    };
 
                     // Nothing asked this agent anything and this peer has
                     // already had its say, so nothing here is owed an answer.
@@ -3737,6 +3745,24 @@ impl Runtime {
                 // the app defaults are a working fallback.
                 tracing::warn!(agent = %card.name, %err, "group settings unreadable, using app defaults");
                 config.inference.clone()
+            }
+        }
+    }
+
+    /// How far a conversation this agent is part of may run.
+    ///
+    /// Layered the same way its inference is, and read rather than cached: a
+    /// limit raised in the group editor has to reach the next run, and the
+    /// guard pins the numbers for the life of a run the moment it uses them.
+    /// Reads the app's limits from the config directly rather than through the
+    /// guard, so nothing here takes the guard lock before the store.
+    fn limits_for(&self, card: &AgentCard) -> GuardLimits {
+        let base = self.inner.config.read().limits;
+        match self.inner.store.group_limits(card.group_id) {
+            Ok(overrides) => overrides.apply(base).sanitized(),
+            Err(err) => {
+                tracing::warn!(agent = %card.name, %err, "group limits unreadable, using app defaults");
+                base.sanitized()
             }
         }
     }

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentCard, Group } from "../lib/types";
+import { aGroup } from "../test-fixtures";
 import { AgentMenu } from "./AgentMenu";
 
 function card(over: Partial<AgentCard> = {}): AgentCard {
@@ -27,16 +28,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
 }
 
 function group(id: string, name: string): Group {
-  return {
-    id,
-    name,
-    agentCount: 1,
-    createdAt: 0,
-    baseUrl: null,
-    defaultModel: null,
-    apiKeySet: false,
-    apiKeyHint: "",
-  };
+  return aGroup({ id, name, agentCount: 1 });
 }
 
 function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {

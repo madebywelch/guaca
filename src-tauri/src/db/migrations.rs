@@ -607,6 +607,52 @@ ALTER TABLE signins_next RENAME TO signins;
 CREATE INDEX signins_agent ON signins (agent_id);
 "#,
     ),
+    (
+        23,
+        r#"
+-- A group is where a crew's settings live. It already carried an endpoint, a
+-- key and a model; what was missing was the setting that decides which of those
+-- are even read. A group can now name the provider that pays for its turns, so
+-- one crew can run on a local server while another spends the ChatGPT plan, and
+-- the app settings are what a group falls back to rather than what it obeys.
+ALTER TABLE groups ADD COLUMN provider             TEXT;
+ALTER TABLE groups ADD COLUMN subscription_model   TEXT;
+ALTER TABLE groups ADD COLUMN request_timeout_secs INTEGER;
+
+-- And the loop guard, which is a statement about one crew's work rather than
+-- about the app: a pair drafting a document needs a handful of model calls, and
+-- a crew working a browser through a long form needs an order of magnitude
+-- more. NULL is inherit, per limit, so a group that has never been touched runs
+-- on exactly the numbers it ran on yesterday.
+ALTER TABLE groups ADD COLUMN max_hops           INTEGER;
+ALTER TABLE groups ADD COLUMN max_steps_per_run  INTEGER;
+ALTER TABLE groups ADD COLUMN max_fanout_per_call INTEGER;
+ALTER TABLE groups ADD COLUMN max_sends_per_pair INTEGER;
+ALTER TABLE groups ADD COLUMN max_tool_rounds    INTEGER;
+
+-- One model column became two, and the split changes what the old one means.
+-- It used to be "this group's model, whoever is paying"; it is now the model
+-- for a key-paid turn, with the new column beside it for a subscription-paid
+-- one. A group whose model is one of the subscription's own could only have
+-- been running on the subscription, so it is copied across and keeps running on
+-- what it was running on. The list is spelled out rather than read from the
+-- code because this is a statement about the models that existed on the day
+-- this migration ran, and it must not change when that list does.
+UPDATE groups
+   SET subscription_model = default_model
+ WHERE default_model IN
+       ('gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna','gpt-5.5','gpt-5.4','gpt-5.4-mini');
+
+-- A group that named an endpoint or a key was taken to have chosen one, because
+-- until this column there was no way for it to say so. That reading is written
+-- down here rather than left as a guess in the code that resolves a turn: a
+-- guess there cannot be argued with, and it outvotes an operator who later
+-- chooses to follow the app settings with an endpoint still in the box.
+UPDATE groups
+   SET provider = 'compatible'
+ WHERE trim(coalesce(base_url, '')) <> '' OR trim(coalesce(api_key, '')) <> '';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -757,6 +803,104 @@ mod tests {
             })
             .unwrap();
         assert_eq!(model, None, "a fresh group must inherit rather than pin a model");
+    }
+
+    #[test]
+    fn a_group_pinned_to_a_subscription_model_keeps_running_on_it() {
+        // The one column became two, and the split changed what the old one
+        // means. A group whose model is one of the subscription's own was being
+        // spent on the subscription; leaving it behind would move that crew to
+        // whatever the app happens to run, silently and on the next turn.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 23) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO groups (id,name,created_at,default_model) VALUES ('g1','Plan',1,'gpt-5.4')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO groups (id,name,created_at,default_model)
+             VALUES ('g2','Local',2,'local/qwen')",
+            [],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        run(&mut conn).unwrap();
+
+        let carried: Option<String> = conn
+            .query_row("SELECT subscription_model FROM groups WHERE id='g1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(carried.as_deref(), Some("gpt-5.4"));
+
+        // And a model that belongs to an endpoint is left where it was: copying
+        // it would pin a crew to a model the subscription cannot run the moment
+        // anyone moved it across.
+        let untouched: Option<String> = conn
+            .query_row("SELECT subscription_model FROM groups WHERE id='g2'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(untouched, None);
+    }
+
+    #[test]
+    fn a_group_that_already_had_an_endpoint_is_written_down_as_choosing_one() {
+        // What it was doing yesterday, said out loud, so that nothing has to
+        // guess it tomorrow.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 23) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.execute(
+            "INSERT INTO groups (id,name,created_at,base_url) VALUES ('g1','Local',1,'http://x/v1')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO groups (id,name,created_at,api_key) VALUES ('g2','Keyed',2,'sk-x')",
+            [],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO groups (id,name,created_at,default_model)
+             VALUES ('g3','Model only',3,'some/model')",
+            [],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        run(&mut conn).unwrap();
+
+        let provider = |id: &str| -> Option<String> {
+            conn.query_row("SELECT provider FROM groups WHERE id=?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(provider("g1").as_deref(), Some("compatible"));
+        assert_eq!(provider("g2").as_deref(), Some("compatible"));
+        // A group that only pinned a model never said anything about who pays,
+        // and must keep saying nothing.
+        assert_eq!(provider("g3"), None);
+    }
+
+    #[test]
+    fn group_limits_start_unset_and_mean_inherit() {
+        // A number here would be a limit nobody chose, and it would override the
+        // app's the first time either was retuned.
+        let mut conn = memory();
+        run(&mut conn).unwrap();
+        let (steps, provider): (Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT max_steps_per_run, provider FROM groups WHERE id=?1",
+                [DEFAULT_GROUP_ID],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(steps, None);
+        assert_eq!(provider, None, "a fresh group is paid for however the app is");
     }
 
     #[test]

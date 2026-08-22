@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { aGroup } from "../test-fixtures";
 import { describeTrigger } from "./routine";
 import { inScope, type SearchInput, score, searchResults, shortUrl } from "./search";
 import type { AgentCard, Group, SearchHits } from "./types";
@@ -30,16 +30,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
 }
 
 function group(name: string): Group {
-  return {
-    id: `group-${name}`,
-    name,
-    agentCount: 2,
-    createdAt: 1,
-    baseUrl: null,
-    defaultModel: null,
-    apiKeySet: false,
-    apiKeyHint: "",
-  };
+  return aGroup({ id: `group-${name}`, name, agentCount: 2, createdAt: 1 });
 }
 
 const NOTHING: SearchHits = { messages: [], files: [], links: [], routines: [] };

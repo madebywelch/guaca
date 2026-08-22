@@ -308,6 +308,35 @@ are not in the crew it takes. Their machines are already destroyed, and handing
 one back would mean a second kill against a sandbox that is not there, which the
 operator would be shown as the failure of the disband.
 
+## A group's settings are the app's, with the crew's answer on top
+
+Everything in the group editor except the name is an override, and blank means
+inherit. That is why the boxes carry placeholders rather than values: an operator
+has to be able to tell "this crew uses the app's model" apart from "this crew
+pins that exact model", and an empty box that means two different things is a
+setting nobody can read.
+
+It is sectioned on the Settings shell for the same reason Settings is: a group
+now decides who pays for its turns, which model answers them, how long a call may
+take and how far a conversation may run, and one scroll put the name and the
+delete button a page apart. The state lives in the shell, so changing section
+cannot discard a half-typed endpoint. Accounts is disabled until the group
+exists, because a credential has to belong to something.
+
+Three rows say who pays, and the first is "follow the app settings", which is
+where every group starts. The second is the ChatGPT subscription, and the group
+editor cannot sign in: there is one sign-in on this machine, it is performed in
+Settings, and what a group chooses is whether to spend it. The rest is the same
+preset list Settings draws, from the same file, because an endpoint that is off
+by a path segment fails the same way whoever typed it.
+
+Two model fields, not one, and only the one belonging to the resolved provider
+is on screen at a time. A model belongs to a provider, which has disjoint names
+from the other and will not accept them, so a crew that tries the subscription for
+an hour and moves back has to find its endpoint model where it left it. Test
+connection is here for the same reason it is in Settings, and it sends what is on
+screen resolved over the app settings, which is what the next turn would do.
+
 ## Pinning is the head of a crew, and nothing else
 
 It does not bump the card version, because the version is how a peer notices a
@@ -423,6 +452,12 @@ draws and what is allowed to interrupt you are five different questions, and one
 scroll made the operator read all five to change one. So it is a nav and a pane,
 on the Cafeteria's shape: a panel that owns its own height, a head and a foot
 pinned to it, one scrolling half.
+
+Two of those eight are defaults rather than orders. Whatever Provider and Limits
+say is what a group falls back to, and a group that answers for itself is not
+affected by either. What stays app-wide is what is genuinely one of: the
+operator's name, the machine and browser accounts, and everything about how the
+app looks and when it may interrupt.
 
 Every value lives in the shell rather than in the pane that draws it, and that is
 not tidiness. The shell is unmounted when the dialog closes, so a pane holding

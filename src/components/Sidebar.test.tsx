@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
 import type { Activity, AgentCard, Group } from "../lib/types";
+import { aGroup, DEFAULT_GROUP } from "../test-fixtures";
 import { Sidebar } from "./Sidebar";
 
 const moveAgent =
@@ -24,19 +25,8 @@ vi.mock("../lib/ipc", () => ({
 }));
 
 const MODEL = "anthropic/claude-opus-4-1-20250805";
-const DEFAULT_GROUP = "00000000-0000-4000-8000-000000000001";
-
 function group(name: string, defaultModel: string | null = null, id = DEFAULT_GROUP): Group {
-  return {
-    id,
-    name,
-    agentCount: 0,
-    createdAt: 0,
-    baseUrl: null,
-    defaultModel,
-    apiKeySet: false,
-    apiKeyHint: "",
-  };
+  return aGroup({ id, name, inference: { ...aGroup().inference, defaultModel } });
 }
 
 function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {

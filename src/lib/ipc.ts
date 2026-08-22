@@ -134,6 +134,16 @@ export const api = {
 
   updateGroup: (id: GroupId, draft: GroupDraft) => invoke<Group>("update_group", { id, draft }),
 
+  /**
+   * Tests a group's endpoint and key, resolved over the app settings.
+   *
+   * Sends what is on screen and starts from the stored key, so testing without
+   * retyping it reports on the key that is actually there. `id` is null for a
+   * group that has not been created yet.
+   */
+  testGroupConnection: (id: GroupId | null, draft: GroupDraft) =>
+    invoke<string>("test_group_connection", { id, draft }),
+
   /** Refused while the group still holds agents; the error carries which. */
   deleteGroup: (id: GroupId) => invoke<void>("delete_group", { id }),
 
