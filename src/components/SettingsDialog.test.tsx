@@ -143,6 +143,11 @@ function type(label: RegExp, value: string): void {
   fireEvent.change(field(label), { target: { value } });
 }
 
+/** A checkbox on the same surface, found the same way and toggled. */
+function check(label: RegExp): void {
+  fireEvent.click(field(label));
+}
+
 function save(): HTMLButtonElement {
   return screen.getByRole("button", { name: "Save" }) as HTMLButtonElement;
 }
@@ -271,6 +276,8 @@ describe("what a save sends", () => {
     expect("apiKey" in patch).toBe(false);
     expect("e2bApiKey" in patch).toBe(false);
     expect("computerIdleMinutes" in patch).toBe(false);
+    expect("kernelApiKey" in patch).toBe(false);
+    expect("browserIdleMinutes" in patch).toBe(false);
     expect("requestTimeoutSecs" in patch).toBe(false);
     expect(patch).toEqual({
       operatorName: "Robert",
@@ -281,6 +288,9 @@ describe("what a save sends", () => {
       baseUrl: "https://openrouter.ai/api/v1",
       defaultModel: "anthropic/claude-sonnet-4.5",
       subscriptionModel: "gpt-5.6-luna",
+      // The one field here that cannot be omitted: a checkbox left alone is a
+      // decision, and off has to be sendable or stealth can never be turned off.
+      browserStealth: false,
       limits: HELD,
     });
   });
@@ -291,11 +301,13 @@ describe("what a save sends", () => {
     type(/^API key/, "   ");
     pane("Machines");
     type(/^E2B API key/, " ");
+    type(/^Kernel API key/, "   ");
     fireEvent.click(save());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect("apiKey" in sentPatch()).toBe(false);
     expect("e2bApiKey" in sentPatch()).toBe(false);
+    expect("kernelApiKey" in sentPatch()).toBe(false);
   });
 
   it("refuses anything but digits in a duration, so no patch can carry NaN", async () => {
@@ -350,6 +362,9 @@ describe("what a save sends", () => {
     pane("Machines");
     type(/^E2B API key/, " e2b_typed ");
     type(/^Sleep computers after/, "45");
+    type(/^Kernel API key/, "  sk_typed  ");
+    type(/^Close browsers after/, "5");
+    check(/^Hide that browsers are automated/);
     pane("General");
     type(/^Your name/, "Robert");
 
@@ -364,9 +379,52 @@ describe("what a save sends", () => {
       apiKey: "sk-or-v1-typed",
       e2bApiKey: "e2b_typed",
       computerIdleMinutes: 45,
+      kernelApiKey: "sk_typed",
+      browserIdleMinutes: 5,
+      browserStealth: true,
       requestTimeoutSecs: 30,
       limits: HELD,
     });
+  });
+
+  it("carries the browser half of Machines on its own, with no computer touched", async () => {
+    // The half of this pane that pays for browsers went missing from the patch
+    // once: three fields typed into, cleared on save, and never sent. What the
+    // operator saw was the Kernel key refusing to stick and no browser widget
+    // in the channel, with "Saved." over the top of it.
+    open();
+    pane("Machines");
+    type(/^Kernel API key/, "sk_typed");
+    type(/^Close browsers after/, "5");
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().kernelApiKey).toBe("sk_typed");
+    expect(sentPatch().browserIdleMinutes).toBe(5);
+    expect("e2bApiKey" in sentPatch()).toBe(false);
+    expect("computerIdleMinutes" in sentPatch()).toBe(false);
+  });
+
+  it("sends stealth turned back off, which omission would make unreachable", async () => {
+    open(stored({ browserStealth: true }));
+    pane("Machines");
+    expect(field(/^Hide that browsers are automated/).checked).toBe(true);
+    check(/^Hide that browsers are automated/);
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().browserStealth).toBe(false);
+  });
+
+  it("refuses anything but digits in the browser timer too", async () => {
+    open();
+    pane("Machines");
+    type(/^Close browsers after/, "5 minutes");
+    expect(field(/^Close browsers after/).value).toBe("5");
+
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch().browserIdleMinutes).toBe(5);
   });
 
   it("clears the API key box afterwards and leaves every other box alone", async () => {
@@ -498,6 +556,7 @@ describe("testing the endpoint", () => {
       defaultModel: "anthropic/claude-sonnet-4.5",
       subscriptionModel: "gpt-5.6-luna",
       apiKey: "gsk_typed",
+      browserStealth: false,
     });
     expect(updateSettings).not.toHaveBeenCalled();
   });
