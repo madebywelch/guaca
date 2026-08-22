@@ -42,7 +42,7 @@ function drawn(
   rows: AgentCard[],
   activity: Record<AgentId, Activity> = {},
   lastActive: Record<AgentId, number> = {},
-  options: { frozen?: boolean; pinnedFirst?: boolean } = {},
+  options: { frozen?: boolean } = {},
 ): string[] {
   return names(railOrder(rows, { activity, lastActive, ...options }));
 }
@@ -111,8 +111,11 @@ describe("what activity is lent", () => {
   });
 
   it("never lifts a pinned row, which is the whole of what a pin is for", () => {
+    // Both pinned, so both are in the band a pin holds. The one that is working
+    // still does not move: being in the same place every time is what a pin is
+    // for, and a row that climbs when its agent gets busy is what it stops.
     const rows = [
-      agent("Manager", { railOrder: 0 }),
+      agent("Manager", { railOrder: 0, pinned: true }),
       agent("Cook", { railOrder: 1, pinned: true }),
       agent("Scribe", { railOrder: 2 }),
     ];
@@ -128,17 +131,17 @@ describe("what activity is lent", () => {
     expect(drawn(rows, working, {}, { frozen: true })).toEqual(["Manager", "Cook", "Scribe"]);
   });
 
-  it("keeps the pins at the head of a section that is a whole group", () => {
+  it("keeps a pin at the head of its crew, over the arrangement and over a turn", () => {
+    // Every section is a crew or part of one, so there is no section a pin does
+    // not head. It used to hold only where the rail drew a pinned section of its
+    // own, which was the overview: going inside the crew drew the list without
+    // it, and pinning a row while looking at that list moved nothing.
     const rows = [
       agent("Manager", { railOrder: 0 }),
       agent("Cook", { railOrder: 1 }),
       agent("Scribe", { railOrder: 2, pinned: true }),
     ];
-    expect(drawn(rows, { Cook: { state: "thinking" } }, {}, { pinnedFirst: true })).toEqual([
-      "Scribe",
-      "Cook",
-      "Manager",
-    ]);
+    expect(drawn(rows, { Cook: { state: "thinking" } })).toEqual(["Scribe", "Cook", "Manager"]);
   });
 });
 

@@ -528,6 +528,16 @@ button {
   background: var(--accent, var(--flesh));
 }
 
+/* The name and its pin as one cell, rather than a fourth column. A column that
+   is empty on every unpinned row still takes its gap, so the names in a crew
+   would line up with each other and with nothing else in the rail. */
+.agent-row__title {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
 .agent-row__name {
   font-family: var(--font-display);
   font-size: 0.88rem;
@@ -537,6 +547,16 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Quiet, and after the name so the name is what truncates. A pin is read once,
+   when the operator wonders why this row is at the top; the row it is on is
+   already carrying a face, a name and a state. */
+.agent-row__pin {
+  flex: none;
+  width: 0.68rem;
+  height: 0.68rem;
+  color: var(--rail-muted);
 }
 
 .agent-row[data-lifecycle="paused"] .agent-row__name {

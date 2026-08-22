@@ -393,47 +393,31 @@ export const useStore = create<State>((set, get) => ({
    * the row lands and a component recomputing them would be a second place for
    * them to drift.
    *
-   * The pinned section is a flag and not a place. It spans groups, so a row
-   * dropped among pins keeps its own crew: the alternative is a gesture that
-   * says "keep this where I can see it" and quietly moves the agent to a
-   * different set of peers.
+   * A pin is the head of a crew, so the row landed on says both things at once:
+   * which crew, and whether the place aimed at is the pinned band above it or
+   * the rest below. Dropping onto a pinned row pins the dragged agent, dropping
+   * below the band unpins it, and either can also change the crew.
+   *
+   * Dropping on a group is the one gesture that says nothing about the band, so
+   * it says nothing: the pin is the operator's standing instruction about that
+   * agent, and moving somebody between crews is not a decision to drop it.
    */
   async dropAgent(id, target) {
     const state = get();
     const dragged = state.agents.find((a) => a.id === id);
     if (!dragged) return;
 
-    if (target.kind === "pinned") {
-      if (dragged.pinned) return;
-      await api.setAgentPinned(id, true);
-      await get().refreshAgents();
-      return;
-    }
-
     const live = state.agents.filter((a) => a.lifecycle !== "terminated");
 
     if (target.kind === "group") {
-      await get().moveAgent(id, { groupId: target.id, before: null, pinned: false });
+      await get().moveAgent(id, { groupId: target.id, before: null });
       return;
     }
 
     const onto = live.find((a) => a.id === target.id);
     if (!onto || onto.id === id) return;
 
-    // Dropped among the pins from another crew: pin it, and leave the crew and
-    // the place it already had. There is no position in that section to express,
-    // because the section is drawn from rows the arrangement holds apart.
-    if (onto.pinned && onto.groupId !== dragged.groupId) {
-      if (!dragged.pinned) {
-        await api.setAgentPinned(id, true);
-        await get().refreshAgents();
-      }
-      return;
-    }
-
-    const section = onto.pinned
-      ? live.filter((a) => a.pinned && a.groupId === onto.groupId)
-      : live.filter((a) => a.groupId === onto.groupId && !a.pinned);
+    const section = live.filter((a) => a.groupId === onto.groupId && a.pinned === onto.pinned);
     const order = railOrder(section, {
       activity: state.activity,
       lastActive: state.lastActive,
@@ -457,11 +441,10 @@ export const useStore = create<State>((set, get) => ({
     if (!agent) return;
 
     const live = state.agents.filter((a) => a.lifecycle !== "terminated");
-    // A pinned row moves among the pinned rows: that section spans groups and is
-    // drawn above them, so its neighbours are the other pins and not the crew.
-    const section = agent.pinned
-      ? live.filter((a) => a.pinned)
-      : live.filter((a) => a.groupId === agent.groupId && !a.pinned);
+    // Within its own band, because that is the list the row is drawn in. A
+    // nudge across the boundary would ask for a place the bands then take back,
+    // and the row would sit exactly where it was with a write behind it.
+    const section = live.filter((a) => a.groupId === agent.groupId && a.pinned === agent.pinned);
 
     const order = railOrder(section, {
       activity: state.activity,

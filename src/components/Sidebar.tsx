@@ -259,7 +259,7 @@ export function Sidebar({
   const isOver = (target: DropTarget): boolean => {
     const over = drag?.over;
     if (!over || over.kind !== target.kind) return false;
-    return over.kind === "pinned" || ("id" in over && "id" in target && over.id === target.id);
+    return over.id === target.id;
   };
 
   /** Which way an agent should turn to face a peer. */
@@ -343,7 +343,21 @@ export function Sidebar({
           look={facing(agent.id, role.facing ?? undefined)}
           says={role.says}
         />
-        <span className="agent-row__name">{agent.name}</span>
+        <span className="agent-row__title">
+          <span className="agent-row__name">{agent.name}</span>
+          {/* The only thing on screen that says a row is pinned rather than
+              first. Being at the head of a crew is what a pin does, and a crew
+              whose pinned member is also the one the operator arranged at the
+              top looks exactly like a pin that did nothing. */}
+          {agent.pinned && (
+            <svg className="agent-row__pin" viewBox="0 0 12 12" role="img" aria-label="pinned">
+              <path
+                d="M6 1.4a2.6 2.6 0 0 1 .9 5.04L6 10.6l-.9-4.16A2.6 2.6 0 0 1 6 1.4z"
+                fill="currentColor"
+              />
+            </svg>
+          )}
+        </span>
         <span className="agent-row__meta" data-state={label.kind}>
           {label.text}
         </span>
@@ -366,18 +380,6 @@ export function Sidebar({
         ⚙
       </button>
     </span>
-  );
-
-  // Pinned agents are lifted out of their group rather than drawn twice. Two
-  // rows for one agent would be two nodes in `rowRefs`, and the wire would
-  // have to pick one of them to throw a message at.
-  //
-  // Ordered by the arrangement, which is the one order that does not move on
-  // its own. The rest of a section lifts whoever is working to the top, and a
-  // row pinned so it could be found in one glance must not do that.
-  const pinned = railOrder(
-    agents.filter((a) => a.pinned),
-    shape,
   );
 
   const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
@@ -480,9 +482,10 @@ export function Sidebar({
             // Inside one group. The heading carries the name and the controls
             // that were squeezed onto a 0.6rem label in the overview, because
             // here there is one group on screen and room to say so. The pins
-            // stay at the head of the list rather than in a section of their
-            // own: everybody drawn here is in this crew already, so a second
-            // heading over one or two rows would divide nothing.
+            // head the list rather than sitting in a section of their own:
+            // everybody drawn here is in this crew already, so a heading over
+            // one or two rows would divide nothing, and the mark on the row is
+            // what says which rows those are.
             <div
               className="rail__group rail__group--open"
               data-over={isOver({ kind: "group", id: focused.id }) ? "true" : undefined}
@@ -495,7 +498,7 @@ export function Sidebar({
               </div>
               {railOrder(
                 agents.filter((a) => a.groupId === focused.id),
-                { ...shape, pinnedFirst: true },
+                shape,
               ).map(row)}
               {agents.every((a) => a.groupId !== focused.id) && (
                 <p className="rail__empty">
@@ -505,33 +508,17 @@ export function Sidebar({
             </div>
           ) : (
             <>
-              {/* Whoever the operator wants to hand, above the groups and in
-                  the same place every time. */}
-              {pinned.length > 0 && (
-                <div
-                  className="rail__group"
-                  data-over={isOver({ kind: "pinned" }) ? "true" : undefined}
-                  onPointerEnter={() => hover({ kind: "pinned" })}
-                  onPointerLeave={() => hover(null)}
-                >
-                  <div className="rail__group-head">
-                    <span className="rail__group-name">Pinned</span>
-                  </div>
-                  {pinned.map(row)}
-                </div>
-              )}
-
               {/* Every group gets a header, including the only one, because the
-                  gear on it is where that group's model and endpoint live. */}
+                  gear on it is where that group's model and endpoint live. A
+                  crew's pins are at the head of it and nowhere else. They had a
+                  section of their own above the groups, which made a pin the one
+                  arrangement that was undone by going inside the crew it was
+                  arranging: the list on screen was the group's, and the row the
+                  operator had just pinned was in a section that was not being
+                  drawn. */}
               {groups.map((group) => {
                 const members = agents.filter((a) => a.groupId === group.id);
-                // Drawn here minus whoever is pinned above, but counted in
-                // full: a pinned agent is still in this group, still costs it
-                // money and is still someone its peers can message.
-                const here = railOrder(
-                  members.filter((a) => !a.pinned),
-                  shape,
-                );
+                const here = railOrder(members, shape);
                 return (
                   // The whole block catches a drop, not just the heading:
                   // anywhere in a group that is not a row means the group and no
@@ -557,7 +544,7 @@ export function Sidebar({
                   rail hiding an agent is worse than the rail looking untidy,
                   and an empty group list used to hide every agent at once. */}
               {railOrder(
-                agents.filter((a) => !a.pinned && !groups.some((g) => g.id === a.groupId)),
+                agents.filter((a) => !groups.some((g) => g.id === a.groupId)),
                 shape,
               ).map(row)}
             </>
