@@ -219,6 +219,11 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
     ...(e2bKey.trim() ? { e2bApiKey: e2bKey.trim() } : {}),
     ...(idleMinutes.trim() ? { computerIdleMinutes: Number(idleMinutes) } : {}),
+    ...(kernelKey.trim() ? { kernelApiKey: kernelKey.trim() } : {}),
+    ...(browserIdleMinutes.trim() ? { browserIdleMinutes: Number(browserIdleMinutes) } : {}),
+    // A checkbox is never blank, so it goes every time. Omitting it would leave
+    // the only way to turn stealth back off unreachable.
+    browserStealth: stealth,
     ...(timeout.trim() ? { requestTimeoutSecs: Number(timeout) } : {}),
   });
 
