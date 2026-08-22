@@ -84,6 +84,7 @@ repo: the frontend renders state and forwards intent.
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` |
+| Deleting a group, deleting an agent, what goes with either | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `retire_agent` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |

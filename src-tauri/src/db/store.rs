@@ -1263,6 +1263,22 @@ impl Store {
         Ok(self.list_groups()?.into_iter().find(|g| g.id == id))
     }
 
+    /// The refusals that do not depend on the group being empty: it has to
+    /// exist, and the default group has to stay, because every agent has to be
+    /// in one.
+    ///
+    /// Separate from `delete_group` so disbanding a crew can refuse before it
+    /// starts destroying machines. A disband that killed a group's computers
+    /// and browsers and then found the group itself could not go would have
+    /// spent the irreversible half of the work on a call that fails.
+    pub fn group_for_removal(&self, id: GroupId) -> Result<Group, StoreError> {
+        let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
+        if id == default_group_id() {
+            return Err(StoreError::CannotDeleteDefaultGroup);
+        }
+        Ok(group)
+    }
+
     /// Deletes a group that no live agent is in.
     ///
     /// Refuses while it still holds agents that can act, rather than moving
@@ -1276,16 +1292,12 @@ impl Store {
     /// Counting them was why deleting every agent in a group still reported
     /// three agents in it.
     pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
-        let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
+        let group = self.group_for_removal(id)?;
         if group.agent_count > 0 {
             return Err(StoreError::GroupNotEmpty { name: group.name, agents: group.agent_count });
         }
 
         let default = default_group_id();
-        if id == default {
-            return Err(StoreError::CannotDeleteDefaultGroup);
-        }
-
         let conn = self.conn()?;
         conn.execute(
             "UPDATE agents SET group_id=?2 WHERE group_id=?1",
@@ -1729,6 +1741,27 @@ impl Store {
     pub fn delete_group_usage(&self, group: GroupId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM usage WHERE group_id=?1", params![group.to_string()])?)
+    }
+
+    /// Every live agent in a group, whole cards.
+    ///
+    /// Terminated ones are left out. They have already been retired: their
+    /// machines are destroyed and their memories gone, and they are only still
+    /// filed under the group so old transcripts render. Handing one back to a
+    /// disband would mean a second attempt to kill a sandbox that no longer
+    /// exists, which is the failure the operator would then be shown.
+    pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
+               FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid",
+        )?;
+        let rows = stmt.query_map(params![group.to_string()], row_to_card)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
     }
 
     /// The agents a group holds, deleted ones included.
@@ -2954,6 +2987,83 @@ mod tests {
             1,
             "clearing one group must not touch another"
         );
+    }
+
+    #[test]
+    fn a_disband_is_told_the_group_cannot_go_before_it_takes_anything() {
+        // The failure path this covers: a disband kills every computer and
+        // browser in a crew and only then asks whether the group itself may be
+        // deleted. The first group may not, and the operator would be left with
+        // the machines gone, the agents gone and the group still there.
+        let f = fixture();
+        let default = default_group_id();
+        let mut d = draft("Resident");
+        d.group_id = Some(default);
+        f.store.create_agent(&d).unwrap();
+
+        assert!(matches!(
+            f.store.group_for_removal(default),
+            Err(StoreError::CannotDeleteDefaultGroup)
+        ));
+
+        // The same question answered for a group that can go, while it is still
+        // full: the check is about the group, not about whether it is empty.
+        let group = f
+            .store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                base_url: None,
+                default_model: None,
+                api_key: None,
+            })
+            .unwrap();
+        let mut d = draft("Scholar");
+        d.group_id = Some(group.id);
+        f.store.create_agent(&d).unwrap();
+        assert!(f.store.group_for_removal(group.id).is_ok());
+        assert!(
+            matches!(f.store.delete_group(group.id), Err(StoreError::GroupNotEmpty { .. })),
+            "the emptiness check has to stay on delete_group"
+        );
+    }
+
+    #[test]
+    fn a_disband_takes_the_live_crew_and_not_the_agents_already_deleted() {
+        // A terminated agent's sandbox is already destroyed and its memory is
+        // already gone. Handing one back would make a disband try to kill a
+        // machine that is not there and show the operator that failure.
+        let f = fixture();
+        let group = f
+            .store
+            .create_group(&CleanGroup {
+                name: "Research".into(),
+                base_url: None,
+                default_model: None,
+                api_key: None,
+            })
+            .unwrap();
+
+        let mut live = draft("Scholar");
+        live.group_id = Some(group.id);
+        let live = f.store.create_agent(&live).unwrap();
+
+        let mut gone = draft("Departed");
+        gone.group_id = Some(group.id);
+        let gone = f.store.create_agent(&gone).unwrap();
+        f.store.set_lifecycle(gone.id, Lifecycle::Terminated).unwrap();
+
+        // And somebody in another crew, who a disband must never reach.
+        let bystander = f.store.create_agent(&draft("Bystander")).unwrap();
+
+        let crew = f.store.group_crew(group.id).unwrap();
+        assert_eq!(crew.iter().map(|c| c.id).collect::<Vec<_>>(), vec![live.id]);
+        assert!(!crew.iter().any(|c| c.id == bystander.id));
+
+        // What the command does after retiring them, which is the reason the
+        // count above has to be right: the group is empty and goes.
+        f.store.set_lifecycle(live.id, Lifecycle::Terminated).unwrap();
+        assert!(f.store.group_crew(group.id).unwrap().is_empty());
+        f.store.delete_group(group.id).expect("a disbanded group must be deletable");
     }
 
     #[test]
