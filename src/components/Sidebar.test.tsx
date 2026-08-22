@@ -291,6 +291,20 @@ describe("groups as places", () => {
     expect(screen.getByTitle("Reader")).toBeTruthy();
   });
 
+  // The circle is how a crew is told apart at 38px, and every crew of two or
+  // more used to draw the same square of four. Where the faces stand is now the
+  // crew's size, so the ring holds more than four and says so when it cannot.
+  it("seats six of a crew, and counts whoever is past that", () => {
+    const cooks = Array.from({ length: 9 }, (_, i) =>
+      agent(`Cook ${i}`, { groupId: RESEARCH, railOrder: i }),
+    );
+    draw([group("everyone"), group("research", null, RESEARCH)], [agent("Manager"), ...cooks]);
+
+    const orb = screen.getByLabelText("research, 9 agents");
+    expect(orb.querySelectorAll(".orb__face")).toHaveLength(6);
+    expect(orb.textContent).toContain("+3");
+  });
+
   it("says on the circle when somebody inside it needs the operator", () => {
     // After focusing on one group the strip is the only place the other crews
     // are still visible, so it has to carry the one state that is waiting on a

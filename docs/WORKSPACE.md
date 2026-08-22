@@ -218,11 +218,24 @@ pins folded to the head of the single list rather than kept in a section of thei
 own, because everybody drawn there is in that crew already.
 
 The circles are faces, not names. A crew is recognised by who is in it long
-before its name is read, and four of them have to fit across a rail that is
-15.5rem wide. Four faces tiled in a square rather than a row of overlaps: the
-circle is 38px across and three 1.35rem avatars in a row measure 51px even
-leaning on each other, so a row either overflowed the ring or hid the faces it
-was drawn to show.
+before its name is read, and four of these have to fit across a rail that is
+15.5rem wide.
+
+How the faces stand is the size of the crew. One is a portrait, two stand side
+by side, and three to six stand on a ring, so a strip of crews is a strip of
+different badges and the number of people in each is legible before any single
+face is. Every crew of two or more used to draw the same square of four, which
+made the circle read as the app's own mark rather than as these agents. The
+seating is `src/lib/orb.ts`, in fractions of the ring rather than in pixels, and
+it is sized against the ink instead of the box the ink is drawn in: a character
+fills 62% of its box across and 83% of it down, so the tight axis is vertical
+and `orb.test.ts` holds every ring to the catalog's own construction spec rather
+than to a number copied out of it.
+
+Six is where it stops. A seventh face is a smudge and it makes the six already
+there smaller, so the rest are a count, hung off the rim rather than laid on it:
+a ring with a seat in every quarter has nowhere inside it for an opaque chip
+that is not somebody's face.
 
 Each circle does two jobs, which is why it is a circle and not an item in a menu.
 Clicking it opens the group. Dropping an agent on it puts the agent in the group,
