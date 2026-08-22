@@ -338,6 +338,14 @@ const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 /// forever, because a turn that never ends is a run that never settles.
 const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+/// How often the schedule is swept for routines that have come due.
+///
+/// A poll rather than a timer per routine: the next due time is what is
+/// stored, so a schedule made last week survives a restart and nothing has to
+/// be rebuilt in memory at startup. The cost of the interval is lateness, and
+/// twenty seconds is under the resolution anything here can be scheduled at.
+const SCHEDULE_TICK: Duration = Duration::from_secs(20);
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     #[error(transparent)]
@@ -1042,54 +1050,71 @@ impl Runtime {
 
     /// Watches the clock so agents can keep their own appointments.
     ///
-    /// Polls rather than holding a timer per routine: what is stored is when a
-    /// thing is next due, so a schedule made last week still fires after a
-    /// restart, and nothing has to be rebuilt in memory at startup.
+    /// The loop is two statements, and that is the whole point: one pass, then
+    /// the wait. Nothing inside a pass can reach the next pass without going
+    /// through [`SCHEDULE_TICK`], because a pass is a separate function and the
+    /// only way out of it is to return.
     pub fn start_scheduler(&self) {
         let runtime = self.clone();
         self.inner.handle.spawn(async move {
             loop {
-                let now = now_ms();
-                // A read that fails waits for the next tick like one that
-                // succeeds. Skipping straight to the next attempt turned a
-                // database that stayed broken into a hot loop of synchronous
-                // SQLite calls, with a warning written as fast as the disk
-                // could refuse.
-                let due = runtime.inner.store.due_routines(now).unwrap_or_else(|err| {
-                    tracing::warn!(%err, "could not read the schedule; trying again next tick");
-                    Vec::new()
-                });
-
-                for routine in due {
-                    // Recorded as run before it is run. A routine that fails on
-                    // delivery must not come due again on the next tick and
-                    // again on the one after that.
-                    if let Err(err) = runtime.inner.store.routine_ran(&routine, now) {
-                        tracing::error!(%err, "could not advance a routine; skipping it");
-                        continue;
-                    }
-                    // The row moved: to its next slot, or off the list
-                    // altogether if it was a one-shot. Either way the panel is
-                    // showing a firing that has already happened.
-                    runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
-
-                    tracing::info!(
-                        agent = %routine.agent_id.short(),
-                        trigger = %routine.trigger.as_str(),
-                        repeats = routine.repeats(),
-                        "a routine came due"
-                    );
-                    match runtime.send_from_routine(&routine) {
-                        Ok(run) => runtime.log_routine_run(&routine, run, RunKind::Scheduled, now),
-                        Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
-                    }
-                }
-
-                // Swept at the end rather than the start, so anything already
-                // overdue at launch runs now instead of waiting out a tick.
-                tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                runtime.sweep_schedule().await;
+                // Swept before the first wait rather than after it, so anything
+                // already overdue at launch runs now instead of sitting out a
+                // tick that starts the moment the app opens.
+                tokio::time::sleep(SCHEDULE_TICK).await;
             }
         });
+    }
+
+    /// One pass over the schedule: everything due now, fired now.
+    ///
+    /// Split out of the loop so that giving up on a pass cannot also skip the
+    /// wait. That is not a hypothetical tidiness: a `continue` on a failed read
+    /// used to jump straight back to the top, so a database that stayed broken
+    /// spun this into a hot loop, pinning a worker on synchronous SQLite calls
+    /// and repeating one warning as fast as the disk could refuse it. The
+    /// scheduler shares its runtime with every agent, so that is not a slow
+    /// scheduler, it is a runtime nobody else gets a turn on. Returning early
+    /// is now the safe thing to write, which is why the fix is a boundary
+    /// rather than a rule about which keyword to avoid.
+    async fn sweep_schedule(&self) {
+        let now = now_ms();
+        let due = match self.inner.store.due_routines(now) {
+            Ok(due) => due,
+            Err(err) => {
+                // Named as a wait, not a stop: this line is read by whoever is
+                // wondering why a routine did not fire, and the answer is that
+                // it will be tried again in twenty seconds.
+                tracing::warn!(%err, "could not read the schedule; waiting for the next tick");
+                return;
+            }
+        };
+
+        for routine in due {
+            // Recorded as run before it is run. A routine that fails on
+            // delivery must not come due again on the next tick and again on
+            // the one after that.
+            if let Err(err) = self.inner.store.routine_ran(&routine, now) {
+                tracing::error!(%err, "could not advance a routine; skipping it");
+                continue;
+            }
+            // The row moved: to its next slot, or off the list altogether if it
+            // was a one-shot. Either way the panel is showing a firing that has
+            // already happened.
+            self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
+
+            tracing::info!(
+                agent = %routine.agent_id.short(),
+                trigger = %routine.trigger.as_str(),
+                repeats = routine.repeats(),
+                "a routine came due"
+            );
+            match self.send_from_routine(&routine) {
+                Ok(run) => self.log_routine_run(&routine, run, RunKind::Scheduled, now),
+                Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
+            }
+        }
     }
 
     /// Operator sends a message to one agent. Returns the run it starts.
