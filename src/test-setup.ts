@@ -89,3 +89,22 @@ if (typeof (globalThis as { localStorage?: Storage }).localStorage?.getItem !== 
     },
   });
 }
+
+// A duplicate or missing key is a defect, not a warning. React's reconciler
+// indexes the outgoing children by key to decide what to delete, so two
+// siblings under one key silently leak whichever of them the map lost: the
+// element stays in the document with no fiber left to update it, which reads
+// as a panel that will not change until it is closed and opened again. React
+// says so on `console.error` and nothing was listening, so the tests are made
+// to listen. Only these two messages: everything else a component logs is the
+// component's business.
+{
+  const complain = console.error;
+  console.error = (...args: unknown[]) => {
+    const said = args.map((arg) => (typeof arg === "string" ? arg : "")).join(" ");
+    if (said.includes("the same key") || said.includes('unique "key"')) {
+      throw new Error(`React key defect: ${said}`);
+    }
+    complain(...args);
+  };
+}

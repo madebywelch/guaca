@@ -148,11 +148,23 @@ export function Inspector({ agent, onEditProfile }: Props) {
         {/* Hidden rather than unmounted while a routine is open. The screen
             holds a live connection to the agent's desktop, and rebuilding it
             every time somebody looked at a schedule would drop and reconnect
-            it. */}
-        <div className="inspector__level" hidden={routine !== null}>
-          <ComputerScreen agent={agent} key={agent.id} />
-          <BrowserScreen agent={agent} key={`browser:${agent.id}`} />
-          <RoutineList agentId={agent.id} onOpen={setRoutine} key={agent.id} />
+            it.
+
+            The key is here rather than on each section, and it is the whole
+            mechanism for switching agent: every section below holds one
+            agent's thing, a desktop connection, a browser, a list read over
+            IPC, and none of them may be left under the next agent's name. One
+            key on what they share says that once. Saying it three times, once
+            per section, collided: React indexes the outgoing children by key
+            to decide what to delete, so the duplicate overwrote the entry the
+            screen would have been deleted through. The previous agent's
+            screen stayed in the document with no fiber left to update it and
+            its polling still running, every switch added another, and only
+            closing the panel cleared them. */}
+        <div className="inspector__level" hidden={routine !== null} key={agent.id}>
+          <ComputerScreen agent={agent} />
+          <BrowserScreen agent={agent} />
+          <RoutineList agentId={agent.id} onOpen={setRoutine} />
         </div>
 
         {routine !== null && (
