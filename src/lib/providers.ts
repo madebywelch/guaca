@@ -24,6 +24,8 @@
  * it does not have. It gets its own block in the pane, above this list.
  */
 
+import type { Group, Settings } from "./types";
+
 export interface Provider {
   id: string;
   name: string;
@@ -117,6 +119,30 @@ export function providerFor(baseUrl: string): Provider | undefined {
  */
 export function providerReady(provider: Provider, keySet: boolean): boolean {
   return provider.local === true || keySet;
+}
+
+/**
+ * Whether an agent in this group has its turns paid for by OpenRouter.
+ *
+ * Asked before OpenRouter's model rankings are offered as suggestions, because
+ * a suggestion is a slug and a slug only means something at the endpoint it was
+ * ranked at. `anthropic/claude-opus-5` pasted into a field pointed at
+ * `api.openai.com` is a refusal by name on the agent's next turn, and the
+ * operator has no way to connect that refusal to a button they pressed in a
+ * dialog an hour earlier.
+ *
+ * Resolves group over app, the same order the backend resolves in. A subscription
+ * is not this endpoint at all: it offers its own models, and none of them are
+ * OpenRouter's to rank.
+ */
+export function onOpenRouter(group: Group | undefined, settings: Settings | null): boolean {
+  // Optional all the way down, including a field the type says is always
+  // there. This decides whether an extra appears beside a field; a group that
+  // arrives half-shaped should cost the operator a suggestion, not the dialog.
+  const provider = group?.inference?.provider ?? settings?.provider;
+  if (provider !== "compatible") return false;
+  const baseUrl = group?.inference?.baseUrl || settings?.baseUrl || "";
+  return providerFor(baseUrl)?.id === "openrouter";
 }
 
 /**

@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { aGroup } from "../test-fixtures";
 import type { Provider } from "./providers";
-import { PROVIDERS, providerFor, providerReady } from "./providers";
+import { onOpenRouter, PROVIDERS, providerFor, providerReady } from "./providers";
+import type { Settings } from "./types";
 
 /**
  * The preset list is data, and both of its jobs are answered from one string.
@@ -252,5 +254,61 @@ describe("what a fresh install starts on", () => {
     // The placeholder is a third copy of the default. One that drifts advertises
     // an endpoint the app would not actually call.
     expect(endpointPlaceholder()).toBe(rustConst("DEFAULT_BASE_URL"));
+  });
+});
+
+/**
+ * Whether OpenRouter's model rankings apply to this agent at all.
+ *
+ * A slug ranked at OpenRouter means nothing at any other endpoint, so offering
+ * one where it will be refused is a button that quietly breaks every turn the
+ * agent takes afterwards. The resolution has to match the backend's, because
+ * that is what actually decides where the call goes.
+ */
+describe("whether OpenRouter is what pays", () => {
+  const app = (over: Partial<Settings> = {}) =>
+    ({ provider: "compatible", baseUrl: "https://openrouter.ai/api/v1", ...over }) as Settings;
+
+  it("follows the app when the crew overrides nothing", () => {
+    expect(onOpenRouter(aGroup(), app())).toBe(true);
+    expect(onOpenRouter(aGroup(), app({ baseUrl: "https://api.openai.com/v1" }))).toBe(false);
+  });
+
+  it("lets a crew's own endpoint win, in both directions", () => {
+    const elsewhere = aGroup({
+      inference: { ...aGroup().inference, baseUrl: "https://api.groq.com/openai/v1" },
+    });
+    expect(onOpenRouter(elsewhere, app())).toBe(false);
+
+    const here = aGroup({
+      inference: { ...aGroup().inference, baseUrl: "https://openrouter.ai/api/v1" },
+    });
+    expect(onOpenRouter(here, app({ baseUrl: "http://localhost:1234/v1" }))).toBe(true);
+  });
+
+  // A subscription is not an endpoint with a different URL. It offers its own
+  // models, and none of them are OpenRouter's to rank.
+  it("is never true on a subscription, whatever endpoint is stored beside it", () => {
+    expect(onOpenRouter(aGroup(), app({ provider: "chatgpt" }))).toBe(false);
+
+    const paid = aGroup({ inference: { ...aGroup().inference, provider: "chatgpt" } });
+    expect(onOpenRouter(paid, app())).toBe(false);
+  });
+
+  // The dialog draws before the first settings load lands. Nothing known is
+  // not OpenRouter.
+  it("says no before anything is known", () => {
+    expect(onOpenRouter(undefined, null)).toBe(false);
+    expect(onOpenRouter(aGroup(), null)).toBe(false);
+  });
+
+  // The endpoint the operator pastes is the one their provider's documentation
+  // prints, and that one ends in /chat/completions. `providerFor` already
+  // normalises it; this is here so a rewrite of either cannot quietly stop.
+  it("recognises the endpoint the way it is actually pasted", () => {
+    expect(
+      onOpenRouter(aGroup(), app({ baseUrl: "https://openrouter.ai/api/v1/chat/completions" })),
+    ).toBe(true);
+    expect(onOpenRouter(aGroup(), app({ baseUrl: " HTTPS://OpenRouter.ai/api/v1/ " }))).toBe(true);
   });
 });

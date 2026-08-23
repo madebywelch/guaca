@@ -74,6 +74,27 @@ describe("IPC contract", () => {
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
 
+  it("knows the same twelve use cases on both sides", () => {
+    // A suggestion is asked for by use case, and the backend refuses anything
+    // that is not one of these before it spends a request. So a category
+    // renamed at OpenRouter and updated on one side only is a dialog that draws
+    // nothing, silently, for exactly the agents it was built for. Neither list
+    // is the source — OpenRouter is — and the pair failing together is how a
+    // rename there gets noticed here.
+    const rust = read("src-tauri/src/llm/catalogue.rs").match(
+      /CATEGORIES: \[&str; \d+\] = \[([\s\S]*?)\];/,
+    );
+    const web = read("src/lib/roles.ts").match(/export const ROLES: Role\[\] = \[([\s\S]*?)\];/);
+    expect(rust, "no CATEGORIES in catalogue.rs").not.toBeNull();
+    expect(web, "no ROLES in roles.ts").not.toBeNull();
+
+    const quoted = (block: string) => [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    // The web list is `{ id, label }` pairs and only the id crosses IPC.
+    const ids = [...web![1]!.matchAll(/id:\s*"([^"]+)"/g)].map((m) => m[1]!);
+
+    expect(ids).toEqual(quoted(rust![1]!));
+  });
+
   it("draws the same floor under a price on both sides", () => {
     // The rail's meters and the menu bar are two readings of one number, and
     // each decides on its own whether a cost is worth the width it takes. A
