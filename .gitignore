@@ -13,3 +13,8 @@ src-tauri/gen/
 
 # Generated from scripts/make-icon.py
 scripts/icon-source.png
+
+# What ./scripts/crew.sh records: a live crew's events, messages and numbers.
+# Kept out of the build directory because `cargo clean` should not take a run
+# recording with it, and out of git because it is a log of one afternoon.
+/runs/
