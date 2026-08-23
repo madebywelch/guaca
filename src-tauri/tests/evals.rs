@@ -24,14 +24,12 @@ mod harness;
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use guac_lib::domain::agent::CleanDraft;
-use guac_lib::domain::approval::Decision;
-use guac_lib::domain::envelope::Envelope;
 use guac_lib::domain::ids::{AgentId, RunId};
 use guac_lib::eval::{analyse, faults, Conversation, Fault};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::trajectory::Trajectory;
 
+use harness::live::*;
 use harness::*;
 
 /// One instruction, run end to end, read for what it did to the operator.
@@ -123,20 +121,7 @@ fn read(h: &Harness, run: RunId, names: &[&str]) -> Eval {
         names.iter().map(|n| (h.id(n), (*n).to_string())).collect();
     let name_of = move |id: AgentId| lookup.get(&id).cloned().unwrap_or_else(|| "?".into());
 
-    // Every channel, not `conversation_flow`: that one is built for the
-    // activity view and excludes the system channel, which is where refusals
-    // are recorded. An eval that cannot see a refusal cannot tell a guard doing
-    // its job from a message that silently went nowhere.
-    let mut messages: Vec<Envelope> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for name in names {
-        for envelope in h.runtime.store().channel_messages(h.id(name), 400).unwrap() {
-            if seen.insert(envelope.id) {
-                messages.push(envelope);
-            }
-        }
-    }
-    messages.sort_by_key(|e| (e.created_at, e.id));
+    let messages = h.envelopes(names);
 
     Eval {
         convo: analyse(&messages, &name_of),
@@ -1162,21 +1147,6 @@ async fn a_coordinator_delegates_from_what_it_remembered_on_an_earlier_run() {
 mod live {
     use super::*;
 
-    fn configured() -> Option<guac_lib::config::AppConfig> {
-        let path = dirs_config()?;
-        let raw = std::fs::read_to_string(path).ok()?;
-        let config: guac_lib::config::AppConfig = serde_json::from_str(&raw).ok()?;
-        (!config.inference.api_key.trim().is_empty()).then_some(config)
-    }
-
-    fn dirs_config() -> Option<std::path::PathBuf> {
-        let home = std::env::var_os("HOME")?;
-        Some(
-            std::path::PathBuf::from(home)
-                .join("Library/Application Support/com.madebywelch.guac/config.json"),
-        )
-    }
-
     /// Everything a live scenario needs: real agents, real model, real prompt.
     async fn run_live(names: &[&'static str], instruction: &str) -> Option<Eval> {
         let crew: Vec<LiveAgent> = names.iter().map(|n| LiveAgent::generic(n)).collect();
@@ -1243,94 +1213,6 @@ mod live {
         assert!(settled, "run did not settle in {secs}s. messages so far:\n{}", h.transcript());
         let eval = read(&h, run, &names);
         Some((h, eval))
-    }
-
-    /// Answers whatever the crew asks the operator, with no.
-    ///
-    /// A live crew has no operator, and a parked turn holds its run for the
-    /// ten minutes the runtime waits before giving up on one. A scenario about
-    /// delegation that happens to trip a permission request would otherwise
-    /// spend its whole settle window waiting for a click that is never coming,
-    /// and fail as though the crew had never stopped talking. That is exactly
-    /// how a knee question in a crew of three read: two messages, one of them
-    /// blank, and five minutes of nothing.
-    ///
-    /// Declined rather than allowed, and not negotiable: the actions behind
-    /// this tool are the ones that reach outside the workspace and cannot be
-    /// taken back. An eval is not a good enough reason to send mail in the
-    /// operator's name. What was asked is returned so the scenario can print
-    /// it, because an answer nobody sees still shapes the run.
-    fn answer_permission_requests(
-        h: &Harness,
-    ) -> (tokio::task::JoinHandle<()>, std::sync::Arc<parking_lot::Mutex<Vec<String>>>) {
-        let asked = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
-        let runtime = h.runtime.clone();
-        let sink = h.sink.clone();
-        let recorded = asked.clone();
-
-        let handle = tokio::spawn(async move {
-            let mut answered = std::collections::HashSet::new();
-            loop {
-                let requests: Vec<_> = sink
-                    .snapshot()
-                    .into_iter()
-                    .filter_map(|event| match event {
-                        guac_lib::runtime::events::UiEvent::ApprovalRequested {
-                            approval_id,
-                            ..
-                        } => Some(approval_id),
-                        _ => None,
-                    })
-                    .collect();
-                for id in requests {
-                    if !answered.insert(id) {
-                        continue;
-                    }
-                    recorded.lock().push(id.short());
-                    if let Err(err) = runtime.decide_approval(id, Decision::Deny) {
-                        eprintln!("could not decline {}: {err}", id.short());
-                    }
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            }
-        });
-
-        (handle, asked)
-    }
-
-    /// Every sandbox this account holds, by id.
-    async fn machines_now(config: &guac_lib::config::AppConfig) -> Vec<String> {
-        match guac_lib::e2b::E2bClient::new(&config.e2b.api_key) {
-            Some(client) => client.list_ours().await.unwrap_or_default(),
-            None => Vec::new(),
-        }
-    }
-
-    /// Kills whatever this run brought into existence, and nothing else.
-    ///
-    /// A diff against a baseline rather than a walk over the crew's rows. An
-    /// agent whose first machine does not answer starts another and records
-    /// only the newest, so the rows name one of the several a single run can
-    /// leave behind; seventeen survived a cleanup written that way.
-    ///
-    /// It is also why `Runtime::sweep_computers` cannot be borrowed for this.
-    /// That kills every Guac sandbox its own store does not claim, so run from
-    /// a throwaway store it would spare this crew's machines and take the
-    /// operator's running app apart instead.
-    async fn release_machines(config: &guac_lib::config::AppConfig, before: Vec<String>) {
-        let Some(client) = guac_lib::e2b::E2bClient::new(&config.e2b.api_key) else {
-            return;
-        };
-        let existing: std::collections::HashSet<String> = before.into_iter().collect();
-        for sandbox in client.list_ours().await.unwrap_or_default() {
-            if existing.contains(&sandbox) {
-                continue;
-            }
-            match client.kill(&sandbox).await {
-                Ok(()) => println!("released {sandbox}"),
-                Err(err) => eprintln!("could not release {sandbox}: {err}"),
-            }
-        }
     }
 
     fn report(scenario: &str, eval: &Eval) {
@@ -1832,88 +1714,4 @@ mod live {
         );
         eval.expect_told_operator("Assistant", 1, "a standing preference");
     }
-}
-
-/// One agent in a live crew.
-///
-/// Skills are here because a scenario about who should get a piece of work is
-/// not testable without them: a crew of four agents with no stated skills gives
-/// a coordinator nothing to choose between, and the broadcast it produces is
-/// then the right answer.
-struct LiveAgent {
-    name: &'static str,
-    skills: &'static [&'static str],
-    /// `None` takes a serviceable default. `Some("")` means the card really
-    /// carries no instructions, which is how most agents are created and is
-    /// what the workspace rules have to hold up without.
-    prompt: Option<&'static str>,
-    /// Overrides the configured default. A crew is not obliged to share a
-    /// model, and a coordinator on a different one from the agents it directs
-    /// is the arrangement that produced the defect these evals were written
-    /// for: putting everyone on the default quietly tests a different app.
-    model: Option<&'static str>,
-}
-
-impl LiveAgent {
-    /// An agent for scenarios that are not about who does what.
-    fn generic(name: &'static str) -> Self {
-        LiveAgent { name, skills: &[], prompt: None, model: None }
-    }
-
-    /// A specialist, described only by what it does.
-    ///
-    /// `Some("")` rather than a default sentence, because a card with no
-    /// instructions is how most agents are created and is what the workspace
-    /// rules have to hold up without: a scenario whose specialists each carry a
-    /// hand-written brief is testing the brief.
-    fn skilled(name: &'static str, skills: &'static [&'static str]) -> Self {
-        LiveAgent { name, skills, prompt: Some(""), model: None }
-    }
-
-    fn system_prompt(&self) -> String {
-        match self.prompt {
-            Some(prompt) => prompt.to_string(),
-            None => format!(
-                "You are the {}. Work with your team the way the workspace rules say.",
-                self.name
-            ),
-        }
-    }
-}
-
-/// A harness pointed at the real configured endpoint rather than a stub.
-fn live_crew(config: guac_lib::config::AppConfig, crew: &[LiveAgent]) -> Harness {
-    let dir = tempfile::tempdir().unwrap();
-    let store = guac_lib::db::Store::open(&dir.path().join("guac.db")).unwrap();
-
-    let mut ids = HashMap::new();
-    for agent in crew {
-        let card = store
-            .create_agent(&CleanDraft {
-                name: agent.name.to_string(),
-                avatar: "plain".into(),
-                color: "#c7d96b".into(),
-                model: agent
-                    .model
-                    .map(str::to_string)
-                    .unwrap_or_else(|| config.inference.default_model.clone()),
-                system_prompt: agent.system_prompt(),
-                skills: agent.skills.iter().map(|s| (*s).to_string()).collect(),
-                group_id: None,
-            })
-            .unwrap();
-        ids.insert(agent.name.to_string(), card.id);
-    }
-
-    let sink = guac_lib::runtime::events::RecordingSink::new();
-    let runtime = guac_lib::runtime::Runtime::new(
-        store,
-        guac_lib::llm::openrouter::LlmClient::new().unwrap(),
-        config,
-        guac_lib::workspace::Workspace::new(dir.path().join("workspace")),
-        guac_lib::files::FileStore::new(dir.path().join("files")),
-        sink.clone(),
-    );
-    runtime.start_all().unwrap();
-    Harness { runtime, sink, ids, _dir: dir }
 }

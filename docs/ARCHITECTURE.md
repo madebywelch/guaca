@@ -944,6 +944,41 @@ offline is a stub agreeing with what this app believes the protocol is; the live
 one is the only thing that notices when that belief goes stale, which it will,
 because the protocol belongs to somebody else.
 
+## A crew is watched rather than asserted
+
+All three suites above decide something. The fourth question cannot be decided,
+and pretending otherwise is how a suite ends up asserting the model's taste: put
+a team of eight in front of one real instruction and a real model divides the
+work differently every time. Once it sends four messages and once it sends six.
+Once the coordinator reports when the last answer lands, and once it reports
+before, then again after, and the operator reads two packages an hour apart with
+no way to tell which is current. Every one of those runs passes the cascade
+suite, because each individual message was correct.
+
+`tests/crew.rs` puts the question the only way it can be put: run the same
+directive several times and write down what happened. Eight roles an operator
+would recognise, one of them carrying the standing instruction and the other
+seven described by their skills alone; a directive with four asks, three of the
+crew with no part in it, and two pairs whose skills overlap so that choosing is
+a judgement rather than a lookup. Each run leaves its whole event stream,
+timestamped as it arrived, its envelopes, a transcript a person can read, and
+its numbers. Beside them is the comparison, which is the actual product: for
+each thing worth comparing, the distinct answers and which runs gave them. A
+dimension with one answer was stable. A dimension with five is where to start
+reading.
+
+It asserts three things and no more, because only three of them are not a
+matter of taste: every run settled, no run left the machinery in a state
+`trajectory.rs` calls broken, and somebody answered the operator. A crew that
+chose oddly is a finding to read; a placeholder left open is a defect. Anything
+promoted from a finding to a rule belongs in `eval.rs`, where it is decidable
+and every suite gets it.
+
+```sh
+./scripts/crew.sh                 # one run, a few cents
+GUACA_RUNS=5 ./scripts/crew.sh    # five, to see what varies
+```
+
 ## Known limitations
 
 Stated plainly rather than discovered later.
