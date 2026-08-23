@@ -1,4 +1,4 @@
-pub mod catalogue;
+pub mod catalog;
 pub mod codex;
 pub mod openrouter;
 pub mod sse;

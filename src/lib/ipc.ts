@@ -128,7 +128,7 @@ export const api = {
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
 
   /** The plugins on offer. Static, and the same for every group. */
-  pluginCatalogue: () => invoke<PluginOffer[]>("plugin_catalogue"),
+  pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 
   /** What one crew has connected. Never carries a grant. */
   groupPlugins: (groupId: GroupId) => invoke<Plugin[]>("group_plugins", { groupId }),
@@ -471,7 +471,7 @@ export function openExternal(url: string): Promise<void> {
  * this return value has to be worded so that it does not claim to.
  *
  * Every failure is swallowed. A refused permission, a plugin that is not there,
- * a platform with no notification centre: none of them are worth a banner,
+ * a platform with no notification center: none of them are worth a banner,
  * because the thing being announced is already on screen in the rail and the
  * transcript. This is the redundant copy, not the record.
  */
@@ -495,7 +495,7 @@ export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<Unlis
 /**
  * Subscribes to the menu bar asking for a channel to be opened.
  *
- * The window is already shown, unminimised and focused by the time this
+ * The window is already shown, unminimized and focused by the time this
  * arrives; all that is left is which channel it lands in. Answering a
  * permission request from the strip does not come through here: that one is
  * decided in Rust and reaches the transcript as an ordinary settled event.

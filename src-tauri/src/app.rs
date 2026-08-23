@@ -17,7 +17,7 @@ use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
 use crate::files::FileStore;
-use crate::llm::catalogue::Catalogue;
+use crate::llm::catalog::Catalog;
 use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
@@ -401,7 +401,7 @@ pub fn run() {
                 downloads,
                 subscription,
                 account,
-                catalogue: Arc::new(Catalogue::new()),
+                catalog: Arc::new(Catalog::new()),
                 artifacts,
                 artifact_port,
             });
@@ -422,7 +422,7 @@ pub fn run() {
             commands::group_connectors,
             commands::create_connector,
             commands::delete_connector,
-            commands::plugin_catalogue,
+            commands::plugin_catalog,
             commands::group_plugins,
             commands::set_plugin_access,
             commands::set_plugin_tool,

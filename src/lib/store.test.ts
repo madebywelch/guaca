@@ -176,7 +176,7 @@ describe("messageAppended", () => {
 });
 
 describe("rail pulses", () => {
-  it("fires for agent-to-agent traffic in the sender's colour", () => {
+  it("fires for agent-to-agent traffic in the sender's color", () => {
     apply({
       type: "messageAppended",
       message: envelope({
@@ -302,7 +302,7 @@ describe("what an agent is thinking", () => {
   });
 
   it("is dropped when the turn ends", () => {
-    // The whole contract: it is visible while it happens and gone afterwards.
+    // The whole contract: it is visible while it happens and gone afterward.
     apply(started);
     apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
     apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });

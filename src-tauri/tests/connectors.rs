@@ -163,7 +163,7 @@ async fn an_agent_can_read_a_folder_of_documents_it_downloaded() {
 
     machine.release().await;
 
-    // The value must not have travelled with the result. Cheap to check and the
+    // The value must not have traveled with the result. Cheap to check and the
     // one mistake in this flow that would matter.
     assert!(!text.contains("MISTRAL_API_KEY="), "the environment leaked into the output");
 }

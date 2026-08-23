@@ -19,7 +19,7 @@
 //!
 //! ## Why the use cases are checked here
 //!
-//! OpenRouter answers an unrecognised category with 200 and an empty list, so a
+//! OpenRouter answers an unrecognized category with 200 and an empty list, so a
 //! slug that has been renamed on their side is indistinguishable from a use case
 //! nobody sends work to. Checking against the published set before spending a
 //! request turns the first case into a sentence naming what was asked for, and
@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
-/// The catalogue is OpenRouter's, so this is not the operator's endpoint.
+/// The catalog is OpenRouter's, so this is not the operator's endpoint.
 ///
 /// Suggestions are only offered when OpenRouter is what the agent's turns are
 /// paid through, and the ranking is still OpenRouter's own even then. Pointing
@@ -75,7 +75,7 @@ const KEEP: usize = 4;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, thiserror::Error)]
-pub enum CatalogueError {
+pub enum CatalogError {
     /// Caught here rather than at OpenRouter, which answers this with an empty
     /// list. See the module comment.
     #[error("OpenRouter does not rank models for {asked}; ask for one of: {}", CATEGORIES.join(", "))]
@@ -115,13 +115,13 @@ pub struct RankedModel {
     pub completion_per_million: Option<f64>,
 }
 
-/// OpenRouter's ranked catalogue, with what has already been asked for.
+/// OpenRouter's ranked catalog, with what has already been asked for.
 ///
 /// Cheap to clone behind the `Arc` its owner holds. The mutex is held to read or
 /// replace a cache entry and never across a request, so two dialogs opening at
 /// once make two requests rather than one blocking the other.
 #[derive(Debug)]
-pub struct Catalogue {
+pub struct Catalog {
     base: String,
     http: reqwest::Client,
     cached: Mutex<HashMap<String, Cached>>,
@@ -133,7 +133,7 @@ struct Cached {
     models: Vec<RankedModel>,
 }
 
-impl Catalogue {
+impl Catalog {
     /// Against OpenRouter, which is the only place this data exists.
     pub fn new() -> Self {
         Self::against(DEFAULT_BASE)
@@ -150,10 +150,10 @@ impl Catalogue {
     }
 
     /// The models OpenRouter sees doing this kind of work, most capable first.
-    pub async fn ranked(&self, category: &str) -> Result<Vec<RankedModel>, CatalogueError> {
+    pub async fn ranked(&self, category: &str) -> Result<Vec<RankedModel>, CatalogError> {
         let category = category.trim().to_ascii_lowercase();
         if !CATEGORIES.contains(&category.as_str()) {
-            return Err(CatalogueError::Unsupported { asked: category });
+            return Err(CatalogError::Unsupported { asked: category });
         }
         if let Some(fresh) = self.fresh(&category) {
             return Ok(fresh);
@@ -168,17 +168,17 @@ impl Catalogue {
             .query(&[("category", category.as_str()), ("sort", "intelligence-high-to-low")])
             .send()
             .await
-            .map_err(|err| CatalogueError::Transport {
+            .map_err(|err| CatalogError::Transport {
                 category: category.clone(),
                 detail: err.to_string(),
             })?;
 
         let status = response.status();
         if !status.is_success() {
-            return Err(CatalogueError::Status { category, status: status.as_u16() });
+            return Err(CatalogError::Status { category, status: status.as_u16() });
         }
 
-        let body: Listing = response.json().await.map_err(|err| CatalogueError::Malformed {
+        let body: Listing = response.json().await.map_err(|err| CatalogError::Malformed {
             category: category.clone(),
             detail: err.to_string(),
         })?;
@@ -186,7 +186,7 @@ impl Catalogue {
         let models: Vec<RankedModel> =
             body.data.into_iter().filter_map(RankedModel::from_wire).take(KEEP).collect();
         if models.is_empty() {
-            return Err(CatalogueError::Withdrawn(category));
+            return Err(CatalogError::Withdrawn(category));
         }
 
         self.cached.lock().insert(category, Cached { at: Instant::now(), models: models.clone() });
@@ -200,7 +200,7 @@ impl Catalogue {
     }
 }
 
-impl Default for Catalogue {
+impl Default for Catalog {
     fn default() -> Self {
         Self::new()
     }
@@ -275,7 +275,7 @@ mod tests {
     use axum::routing::get;
     use axum::Router;
 
-    /// Spins a stub catalogue and returns its base URL, the queries it saw, and
+    /// Spins a stub catalog and returns its base URL, the queries it saw, and
     /// how many requests it answered.
     async fn stub(
         answer: impl Fn() -> axum::response::Response + Clone + Send + Sync + 'static,
@@ -336,9 +336,9 @@ mod tests {
     async fn a_use_case_openrouter_does_not_rank_is_refused_without_asking() {
         let (base, _seen, count) = stub(|| listing(two())).await;
 
-        let refused = Catalogue::against(base).ranked("sales").await.unwrap_err();
+        let refused = Catalog::against(base).ranked("sales").await.unwrap_err();
 
-        assert!(matches!(refused, CatalogueError::Unsupported { ref asked } if asked == "sales"));
+        assert!(matches!(refused, CatalogError::Unsupported { ref asked } if asked == "sales"));
         // The whole point: no request was spent finding that out.
         assert_eq!(count.load(Ordering::SeqCst), 0);
         // And the refusal says what may be asked for instead.
@@ -349,7 +349,7 @@ mod tests {
     async fn a_use_case_is_asked_for_by_capability_inside_its_own_pool() {
         let (base, seen, _count) = stub(|| listing(two())).await;
 
-        Catalogue::against(base).ranked("legal").await.unwrap();
+        Catalog::against(base).ranked("legal").await.unwrap();
 
         let query = seen.lock()[0].clone();
         assert_eq!(query["category"], "legal");
@@ -365,7 +365,7 @@ mod tests {
     async fn the_use_case_with_a_slash_in_it_survives_the_query_string() {
         let (base, seen, _count) = stub(|| listing(two())).await;
 
-        Catalogue::against(base).ranked("marketing/seo").await.unwrap();
+        Catalog::against(base).ranked("marketing/seo").await.unwrap();
 
         assert_eq!(seen.lock()[0]["category"], "marketing/seo");
     }
@@ -374,7 +374,7 @@ mod tests {
     async fn a_price_crosses_as_dollars_per_million_and_a_free_model_as_zero() {
         let (base, _seen, _count) = stub(|| listing(two())).await;
 
-        let ranked = Catalogue::against(base).ranked("legal").await.unwrap();
+        let ranked = Catalog::against(base).ranked("legal").await.unwrap();
 
         assert_eq!(ranked[0].id, "openai/gpt-5.6-sol");
         assert_eq!(ranked[0].name, "OpenAI: GPT-5.6 Sol");
@@ -394,7 +394,7 @@ mod tests {
         ]);
         let (base, _seen, _count) = stub(move || listing(unpriced.clone())).await;
 
-        let ranked = Catalogue::against(base).ranked("legal").await.unwrap();
+        let ranked = Catalog::against(base).ranked("legal").await.unwrap();
 
         assert_eq!(ranked[0].prompt_per_million, None);
         assert_eq!(ranked[1].prompt_per_million, None);
@@ -411,7 +411,7 @@ mod tests {
         ]);
         let (base, _seen, _count) = stub(move || listing(ragged.clone())).await;
 
-        let ranked = Catalogue::against(base).ranked("legal").await.unwrap();
+        let ranked = Catalog::against(base).ranked("legal").await.unwrap();
 
         assert_eq!(ranked.len(), 1);
         assert_eq!(ranked[0].id, "vendor/model");
@@ -427,7 +427,7 @@ mod tests {
             .collect::<Vec<_>>());
         let (base, _seen, _count) = stub(move || listing(twenty.clone())).await;
 
-        let ranked = Catalogue::against(base).ranked("legal").await.unwrap();
+        let ranked = Catalog::against(base).ranked("legal").await.unwrap();
 
         assert_eq!(ranked.len(), KEEP);
         assert_eq!(ranked[0].id, "v/m0");
@@ -438,15 +438,15 @@ mod tests {
     #[tokio::test]
     async fn the_same_use_case_is_asked_for_once() {
         let (base, _seen, count) = stub(|| listing(two())).await;
-        let catalogue = Catalogue::against(base);
+        let catalog = Catalog::against(base);
 
-        let first = catalogue.ranked("legal").await.unwrap();
-        let again = catalogue.ranked("  LEGAL  ").await.unwrap();
+        let first = catalog.ranked("legal").await.unwrap();
+        let again = catalog.ranked("  LEGAL  ").await.unwrap();
 
         assert_eq!(first, again);
         assert_eq!(count.load(Ordering::SeqCst), 1);
         // Two use cases are two lists, so the second one is still a request.
-        catalogue.ranked("finance").await.unwrap();
+        catalog.ranked("finance").await.unwrap();
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -456,15 +456,15 @@ mod tests {
     #[tokio::test]
     async fn a_use_case_that_has_been_withdrawn_says_so() {
         let (base, _seen, count) = stub(|| listing(serde_json::json!([]))).await;
-        let catalogue = Catalogue::against(base);
+        let catalog = Catalog::against(base);
 
-        let refused = catalogue.ranked("legal").await.unwrap_err();
+        let refused = catalog.ranked("legal").await.unwrap_err();
 
-        assert!(matches!(refused, CatalogueError::Withdrawn(ref what) if what == "legal"));
+        assert!(matches!(refused, CatalogError::Withdrawn(ref what) if what == "legal"));
         // Nothing empty is cached, so a vendor putting the use case back is one
         // dialog away rather than a restart.
-        assert!(catalogue.fresh("legal").is_none());
-        catalogue.ranked("legal").await.unwrap_err();
+        assert!(catalog.fresh("legal").is_none());
+        catalog.ranked("legal").await.unwrap_err();
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -472,13 +472,13 @@ mod tests {
     async fn a_refusal_from_openrouter_names_the_status_and_is_not_cached() {
         let (base, _seen, count) =
             stub(|| (axum::http::StatusCode::TOO_MANY_REQUESTS, "slow down").into_response()).await;
-        let catalogue = Catalogue::against(base);
+        let catalog = Catalog::against(base);
 
-        let refused = catalogue.ranked("legal").await.unwrap_err();
+        let refused = catalog.ranked("legal").await.unwrap_err();
 
-        assert!(matches!(refused, CatalogueError::Status { status: 429, .. }));
+        assert!(matches!(refused, CatalogError::Status { status: 429, .. }));
         assert!(refused.to_string().contains("legal"));
-        catalogue.ranked("legal").await.unwrap_err();
+        catalog.ranked("legal").await.unwrap_err();
         assert_eq!(count.load(Ordering::SeqCst), 2);
     }
 
@@ -487,9 +487,9 @@ mod tests {
         let (base, _seen, _count) =
             stub(|| axum::Json(serde_json::json!({ "models": [] })).into_response()).await;
 
-        let refused = Catalogue::against(base).ranked("science").await.unwrap_err();
+        let refused = Catalog::against(base).ranked("science").await.unwrap_err();
 
-        assert!(matches!(refused, CatalogueError::Malformed { .. }));
+        assert!(matches!(refused, CatalogError::Malformed { .. }));
         assert!(refused.to_string().contains("science"));
     }
 
@@ -502,18 +502,18 @@ mod tests {
     /// for, silently, and no offline suite would notice. Same shape as the live
     /// halves of `tests/plugins.rs` and `tests/account.rs`.
     ///
-    /// Reaches the internet, authorises nothing and spends nothing.
+    /// Reaches the internet, authorizes nothing and spends nothing.
     ///
     ///   cargo test --manifest-path src-tauri/Cargo.toml \
-    ///     llm::catalogue::tests::every_use_case -- --ignored --nocapture
+    ///     llm::catalog::tests::every_use_case -- --ignored --nocapture
     #[tokio::test]
     #[ignore = "reaches OpenRouter"]
     async fn every_use_case_this_build_believes_in_is_one_openrouter_still_ranks() {
-        let catalogue = Catalogue::new();
+        let catalog = Catalog::new();
         let mut missing = Vec::new();
 
         for use_case in CATEGORIES {
-            match catalogue.ranked(use_case).await {
+            match catalog.ranked(use_case).await {
                 Ok(models) => {
                     println!("{use_case:<14} {}", models[0].id);
                     // Capability ordering is the whole reason this is not the
@@ -529,12 +529,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unreachable_catalogue_names_openrouter_rather_than_a_port() {
+    async fn an_unreachable_catalog_names_openrouter_rather_than_a_port() {
         // Nothing is listening here, and nothing ever will be.
-        let refused =
-            Catalogue::against("http://127.0.0.1:1/v1").ranked("legal").await.unwrap_err();
+        let refused = Catalog::against("http://127.0.0.1:1/v1").ranked("legal").await.unwrap_err();
 
-        assert!(matches!(refused, CatalogueError::Transport { .. }));
+        assert!(matches!(refused, CatalogError::Transport { .. }));
         assert!(refused.to_string().contains("OpenRouter"));
     }
 }

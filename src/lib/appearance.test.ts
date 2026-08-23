@@ -16,7 +16,7 @@ import type { UiScale } from "./prefs";
  * Appearance, as the three things the root element is asked to carry.
  *
  * jsdom resolves no `var()` and does no layout, so nothing here can be asked
- * what colour it drew. What it can be asked is what `styles.css` is keyed on:
+ * what color it drew. What it can be asked is what `styles.css` is keyed on:
  * the `data-surface` attribute, the `--ui-scale` multiplier, and the
  * `color-scheme` the engine reads for its own controls. Those three are the
  * whole contract between this file and the stylesheet, and each has a wrong
@@ -92,7 +92,7 @@ afterEach(() => {
 describe("a webview with no media queries", () => {
   it("reads a light surface rather than throwing", () => {
     // This is jsdom, and the reason the call is optional. An unguarded
-    // `matchMedia` here is not a wrong colour, it is a window that never draws.
+    // `matchMedia` here is not a wrong color, it is a window that never draws.
     withoutMatchMedia();
     expect(prefersDark()).toBe(false);
   });
@@ -145,7 +145,7 @@ describe("what applying an appearance writes", () => {
 
     // The rail is dark in both surfaces and pins its own accents. A `--rail-*`
     // override written from here would look like a design decision, and no
-    // colour assertion in jsdom could ever catch it.
+    // color assertion in jsdom could ever catch it.
     expect(inlineProperties().filter((name) => name.startsWith("--rail"))).toEqual([]);
     expect(document.documentElement.getAttribute("style")).not.toContain("--rail");
   });

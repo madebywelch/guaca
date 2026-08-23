@@ -72,7 +72,7 @@ export function Sidebar({
   const [rowCenters, setRowCenters] = useState<Map<AgentId, number>>(new Map());
   const previousTops = useRef(new Map<AgentId, number>());
 
-  /** The press that has not yet travelled far enough to be a drag. */
+  /** The press that has not yet traveled far enough to be a drag. */
   const press = useRef<{ id: AgentId; x: number; y: number } | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   /**
@@ -103,7 +103,7 @@ export function Sidebar({
   const dragging = drag?.id ?? null;
 
   // One layout pass does two jobs: slide rows that moved, and record where
-  // every row ended up so the travelling message knows where to fly.
+  // every row ended up so the traveling message knows where to fly.
   useLayoutEffect(() => {
     const measure = () => {
       if (!listRef.current) return;

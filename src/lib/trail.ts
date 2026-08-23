@@ -221,7 +221,7 @@ function describe(tool: string, args: Args): Described {
 
     case "schedule": {
       const action = text(args, "action");
-      if (action === "cancel") return { title: "Cancelled a routine", target: null };
+      if (action === "cancel") return { title: "Canceled a routine", target: null };
       if (action === "list") return { title: "Checked its schedule", target: null };
       const what = text(args, "name") ?? text(args, "what");
       return { title: what ? `Scheduled ${clip(what, 40)}` : "Changed its schedule", target: what };
@@ -442,7 +442,7 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
  * the characters. `attach_file` answers `attached brief.md` beside a chip that
  * says "Attached brief.md" and a card drawing brief.md. None of them is wrong;
  * all of them are the line above read back, and nine of those turned a row into
- * a paragraph of grey monospace, which is the shape this was collapsed to get
+ * a paragraph of gray monospace, which is the shape this was collapsed to get
  * away from.
  *
  * A failure is never an echo. Whatever went wrong is not something the title

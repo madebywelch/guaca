@@ -6,7 +6,7 @@
  *
  * - what the operator and that agent said to each other: full bubbles, the
  *   only messages written to be read in full
- * - what the agent exchanged with its peers: one centred line per peer, with
+ * - what the agent exchanged with its peers: one centered line per peer, with
  *   the exchange itself a click away
  * - what the agent did on its own turn: tool trails, guard stops, refusals
  *

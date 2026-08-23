@@ -19,7 +19,7 @@
  * Coordinates are worked out against a fixed {@link WIDTH}, and the drawing is
  * scaled by CSS to whatever room it has. So a "pixel" here is roughly a real
  * one in a transcript and rather more than one in the full view, which is the
- * behaviour a figure should have: opened larger, it is larger.
+ * behavior a figure should have: opened larger, it is larger.
  */
 
 import { MAX_SERIES } from "./palette";
@@ -137,7 +137,7 @@ const NO_READING = "no reading";
 const MAX_SLICES = 6;
 
 /** Under this share, a wedge is too thin to write beside without collisions. */
-const LABELLED_SHARE = 0.04;
+const LABELED_SHARE = 0.04;
 
 /** The width every coordinate below is worked out against. */
 export const WIDTH = 640;
@@ -359,7 +359,7 @@ function trim(value: number): string {
 /**
  * Round numbers a reader can do arithmetic with, spanning the data.
  *
- * The 1-2-5 rule, which is the only tick algorithm anybody recognises: an axis
+ * The 1-2-5 rule, which is the only tick algorithm anybody recognizes: an axis
  * that steps by 37 is technically a fit and practically unreadable.
  */
 export function niceTicks(low: number, high: number, wanted = 5): number[] {
@@ -643,7 +643,7 @@ function cartesian(chart: CartesianChart): CartesianPlot {
 
       // And its fill stops at the series underneath rather than at zero. Every
       // band drawn down to the axis is every band drawn over the one before it,
-      // which at a tenth opacity is a stack whose colours are all mixtures.
+      // which at a tenth opacity is a stack whose colors are all mixtures.
       const under = chart.stacked && at > 0 ? runningTotals(chart, at - 1) : null;
       const floorAt = (band: number) => {
         const below = under?.[band];
@@ -901,7 +901,7 @@ function radial(chart: RadialChart): RadialPlot {
       // Under the threshold the legend and the table carry the name, which they
       // were already doing, and nothing is written on top of anything.
       label:
-        share < LABELLED_SHARE
+        share < LABELED_SHARE
           ? null
           : {
               x: center.x + Math.cos(middle) * out,

@@ -53,7 +53,7 @@ describe("the line drawn from it", () => {
     expect(thoughtNow("They want the total. So 17").line).toBe("They want the total.");
   });
 
-  it("counts a line ended by a newline as finished, full stop or not", () => {
+  it("counts a line ended by a newline as finished, period or not", () => {
     // Reasoning arrives with bullets and fragments in it. A line the model
     // moved on from is a line it finished.
     expect(thoughtNow("- check the totals\n- then the ledger").line).toBe("- check the totals");
@@ -127,7 +127,7 @@ describe("the heading above it", () => {
   });
 
   it("is not a sentence with emphasis in it", () => {
-    // Only a line that is nothing but a heading is one. A model emphasising
+    // Only a line that is nothing but a heading is one. A model emphasizing
     // two words mid-thought is writing prose.
     expect(thoughtNow("I should **check** the totals **now**.")).toEqual({
       heading: "",

@@ -113,7 +113,7 @@ impl Tray {
             .icon(image)
             // macOS tints a template image to match the menu bar, in either
             // appearance and while the bar is highlighted. Giving that up is
-            // the price of the one glyph that has a colour, and `Look` is what
+            // the price of the one glyph that has a color, and `Look` is what
             // decides which of the two this is.
             .icon_as_template(template)
             .title(look.title.clone().unwrap_or_default())
@@ -274,7 +274,7 @@ impl Tray {
 
     /// One click, from a menu item id back to something the runtime does.
     ///
-    /// An id this build does not recognise is ignored. That is not defensive
+    /// An id this build does not recognize is ignored. That is not defensive
     /// padding: the disabled rows carry ids too, and a guess at an unparseable
     /// one is a permission request answered by nobody.
     fn clicked(&self, id: &str) {
@@ -321,7 +321,7 @@ impl Tray {
 
     /// Brings the window back, optionally with one channel open.
     ///
-    /// Shown *and* unminimised *and* focused, because the window can be in any
+    /// Shown *and* unminimized *and* focused, because the window can be in any
     /// of the three states and only one of the three calls fixes each.
     fn reveal(&self, agent: Option<AgentId>) {
         let Some(window) = window(&self.app) else {

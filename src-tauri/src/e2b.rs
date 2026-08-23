@@ -239,7 +239,7 @@ pub struct Output {
 }
 
 impl Output {
-    /// What the model is shown. Both streams, labelled, with the exit code only
+    /// What the model is shown. Both streams, labeled, with the exit code only
     /// when it is not zero: a successful command should read as its output and
     /// nothing else.
     pub fn rendered(&self) -> String {
@@ -573,7 +573,7 @@ impl E2bClient {
                 "xfce4",
                 &format!("env DISPLAY=:0 PATH={LOCAL_BIN}:$PATH startxfce4"),
             ),
-            // x11vnc daemonises itself with -bg, so it is started directly.
+            // x11vnc daemonizes itself with -bg, so it is started directly.
             format!(
                 "pgrep -x x11vnc >/dev/null || x11vnc -bg -display :0 -forever -shared \
                  -rfbport {RAW_VNC_PORT} -nopw >/tmp/guac-x11vnc.log 2>&1 ; sleep 1"
@@ -734,7 +734,7 @@ impl E2bClient {
 ///
 /// Built here rather than inline so the shape can be asserted. E2B accepts
 /// three different casings across this one object and silently ignores a field
-/// it does not recognise: `allow_public_traffic` at the top level is accepted
+/// it does not recognize: `allow_public_traffic` at the top level is accepted
 /// and does nothing, and the sandbox comes back with no traffic token and its
 /// ports open to anyone who learns the id. The nesting below is the form that
 /// actually locks it.
@@ -1907,7 +1907,7 @@ mod tests {
     #[test]
     fn a_new_sandbox_is_created_with_both_locks_and_a_network() {
         // Every one of these has been wrong at least once, and each failure is
-        // silent: E2B accepts an unrecognised field and returns a sandbox with
+        // silent: E2B accepts an unrecognized field and returns a sandbox with
         // no token and its ports wide open.
         let body = create_body("Manager", 900);
         assert_eq!(body["secure"], true, "envd must refuse anonymous commands");

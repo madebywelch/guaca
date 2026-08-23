@@ -44,7 +44,7 @@ pub enum ChatMessage {
 /// What a user turn carries. A plain string for ordinary text, or a list of
 /// parts when one of them is an image.
 ///
-/// Untagged so both forms serialise the way OpenAI-compatible endpoints expect:
+/// Untagged so both forms serialize the way OpenAI-compatible endpoints expect:
 /// a bare string, or the array of `{type: ...}` objects. Sending the array form
 /// for every message would work too, but it is noisier on the wire and some
 /// endpoints handle the string form better.
@@ -1183,7 +1183,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_error_arriving_mid_stream_is_surfaced() {
-        // A 200 followed by an error frame is a real OpenRouter behaviour when
+        // A 200 followed by an error frame is a real OpenRouter behavior when
         // an upstream provider fails after the connection is established.
         let frames = vec![
             text_frame("partial answer"),

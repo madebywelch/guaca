@@ -111,7 +111,7 @@ pub enum UiEvent {
     ///
     /// The whole `Part::ToolCall` rather than the outcome alone, and that is
     /// what makes the chip drawn while a turn runs and the chip drawn
-    /// afterwards the same chip rather than two that agree today. A memory
+    /// afterward the same chip rather than two that agree today. A memory
     /// rewrite carries what it overwrote and nothing outside the runtime could
     /// supply it; the next thing a call has to say for itself will be the same,
     /// and an event listing the fields it happened to need would have to be
@@ -175,7 +175,7 @@ pub enum UiEvent {
         state: ApprovalState,
     },
 
-    /// One agent's schedule changed: it set a routine, edited one, cancelled
+    /// One agent's schedule changed: it set a routine, edited one, canceled
     /// one, or one came due and moved to its next slot.
     ///
     /// Not `AgentsChanged`, which is what this used to borrow. The roster did

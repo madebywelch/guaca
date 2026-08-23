@@ -3,7 +3,7 @@
 //! Stored as JSON next to the database in the platform config directory. The
 //! API key lives here in plaintext, which is worth being blunt about: Guac is
 //! a local, no-auth app, and a key encrypted with a key stored beside it is
-//! theatre. The file is written 0600 and the key is never sent to the webview.
+//! theater. The file is written 0600 and the key is never sent to the webview.
 //! If you want real secret storage, the honest answer is the OS keychain, and
 //! that is a deliberate follow-up rather than something faked here.
 
@@ -22,7 +22,7 @@ pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 ///
 /// Two answers, not one with a flag: a pasted key and a signed-in subscription
 /// differ in the endpoint, the wire protocol, the auth header, the models on
-/// offer and whether a call has a price. Modelling the second as "a base URL
+/// offer and whether a call has a price. Modeling the second as "a base URL
 /// with a different key" would put that whole disagreement behind a string an
 /// operator can type, and the first symptom would be an agent failing on a
 /// parameter nobody set.
@@ -51,7 +51,7 @@ impl Provider {
         }
     }
 
-    /// Reads one back. Anything unrecognised is `None`, which every caller
+    /// Reads one back. Anything unrecognized is `None`, which every caller
     /// already has a meaning for: inherit. A column written by a newer build
     /// must leave a crew running on the app settings rather than refusing to
     /// load the group.
@@ -164,7 +164,7 @@ impl InferenceConfig {
     /// The model the active provider is set to.
     ///
     /// Every reader that is about to make a call wants this rather than either
-    /// field: an agent or a group can still override it afterwards, but the
+    /// field: an agent or a group can still override it afterward, but the
     /// value being overridden has to be the one that belongs to the provider
     /// doing the work.
     pub fn active_model(&self) -> &str {

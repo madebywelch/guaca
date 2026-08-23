@@ -18,7 +18,7 @@
  *   frame. It is the label, so the eye has something to hold on to and the
  *   answer to "what is it doing" survives longer than a glance.
  * - **The line under it is the last sentence that finished.** Nobody reads a
- *   sentence as it is typed. Waiting for the full stop costs a second or two of
+ *   sentence as it is typed. Waiting for the period costs a second or two of
  *   staleness and buys a line that can actually be read.
  *
  * Everything else is behind the disclosure, where it is the model's working as
@@ -41,7 +41,7 @@ const KEPT = 200_000;
  *
  * The heading and the newest finished sentence are always within a paragraph or
  * two of the end, and this is recomputed every time a delta lands. Scanning a
- * whole turn's thinking sixty times a second to find the last full stop in it
+ * whole turn's thinking sixty times a second to find the last period in it
  * is work nobody can see.
  */
 const TAIL = 4000;
@@ -58,7 +58,7 @@ const HEADING = /^(?:#{1,6}\s+(.+)|\*\*([^*]+)\*\*)$/;
  * A terminator followed by a space, a newline, or nothing more yet. The last of
  * those is what lets a sentence settle the moment it is finished rather than
  * when the next one starts, and its price is a decimal point at the very end of
- * the buffer reading as a full stop for one frame.
+ * the buffer reading as a period for one frame.
  */
 const ENDS = /[.!?](?=\s|$)/g;
 
@@ -74,7 +74,7 @@ export interface Thought {
  * Adds what just arrived, keeping the end.
  *
  * Raw, newlines and all: the line boundaries are what say where a heading
- * starts and where a sentence was ended by something other than a full stop,
+ * starts and where a sentence was ended by something other than a period,
  * and a reduction that dropped them ran the end of one thought into the
  * beginning of the next.
  */
@@ -95,7 +95,7 @@ export function thoughtNow(held: string | undefined): Thought {
   const lines = recent(held ?? "").split("\n");
   // Whatever follows the last newline is still being written. Every line before
   // it was finished by the newline that ended it, whether or not it was ended
-  // by a full stop as well.
+  // by a period as well.
   const open = (lines.pop() ?? "").trim();
 
   let heading = "";

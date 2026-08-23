@@ -181,7 +181,7 @@ impl Refusal {
             Refusal::ExchangeSettled { recipient } => format!(
                 "Refused: you and {recipient} have both had your say in this run, neither of you \
                  is waiting on the other, and this message was sent as a courtesy. Acknowledging \
-                 an acknowledgement is not work. Reply to the operator instead, and say there \
+                 an acknowledgment is not work. Reply to the operator instead, and say there \
                  what you still need. If you are giving {recipient} something to do rather than \
                  thanking them, send it again with intent \"work\", saying plainly what you need \
                  done."

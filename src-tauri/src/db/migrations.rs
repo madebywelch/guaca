@@ -902,6 +902,20 @@ INSERT INTO plugin_tool_access (plugin_id, tool, access)
 DROP TABLE plugin_denied_tools;
 "#,
     ),
+    (
+        32,
+        r#"
+-- The one British spelling left in the schema. Every other column this app
+-- wrote is American (`color` has been on `agents` since migration 1), and the
+-- Rust field and the IPC field this column feeds are `recognized` now, so
+-- without this the four statements in `store.rs` name a column spelled the
+-- other way and only positional row access hides it.
+--
+-- A rename, not a rebuild: nothing else references the column, and RENAME
+-- COLUMN leaves every row and the primary key exactly where they are.
+ALTER TABLE signins RENAME COLUMN recognised TO recognized;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1193,6 +1207,46 @@ mod tests {
         let avatar: String =
             conn.query_row("SELECT avatar FROM agents WHERE id='a'", [], |r| r.get(0)).unwrap();
         assert_eq!(avatar, "avocado", "the rename must not drop the value");
+    }
+
+    #[test]
+    fn the_signin_column_is_renamed_and_keeps_its_data() {
+        // The rename is the entire migration, so a row written by an older
+        // build is the only thing that can show it renamed the column rather
+        // than rebuilding the table around it.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 32) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO agents
+             (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,
+              created_at,updated_at,group_id)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0,?1)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO signins
+             (agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at)
+             VALUES ('a','computer','github.com','GitHub',1,7,9)",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let (service, recognized, since): (String, i64, i64) = conn
+            .query_row(
+                "SELECT service,recognized,first_seen_at FROM signins WHERE agent_id='a'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(service, "GitHub", "the rename must not drop the row");
+        assert_eq!(recognized, 1, "nor the value the renamed column was holding");
+        assert_eq!(since, 7, "nor when the sign-in was first seen");
     }
 
     #[test]

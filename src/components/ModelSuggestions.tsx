@@ -63,21 +63,21 @@ export function ModelSuggestions({ name, skills, instructions, model, active, on
       setUnreachable(false);
       return;
     }
-    let cancelled = false;
+    let canceled = false;
     void api
       .rankedModels(useCase)
       .then((models) => {
-        if (cancelled) return;
+        if (canceled) return;
         setRanked(models);
         setUnreachable(false);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (canceled) return;
         setRanked([]);
         setUnreachable(true);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [useCase]);
 

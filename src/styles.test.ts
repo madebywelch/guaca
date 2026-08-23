@@ -8,7 +8,7 @@
  * ordinary dialog. Neither is visible in a DOM assertion and neither is
  * visible in review, so both are asserted here against the cascade itself.
  *
- * Only invariants that survive a redesign belong in this file. A colour, a
+ * Only invariants that survive a redesign belong in this file. A color, a
  * spacing or a font size is a decision, not a rule, and locking one down here
  * would make changing your mind a test failure.
  */

@@ -36,11 +36,11 @@ def ellipse(x: float, y: float, cx: float, cy: float, rx: float, ry: float) -> b
 
 
 def sample(x: float, y: float) -> tuple[int, int, int, int]:
-    """Colour at one sub-pixel position."""
+    """Color at one sub-pixel position."""
     if not rounded_rect(x, y, SIZE, SIZE, SIZE * 0.225):
         return (0, 0, 0, 0)
 
-    # The avocado sits slightly high so the pit reads as the optical centre.
+    # The avocado sits slightly high so the pit reads as the optical center.
     cx, cy = SIZE * 0.5, SIZE * 0.52
     if ellipse(x, y, cx, cy, SIZE * 0.30, SIZE * 0.365):
         if ellipse(x, y, cx, cy, SIZE * 0.235, SIZE * 0.295):
@@ -66,7 +66,7 @@ def render() -> bytes:
                 for sx in range(SUPERSAMPLE):
                     xx = px + offset + sx * step
                     cr, cg, cb, ca = sample(xx, yy)
-                    # Premultiply so transparent samples do not drag colour in.
+                    # Premultiply so transparent samples do not drag color in.
                     r += cr * ca
                     g += cg * ca
                     b += cb * ca

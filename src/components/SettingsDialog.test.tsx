@@ -475,7 +475,7 @@ describe("what a save sends", () => {
     expect(sentPatch().browserIdleMinutes).toBe(5);
   });
 
-  it("clears the API key box afterwards and leaves every other box alone", async () => {
+  it("clears the API key box afterward and leaves every other box alone", async () => {
     open();
     pane("Provider");
     type(/^API key/, "sk-or-v1-typed");
@@ -651,7 +651,7 @@ describe("the provider presets", () => {
     expect(preset("OpenRouter").getAttribute("aria-current")).toBe("true");
     expect(preset("OpenAI").getAttribute("aria-current")).toBe("false");
 
-    // A hand-typed endpoint is chosen, not unrecognised, so nothing is marked.
+    // A hand-typed endpoint is chosen, not unrecognized, so nothing is marked.
     type(/^Inference endpoint/, "https://gateway.example/v1");
     expect(preset("OpenRouter").getAttribute("aria-current")).toBe("false");
   });
@@ -942,7 +942,7 @@ describe("the ChatGPT subscription", () => {
  * The thing worth testing here is that it is optional and behaves like it. An
  * install that never opens this pane must never reach the service, a sign-in
  * that fails must leave the pane signed out rather than half linked, and a
- * service that no longer recognises a stored sign-in has to redraw as signed
+ * service that no longer recognizes a stored sign-in has to redraw as signed
  * out rather than as an account with an empty list under it.
  */
 describe("the Guaca account", () => {
@@ -1208,7 +1208,7 @@ describe("notifications", () => {
     expect(banner().className).toContain("banner--error");
   });
 
-  it("sends something recognisable when the machine allows it", async () => {
+  it("sends something recognizable when the machine allows it", async () => {
     open();
     pane("Notifications");
     fireEvent.click(screen.getByRole("button", { name: "Send a test notification" }));

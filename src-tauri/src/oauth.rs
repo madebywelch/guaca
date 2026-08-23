@@ -15,20 +15,20 @@
 //! before an operator can use it.
 //!
 //! The device flow is not available here anyway. None of the servers on the
-//! list advertises it, and the MCP authorisation spec mandates authorisation
+//! list advertises it, and the MCP authorization spec mandates authorization
 //! code with PKCE, so this is the flow or there is no flow.
 //!
 //! ## The order of the dance
 //!
-//! 1. Ask the resource who can authorise for it (RFC 9728).
-//! 2. Ask that authorisation server where its endpoints are (RFC 8414).
+//! 1. Ask the resource who can authorize for it (RFC 9728).
+//! 2. Ask that authorization server where its endpoints are (RFC 8414).
 //! 3. Bind a loopback port.
 //! 4. Register as a client that redirects to it (RFC 7591).
-//! 5. Send the operator to the authorisation endpoint with a PKCE challenge.
+//! 5. Send the operator to the authorization endpoint with a PKCE challenge.
 //! 6. Catch the redirect, check the state, trade the code for a grant.
 //!
 //! Steps 1 and 2 are [`discover`], and every one of their fallbacks is a real
-//! server rather than defensiveness. Stripe's authorisation server is
+//! server rather than defensiveness. Stripe's authorization server is
 //! `https://access.stripe.com/mcp`, and RFC 8414 says the well-known segment
 //! goes *before* that path; Linear publishes its resource metadata under the
 //! endpoint's path and Neon's under the bare one. Getting any of those wrong is
@@ -84,7 +84,7 @@ pub enum OauthError {
     NoBrowser { detail: String },
     #[error("nothing came back from your browser within five minutes; the sign-in was abandoned")]
     TimedOut,
-    /// The operator pressed Cancel, or the authorisation server refused.
+    /// The operator pressed Cancel, or the authorization server refused.
     #[error("the sign-in was refused: {error}{}", .description.as_deref().map(|d| format!(" — {d}")).unwrap_or_default())]
     Refused { error: String, description: Option<String> },
     /// The redirect did not match the request that started it. Treated as an
@@ -226,7 +226,7 @@ pub struct Discovered {
     pub issuer: String,
     pub server: ServerMetadata,
     /// What the *resource* said it wants asked for, which is not the same list
-    /// as the authorisation server's and takes precedence over it. See
+    /// as the authorization server's and takes precedence over it. See
     /// [`Discovered::requested_scope`].
     pub resource_scopes: Vec<String>,
 }
@@ -306,7 +306,7 @@ async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<Resourc
     Some(Resource { issuer, scopes: metadata.scopes_supported })
 }
 
-/// RFC 8414 authorisation-server metadata, as far as this build reads it.
+/// RFC 8414 authorization-server metadata, as far as this build reads it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerMetadata {
     pub authorization_endpoint: String,
@@ -395,7 +395,7 @@ impl Discovered {
     ///
     /// Two documents publish one and they are not the same list. The resource's
     /// (RFC 9728) is the scopes used to request access to *that resource*; the
-    /// authorisation server's (RFC 8414) is everything the issuer can grant,
+    /// authorization server's (RFC 8414) is everything the issuer can grant,
     /// across every resource behind it and for clients it created by hand as
     /// well as ones that registered themselves. So the resource's is asked for
     /// when there is one, and the server's is the fallback for the resource
@@ -407,7 +407,7 @@ impl Discovered {
     /// and refuses a registered client that asks for them: `invalid_scope`, on
     /// a vendor's error page, where nothing here can explain it.
     ///
-    /// `offline_access` is the one addition, and only when the authorisation
+    /// `offline_access` is the one addition, and only when the authorization
     /// server names it. It is not access to anything: it is the scope that
     /// decides whether a refresh token comes back, and without one a plugin
     /// works until the access token expires and then asks to be signed in
@@ -727,7 +727,7 @@ pub(crate) fn encode(raw: &str) -> String {
 }
 
 /// The inverse, for what comes back on the redirect. `+` is a space here
-/// because that is what a form-encoded query means by it, and an authorisation
+/// because that is what a form-encoded query means by it, and an authorization
 /// code containing one would otherwise be exchanged with a plus in it.
 fn decode(raw: &str) -> String {
     let bytes = raw.as_bytes();
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn a_plus_in_a_redirect_is_a_space_and_not_a_plus() {
-        // Query strings are form-encoded on the way back. An authorisation code
+        // Query strings are form-encoded on the way back. An authorization code
         // is opaque, so a wrong reading here fails at the token endpoint with
         // "invalid grant" and nothing says why.
         assert_eq!(decode("one+two"), "one two");
@@ -816,7 +816,7 @@ mod tests {
     #[test]
     fn metadata_addresses_put_the_well_known_segment_before_the_path() {
         // The part of RFC 8414 that is most often got wrong, and the reason
-        // Stripe's authorisation server is found at all: its issuer is
+        // Stripe's authorization server is found at all: its issuer is
         // `https://access.stripe.com/mcp`, and the first form below is the only
         // one of the three that answers.
         assert_eq!(
@@ -882,7 +882,7 @@ mod tests {
     }
 
     #[test]
-    fn the_resource_decides_what_is_asked_for_and_not_its_authorisation_server() {
+    fn the_resource_decides_what_is_asked_for_and_not_its_authorization_server() {
         // AgentMail, exactly as the two documents read today. Its MCP server
         // wants three scopes; the Clerk instance behind it can issue seven and
         // refuses a registered client that asks for the other four, with an

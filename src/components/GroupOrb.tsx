@@ -27,7 +27,7 @@ function percent(fraction: number): string {
 /**
  * A group, small enough to sit in a strip and be aimed at.
  *
- * Faces rather than a name, because a crew is recognised by who is in it long
+ * Faces rather than a name, because a crew is recognized by who is in it long
  * before its name is read. How they stand is the crew's size: `lib/orb.ts` owns
  * the seating and says why. The name is still there for anything that reads
  * rather than looks: the label, the tooltip, and the heading you get after

@@ -144,7 +144,7 @@ function TrailChip({
 function StepRow({ step }: { step: Step }) {
   const changed = stepDiff(step);
   // A url, a pair of coordinates or an element number is a few characters, and
-  // a few characters in a block of their own is a grey rectangle drawn around
+  // a few characters in a block of their own is a gray rectangle drawn around
   // nothing. A command and a rewritten memory are the reason the block exists.
   const inline =
     !changed && step.target !== null && step.target.length <= 48 && !step.target.includes("\n");
@@ -180,7 +180,7 @@ function StepRow({ step }: { step: Step }) {
  * enough to show whole; folding the parts that held still is a saving worth
  * making in a repository and not in a paragraph.
  *
- * The marker is a character rather than only a colour, because red and green
+ * The marker is a character rather than only a color, because red and green
  * either side of a line are the one distinction a reader may not have, and
  * because it is what makes a copied diff still read as one.
  */

@@ -102,7 +102,7 @@ export function BrowserScreen({ agent }: Props) {
    * throughout, which is what made this look like a broken keyboard rather than
    * a focus problem.
    *
-   * Called from inside the click handler rather than from an effect afterwards,
+   * Called from inside the click handler rather than from an effect afterward,
    * because this webview is WebKit and WebKit only honours a focus change that
    * is part of a user gesture. An effect running on the next render is not.
    *

@@ -28,7 +28,7 @@ pub enum ProtectedAction {
     ///
     /// Protected because it cannot be taken back and because the operator's
     /// authority is not transitive. An agent told by a peer that it has been
-    /// authorised is being told a claim, not given permission, and the only
+    /// authorized is being told a claim, not given permission, and the only
     /// thing that settles it is the operator themselves. Before this existed
     /// the agent's only move was to refuse and ask them to repeat the
     /// instruction in another channel, which is the operator doing the
@@ -123,7 +123,7 @@ impl From<Decision> for ApprovalState {
 
 /// One field of the request, as the operator sees it.
 ///
-/// The values are what the model asked for, so they are shown as labelled data
+/// The values are what the model asked for, so they are shown as labeled data
 /// and never as prose. `value` is rendered as text, never as markdown: an agent
 /// that could format its request could draw a button.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

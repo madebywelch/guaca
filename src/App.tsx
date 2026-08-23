@@ -105,7 +105,7 @@ export default function App() {
     // first cleanup finds `unlisten` still undefined, and every stream delta is
     // then applied by two listeners. That renders as text interleaved with
     // itself, which looks like a model bug rather than a subscription bug.
-    let cancelled = false;
+    let canceled = false;
 
     void (async () => {
       // Subscribe before the first read so nothing that happens during startup
@@ -114,7 +114,7 @@ export default function App() {
         applyEvent(event);
         announce(event);
       });
-      if (cancelled) {
+      if (canceled) {
         stop();
         return;
       }
@@ -132,12 +132,12 @@ export default function App() {
       } catch (error) {
         setBanner({ tone: "error", text: errorMessage(error) });
       } finally {
-        if (!cancelled) setReady(true);
+        if (!canceled) setReady(true);
       }
     })();
 
     return () => {
-      cancelled = true;
+      canceled = true;
       unlisten?.();
     };
   }, [announce, applyEvent, bootstrap, setBanner]);
@@ -148,13 +148,13 @@ export default function App() {
   // thing in the channel that raised it.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    let cancelled = false;
+    let canceled = false;
 
     void (async () => {
       const stop = await onRevealRequest((agent) => {
         void select(agent);
       });
-      if (cancelled) {
+      if (canceled) {
         stop();
         return;
       }
@@ -162,7 +162,7 @@ export default function App() {
     })();
 
     return () => {
-      cancelled = true;
+      canceled = true;
       unlisten?.();
     };
   }, [select]);

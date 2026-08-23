@@ -13,7 +13,7 @@ import { Markdown } from "./Markdown";
  * operator's own conversation is buried under machine chatter they were never
  * meant to read line by line.
  *
- * So a burst of peer traffic becomes a single centred line naming who was
+ * So a burst of peer traffic becomes a single centered line naming who was
  * talking and how much of it there was, and the exchange itself is one click
  * away as a thread. Full bubbles are reserved for the two things actually
  * addressed to the operator: what they said, and what an agent said back.
@@ -346,7 +346,7 @@ export function AsideRow({ text }: { text: string }) {
 }
 
 /**
- * A centred system line: guard stops, upstream failures, lifecycle notes.
+ * A centered system line: guard stops, upstream failures, lifecycle notes.
  *
  * `onRetry` is offered only where trying again could plausibly work. The
  * runtime has already retried a failed call several times by the time one of

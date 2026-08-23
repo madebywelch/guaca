@@ -11,7 +11,7 @@ import type {
 } from "../lib/types";
 import { PluginList } from "./PluginList";
 
-const pluginCatalogue = vi.fn<() => Promise<PluginOffer[]>>();
+const pluginCatalog = vi.fn<() => Promise<PluginOffer[]>>();
 const groupPlugins = vi.fn<() => Promise<Plugin[]>>();
 const connectPlugin =
   vi.fn<(groupId: string, kind: string, connection?: string) => Promise<Plugin>>();
@@ -22,7 +22,7 @@ const openExternal = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
   api: {
-    pluginCatalogue: () => pluginCatalogue(),
+    pluginCatalog: () => pluginCatalog(),
     groupPlugins: () => groupPlugins(),
     accountConnectors: () => accountConnectors(),
     connectPlugin: (groupId: string, kind: string, connection?: string) =>
@@ -124,14 +124,14 @@ const CREW = [member("a1", "Revenue"), member("a2", "Scribe")];
 
 describe("PluginList", () => {
   beforeEach(() => {
-    pluginCatalogue.mockReset();
+    pluginCatalog.mockReset();
     groupPlugins.mockReset();
     connectPlugin.mockReset();
     disconnectPlugin.mockReset();
     setPluginAccess.mockReset();
     setPluginTool.mockReset();
     openExternal.mockReset();
-    pluginCatalogue.mockResolvedValue(OFFERS);
+    pluginCatalog.mockResolvedValue(OFFERS);
     groupPlugins.mockResolvedValue([]);
   });
 
@@ -499,7 +499,7 @@ describe("choosing which account a crew uses", () => {
   const one: AccountConnectors = { ...two, connections: [two.connections[0]!] };
 
   beforeEach(() => {
-    pluginCatalogue.mockResolvedValue([GOOGLE_OFFER]);
+    pluginCatalog.mockResolvedValue([GOOGLE_OFFER]);
   });
 
   it("says which account it acts as, without an inert picker, when there is one", async () => {

@@ -86,7 +86,7 @@ describe("FileCard", () => {
     expect(revoked).toEqual([made[0]]);
   });
 
-  it("says a document could not be read rather than leaving a grey box", async () => {
+  it("says a document could not be read rather than leaving a gray box", async () => {
     fetched.mockResolvedValue({ ok: false, status: 404, blob: async () => new Blob([]) });
     render(<FileCard file={file("missing.pdf", "application/pdf")} />);
 

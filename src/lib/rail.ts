@@ -119,7 +119,7 @@ export function railOrder(agents: AgentCard[], options: RailOptions): AgentCard[
  *
  * Read off two positions rather than measured against a pointer. A row's
  * midpoint is geometry a test cannot see and a hand cannot aim at; the
- * direction the row travelled says which side of the target it belongs on.
+ * direction the row traveled says which side of the target it belongs on.
  * Dragging down puts it after what it passed, dragging up puts it in front,
  * which is what both look like while the drag is happening.
  *

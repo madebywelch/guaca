@@ -16,7 +16,7 @@
 //! whatever the operator holds a token for. A plugin is a service that
 //! publishes tools, and the list is short on purpose.
 //!
-//! ## Why the catalogue is short and lives in Rust
+//! ## Why the catalog is short and lives in Rust
 //!
 //! The old list was twelve brands and a text box, which asked the operator to
 //! know four things about a token they had: the variable it belongs in, the
@@ -31,7 +31,7 @@
 //! live vendors.
 //!
 //! It is in Rust rather than in the webview because the runtime is what makes
-//! the call. The old catalogue could live in the front end precisely because
+//! the call. The old catalog could live in the front end precisely because
 //! the backend had no opinion: it stored whatever service name it was handed.
 //! An endpoint the runtime dials is not that, and a second copy of it in the
 //! webview would be a second place for it to be wrong.
@@ -113,7 +113,7 @@ impl PluginKind {
     /// has no path and the other four do, and each is the identifier that
     /// vendor publishes in its own protected-resource metadata. A tidier
     /// `format!("{host}/mcp")` would be a resource the server does not
-    /// recognise, and the refusal arrives in the operator's browser.
+    /// recognize, and the refusal arrives in the operator's browser.
     ///
     /// Cloudflare publishes two kinds of server, and this is the account-wide
     /// one. The fifteen `*.mcp.cloudflare.com` hosts are one product area each,
@@ -145,8 +145,8 @@ impl PluginKind {
     /// one separately because there is nothing else it could do. Google is not
     /// a server: it is the operator's own account at `guaca.bot`, which already
     /// holds the grant and already refreshes it. Running a second OAuth dance
-    /// for it would send an operator to a consent screen to authorise something
-    /// they authorised when they signed in, and would leave a per-group grant
+    /// for it would send an operator to a consent screen to authorize something
+    /// they authorized when they signed in, and would leave a per-group grant
     /// beside a per-account one for the same access, expiring on its own clock.
     ///
     /// So the sign-in is the account's and the *decision to use it* stays the
@@ -172,7 +172,7 @@ impl PluginKind {
         }
     }
 
-    /// Where the operator can read what they are about to authorise.
+    /// Where the operator can read what they are about to authorize.
     pub const fn docs(self) -> &'static str {
         match self {
             PluginKind::Neon => "https://neon.com/docs/ai/neon-mcp-server",
@@ -208,7 +208,7 @@ pub struct PluginOffer {
     pub account_backed: bool,
 }
 
-pub fn catalogue() -> Vec<PluginOffer> {
+pub fn catalog() -> Vec<PluginOffer> {
     PluginKind::ALL
         .into_iter()
         .map(|kind| PluginOffer {
@@ -332,7 +332,7 @@ pub enum PluginAccess {
 /// widens a plugin past its named agents.
 ///
 /// Compared rather than parsed, in SQL and here, so that a value neither side
-/// recognises reads as a restriction rather than as an opening. A permission
+/// recognizes reads as a restriction rather than as an opening. A permission
 /// that cannot be read must fail closed: the crew loses a plugin, which the
 /// operator can see and fix, rather than gaining one nobody chose.
 pub const ACCESS_EVERYONE: &str = "everyone";
@@ -380,7 +380,7 @@ impl PluginAccess {
 
 /// A plugin a group has connected.
 ///
-/// Serialisable in full: there is no grant on it. The tokens live in the store
+/// Serializable in full: there is no grant on it. The tokens live in the store
 /// and only ever leave it onto the wire to the server they came from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -390,7 +390,7 @@ pub struct Plugin {
     pub group_id: GroupId,
     pub kind: PluginKind,
     /// Who the grant turned out to be for, when the server said. Often blank:
-    /// an MCP server is under no obligation to name the account it authorised,
+    /// an MCP server is under no obligation to name the account it authorized,
     /// and inventing a label would be worse than an empty one.
     pub account: String,
     /// Every tool this server published, each with who may call it. The schemas
@@ -412,7 +412,7 @@ pub struct Plugin {
     /// and a personal one — and those are two grants with two ids; this is how
     /// one group says which of them it means while another says the other.
     pub connection: String,
-    /// False for a server that authorised nothing because it asked for nothing.
+    /// False for a server that authorized nothing because it asked for nothing.
     /// Every server on the list today asks, so this is true in practice; it is
     /// read off whether a grant was actually issued rather than off the fact
     /// that connecting succeeded, because a server that stops asking must not
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn every_kind_is_offered_exactly_once() {
-        let offered = catalogue();
+        let offered = catalog();
         assert_eq!(offered.len(), PluginKind::ALL.len());
         for kind in PluginKind::ALL {
             assert_eq!(offered.iter().filter(|o| o.kind == kind).count(), 1);

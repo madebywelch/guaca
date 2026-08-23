@@ -64,7 +64,7 @@ peer rather than "5 messages with 2 agents".
 summaries are the line above read back in the runtime's words: `browse` answers
 `read in the browser`, `update_notes` answers with a character count printed
 directly over the characters. Nine of those turned a row into a paragraph of
-grey monospace. So the summary earns its place when the call went wrong, or when
+gray monospace. So the summary earns its place when the call went wrong, or when
 the call has nothing else to show and the summary is the whole of what came
 back: `2 agents: Chef, Scribe` is the answer to a directory lookup, not a
 restatement of it. Everything else is one click away, where an exit code is
@@ -97,7 +97,7 @@ have nothing to compare against and draw as they always did.
 Every unchanged line is kept, unlike a patch. A page is short enough to show
 whole, and an operator opening this has a second question the changed lines
 alone do not answer: not only what the agent changed its mind about, but what it
-now believes. The marker in the gutter is a character rather than only a colour,
+now believes. The marker in the gutter is a character rather than only a color,
 because red and green either side of a line are the one distinction a reader may
 not have, and because it is what makes a diff copied out of the window still
 read as one. How much moved is said in words, in the place the runtime's own
@@ -179,11 +179,11 @@ that is a red box under every figure for a second, which teaches an operator the
 feature is broken. `looksComplete` counts braces outside strings; until they
 balance, the figure says it is still drawing.
 
-## A chart's colours are the output of a check, not a decision
+## A chart's colors are the output of a check, not a decision
 
-Every other colour in `styles.css` is a judgement somebody can revise. The eight
-series hues are not. What makes a chart readable to a red-green colourblind
-operator is that *neighbouring* slots stay far apart, because neighbours are
+Every other color in `styles.css` is a judgment somebody can revise. The eight
+series hues are not. What makes a chart readable to a red-green colorblind
+operator is that *neighboring* slots stay far apart, because neighbors are
 what touch in a stack, sit side by side in a group and cross in a line chart,
 and no one can check that by looking.
 
@@ -201,7 +201,7 @@ and a hex nudged because a screenshot looked slightly off fails the suite. That
 is the intended experience.
 
 **Nine hues is not an option.** A generated ninth is indistinguishable from one
-of the eight under colourblindness, so a ninth series is refused with the fix in
+of the eight under colorblindness, so a ninth series is refused with the fix in
 the sentence: fold the tail into an "Other". A pie past six wedges folds itself,
 because past six nobody is comparing them, they are reading the big ones and the
 remainder.
@@ -383,7 +383,7 @@ it would move the row to the bottom of the rail.
 
 Which side of the target it lands on is read off two positions rather than
 measured against the pointer. A row's midpoint is geometry a test cannot see and
-a hand cannot aim at; the direction the row travelled says which side it belongs
+a hand cannot aim at; the direction the row traveled says which side it belongs
 on, and dragging down past something and dragging up onto it are exactly what
 those two look like while they are happening.
 
@@ -407,7 +407,7 @@ either view. Neither view gives them a heading: everybody drawn under a crew is
 in that crew already, and a heading over one or two rows would divide nothing.
 The mark on the row is what says which rows are pinned.
 
-The circles are faces, not names. A crew is recognised by who is in it long
+The circles are faces, not names. A crew is recognized by who is in it long
 before its name is read, and four of these have to fit across a rail that is
 15.5rem wide.
 
@@ -672,7 +672,7 @@ models people actually send that work to, and capability orders the pool. Every
 row carries its price, because capability ordering ignores price and the most
 capable model in a pool is regularly the dearest thing in it: a one-click swap
 that hid the number would be a one-click way to make every turn forty times
-dearer. `llm/catalogue.rs` has the rest, including why the twelve are checked
+dearer. `llm/catalog.rs` has the rest, including why the twelve are checked
 before a request is spent rather than after.
 
 ## A duplicate copies the card and nothing an agent went and did
@@ -767,7 +767,7 @@ two accents it draws with on `.rail` itself. That last part is load-bearing: the
 rail reads `--flesh` in twelve rules and `--flesh-soft` in two, so a dark value
 for either would have repainted it silently and no test in this repo would have
 caught it. Pinning them on the one element every rail rule descends from turns
-the rail into a colour scope instead of a naming convention.
+the rail into a color scope instead of a naming convention.
 
 `system` is resolved before it reaches the document, so `data-surface` is only
 ever `light` or `dark`. A rule keyed on `system` would have to duplicate the one
@@ -799,7 +799,7 @@ So "away" is not one condition, because the four kinds are not the same news.
 - **A permission request** blocks a turn until it is answered. It reaches the
   operator when the window is not in front of them, *and* when it is but the
   request belongs to a channel they are not looking at. Nobody finds a parked
-  turn by noticing a row change colour three screens up the rail.
+  turn by noticing a row change color three screens up the rail.
 - **A routine firing** was addressed to nobody and implies no channel: it goes
   where it was pointed, which is almost never where the operator is. It reaches
   them whenever they are away, with no channel to match against.
@@ -827,14 +827,14 @@ is gone in four seconds, and the turn is still parked.
 
 So there is a presence in the menu bar, and it has four channels doing four
 jobs. `menubar.rs` decides all of it and `tray.rs` draws it, which is what makes
-every judgement below arguable in a test rather than by squinting at a corner of
+every judgment below arguable in a test rather than by squinting at a corner of
 the screen.
 
 - **The glyph** is state without being looked at. An outline when nothing is
   running, filled when something is, and warm red when an agent is blocked on
   you. That last one is the only glyph that is not a template image, and giving
   up the menu bar's own light-and-dark tinting is the price of it: macOS tints a
-  template image to match the bar, so a template glyph cannot have a colour.
+  template image to match the bar, so a template glyph cannot have a color.
   Worth paying exactly once, for the one state that must not be missed.
 - **The title** is the count of turns waiting on you, and nothing else. Menu bar
   width is shared with every other app on the machine. A number that is always

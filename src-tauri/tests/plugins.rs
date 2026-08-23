@@ -8,8 +8,8 @@
 //!
 //! Everything below goes through the real `oauth`, `mcp`, `plugins` and store
 //! code. What is scripted is the far side: a server that publishes RFC 9728
-//! protected-resource metadata, RFC 8414 authorisation-server metadata, an
-//! RFC 7591 registration endpoint, an authorisation endpoint, a token endpoint
+//! protected-resource metadata, RFC 8414 authorization-server metadata, an
+//! RFC 7591 registration endpoint, an authorization endpoint, a token endpoint
 //! and an MCP endpoint. That is the whole surface an operator's Neon account is
 //! on the other side of.
 //!
@@ -45,7 +45,7 @@ const NOBODY: PluginAccess = PluginAccess::Chosen { agents: Vec::new() };
 /// How the scripted server behaves. Every field is something a real one does.
 #[derive(Debug, Clone)]
 struct Rules {
-    /// False is a server that authorises everybody and asks for nothing. None
+    /// False is a server that authorizes everybody and asks for nothing. None
     /// of the five on the list does today, and the row must not claim a
     /// sign-in if one starts.
     needs_token: bool,
@@ -160,7 +160,7 @@ async fn authorization_server(State(server): State<Server>) -> impl IntoResponse
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         // Neon publishes exactly this. The wildcard has to be filtered out on
-        // the way into the authorisation URL, and this is where that is proved.
+        // the way into the authorization URL, and this is where that is proved.
         "scopes_supported": ["read", "write", "*"],
     });
     if server.rules.registers {
@@ -314,7 +314,7 @@ async fn rpc(
         .into_response()
 }
 
-/// Plays the browser: visits the authorisation page, then calls the app back.
+/// Plays the browser: visits the authorization page, then calls the app back.
 ///
 /// Both halves matter. Visiting the page is what puts the PKCE challenge and
 /// the scope in front of the scripted server's assertions; calling back is what
@@ -427,9 +427,9 @@ fn crew(store: &Store, group: GroupId, name: &str) -> AgentId {
 
 #[tokio::test]
 async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_browser() {
-    // An operator sent to authorise a server that authorises everybody is a
+    // An operator sent to authorize a server that authorizes everybody is a
     // consent prompt for nothing, and the row would claim a sign-in that never
-    // happened. No vendor on the list is public today; this is the behaviour if
+    // happened. No vendor on the list is public today; this is the behavior if
     // one becomes it, and the live test is what would say so.
     let server = serve(Rules { needs_token: false, ..Default::default() }).await;
     let (_dir, store, group, _agent) = workspace();
@@ -445,7 +445,7 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
     .await
     .expect("a public server connects");
 
-    assert!(!plugin.signed_in, "nothing was authorised, so nothing may claim to have been");
+    assert!(!plugin.signed_in, "nothing was authorized, so nothing may claim to have been");
     let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
     assert_eq!(named, vec!["run_sql", "list_projects"]);
     assert!(
@@ -479,7 +479,7 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
     // this checks the row it would have come from.
     let held = store.group_plugins(group).unwrap();
     let json = serde_json::to_string(&held).unwrap();
-    assert!(!json.contains("access-0"), "a grant must not be serialisable to the webview: {json}");
+    assert!(!json.contains("access-0"), "a grant must not be serializable to the webview: {json}");
     assert!(!json.contains("refresh-token"));
     assert!(!json.contains("must-not-be-sent"));
 }
@@ -872,7 +872,7 @@ mod account_backed {
 /// this repository also wrote, so the two agree by construction. The failure
 /// worth catching is the one where they stop agreeing with the service: a
 /// header the Worker does not read, a content type Guaca does not sniff, a
-/// session id one side invents. It reaches the network, authorises nothing and
+/// session id one side invents. It reaches the network, authorizes nothing and
 /// spends nothing.
 ///
 /// Needs an account token, because the sign-in behind one is a browser and a
@@ -905,8 +905,8 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
     .await
     .expect("the account token should connect");
 
-    // A grant with nothing authorised offers nothing, which is a real state and
-    // not a failure: it means the operator has not authorised Google yet.
+    // A grant with nothing authorized offers nothing, which is a real state and
+    // not a failure: it means the operator has not authorized Google yet.
     let offered: Vec<&str> = plugin.tools.iter().map(|card| card.name.as_str()).collect();
     println!("connected with {} tool(s): {offered:?}", offered.len());
 
@@ -1316,7 +1316,7 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
         results.iter().any(|r| r.contains("not for you") && r.contains("peer")),
         "got {results:?}"
     );
-    assert!(server.called.lock().is_empty(), "an unauthorised call must not reach the vendor");
+    assert!(server.called.lock().is_empty(), "an unauthorized call must not reach the vendor");
     assert_eq!(h.channel_texts("Scribe").len(), 2, "the operator is answered either way");
 }
 
@@ -1678,19 +1678,19 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
 /// What the vendors on the list actually publish, right now.
 ///
 /// Everything above is a stub agreeing with what this app believes MCP
-/// authorisation looks like, and the failure worth catching is that belief
+/// authorization looks like, and the failure worth catching is that belief
 /// going stale: a vendor can move an endpoint, stop offering dynamic client
 /// registration, or start requiring a token on a server that used to be open,
 /// and every offline test here keeps passing while no operator can connect.
 ///
 /// Discovery is `oauth::discover`, the same call a sign-in makes, rather than
 /// metadata URLs rebuilt beside it. A test with its own copy of RFC 8414 passes
-/// on a vendor this build cannot reach: Stripe's authorisation server is
+/// on a vendor this build cannot reach: Stripe's authorization server is
 /// `https://access.stripe.com/mcp`, and the well-known segment goes before that
 /// path, not after it.
 ///
 /// Run with `./scripts/plugins.sh`. It reaches the real internet and spends
-/// nothing: no account is authorised and no tool is called.
+/// nothing: no account is authorized and no tool is called.
 #[tokio::test]
 #[ignore = "reaches the real vendors; run ./scripts/plugins.sh"]
 async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
@@ -1704,7 +1704,7 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
         let challenge = match &opened {
             Ok(session) => {
                 let tools = guac_lib::mcp::list_tools(session).await.unwrap_or_else(|err| {
-                    panic!("{} authorised us and then refused a tool list: {err}", kind.label())
+                    panic!("{} authorized us and then refused a tool list: {err}", kind.label())
                 });
                 assert!(!tools.is_empty(), "{} offered no tools", kind.label());
                 println!("{}: open, {} tools", kind.label(), tools.len());
@@ -1741,7 +1741,7 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
         // 4. And that the scope this build would send is one the vendor
         //    publishes. Everything above passed while AgentMail refused every
         //    sign-in: Guaca asked its Clerk instance for all seven scopes the
-        //    *authorisation server* lists, and four of those are ones a
+        //    *authorization server* lists, and four of those are ones a
         //    registered client may not have. Discovery is not the only thing
         //    that goes stale, and `invalid_scope` arrives in the operator's
         //    browser where no error message can reach it.
@@ -1751,7 +1751,7 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
                 found.server.scopes_supported.iter().any(|s| s == scope)
             } else {
                 // `offline_access` is the one this build adds, and only ever on
-                // the authorisation server's say-so.
+                // the authorization server's say-so.
                 found.resource_scopes.iter().any(|s| s == scope)
                     || (scope == "offline_access"
                         && found.server.scopes_supported.iter().any(|s| s == scope))

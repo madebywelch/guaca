@@ -3,7 +3,7 @@
  *
  * Both are one write to the root element, because both are already expressed in
  * `styles.css` as one thing: every size in the stylesheet is a `rem`, so scale
- * is a root font size, and every colour the reading column uses is a custom
+ * is a root font size, and every color the reading column uses is a custom
  * property, so the surface is a token block behind an attribute.
  *
  * The rail is not part of either question. It owns `--rail-*`, it is dark in
@@ -13,7 +13,7 @@
  * `system` is resolved here rather than in a media query. A media query would
  * mean the dark token block written twice, once for the chosen mode and once
  * inside `prefers-color-scheme`, with no way for CSS to share it; two copies of
- * eighteen colours that must agree is a worse bargain than one listener.
+ * eighteen colors that must agree is a worse bargain than one listener.
  */
 
 import type { SurfaceMode, UiScale } from "./prefs";

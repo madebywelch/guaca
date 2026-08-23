@@ -23,7 +23,7 @@
 //! says nothing. `None` is that silence throughout, at every layer: in the
 //! draft the operator sends, in the columns, and in the resolved overrides. An
 //! empty string is a field an operator blanked, which means inherit too, and is
-//! normalised to `None` on the way in so the two can never disagree.
+//! normalized to `None` on the way in so the two can never disagree.
 
 use serde::{Deserialize, Serialize};
 
@@ -652,7 +652,7 @@ mod tests {
 
     #[test]
     fn a_group_changes_nothing_when_the_app_is_on_an_endpoint() {
-        // The behaviour that existed before groups had settings, unchanged.
+        // The behavior that existed before groups had settings, unchanged.
         let base = InferenceConfig::default();
         assert_eq!(GroupInference::default().apply(&base), base);
     }

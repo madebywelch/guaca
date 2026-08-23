@@ -50,7 +50,7 @@ pub enum CdpError {
     Transport(String),
     #[error("the browser has no page open")]
     NoPage,
-    /// What the page itself said. Passed through rather than summarised: a
+    /// What the page itself said. Passed through rather than summarized: a
     /// thrown exception's message is usually the most useful sentence available
     /// and the model is the one who has to act on it.
     #[error("{0}")]

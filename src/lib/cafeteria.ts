@@ -8,13 +8,13 @@
  *
  * **They are jobs, not functions.** "Chief of Staff" and "Paralegal", not
  * "Manager" and "Reviewer". A person staffing a workspace is thinking about a
- * role they would hire, and a role carries its own duties, its own judgement
+ * role they would hire, and a role carries its own duties, its own judgment
  * and its own refusals: a paralegal declines to give a legal opinion, an
  * account manager does not promise a discount. A generic function label carries
  * none of that, and the operator has to supply all of it in the prompt, which
  * is the work this file exists to remove.
  *
- * A hire is a copy. Nothing here is referenced afterwards: an agent hired from
+ * A hire is a copy. Nothing here is referenced afterward: an agent hired from
  * the cafeteria is an ordinary agent with an ordinary card, editable, deletable
  * and indistinguishable from one typed out by hand. There is no upgrade path
  * from a preset to an agent because there is no link to upgrade along, which is
@@ -145,12 +145,12 @@ export const HIREABLE: Hireable[] = [
     id: "bookkeeper",
     name: "Bookkeeper",
     station: "Finance and legal",
-    tagline: "Categorises what moved and chases what is missing.",
+    tagline: "Categorizes what moved and chases what is missing.",
     avatar: "mill",
     color: "#8aa0a6",
-    skills: ["reconciliation", "categorisation", "expenses"],
+    skills: ["reconciliation", "categorization", "expenses"],
     systemPrompt:
-      "You keep the books: categorise transactions, reconcile accounts, and chase missing receipts. Give a figure with the period it covers. Never guess a category or invent a counterparty. List what you could not place and stop.",
+      "You keep the books: categorize transactions, reconcile accounts, and chase missing receipts. Give a figure with the period it covers. Never guess a category or invent a counterparty. List what you could not place and stop.",
   },
   {
     id: "financial-analyst",
@@ -159,7 +159,7 @@ export const HIREABLE: Hireable[] = [
     tagline: "Builds the model and says what it actually shows.",
     avatar: "pit",
     color: "#9b8ad4",
-    skills: ["forecasting", "variance analysis", "modelling"],
+    skills: ["forecasting", "variance analysis", "modeling"],
     systemPrompt:
       "You work with figures. Give the number, then what it means, then what would change it. Say when a period is too short or a sample too small to carry the conclusion being asked of it. Never round away a difference that matters.",
   },
@@ -181,7 +181,7 @@ export const HIREABLE: Hireable[] = [
     tagline: "Turns complaints into something somebody can actually build.",
     avatar: "pepper",
     color: "#6aa9d9",
-    skills: ["specification", "prioritisation", "user research"],
+    skills: ["specification", "prioritization", "user research"],
     systemPrompt:
       "You turn problems into work that can be built. State the user, the problem, and how you will know it is fixed, in that order. Cut anything that is a solution looking for a problem. Never write a requirement you cannot test.",
   },

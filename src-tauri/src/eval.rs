@@ -7,7 +7,7 @@
 //! this reads the shape.
 //!
 //! Deliberately not a scoring model. Every fault here is a property that can be
-//! decided from the envelopes, because an eval that needs a judgement call is
+//! decided from the envelopes, because an eval that needs a judgment call is
 //! one nobody can act on when it fails.
 
 use std::collections::{HashMap, HashSet};
@@ -80,8 +80,8 @@ pub enum Fault {
     /// A message demanding an answer, sent to a peer that had already answered.
     /// The exact shape of a cascade that will not converge.
     DemandedAnswerFromSettledPeer { from: String, to: String },
-    /// An acknowledgement of an acknowledgement.
-    AcknowledgedAnAcknowledgement { from: String, to: String },
+    /// An acknowledgment of an acknowledgment.
+    AcknowledgedAnAcknowledgment { from: String, to: String },
     /// A peer was written to more than twice in one run without asking for
     /// anything. Politeness with a rhythm.
     Nagged { from: String, to: String, times: usize },
@@ -104,8 +104,8 @@ impl Fault {
                 "{from} demanded an answer from {to}, which had already answered: this is what \
                  does not converge"
             ),
-            Fault::AcknowledgedAnAcknowledgement { from, to } => {
-                format!("{from} acknowledged {to}'s acknowledgement")
+            Fault::AcknowledgedAnAcknowledgment { from, to } => {
+                format!("{from} acknowledged {to}'s acknowledgment")
             }
             Fault::Nagged { from, to, times } => {
                 format!("{from} wrote to {to} {times} times without asking for anything")
@@ -117,9 +117,9 @@ impl Fault {
 /// Reads a run's envelopes into something that can be asserted on.
 ///
 /// `name_of` resolves an agent id for the rendered script and the faults; the
-/// analyser never looks anything up itself, so it can be run against a store,
+/// analyzer never looks anything up itself, so it can be run against a store,
 /// a fixture, or a live session without knowing which.
-pub fn analyse(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Conversation {
+pub fn analyze(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Conversation {
     let mut to_operator = Vec::new();
     let mut between_agents = 0usize;
     let mut max_hop = 0u16;
@@ -176,7 +176,7 @@ pub fn analyse(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Co
 /// Everything wrong with how a run communicated, worst first.
 pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec<Fault> {
     let mut faults = Vec::new();
-    let convo = analyse(messages, name_of);
+    let convo = analyze(messages, name_of);
 
     let operator_asked = messages
         .iter()
@@ -240,7 +240,7 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
     }
 
     // Said again in nearly the same words. Kept strict: paraphrase detection
-    // needs a judgement call, and a fault nobody can act on is worse than none.
+    // needs a judgment call, and a fault nobody can act on is worse than none.
     let mut said: Vec<HashSet<String>> = Vec::new();
     for (_, line) in &convo.to_operator {
         let words = significant(line);
@@ -273,10 +273,8 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
         }
 
         if !envelope.expects_reply && last_wanted.get(&(to, from)) == Some(&false) {
-            faults.push(Fault::AcknowledgedAnAcknowledgement {
-                from: name_of(from),
-                to: name_of(to),
-            });
+            faults
+                .push(Fault::AcknowledgedAnAcknowledgment { from: name_of(from), to: name_of(to) });
         }
 
         if !envelope.expects_reply {
@@ -294,7 +292,7 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
     faults
 }
 
-/// One line of a message, enough to recognise it by.
+/// One line of a message, enough to recognize it by.
 fn brief(text: &str) -> String {
     let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if flat.chars().count() <= 80 {
@@ -459,7 +457,7 @@ mod tests {
     #[test]
     fn a_courtesy_nobody_answers_is_not_work_left_undone() {
         // The asymmetry that terminates cascades depends on an agent being
-        // allowed to read an acknowledgement and say nothing. Flagging that
+        // allowed to read an acknowledgment and say nothing. Flagging that
         // would make the fault fire on every well-behaved broadcast.
         let (a, b) = agents();
         let run = [
@@ -531,7 +529,7 @@ mod tests {
         ];
         assert_eq!(faults(&run, &named(a, b)), vec![]);
 
-        let convo = analyse(&run, &named(a, b));
+        let convo = analyze(&run, &named(a, b));
         assert_eq!(convo.to_operator.len(), 1);
         assert_eq!(convo.to_operator[0].0, "Manager");
         assert_eq!(convo.between_agents, 2);
@@ -569,7 +567,7 @@ mod tests {
             msg(Participant::Agent { id: a }, Participant::Agent { id: b }, "thanks", 3, false),
             msg(Participant::Agent { id: a }, Participant::Human, "done", 0, false),
         ];
-        assert!(faults(&run, &named(a, b)).contains(&Fault::AcknowledgedAnAcknowledgement {
+        assert!(faults(&run, &named(a, b)).contains(&Fault::AcknowledgedAnAcknowledgment {
             from: "Manager".into(),
             to: "Chef".into()
         }));
@@ -680,7 +678,7 @@ mod tests {
         }
         run.push(msg(Participant::Agent { id: a }, Participant::Human, "done", 0, false));
 
-        let convo = analyse(&run, &named(a, b));
+        let convo = analyze(&run, &named(a, b));
         assert_eq!(convo.chatter(), 10.0, "ten peer messages for one thing said");
     }
 }

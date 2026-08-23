@@ -204,7 +204,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       setSettings(next);
       // Read the limits back rather than leaving what was typed. The `max` on a
       // number input is advisory — a pasted or typed value sails past it — and
-      // the runtime sanitises what it stores, so a relay depth of 40 is kept as
+      // the runtime sanitizes what it stores, so a relay depth of 40 is kept as
       // 16. Saying "Saved." over a box still reading 40 tells the operator
       // something untrue about what is running.
       setLimits(next.limits);
@@ -297,7 +297,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
         if (live) setConnectors(value);
       })
       .catch((error) => {
-        // A sign-in the service no longer recognises comes back as `signedOut`,
+        // A sign-in the service no longer recognizes comes back as `signedOut`,
         // and the honest thing to draw is a signed-out pane rather than an
         // account with an empty list under it.
         if (!live) return;
@@ -1118,7 +1118,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   </div>
 
                   <div className="field">
-                    <span className="field__label">Licence</span>
+                    <span className="field__label">License</span>
                     <span className="field__hint">
                       GNU Affero General Public License v3 or later.
                     </span>

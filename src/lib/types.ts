@@ -344,12 +344,12 @@ export type Surface = "computer" | "browser";
 export interface Signin {
   agentId: AgentId;
   surface: Surface;
-  /** The host, normalised: `linkedin.com`. */
+  /** The host, normalized: `linkedin.com`. */
   domain: string;
-  /** A recognised service's real name, or the domain when it is a guess. */
+  /** A recognized service's real name, or the domain when it is a guess. */
   service: string;
   /** False when this came from the weaker visited-plus-session-cookie rule. */
-  recognised: boolean;
+  recognized: boolean;
   firstSeenAt: number;
   lastSeenAt: number;
 }
@@ -477,7 +477,7 @@ export type Provider = "compatible" | "chatgpt";
  * field.
  *
  * Ranked by capability inside the pool of models that use case actually gets
- * sent, which is not the order the endpoint returns by default: `catalogue.rs`
+ * sent, which is not the order the endpoint returns by default: `catalog.rs`
  * has the argument. The price is here because that ranking ignores it, and the
  * most capable model in a pool is regularly the dearest thing in it.
  */
@@ -641,7 +641,7 @@ export type UiEvent =
    * being made. `callId` is the provider's own, which is what pairs the two.
    *
    * The finish carries the whole part rather than the outcome, so the chip
-   * drawn while the turn runs and the chip drawn afterwards are one value read
+   * drawn while the turn runs and the chip drawn afterward are one value read
    * once: a memory rewrite carries what it overwrote, and nothing outside the
    * runtime could supply it.
    */
@@ -670,7 +670,7 @@ export type UiEvent =
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
   | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
   /**
-   * One agent's schedule changed: it set a routine, edited one, cancelled one,
+   * One agent's schedule changed: it set a routine, edited one, canceled one,
    * or one came due and moved. The list refetches; nothing here is patched,
    * because a schedule is a handful of rows.
    */

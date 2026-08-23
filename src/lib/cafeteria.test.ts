@@ -8,7 +8,7 @@ import { matchMentions, mentionAt } from "./mentions";
  * The cafeteria is data, so this is where its rules live.
  *
  * Nothing here needs a running app: a preset that names a character nobody
- * draws, or a colour the editor cannot show, is wrong the moment it is written
+ * draws, or a color the editor cannot show, is wrong the moment it is written
  * and should fail the build rather than a first run.
  */
 
@@ -45,9 +45,9 @@ describe("the cafeteria catalog", () => {
     expect(strays.map((preset) => `${preset.id}: ${preset.avatar}`)).toEqual([]);
   });
 
-  it("colours every preset with an accent the editor offers", () => {
+  it("colors every preset with an accent the editor offers", () => {
     // So that opening a hired agent shows its swatch already selected, rather
-    // than a colour the operator cannot get back if they click away.
+    // than a color the operator cannot get back if they click away.
     const offered = new Set(ACCENTS.map((accent) => accent.value));
     const strays = HIREABLE.filter((preset) => !offered.has(preset.color));
     expect(strays.map((preset) => `${preset.id}: ${preset.color}`)).toEqual([]);
@@ -55,7 +55,7 @@ describe("the cafeteria catalog", () => {
 
   it("gives each station a distinct silhouette", () => {
     // Two agents side by side at one counter have to be tellable apart at the
-    // 22px the rail draws them at, and colour is not what does that.
+    // 22px the rail draws them at, and color is not what does that.
     for (const station of STATIONS) {
       const here = HIREABLE.filter((preset) => preset.station === station);
       const faces = here.map((preset) => lookupCharacter(preset.avatar).key);
@@ -85,7 +85,7 @@ describe("the cafeteria catalog", () => {
       expect([...preset.name].length, `${preset.id} name is too long`).toBeLessThanOrEqual(
         MAX_NAME_LEN,
       );
-      expect(preset.color, `${preset.id} colour`).toMatch(/^#[0-9a-f]{6}$/);
+      expect(preset.color, `${preset.id} color`).toMatch(/^#[0-9a-f]{6}$/);
       expect(preset.avatar.trim(), preset.id).not.toBe("");
     }
   });

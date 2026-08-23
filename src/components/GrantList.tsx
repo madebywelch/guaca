@@ -34,15 +34,15 @@ export function GrantList({ agent }: Props) {
   const [busy, setBusy] = useState<ProtectedAction | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     void api
       .agentGrants(agent.id)
       .then((found) => {
-        if (!cancelled) setGrants(found);
+        if (!canceled) setGrants(found);
       })
       .catch(() => {});
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [agent.id]);
 

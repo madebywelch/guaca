@@ -62,7 +62,7 @@ export interface SearchResult {
   meta: string;
   score: number;
   action: SearchAction;
-  /** Colour and avatar, for the rows that have a face. */
+  /** Color and avatar, for the rows that have a face. */
   face?: { avatar: string; color: string; seed: string };
 }
 

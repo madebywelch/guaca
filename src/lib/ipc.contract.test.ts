@@ -81,11 +81,11 @@ describe("IPC contract", () => {
     // nothing, silently, for exactly the agents it was built for. Neither list
     // is the source — OpenRouter is — and the pair failing together is how a
     // rename there gets noticed here.
-    const rust = read("src-tauri/src/llm/catalogue.rs").match(
+    const rust = read("src-tauri/src/llm/catalog.rs").match(
       /CATEGORIES: \[&str; \d+\] = \[([\s\S]*?)\];/,
     );
     const web = read("src/lib/roles.ts").match(/export const ROLES: Role\[\] = \[([\s\S]*?)\];/);
-    expect(rust, "no CATEGORIES in catalogue.rs").not.toBeNull();
+    expect(rust, "no CATEGORIES in catalog.rs").not.toBeNull();
     expect(web, "no ROLES in roles.ts").not.toBeNull();
 
     const quoted = (block: string) => [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);

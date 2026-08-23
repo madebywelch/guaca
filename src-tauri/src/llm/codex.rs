@@ -855,7 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn an_image_part_is_recognised_however_it_was_built() {
+    fn an_image_part_is_recognized_however_it_was_built() {
         let request = ChatRequest {
             model: "m".into(),
             messages: vec![ChatMessage::User {

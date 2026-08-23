@@ -15,7 +15,7 @@ interface Props {
   size?: "xs" | "sm" | "md" | "lg";
   activity?: Activity;
   lifecycle?: Lifecycle;
-  /** Desynchronises idle motion. Pass the agent id so a crew never moves in unison. */
+  /** Desynchronizes idle motion. Pass the agent id so a crew never moves in unison. */
   seed?: string;
   look?: Look;
   gesture?: Gesture;
@@ -34,7 +34,7 @@ function phase(seed: string): number {
 /**
  * An agent's character.
  *
- * The drawing is the catalog's business; this owns behaviour, layered in rough
+ * The drawing is the catalog's business; this owns behavior, layered in rough
  * order of loudness:
  *
  * - idle: a slow breath, and a glance around every several seconds

@@ -88,7 +88,7 @@
    darker frame and the column is still the surface you read on.
    The accents are lifted rather than kept, because the product's olive and
    brown are chosen against white and neither can be read on ink. They stay
-   recognisably the same colours; they are not the same values. */
+   recognizably the same colors; they are not the same values. */
 :root[data-surface="dark"] {
   --ground: #1b1e1b;
   --raised: #222622;
@@ -97,7 +97,7 @@
   --text: #e7ebe2;
   --muted: #a1aa9f;
   /* Unchanged from paper on purpose: it is already the lightest of the three
-     greys and it is the one hints are set in, so it has the least contrast to
+     grays and it is the one hints are set in, so it has the least contrast to
      spare. */
   --faint: #8a938a;
 
@@ -229,7 +229,7 @@ button {
 /* The rail is dark in both surfaces, so the two accents it draws with are the
    paper values whatever the reading column is doing. Pinned here, on the one
    element every rail rule descends from, rather than renamed at the twenty-odd
-   call sites in the reading half: this makes the rail a real colour scope
+   call sites in the reading half: this makes the rail a real color scope
    instead of a naming convention, and a new dark value for either token cannot
    reach it by accident. `:focus-visible` is deliberately not covered — a focus
    ring is drawn in both halves and should follow the surface it is drawn on. */
@@ -374,7 +374,7 @@ button {
   /* The group header this hangs off is uppercased, and the only letters in a
      readout are its units: `909k` arrived as `909K`, one glyph away from the
      `M` that means a thousand times more. Nothing else in the app that draws a
-     token count sits inside an uppercased heading, so the unit is normalised
+     token count sits inside an uppercased heading, so the unit is normalized
      here rather than in the number. */
   text-transform: none;
 }
@@ -644,7 +644,7 @@ button {
 .rail__held {
   position: fixed;
   z-index: 40;
-  /* Below and to the right of the pointer, not under it. Centred on the pointer
+  /* Below and to the right of the pointer, not under it. Centered on the pointer
      it covered the top edge of the row being aimed at, which is exactly where
      the line saying "it lands here" is drawn. */
   transform: translate(0.9rem, 0.35rem);
@@ -670,7 +670,7 @@ button {
 /* ==========================================================================
    Groups, as places
 
-   A crew is recognised by who is in it before its name is read, so a group is
+   A crew is recognized by who is in it before its name is read, so a group is
    drawn as a circle of its members' faces. Clicking one takes the rail inside
    it; dropping an agent on one puts the agent in it. The strip is absent while
    there is one group, because a choice of one is chrome.
@@ -779,7 +779,7 @@ button {
   }
 }
 
-/* An empty crew. Centred by hand, because everything else in the ring is
+/* An empty crew. Centered by hand, because everything else in the ring is
    placed absolutely and there is no flow left to sit in the middle of. */
 .orb__none {
   position: absolute;
@@ -901,7 +901,7 @@ button {
    accent picks the hue and the rest of the tones derive from it, so one choice
    produces a coherent character rather than a body and a set of unrelated parts.
 
-   Behaviour, in order of loudness: a slow breath at rest, a glance around every
+   Behavior, in order of loudness: a slow breath at rest, a glance around every
    few seconds, quicker glances and an occasional full turn while thinking, an
    aimed look when addressing someone, and a wind-up or knock-back when a
    message is thrown or caught.
@@ -943,7 +943,7 @@ button {
   50% { transform: scale(1.015, 0.985) translateY(1.5%); }
 }
 
-/* Thinking is a change of behaviour, not a spinner bolted on beside the face. */
+/* Thinking is a change of behavior, not a spinner bolted on beside the face. */
 .avatar[data-busy="true"] .avatar__body {
   animation: think 1.9s ease-in-out infinite;
 }
@@ -1466,10 +1466,10 @@ button {
    an agent wrote. One card either way, so a figure sits in a conversation the
    way a file does rather than as a wall of markup mid-sentence.
 
-   The series colours are the one block of literal hex left in this file, and
-   they are literal on purpose. Every other colour here is a decision somebody
-   can revise; these eight are the output of a check (neighbouring slots must
-   stay apart for a red-green colourblind reader on this exact surface) and
+   The series colors are the one block of literal hex left in this file, and
+   they are literal on purpose. Every other color here is a decision somebody
+   can revise; these eight are the output of a check (neighboring slots must
+   stay apart for a red-green colorblind reader on this exact surface) and
    `palette.test.ts` recomputes that check from these values. Editing one by eye
    fails the suite, which is the intended experience.
    ========================================================================== */
@@ -1591,8 +1591,8 @@ button {
   font-variant-numeric: normal;
 }
 
-/* Text never wears the data colour. A pale hue is illegible as type on the
-   surface, and identity comes from the coloured mark beside the words. */
+/* Text never wears the data color. A pale hue is illegible as type on the
+   surface, and identity comes from the colored mark beside the words. */
 .chart__value {
   font-family: var(--font-ui);
   font-size: 10.5px;
@@ -1612,7 +1612,7 @@ button {
 
 /* The mark under the pointer lifts, so the reader can see it respond. The
    others recede rather than the hovered one brightening: brightening a fill
-   changes the colour a series is identified by. */
+   changes the color a series is identified by. */
 .chart__frame:hover .chart__bar:not([data-lit]),
 .chart__frame:hover .chart__wedge:not([data-lit]) {
   opacity: 0.55;
@@ -2110,7 +2110,7 @@ button {
 
 /* --- the wire ------------------------------------------------------------
 
-   Agent-to-agent traffic, reduced to one centred line. A channel should read
+   Agent-to-agent traffic, reduced to one centered line. A channel should read
    as a conversation with one agent; rendering every peer message as a bubble
    buried the operator's own conversation. The content is one click away.
    ------------------------------------------------------------------------ */
@@ -2280,7 +2280,7 @@ button {
 }
 
 /* An agent's own closing words, written after it had already answered its peer.
-   Nobody was sent them, so they are neither centred like a system line nor
+   Nobody was sent them, so they are neither centered like a system line nor
    bracketed like traffic: both of those say something passed between two
    participants. In the trail's column, on the same 2.85rem of gutter, because
    this belongs with what the turn did rather than with what was said to
@@ -2305,7 +2305,7 @@ button {
    is chips, one per kind of work, and the calls open underneath in place.
 
    Deliberately not the burst's shape, even though both collapse. A burst is a
-   conversation with somebody, so it is centred and bracketed by rules like the
+   conversation with somebody, so it is centered and bracketed by rules like the
    rest of the traffic. This is the agent's own working, so it sits under the
    left margin where the agent's words are, at the size of a footnote.
    ========================================================================== */
@@ -2315,7 +2315,7 @@ button {
 }
 
 /* Wide gaps between chips and tight ones inside. Four of these on a line with
-   the same space either side of every word read as one paragraph of grey
+   the same space either side of every word read as one paragraph of gray
    monospace, which is exactly the shape the row was collapsed to get away
    from. */
 .trail__chips {
@@ -2395,7 +2395,7 @@ button {
 }
 
 /* Something went wrong, and the row it is on is otherwise a list of things
-   that went right. Given a shape rather than only a colour, for the same reason
+   that went right. Given a shape rather than only a color, for the same reason
    a refused send is louder than the traffic around it: this is the one chip on
    the row the operator may have to do something about. */
 .trail__chip[data-failed] {
@@ -2410,7 +2410,7 @@ button {
   opacity: 1;
 }
 
-/* Opened. Indented under the chips rather than centred, because these are the
+/* Opened. Indented under the chips rather than centered, because these are the
    calls behind one chip and not a new kind of row. */
 .trail__steps {
   list-style: none;
@@ -2470,7 +2470,7 @@ button {
    the one above and the same reasons for it, with a gutter down the left for
    what happened to each line.
 
-   Colour is the fast read and never the only one: the marker is a character in
+   Color is the fast read and never the only one: the marker is a character in
    the text, so the distinction survives a reader who cannot tell the two hues
    apart and survives being copied out. The grounds are mixed rather than named
    because they have to sit on paper and on ink at the same weight, and a pair
@@ -2901,7 +2901,7 @@ button {
 
 /* The model's own section heading. It changes every half minute rather than
    every frame, which is what makes it the part of the line worth setting in a
-   colour that asks to be read. */
+   color that asks to be read. */
 .working__topic {
   flex: none;
   color: var(--text);
@@ -3077,7 +3077,7 @@ button {
 
 /* The margin is space from the words above, and a file handed over with
    nothing typed has none: that message is a bubble whose only content is this
-   card, and the gap left it sitting off-centre inside its own padding. */
+   card, and the gap left it sitting off-center inside its own padding. */
 .file:first-child {
   margin-top: 0;
 }
@@ -3329,7 +3329,7 @@ button {
    the measure is capped the way prose is set. Full width, a heading two lines
    long crosses the whole window and the eye loses the return.
 
-   Centred, because the cap is narrower than the dialog: left-aligned, the
+   Centered, because the cap is narrower than the dialog: left-aligned, the
    column sits against one edge with the rest of a 64rem window empty beside
    it, which reads as a layout that ran out rather than one that chose. */
 .file-view__body .file__doc .md {
@@ -3405,7 +3405,7 @@ button {
 }
 
 /* Outside the pill, so the live chip is the exact box of the settled one. As a
-   flex item the dots made it a dozen pixels wider, and a centred row slid
+   flex item the dots made it a dozen pixels wider, and a centered row slid
    sideways the instant the message landed. The thing worth noticing there is
    the message, not the row moving. */
 .wire__dots {
@@ -3615,8 +3615,8 @@ button {
   margin-bottom: 1.15rem;
 }
 
-/* The brand's mark in the brand's colour, on a neutral chip.
-   A coloured chip with a white glyph would be the obvious choice and is the
+/* The brand's mark in the brand's color, on a neutral chip.
+   A colored chip with a white glyph would be the obvious choice and is the
    wrong one here: a brand that publishes a black mark would come out as a black
    square, which is not a logo. */
 .mark {
@@ -3637,7 +3637,7 @@ button {
 
 /* A brand that publishes a black mark is not there at all on a dark chip.
    Mixed toward the foreground rather than replaced, so a brand that does have a
-   colour keeps most of it. The comment above rules out the other obvious fix. */
+   color keeps most of it. The comment above rules out the other obvious fix. */
 :root[data-surface="dark"] .mark {
   color: color-mix(in oklab, var(--mark, var(--muted)) 62%, var(--text));
 }
@@ -3761,7 +3761,7 @@ button {
 }
 
 /* Who ends up able to call a narrowed tool, once the plugin's answer and the
-   tool's are both applied. Drawn in the body colour rather than the muted one
+   tool's are both applied. Drawn in the body color rather than the muted one
    the sentence above it uses: it is the consequence of a decision the operator
    just made, and the vendor's blurb is background. */
 .toolset__who {
@@ -3871,7 +3871,7 @@ button {
 }
 
 /* The scrim scrolls, not the dialog alone: on a short window a tall dialog
-   would otherwise centre itself with its top edge above the viewport, putting
+   would otherwise center itself with its top edge above the viewport, putting
    the first field permanently out of reach. */
 .scrim {
   position: fixed;
@@ -4066,7 +4066,7 @@ button {
   padding: 0.55rem 0.5rem 0.35rem;
 }
 
-/* Centred between the two controls rather than after the back arrow, so it
+/* Centered between the two controls rather than after the back arrow, so it
    stays put as the arrow appears and disappears. */
 .inspector__title {
   flex: 1;
@@ -4229,7 +4229,7 @@ button {
    is drawn in the top-left corner: at `inset: 0` they landed on the title in
    this bar and on the picture below it. Insetting the stage leaves that corner
    showing the app, which is where those buttons belong, and has the side
-   benefit of keeping the conversation visible around the edge so a maximised
+   benefit of keeping the conversation visible around the edge so a maximized
    screen reads as something being worked on rather than as a new window. The
    top inset matches the rail's own, which is how the rest of the app already
    clears those controls. */
@@ -4765,7 +4765,7 @@ button {
   opacity: 0.75;
 }
 
-/* Held near the top rather than centred: the list grows downwards as it fills,
+/* Held near the top rather than centered: the list grows downward as it fills,
    and a panel that keeps recentring moves the row under the pointer. */
 .scrim--palette {
   align-items: flex-start;
@@ -5033,7 +5033,7 @@ button {
 }
 
 /* Selection is carried by the agent's own accent, so a picked crew reads as
-   the colours that will be in the rail a moment later. */
+   the colors that will be in the rail a moment later. */
 .hire[aria-pressed="true"] {
   border-color: var(--accent);
   background: color-mix(in oklab, var(--accent) 9%, var(--raised));
@@ -5523,7 +5523,7 @@ button {
   white-space: nowrap;
 }
 
-/* About. Centred, because it is the one pane that is a statement rather than a
+/* About. Centered, because it is the one pane that is a statement rather than a
    set of controls. */
 .about {
   text-align: center;

@@ -59,7 +59,7 @@ describe("Composer", () => {
     await drop(["/Users/robert/Documents/proposal.docx"]);
 
     // The path is the operator's business and is never shown; the name is what
-    // they recognise.
+    // they recognize.
     expect(screen.getByText("proposal.docx")).toBeTruthy();
     expect(screen.queryByText(/Users\/robert/)).toBeNull();
 

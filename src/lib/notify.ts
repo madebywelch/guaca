@@ -13,13 +13,13 @@
  *   the moment    are you actually elsewhere, and elsewhere from what
  *   the burst     has this already been said in the last second
  *
- * The second is where the judgement is. "Away" is not one condition, because a
+ * The second is where the judgment is. "Away" is not one condition, because a
  * permission request and a finished conversation are not the same news:
  *
  *   attention   an agent is blocked on you. Reaches you when the window is not
  *               in front of you, and also when it is but the request belongs to
  *               a channel you are not looking at. Nobody finds a parked turn by
- *               noticing a row change colour three screens up the rail.
+ *               noticing a row change color three screens up the rail.
  *   ambient     nothing was addressed to you and no channel is implied. A
  *               routine fires wherever it was pointed. Reaches you whenever you
  *               are away, with no channel to match against.
@@ -74,7 +74,7 @@ export function shouldNotify(kind: NotifyKind, prefs: NotifyPrefs, moment: Momen
 /**
  * True when the window is not the thing the operator is looking at.
  *
- * `document.hidden` alone is not enough: it flips when the window is minimised
+ * `document.hidden` alone is not enough: it flips when the window is minimized
  * or fully covered, and a window sitting behind a browser on the same screen is
  * visible-but-unfocused, which is exactly the case worth notifying for.
  */

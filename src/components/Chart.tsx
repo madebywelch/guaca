@@ -31,7 +31,7 @@ import { seriesColor, seriesMark } from "../lib/palette";
  * layout, so a chart that sized itself from a real element would be exercised
  * by no test in this repo; and a chart that waits to be measured is a jump on
  * every first paint. The trade is that type grows a little when a figure is
- * opened large, which is the behaviour a figure should have anyway.
+ * opened large, which is the behavior a figure should have anyway.
  *
  * Three things carry every value, and that is deliberate. The marks carry the
  * shape, the direct labels and the readout carry the number, and the table
@@ -82,7 +82,7 @@ export function Chart({ chart }: { chart: ChartValue }) {
         </svg>
         <Readout chart={chart} plot={plot} hidden={hidden} at={at} names={names} />
       </div>
-      {/* One series needs no legend: there is one colour, and the title above
+      {/* One series needs no legend: there is one color, and the title above
           already says what is plotted. A box with a single swatch in it
           restates the title and costs a line. */}
       {names.length > 1 && (
@@ -292,10 +292,10 @@ function Radial({
 /**
  * Clouds of points.
  *
- * Every series wears a shape as well as a colour. That is not decoration: in a
+ * Every series wears a shape as well as a color. That is not decoration: in a
  * scatter any dot can end up beside any other, so the guarantee that holds for
- * neighbouring colours elsewhere does not hold here at all, and shape is the
- * channel that survives colourblindness, grey print and a screenshot.
+ * neighboring colors elsewhere does not hold here at all, and shape is the
+ * channel that survives colorblindness, gray print and a screenshot.
  */
 function Scatter({
   chart,
@@ -366,7 +366,7 @@ function Scatter({
  * One point, with a target far bigger than itself.
  *
  * A nine-pixel dot is a pinpoint nobody hits, so the transparent circle over it
- * is what the pointer is actually aiming at. The ring in the surface colour is
+ * is what the pointer is actually aiming at. The ring in the surface color is
  * what keeps two overlapping points readable as two.
  */
 function Mark({ dot, lit, onEnter }: { dot: Point; lit: boolean; onEnter: () => void }) {
@@ -479,7 +479,7 @@ function Readout({
       {chart.series.map((series, index) =>
         hidden.has(index) ? null : (
           <p className="chart__readout-row" key={series.name}>
-            {/* A short stroke of the series colour, not a filled box: at this
+            {/* A short stroke of the series color, not a filled box: at this
                 density a box is data-weight ink doing a label's job. */}
             <span className="chart__key" style={{ background: seriesColor(index) }} />
             <span className="chart__readout-value">
@@ -498,9 +498,9 @@ function Readout({
 /**
  * Which series is which, and which are switched off.
  *
- * Always present past one series, because colour-matching alone is not an
+ * Always present past one series, because color-matching alone is not an
  * identity channel a reader can rely on. Toggling never repaints what is left:
- * a colour belongs to a series, not to its position in what is currently shown,
+ * a color belongs to a series, not to its position in what is currently shown,
  * and an operator who has learned that revenue is green is misled by a chart
  * that reassigns it when something else is hidden.
  */
@@ -532,7 +532,7 @@ function Legend({
               className={line ? "chart__key" : "chart__swatch"}
               data-mark={isScatter(chart) ? seriesMark(index) : undefined}
               // Both, because a triangle is drawn out of a border and a border
-              // reads `currentColor`. One or the other leaves one shape grey.
+              // reads `currentColor`. One or the other leaves one shape gray.
               style={{ background: seriesColor(index), color: seriesColor(index) }}
             />
             {name}

@@ -34,10 +34,10 @@ boundary, so importing that machinery would be cargo cult.
 |---|---|---|---|
 | Agent Card hosting | Served at `/.well-known/agent-card.json` over HTTP | A row in SQLite | There is no network peer. An HTTP server to talk to yourself is pure overhead. |
 | Identity | W3C DIDs, `did:wba`, DID documents, signature verification (ANP) | A UUID | DIDs solve "prove you are who you claim across an untrusted network". Inside one process there is no claim to verify. |
-| Manifest signing | Sigstore, JWS, signed manifest diffs | Nothing | Signatures defend against a supply chain Guaca does not have. Adding them would be security theatre with a maintenance cost. |
+| Manifest signing | Sigstore, JWS, signed manifest diffs | Nothing | Signatures defend against a supply chain Guaca does not have. Adding them would be security theater with a maintenance cost. |
 | Transport | JSON-RPC 2.0 or REST over HTTP, SSE, gRPC | A `tokio::mpsc` channel per agent | The protocols' transport layer exists to cross a process boundary. Guaca's agents share an address space. |
 | Registry / broker | Central registry with runtime registration (ACP) | A `HashMap<AgentId, Inbox>` | Same reason. |
-| Lifecycle phases | Creation → Operation → Update → Termination | `Active`, `Paused`, `Terminated` | Creation and Update are transitions, not resting states. Modelling them as states creates states no observer can ever see. |
+| Lifecycle phases | Creation → Operation → Update → Termination | `Active`, `Paused`, `Terminated` | Creation and Update are transitions, not resting states. Modeling them as states creates states no observer can ever see. |
 
 ## Invented, because the survey does not cover it
 
@@ -46,7 +46,7 @@ This is the part that mattered most in practice.
 **None of the four protocols specifies a termination condition.** They define
 how to address a peer and how to describe a capability. They are silent on what
 happens when agent A messages agent B, B replies to A, and A replies to B. That
-is not an edge case; it is the default behaviour of polite language models, and
+is not an edge case; it is the default behavior of polite language models, and
 it costs real money on every cycle.
 
 That claim was argued from first principles here before anybody had measured
@@ -72,7 +72,7 @@ different shape of runaway and every one of them alone has a hole:
 | Content dedup | An agent restating itself to make progress |
 | Fan-out width | One call blasting the entire roster |
 
-Two further mechanisms have no analogue in the literature:
+Two further mechanisms have no analog in the literature:
 
 - **`expects_reply` asymmetry** (`domain::envelope`). A human message or an
   explicit `send_message` expects an answer; an automatic reply does not. An
@@ -93,7 +93,7 @@ termination" is 6.2% of the failures in that dataset, and the paper attributes
 it specifically to a star topology with no predefined workflow, which is this
 app's shape: every agent answers to one operator and nothing prescribes the
 order. Everything above pushes toward stopping, and this app has twice shipped a
-bug that pushed too far: an authorised external send refused because nobody was
+bug that pushed too far: an authorized external send refused because nobody was
 waiting on it, and an agent given work in a mode whose prompt told it silence
 was usually right. `intent` and `ReplyMode::Assigned` are the fixes; the reason
 neither was caught is that the eval suite could only see the noisy direction.
@@ -173,8 +173,8 @@ about peers. A signed-in agent's larger exposure is the page it is reading:
 point that the injections that matter drive actions rather than text, and being
 signed in is precisely what makes the attempt worth making, since the payload no
 longer needs to obtain access. Guaca takes the architectural half of their
-layered defence, which is the half a local app can hold honestly: page content
-is labelled where it enters the turn (`runtime::WEB_LABEL`) rather than only in
+layered defense, which is the half a local app can hold honestly: page content
+is labeled where it enters the turn (`runtime::WEB_LABEL`) rather than only in
 a system prompt written thousands of tokens earlier, credentials never enter the
 model's context, and the prompt names the line a signed-in agent stops at.
 Their model-based layers are not reimplemented here and are not claimed.
@@ -199,7 +199,7 @@ reach the click being approved. What is left is the case this paper and
 BrowseSafe agree is worth paying for: the payload does not need to obtain
 access, it already has the operator's, and the next press is the operator's to
 allow. Once, per site, per turn: a question asked again for every press on the
-same account is one an operator stops reading, and a defence nobody reads is
+same account is one an operator stops reading, and a defense nobody reads is
 wording again. The grant lives on the turn and dies with it, and any page from
 off that site takes it back.
 
@@ -276,7 +276,7 @@ suites verify at test time instead, where being slow and thorough is free.
 
 **A judge in the eval suite.** `eval.rs` decides every fault from the envelopes
 and scores nothing, which was a taste decision when it was written: a fault that
-needs a judgement call is one nobody can act on when it fails. *Gaming the
+needs a judgment call is one nobody can act on when it fails. *Gaming the
 Judge* ([arXiv 2601.14691](https://arxiv.org/abs/2601.14691)) is the measured
 argument for it. Rewriting an agent's reasoning while holding its actions and
 observations fixed inflated the false positive rate of state-of-the-art judges
@@ -316,7 +316,7 @@ The protocols themselves, and the people behind them:
   are all A2A's, and they are the ideas this app leans on hardest.
 - **ACP**: Agent Communication Protocol, IBM Research / BeeAI. Typed ordered
   multipart messages are ACP's shape.
-- **ANP**: Agent Network Protocol. Decentralised discovery, most of which this
+- **ANP**: Agent Network Protocol. Decentralized discovery, most of which this
   app has no use for, and one idea it does.
 
 The survey above is what made comparing them tractable, and its
