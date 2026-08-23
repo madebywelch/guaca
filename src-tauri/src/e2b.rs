@@ -87,6 +87,18 @@ const ENVD_PORT: u16 = 49983;
 
 const API_BASE: &str = "https://api.e2b.app";
 
+/// The control plane this build talks to.
+///
+/// [`API_BASE`] everywhere except under `GUAC_E2B_API_BASE`, which is the seam
+/// `tests/machines.rs` points at a scripted one. Only the control plane moves:
+/// a sandbox's own envd is at an address the control plane hands out.
+fn api_base() -> String {
+    match std::env::var("GUAC_E2B_API_BASE") {
+        Ok(base) if !base.trim().is_empty() => base.trim().trim_end_matches('/').to_string(),
+        _ => API_BASE.to_string(),
+    }
+}
+
 /// Everything Guaca puts on a machine. Spelled absolutely rather than as `~`,
 /// because a command daemon that runs as a different user resolves `~`
 /// somewhere else, and the failure that produces is not an error: it is a
@@ -290,6 +302,7 @@ pub struct E2bClient {
     /// process environment of the command that needs it and goes when the
     /// command does.
     env: std::collections::BTreeMap<String, String>,
+    base: String,
 }
 
 impl E2bClient {
@@ -301,7 +314,7 @@ impl E2bClient {
             return None;
         }
         let http = reqwest::Client::builder().timeout(RUN_TIMEOUT).build().ok()?;
-        Some(Self { http, api_key: api_key.to_string(), env: Default::default() })
+        Some(Self { http, api_key: api_key.to_string(), env: Default::default(), base: api_base() })
     }
 
     /// Hands this client the credentials its agent's group holds.
@@ -355,7 +368,7 @@ impl E2bClient {
         let row: SandboxRow = self
             .control(
                 self.http
-                    .post(format!("{API_BASE}/sandboxes"))
+                    .post(format!("{}/sandboxes", self.base))
                     .json(&create_body(agent, idle_seconds)),
             )
             .await?;
@@ -374,7 +387,7 @@ impl E2bClient {
     pub async fn state(&self, sandbox: &str) -> Result<SandboxState, E2bError> {
         let response = self
             .http
-            .get(format!("{API_BASE}/sandboxes/{sandbox}"))
+            .get(format!("{}/sandboxes/{sandbox}", self.base))
             .header("X-API-Key", &self.api_key)
             .send()
             .await
@@ -407,7 +420,7 @@ impl E2bClient {
     pub async fn pause(&self, sandbox: &str) -> Result<(), E2bError> {
         let response = self
             .http
-            .post(format!("{API_BASE}/sandboxes/{sandbox}/pause"))
+            .post(format!("{}/sandboxes/{sandbox}/pause", self.base))
             .header("X-API-Key", &self.api_key)
             .json(&serde_json::json!({ "memory": false }))
             .send()
@@ -431,7 +444,7 @@ impl E2bClient {
         let row: SandboxRow = self
             .control(
                 self.http
-                    .post(format!("{API_BASE}/sandboxes/{sandbox}/resume"))
+                    .post(format!("{}/sandboxes/{sandbox}/resume", self.base))
                     .json(&serde_json::json!({ "timeout": idle_seconds })),
             )
             .await?;
@@ -450,7 +463,7 @@ impl E2bClient {
     pub async fn keep_awake(&self, sandbox: &str, idle_seconds: u32) {
         let _ = self
             .http
-            .post(format!("{API_BASE}/sandboxes/{sandbox}/timeout"))
+            .post(format!("{}/sandboxes/{sandbox}/timeout", self.base))
             .header("X-API-Key", &self.api_key)
             .json(&serde_json::json!({ "timeout": idle_seconds }))
             .send()
@@ -467,7 +480,7 @@ impl E2bClient {
     /// billing quietly forever.
     pub async fn list_ours(&self) -> Result<Vec<String>, E2bError> {
         let rows: Vec<SandboxRow> =
-            self.control(self.http.get(format!("{API_BASE}/v2/sandboxes"))).await?;
+            self.control(self.http.get(format!("{}/v2/sandboxes", self.base))).await?;
         Ok(rows
             .into_iter()
             .filter(|r| r.metadata.get("guac").map(String::as_str) == Some("true"))
@@ -478,7 +491,7 @@ impl E2bClient {
     pub async fn kill(&self, sandbox: &str) -> Result<(), E2bError> {
         let response = self
             .http
-            .delete(format!("{API_BASE}/sandboxes/{sandbox}"))
+            .delete(format!("{}/sandboxes/{sandbox}", self.base))
             .header("X-API-Key", &self.api_key)
             .send()
             .await

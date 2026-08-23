@@ -85,6 +85,33 @@ The profile is deleted with the agent. A name is free to reuse the moment an
 agent is deleted, and the profile is named from the agent, so leaving it behind
 would hand the next agent of that name somebody else's sessions.
 
+## What an agent holds is read from its row, not from its turn
+
+A turn carries one `AgentCard`, read once in `run_turn` and passed through every
+round. That is right for everything the operator decides and wrong for the one
+thing a turn changes about itself: the browser made by the first `browse` is
+written to the row and not to that snapshot. Read from the snapshot, the second
+`browse` of a turn sees an agent holding nothing and asks for another browser,
+under a name only one live browser may have. Kernel answers 409, and it answers
+it to every page the agent tries to open for the rest of the turn.
+
+So `ensure_browser` reads `browser_id` from the store. `Runtime::held` is the
+whole of it, and `ensure_computer` reads the sandbox the same way for the same
+reason, where the provider does not refuse the second one and simply bills for
+it.
+
+A conflict is still possible without that mistake, because the row can be lost
+while the browser is up: a crash between creating one and writing it down leaves
+a browser running, holding the agent's name, with nothing in the app pointing at
+it. `KernelClient::create` treats the 409 as the answer it wanted and adopts
+that browser, found by its `guac-agent` tag rather than by the name the conflict
+was about, and asked for by id so the reply carries a socket. The alternative is
+a `browse` tool that refuses every call until the orphan times out.
+
+`tests/machines.rs` drives both of these against a scripted control plane: a
+provider that refuses a duplicate name is the only thing that can tell one
+browser per agent from two.
+
 ## The element numbering lives on the page
 
 `read` returns the page's text and a numbered list of what can be used, and
