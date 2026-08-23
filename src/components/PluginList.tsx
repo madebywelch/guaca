@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, openExternal } from "../lib/ipc";
 import { BRANDS, hostOf } from "../lib/plugins";
 import {
+  type AccountConnection,
   type AgentCard,
   type AgentId,
   errorMessage,
@@ -103,6 +104,11 @@ export function PluginList({ groupId, crew }: Props) {
   // between the operator and the button they came here for, and the counts on
   // the line above are what says whether opening one is worth it.
   const [opened, setOpened] = useState<string[]>([]);
+  // Which identities the operator has authorized at their Guaca account. Only
+  // an account-backed plugin has any, and an install with no account has none,
+  // which is why a failure here is swallowed rather than surfaced: it means
+  // there is nothing to choose between, not that the panel is broken.
+  const [connections, setConnections] = useState<AccountConnection[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -113,6 +119,13 @@ export function PluginList({ groupId, crew }: Props) {
       setOffers(catalogue);
       setConnected(held);
       setError(null);
+      // Separately, and deliberately not awaited with the two above: this one
+      // goes over the network to guaca.bot, and a slow or absent service must
+      // not keep the plugin list from drawing.
+      void api
+        .accountConnectors()
+        .then((account) => setConnections(account.connections))
+        .catch(() => setConnections([]));
     } catch (caught) {
       setError(errorMessage(caught));
       setOffers([]);
@@ -146,6 +159,8 @@ export function PluginList({ groupId, crew }: Props) {
         const brand = BRANDS[offer.kind];
         const working = busy === offer.kind;
         const chosen = held?.access.mode === "chosen" ? held.access.agents : [];
+        // Two Google accounts are two grants, and a crew uses one of them.
+        const mine = connections.filter((connection) => connection.provider === offer.kind);
 
         return (
           <div className="access__item" key={offer.kind}>
@@ -179,7 +194,15 @@ export function PluginList({ groupId, crew }: Props) {
                   type="button"
                   className="btn btn--small btn--primary"
                   disabled={busy !== null}
-                  onClick={() => void run(offer.kind, () => api.connectPlugin(groupId, offer.kind))}
+                  onClick={() =>
+                    void run(offer.kind, () =>
+                      // The first identity when there is one, so the common
+                      // case is still one click. With none, this connects
+                      // against the account's default and the refusal from Rust
+                      // is what says an account is needed.
+                      api.connectPlugin(groupId, offer.kind, mine[0]?.id),
+                    )
+                  }
                 >
                   {working ? "Waiting for your browser…" : "Connect"}
                 </button>
@@ -194,6 +217,36 @@ export function PluginList({ groupId, crew }: Props) {
                   {!held.signedIn &&
                     " This server asked for no sign-in, so nothing was authorised."}
                 </p>
+
+                {/* Which of the account's identities this crew uses.
+                    Shown only when there is a choice to make: one authorized
+                    Google is not a decision, and a select with a single option
+                    is a control that cannot do anything. */}
+                {mine.length > 1 && (
+                  <label className="field">
+                    <span className="field__label">Account</span>
+                    <select
+                      className="input"
+                      value={held.connection || mine[0]?.id || ""}
+                      disabled={busy !== null}
+                      onChange={(event) =>
+                        void run(offer.kind, () =>
+                          api.setPluginConnection(groupId, offer.kind, event.target.value),
+                        )
+                      }
+                    >
+                      {mine.map((connection) => (
+                        <option key={connection.id} value={connection.id}>
+                          {connection.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="field__hint">
+                      Which {offer.name} account this crew acts as. Its tools are re-read when you
+                      change it, because two accounts do not always authorize the same things.
+                    </span>
+                  </label>
+                )}
 
                 {/* Two buttons rather than a list with an "all" entry at the
                     top: every agent is a standing answer that covers whoever
