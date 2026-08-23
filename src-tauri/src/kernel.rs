@@ -53,6 +53,20 @@ use crate::domain::signin::BrowserState;
 
 const API_BASE: &str = "https://api.onkernel.com";
 
+/// The control plane this build talks to.
+///
+/// [`API_BASE`] everywhere except under `GUAC_KERNEL_API_BASE`, which is the
+/// seam `tests/machines.rs` points at a scripted one. The same shape
+/// `GUACA_ACCOUNT_ORIGIN` has and here for the same reason: the rule this
+/// module keeps is that an agent holds one browser, and the only way to prove
+/// it is against a provider that refuses the second.
+fn api_base() -> String {
+    match std::env::var("GUAC_KERNEL_API_BASE") {
+        Ok(base) if !base.trim().is_empty() => base.trim().trim_end_matches('/').to_string(),
+        _ => API_BASE.to_string(),
+    }
+}
+
 /// The hosts a live view is served from, and the port it is served on.
 ///
 /// Two hosts because the provider moved: a browser created today answers on
@@ -94,6 +108,10 @@ const SETTLE_SCROLL_MS: u32 = 600;
 /// Marks every browser this app made, so the sweep can tell them from the ones
 /// somebody else's project put on the same account.
 const TAG: &str = "guac";
+
+/// Marks a browser with the agent it was made for, which is how one is found
+/// again when nothing in this app is holding its id.
+const AGENT_TAG: &str = "guac-agent";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KernelError {
@@ -241,6 +259,7 @@ struct ProfileRow {
 pub struct KernelClient {
     http: reqwest::Client,
     api_key: String,
+    base: String,
 }
 
 impl KernelClient {
@@ -252,7 +271,7 @@ impl KernelClient {
             return None;
         }
         let http = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).build().ok()?;
-        Some(Self { http, api_key: api_key.to_string() })
+        Some(Self { http, api_key: api_key.to_string(), base: api_base() })
     }
 
     async fn call<T: for<'de> Deserialize<'de>>(
@@ -295,7 +314,7 @@ impl KernelClient {
         let name = profile_name(agent);
         match self
             .call::<ProfileRow>(
-                self.http.post(format!("{API_BASE}/profiles")).json(&json!({ "name": name })),
+                self.http.post(format!("{}/profiles", self.base)).json(&json!({ "name": name })),
             )
             .await
         {
@@ -319,15 +338,53 @@ impl KernelClient {
         stealth: bool,
     ) -> Result<Session, KernelError> {
         let profile = self.ensure_profile(agent).await?;
-        let row: BrowserRow = self
-            .call(self.http.post(format!("{API_BASE}/browsers")).json(&create_body(
-                agent,
-                &profile,
-                idle_seconds,
-                stealth,
-            )))
+        let made = self
+            .call::<BrowserRow>(
+                self.http.post(format!("{}/browsers", self.base)).json(&create_body(
+                    agent,
+                    &profile,
+                    idle_seconds,
+                    stealth,
+                )),
+            )
+            .await;
+
+        match made {
+            Ok(row) => Ok(row.into()),
+            // The name is one per agent, so a conflict is this agent's own
+            // browser, alive and unrecorded: a crash between creating one and
+            // writing it down, or a row cleared while the browser was up. That
+            // browser is what the caller asked for, and the alternative to
+            // taking it is a `browse` tool that refuses every call until the
+            // orphan times out.
+            Err(KernelError::Api { status: 409, message }) => match self.held_by(agent).await? {
+                Some(live) => Ok(live),
+                None => Err(KernelError::Api { status: 409, message }),
+            },
+            Err(err) => Err(err),
+        }
+    }
+
+    /// The browser this agent already has, whatever recorded it.
+    ///
+    /// Found by the tag rather than by the name, because the name is the thing
+    /// the conflict was about and the tag is what says whose browser it is. The
+    /// socket comes from asking for the session itself: a list row is not
+    /// documented to carry one, and a `Session` without its socket names a
+    /// browser nothing can talk to.
+    async fn held_by(&self, agent: &str) -> Result<Option<Session>, KernelError> {
+        let rows: Vec<BrowserRow> = self
+            .call(self.http.get(format!("{}/browsers", self.base)).query(&[
+                ("status", "active"),
+                (&format!("tags[{TAG}]"), "true"),
+                (&format!("tags[{AGENT_TAG}]"), agent),
+                ("limit", "10"),
+            ]))
             .await?;
-        Ok(row.into())
+        match rows.first() {
+            Some(row) => self.get(&row.session_id).await,
+            None => Ok(None),
+        }
     }
 
     /// The browser with this id, or `None` if it has gone.
@@ -337,7 +394,7 @@ impl KernelClient {
     /// caller that had to distinguish a 404 from a real failure would get it
     /// wrong somewhere.
     pub async fn get(&self, id: &str) -> Result<Option<Session>, KernelError> {
-        match self.call::<BrowserRow>(self.http.get(format!("{API_BASE}/browsers/{id}"))).await {
+        match self.call::<BrowserRow>(self.http.get(format!("{}/browsers/{id}", self.base))).await {
             Ok(row) => Ok(Some(row.into())),
             Err(KernelError::Api { status: 404, .. }) => Ok(None),
             Err(err) => Err(err),
@@ -350,7 +407,7 @@ impl KernelClient {
     /// and on the provider's clock, so this is also how an operator's sign-in
     /// is made durable now rather than in an hour.
     pub async fn delete(&self, id: &str) -> Result<(), KernelError> {
-        match self.call::<Value>(self.http.delete(format!("{API_BASE}/browsers/{id}"))).await {
+        match self.call::<Value>(self.http.delete(format!("{}/browsers/{id}", self.base))).await {
             Ok(_) => Ok(()),
             // Already gone is the outcome that was asked for.
             Err(KernelError::Api { status: 404, .. }) => Ok(()),
@@ -367,7 +424,7 @@ impl KernelClient {
     /// would hand the next agent of that name somebody else's sessions.
     pub async fn delete_profile(&self, agent: &str) -> Result<(), KernelError> {
         let name = profile_name(agent);
-        match self.call::<Value>(self.http.delete(format!("{API_BASE}/profiles/{name}"))).await {
+        match self.call::<Value>(self.http.delete(format!("{}/profiles/{name}", self.base))).await {
             Ok(_) => Ok(()),
             Err(KernelError::Api { status: 404, .. }) => Ok(()),
             Err(err) => Err(err),
@@ -381,7 +438,7 @@ impl KernelClient {
     /// created just before a crash has a name nothing recorded.
     pub async fn list_ours(&self) -> Result<Vec<String>, KernelError> {
         let rows: Vec<BrowserRow> = self
-            .call(self.http.get(format!("{API_BASE}/browsers")).query(&[
+            .call(self.http.get(format!("{}/browsers", self.base)).query(&[
                 ("status", "active"),
                 (&format!("tags[{TAG}]"), "true"),
                 ("limit", "100"),
@@ -602,7 +659,7 @@ fn create_body(agent: &str, profile: &str, idle_seconds: u32, stealth: bool) -> 
         "stealth": stealth,
         // The tag is what the sweep matches on; the name is what an operator
         // sees in Kernel's own dashboard when they go looking.
-        "tags": { TAG: "true", "guac-agent": agent },
+        "tags": { TAG: "true", AGENT_TAG: agent },
         "name": format!("guac-{agent}"),
     })
 }

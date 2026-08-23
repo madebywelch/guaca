@@ -3611,6 +3611,7 @@ impl Runtime {
         if !card.has_computer {
             return Err(E2bError::NotGiven);
         }
+        let held = self.held(card);
         let config = self.config();
         // The one place a sandbox is provisioned is the one place that knows
         // which agent it is for, so it is where the group's credentials are
@@ -3623,7 +3624,7 @@ impl Runtime {
 
         // A sandbox recorded without its tokens predates them and cannot be
         // reached, so it counts as absent rather than as something to retry.
-        let known = match (&card.sandbox_id, &card.sandbox_envd_token) {
+        let known = match (&held.sandbox_id, &held.sandbox_envd_token) {
             (Some(id), Some(envd)) => Some((id.clone(), envd.clone())),
             _ => None,
         };
@@ -3639,7 +3640,7 @@ impl Runtime {
                         Sandbox {
                             id,
                             envd_token: envd,
-                            traffic_token: card.sandbox_traffic_token.clone().unwrap_or_default(),
+                            traffic_token: held.sandbox_traffic_token.clone().unwrap_or_default(),
                         },
                     ));
                 }
@@ -3710,6 +3711,26 @@ impl Runtime {
         self.configured().given_to(card)
     }
 
+    /// What this agent is holding *now*, rather than when its turn started.
+    ///
+    /// A turn carries one `AgentCard`, read once in `run_turn` and passed
+    /// through every round. That is right for everything the operator decides
+    /// and wrong for the two things a turn changes about itself: a machine or a
+    /// browser provisioned by one tool call is written to the row and not to
+    /// that snapshot, so the next call sees an agent holding nothing and
+    /// provisions again. It cost a duplicate sandbox, billing until the sweep
+    /// found it, and a second browser Kernel refused by name, which left an
+    /// agent's `browse` failing for the rest of a turn after its first page
+    /// had loaded.
+    ///
+    /// The card stays the authority on what an agent was *given*. This is only
+    /// what it now holds, and a row that cannot be read falls back to the card
+    /// rather than to nothing: provisioning again is the expensive answer,
+    /// refusing a turn its machine because the store hiccupped is the wrong one.
+    fn held(&self, card: &AgentCard) -> AgentCard {
+        self.inner.store.get_agent(card.id).ok().flatten().unwrap_or_else(|| card.clone())
+    }
+
     /// The agent's browser, made or replaced if there is not a live one.
     ///
     /// The single place a browser is provisioned, for the same reason the
@@ -3739,7 +3760,7 @@ impl Runtime {
         let client = KernelClient::new(&config.kernel.api_key).ok_or(KernelError::NoKey)?;
         let idle = config.kernel.idle_minutes.max(1) * 60;
 
-        if let Some(id) = card.browser_id.clone() {
+        if let Some(id) = self.held(card).browser_id {
             // Asked rather than assumed, and the socket is taken from the
             // answer. A stored socket outlives the browser it addressed, and
             // connecting to one is a hang rather than an error.
