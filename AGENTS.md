@@ -262,7 +262,11 @@ the model takes a screenshot to see what `browse` did.
   it wrote and checks the box is still there before writing again, which is why
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
-  pair thread or the activity board, and an effect cannot re-bind on that.
+  pair thread or the activity board, and an effect cannot re-bind on that. The
+  size observer beside it is bound there for that reason too, and it is not
+  decoration: everything under a transcript takes height from it without
+  anything arriving or scrolling, so a composer growing a line or the working
+  panel opening put the newest message under the fold and left it there.
 - **What a plugin's sign-in asks for is the resource's list, not its
   authorisation server's.** They are two documents and two lists: RFC 9728 names
   the scopes for *that resource*, RFC 8414 names everything the server can issue
