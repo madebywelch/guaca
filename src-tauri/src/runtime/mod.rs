@@ -554,6 +554,15 @@ impl Runtime {
         let _ = self.inner.account.set(account);
     }
 
+    /// Where the machine's account lives, for building a plugin endpoint.
+    pub fn account_origin(&self) -> &str {
+        self.inner
+            .account
+            .get()
+            .map(|account| account.origin())
+            .unwrap_or(crate::account::DEFAULT_ORIGIN)
+    }
+
     /// A token for the machine's account, or nothing.
     ///
     /// Nothing means either no account was handed over or the operator is not
@@ -2730,14 +2739,34 @@ impl Runtime {
                 // token, and a copy taken when the turn started is one that can
                 // be stale by the time the tool is reached.
                 let account = if kind.account_backed() { self.account_token().await } else { None };
+                // Which identity this crew chose, and therefore which address.
+                // Read off the stored row rather than remembered, because the
+                // operator can move a group between accounts between turns.
+                let connection = if kind.account_backed() {
+                    self.store()
+                        .group_plugins(card.group_id)
+                        .ok()
+                        .and_then(|all| all.into_iter().find(|held| held.kind == kind))
+                        .map(|held| held.connection)
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                let endpoint = if kind.account_backed() {
+                    plugins::AccountUse::endpoint(self.account_origin(), &connection)
+                } else {
+                    self.plugin_endpoint(kind).to_string()
+                };
                 let called = plugins::call(
                     self.store(),
                     plugins::Target {
                         group: card.group_id,
                         agent: card.id,
                         kind,
-                        endpoint: self.plugin_endpoint(kind),
-                        account: account.as_deref(),
+                        endpoint: &endpoint,
+                        account: account
+                            .as_deref()
+                            .map(|token| plugins::AccountUse { token, connection: &connection }),
                     },
                     &tool,
                     &sent,

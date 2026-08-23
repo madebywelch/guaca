@@ -610,7 +610,7 @@ mod account_backed {
             group,
             PluginKind::Google,
             &format!("{}/mcp", server.base()),
-            Some(ACCOUNT),
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
         )
         .await
@@ -636,9 +636,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         match store.plugin_reach(group, agent, PluginKind::Google, "gmail_search").unwrap() {
             guac_lib::db::store::PluginReach::Granted { grant, .. } => {
@@ -676,9 +683,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         let answer = plugins::call(
             &store,
@@ -687,7 +701,7 @@ mod account_backed {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(ACCOUNT),
+                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
@@ -707,9 +721,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         let failed = plugins::call(
             &store,
@@ -738,12 +759,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        let plugin =
-            plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| {
-                Ok(())
-            })
-            .await
-            .unwrap();
+        let plugin = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         // Chosen, and this agent is not among them.
         store
@@ -760,7 +785,7 @@ mod account_backed {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(ACCOUNT),
+                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
             "run_sql",
             &serde_json::json!({}),
@@ -806,12 +831,16 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
 
     let (_dir, store, group, agent) = workspace();
 
-    let plugin =
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(&token), |_| {
-            panic!("an account-backed plugin must not open a browser")
-        })
-        .await
-        .expect("the account token should connect");
+    let plugin = plugins::connect(
+        &store,
+        group,
+        PluginKind::Google,
+        &endpoint,
+        Some(plugins::AccountUse { token: &token, connection: "" }),
+        |_| panic!("an account-backed plugin must not open a browser"),
+    )
+    .await
+    .expect("the account token should connect");
 
     // A grant with nothing authorised offers nothing, which is a real state and
     // not a failure: it means the operator has not authorised Google yet.
@@ -828,7 +857,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(&token),
+                account: Some(plugins::AccountUse { token: &token, connection: "" }),
             },
             tool,
             &serde_json::json!({}),

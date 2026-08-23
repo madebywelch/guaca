@@ -222,6 +222,25 @@ account rotates its own token, so a copy on the row would be a second thing to
 keep fresh, a second thing to be stale, and a renewal path racing the account's.
 `Runtime::account_token` reads a live one per call.
 
+**A crew chooses which identity it uses.** A person can authorize the same
+provider twice — a work Google and a personal one — and those are two grants at
+`guaca.bot` with two ids. `plugins.connection` holds the one this crew means,
+and it is part of the address: `/mcp/<id>` rather than `/mcp`. Two groups can
+therefore hold two Google accounts at once, which is the case the single-grant
+model could not express at all.
+
+Empty means unnamed, and that is not a missing value. It is the account's
+default, it is what every plugin connected before this column existed keeps
+sending, and bare `/mcp` still answers with every connection's tools. An upgrade
+that invented an id would silently repoint a working crew at a different
+mailbox.
+
+Changing it is `set_plugin_connection` rather than Disconnect and Connect,
+because those are different acts: reconnecting replaces the row and loses the
+per-tool switches the operator set. The tool list is re-read either way, because
+two identities do not publish the same tools — a grant that can read mail and
+not send it offers fewer.
+
 **What the tools are is decided at `guaca.bot`, not here.** The server offers a
 tool only when every scope it needs came back from Google, so a grant that can
 read mail and not send it offers `gmail_search` and not `gmail_send`. A crew

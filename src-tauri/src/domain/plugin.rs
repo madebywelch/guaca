@@ -363,6 +363,13 @@ pub struct Plugin {
     /// group's either way: this decides who is allowed to spend it, not who
     /// holds it.
     pub access: PluginAccess,
+    /// Which authorized identity at the operator's Guaca account this crew uses.
+    ///
+    /// Only meaningful for an account-backed kind, and empty is the account's
+    /// default. A person can authorize the same provider twice — a work Google
+    /// and a personal one — and those are two grants with two ids; this is how
+    /// one group says which of them it means while another says the other.
+    pub connection: String,
     /// False for a server that authorised nothing because it asked for nothing.
     /// Every server on the list today asks, so this is true in practice; it is
     /// read off whether a grant was actually issued rather than off the fact

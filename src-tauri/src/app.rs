@@ -467,6 +467,7 @@ pub fn run() {
             commands::sign_in_account,
             commands::account_connectors,
             commands::sign_out_account,
+            commands::set_plugin_connection,
             commands::subscription_status,
             commands::begin_subscription_signin,
             commands::complete_subscription_signin,

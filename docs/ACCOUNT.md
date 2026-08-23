@@ -176,6 +176,25 @@ a live Google credential on a laptop for an hour at a time, and the rule from
 model.** Keeping the token at the origin that holds the refresh token is the
 stronger position, and the app gets tools instead.
 
+## One account, several identities
+
+Signing in to `guaca.bot` is one identity: the address a code reached. What that
+account *holds* is not. A person can authorize a work Google and a personal one,
+and those are two grants — Better Auth keys them on `(issuer, accountId)`, and
+two Google accounts are two subjects.
+
+The first version of this got that wrong by one word. It said "one grant per
+provider" and read the first row matching one, so a second account could be
+authorized and never seen again, and a crew had no way to name one. Two things
+were needed to fix it and only one of them was in the app:
+
+- `prompt=select_account` on Google's consent. `consent` alone forces the screen
+  and still silently reuses whichever Google the browser is signed into, so an
+  operator could not create the second grant in the first place.
+- A connection id on the plugin row, so a group can say which it means.
+
+`docs/PLUGINS.md`, *A crew chooses which identity it uses*, has the app half.
+
 ## What is not built yet
 
 Cloud-run agents and managed provider keys, both of which were named as reasons
