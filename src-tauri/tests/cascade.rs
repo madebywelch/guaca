@@ -705,6 +705,94 @@ async fn streamed_text_matches_the_persisted_message() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_that_speaks_twice_is_watched_with_the_break_between_its_rounds() {
+    // A turn is several model calls under one placeholder, and a model that
+    // narrates its work says something before each tool call. The message that
+    // lands puts a blank line between those sentences; the bubble the operator
+    // watched being written has to put one there too, or every round after the
+    // first begins in the middle of the sentence the last one ended with:
+    // "...who is here.Two of us."
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Two of us.".into())
+        } else {
+            Script::Narrate {
+                text: "Checking who is here.".into(),
+                then: Box::new(Script::Directory),
+            }
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "who else is here?").unwrap();
+    h.settle(run).await;
+
+    let stream_id = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+
+    let persisted = h.channel_texts("Manager").pop().unwrap();
+    assert_eq!(persisted, "Checking who is here.\n\nTwo of us.");
+    assert_eq!(
+        h.sink.streamed_text(stream_id),
+        persisted,
+        "what the operator watched appear must equal what was saved"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_retried_round_opens_its_replacement_at_the_left_margin() {
+    // The other half of that break. A retry throws away what was drawn and
+    // starts a new placeholder, so the round it reopens for is the first thing
+    // in that bubble however many rounds came before it. Deciding the break
+    // from what has been collected rather than from what is on screen puts a
+    // blank line at the top of every recovered turn.
+    let answers = Arc::new(AtomicUsize::new(0));
+    let stub = serve(move |body| {
+        if !has_tool_result(body) {
+            return Script::Narrate {
+                text: "Checking who is here.".into(),
+                then: Box::new(Script::Directory),
+            };
+        }
+        if answers.fetch_add(1, Ordering::SeqCst) == 0 {
+            Script::Unavailable
+        } else {
+            Script::Say("Two of us.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "who else is here?").unwrap();
+    h.settle(run).await;
+
+    let opened: Vec<_> = h
+        .sink
+        .snapshot()
+        .into_iter()
+        .filter_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(message_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(opened.len(), 2, "the failed attempt should have been replaced, not appended to");
+
+    assert_eq!(
+        h.sink.streamed_text(*opened.last().unwrap()),
+        "Two of us.",
+        "the replacement bubble held nothing to be separated from"
+    );
+    // And the record is unaffected: it kept the round the screen threw away.
+    assert_eq!(h.channel_texts("Manager").pop().unwrap(), "Checking who is here.\n\nTwo of us.");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
     // The whole of the feature: an operator can see what a turn is doing while
     // it does it, and nothing about it survives the turn. Reasoning that leaked
