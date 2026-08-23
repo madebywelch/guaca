@@ -3141,6 +3141,71 @@ button {
   margin-left: auto;
 }
 
+/* One connected plugin's tools, one to a row, each with what the operator
+   decided about it. Shut until asked for: a crew with three plugins connected
+   has sixty of these between the operator and the Disconnect button. */
+.toolset {
+  list-style: none;
+  margin: 0.2rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.toolset__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0;
+  border-top: 1px solid var(--edge);
+}
+
+.toolset__item:first-child {
+  border-top: 0;
+}
+
+/* The name and the vendor's sentence take whatever is left, and the two
+   buttons keep their width: a tool with a paragraph of description must not
+   push Allow and Deny off the end of the row. */
+.toolset__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.toolset__name {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  color: var(--text);
+}
+
+/* Clamped rather than truncated to one line. Some servers write a paragraph
+   per tool and some write four words, and two lines is enough of either to
+   decide with. */
+.toolset__blurb {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  font-size: 0.66rem;
+  color: var(--muted);
+}
+
+/* The disclosure. A link's weight rather than a button's, because it reveals
+   what is already there rather than changing anything. */
+.toolset__more {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--flesh);
+  font-size: 0.68rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .access__ok,
 .access__warn {
   margin: 0;
@@ -4628,6 +4693,13 @@ button {
 .choice:hover:not([aria-pressed="true"]):not([aria-checked="true"]) {
   color: var(--text);
   border-color: color-mix(in oklab, var(--flesh) 40%, var(--edge));
+}
+
+/* Two words in a row that already carries a name and a sentence. The base
+   size would make the pair as tall as the text beside them. */
+.choice--tight {
+  padding: 0.18rem 0.45rem;
+  font-size: 0.68rem;
 }
 
 .choice:disabled {
