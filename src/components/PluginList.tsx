@@ -150,7 +150,7 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
  * at all. A server that publishes its own tools answers all four itself.
  *
  * What is on the list comes from Rust, in order, and is drawn as it arrives: a
- * catalogue the webview sorted or filtered would be a second opinion about
+ * catalog the webview sorted or filtered would be a second opinion about
  * which servers exist, and the runtime is the one that dials them.
  *
  * Connecting can take minutes, because part of it happens in a browser in front
@@ -185,11 +185,8 @@ export function PluginList({ groupId, crew }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [catalogue, held] = await Promise.all([
-        api.pluginCatalogue(),
-        api.groupPlugins(groupId),
-      ]);
-      setOffers(catalogue);
+      const [catalog, held] = await Promise.all([api.pluginCatalog(), api.groupPlugins(groupId)]);
+      setOffers(catalog);
       setConnected(held);
       setError(null);
       // Separately, and deliberately not awaited with the two above: this one
@@ -259,7 +256,7 @@ export function PluginList({ groupId, crew }: Props) {
                 </svg>
               </span>
               <strong className="access__name">{offer.name}</strong>
-              {/* The host, not the whole URL: what matters before authorising
+              {/* The host, not the whole URL: what matters before authorizing
                   is which company is about to be handed the operator's
                   account, and the path is noise beside that. */}
               <span className="access__where">{hostOf(offer.endpoint)}</span>
@@ -361,7 +358,7 @@ export function PluginList({ groupId, crew }: Props) {
                     {accountEmail ? `, from your Guaca account ${accountEmail}` : ""}.{" "}
                     {held
                       ? "Its tools are re-read when you change it, because two accounts do not always authorize the same things."
-                      : "Pick before connecting; you can change it afterwards."}
+                      : "Pick before connecting; you can change it afterward."}
                   </span>
                 </label>
               ))}
@@ -375,7 +372,7 @@ export function PluginList({ groupId, crew }: Props) {
                       an account. */}
                   {held.account && ` Signed in as ${held.account}.`}
                   {!held.signedIn &&
-                    " This server asked for no sign-in, so nothing was authorised."}
+                    " This server asked for no sign-in, so nothing was authorized."}
                 </p>
 
                 {/* Two buttons rather than a list with an "all" entry at the

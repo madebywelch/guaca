@@ -360,7 +360,7 @@ export function firstRunDelay(
     // The next month that actually has that day, rather than the last day of
     // this one. Clamping here would anchor a routine set for the 31st on the
     // 28th of February and keep it there for the rest of the year, which is
-    // the walk backwards down the calendar the Rust side is careful to avoid.
+    // the walk backward down the calendar the Rust side is careful to avoid.
     const start = new Date(from);
     for (let step = 0; step <= 14; step += 1) {
       const month = new Date(start.getFullYear(), start.getMonth() + step, 1);
@@ -390,7 +390,7 @@ export function momentOf(at: number): Moment {
   };
 }
 
-/** Now, rounded up to the next five minutes: an easier row to recognise later. */
+/** Now, rounded up to the next five minutes: an easier row to recognize later. */
 export function nextRoundMoment(from: number = Date.now()): Moment {
   const when = new Date(from);
   when.setMinutes(Math.ceil(when.getMinutes() / 5) * 5, 0, 0);

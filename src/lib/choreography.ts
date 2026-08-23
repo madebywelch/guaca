@@ -20,7 +20,7 @@ import type { AgentId } from "./types";
  *   flight  the parcel crosses the wire
  *   catch   the recipient takes the hit and settles
  *
- * Simultaneous messages are staggered rather than serialised, so a burst still
+ * Simultaneous messages are staggered rather than serialized, so a burst still
  * finishes promptly while each throw stays individually legible.
  */
 

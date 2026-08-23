@@ -76,7 +76,7 @@ describe("isInterAgent", () => {
 });
 
 describe("error handling", () => {
-  it("recognises a structured command error", () => {
+  it("recognizes a structured command error", () => {
     expect(isCommandError({ kind: "validation", message: "bad" })).toBe(true);
     expect(isCommandError(new Error("boom"))).toBe(false);
     expect(isCommandError(null)).toBe(false);

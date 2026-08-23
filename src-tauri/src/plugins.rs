@@ -9,7 +9,7 @@
 //! ## A session per call, on purpose
 //!
 //! Every tool call opens a fresh MCP session: `initialize`, then the call. The
-//! obvious optimisation is to keep the session and reuse it, and it is not
+//! obvious optimization is to keep the session and reuse it, and it is not
 //! taken. A cached session is a second thing that can be stale — the server can
 //! expire it, the token under it can be refreshed, and the crew can disconnect
 //! the plugin — and every one of those failures surfaces as a tool call that
@@ -84,7 +84,7 @@ pub enum PluginError {
 ///
 /// The first `initialize` goes out with no token deliberately, and it is doing
 /// two jobs. It is the only honest way to find out whether this server wants
-/// one — sending an operator to a browser to authorise a server that authorises
+/// one — sending an operator to a browser to authorize a server that authorizes
 /// everybody is a consent prompt for nothing — and its refusal is where the
 /// address of the sign-in comes from: the `WWW-Authenticate` challenge names
 /// the server's own protected-resource metadata, which is the answer the vendor

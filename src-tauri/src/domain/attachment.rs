@@ -1,4 +1,4 @@
-//! A file travelling between the operator, the agents, and their machines.
+//! A file traveling between the operator, the agents, and their machines.
 //!
 //! The bytes are not here and never travel in an envelope. A transcript is read
 //! in bulk (forty messages into every prompt, hundreds into the activity view),

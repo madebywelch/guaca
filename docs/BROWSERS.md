@@ -231,7 +231,7 @@ decision and not one it announces. An entry for a host nobody is issued costs a
 line in an allowlist. A missing one costs the whole pane, silently: an iframe
 the CSP refuses draws the surface behind it and reports nothing, so a browser
 that is running, signed in and working looks exactly like one that failed to
-start. Black full screen, grey in the panel, no error anywhere.
+start. Black full screen, gray in the panel, no error anywhere.
 
 That is why `framable` asks the same question of the URL that actually arrived,
 and `Browser::running` hands the pane the origin instead of the URL when the

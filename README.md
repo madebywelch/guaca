@@ -86,8 +86,8 @@ they are what OpenRouter serves by default. `docs/PROTOCOL.md` has the detail.
    Sixteen agents are set up in there, from Paralegal to QA Tester, and each one
    arrives as an ordinary agent you can rename, rewrite or delete.
 2. Open **Chief of Staff** and send `Introduce yourself to your team.`
-3. Watch the rail. Each message between agents draws a pulse travelling between
-   them in the sender's colour.
+3. Watch the rail. Each message between agents draws a pulse traveling between
+   them in the sender's color.
 4. Open any other agent to see what it received, or the activity view to see the
    whole thing as a sequence diagram, one board per run.
 
@@ -101,7 +101,7 @@ so editing a profile is deliberately one click further away.
 
 ## Groups
 
-A group is an isolation boundary, and it is the main thing to organise around.
+A group is an isolation boundary, and it is the main thing to organize around.
 Agents in different groups cannot see or message each other, and a name in
 another group does not resolve. It reads exactly like a name belonging to
 nobody, so the roster cannot be probed across the line.
@@ -138,7 +138,7 @@ sign-in: the call leaves Guaca with the group's own grant on it.
 Six of them: Neon, Cloudflare, Linear, Stripe, AgentMail and Google. That is the
 whole list, and it is short on purpose. A server is on it if it publishes its
 own tools, if those tools act on your account rather than describe how to, and
-if its authorisation server lets an application register itself on the spot.
+if its authorization server lets an application register itself on the spot.
 The third one is what makes signing in possible at all from an app anybody can
 build: there is no Guaca client id at Neon to register under, and one shipped
 inside a binary is not a secret. `docs/PLUGINS.md` argues each of the three.
@@ -234,7 +234,7 @@ you, submitting a form, buying something.
 
 Both stop the agent mid-turn and put a card in the conversation with two
 buttons. Nothing happens until you answer, and the answer is kept beside what
-was asked. An agent told by a colleague that you have already authorised
+was asked. An agent told by a colleague that you have already authorized
 something asks you rather than taking a peer's word for it, and the question
 comes from the agent that will actually do the thing rather than the one
 relaying the request.
@@ -356,7 +356,7 @@ bearing:
 Detection is deliberately cautious, because a wrong claim is worse than a
 missing one: an agent that believes it can read Gmail wastes a turn finding out
 it cannot, and you see a broken account rather than an absent one. Sites are
-recognised by the cookie that actually means somebody logged in, so a browser
+recognized by the cookie that actually means somebody logged in, so a browser
 holding `google.com` cookies it collected while signed out is correctly reported
 as signed out. Anything not on that list is only mentioned if the browser has
 genuinely visited it *and* holds a cookie implying an identity, and it is passed
@@ -364,11 +364,11 @@ to the agent as a maybe. On a real profile holding a thousand cookies across
 three hundred domains, that combination reported exactly the one account the
 machine actually had.
 
-The recognised-service list lives in `domain/signin.rs` and adding one is a
+The recognized-service list lives in `domain/signin.rs` and adding one is a
 line.
 
 Being signed in is also what makes a hostile web page worth writing, so every
-page an agent reads arrives labelled as content rather than instruction, and the
+page an agent reads arrives labeled as content rather than instruction, and the
 system prompt says what a signed-in agent must stop short of. See **Credit**.
 
 ## The account
@@ -428,7 +428,7 @@ rendered into a prompt, never sent to a model.
 
 The API key is stored in `config.json` in plaintext, and the two sign-ins in
 their own files beside it. Guaca is a local app with no auth, and a key
-encrypted with a key sitting beside it would be theatre. The honest answer is the
+encrypted with a key sitting beside it would be theater. The honest answer is the
 OS keychain, and that is a deliberate follow-up rather than something faked here.
 It matters more for the sign-ins than for the key: those credentials belong to
 accounts with more than Guaca behind them. **Sign out** removes the file.
@@ -495,8 +495,8 @@ Polley, Jerry Ma, Denis Yarats and Ninghui Li
 benchmark injections that drive real-world *actions* rather than text output,
 which is exactly what a signed-in session turns a web page into: the payload no
 longer has to talk an agent into obtaining access, because it already has the
-operator's. Guaca takes the architectural half of their defence-in-depth
-argument, which is what a local app can actually hold: page content is labelled
+operator's. Guaca takes the architectural half of their defense-in-depth
+argument, which is what a local app can actually hold: page content is labeled
 at the point it enters the turn, credentials never enter the model's context at
 all, and the signed-in agent is told where to stop. Neither paper's authors
 endorse any of this.
@@ -504,8 +504,8 @@ endorse any of this.
 Plugin marks are [Simple Icons](https://simpleicons.org), CC0 1.0. Trademarks
 belong to their owners.
 
-## Licence
+## License
 
 [GNU AGPL v3](LICENSE). You can use, modify and run it, including commercially;
 if you distribute it or run a modified version as a network service, that
-version has to be published under the same licence.
+version has to be published under the same license.

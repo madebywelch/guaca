@@ -45,7 +45,7 @@ mod tests {
         let mut sorted = stamps.clone();
         sorted.dedup();
         assert_eq!(stamps.len(), sorted.len(), "two records must never share a timestamp");
-        assert!(stamps.windows(2).all(|w| w[1] > w[0]), "and they must only ever go forwards");
+        assert!(stamps.windows(2).all(|w| w[1] > w[0]), "and they must only ever go forward");
     }
 
     #[test]

@@ -1,10 +1,10 @@
 /**
- * The colours a chart is allowed to use.
+ * The colors a chart is allowed to use.
  *
  * Eight hues in one fixed order, assigned to series by position and never
  * cycled. The order is the accessibility mechanism, not a preference: what
- * makes a chart readable to a red-green colourblind operator is that
- * *neighbouring* slots stay far apart, because neighbouring slots are the ones
+ * makes a chart readable to a red-green colorblind operator is that
+ * *neighboring* slots stay far apart, because neighboring slots are the ones
  * that touch in a stack, sit side by side in a group, and cross in a line
  * chart. A palette picked by eye fails that test roughly always.
  *
@@ -20,14 +20,14 @@
  *
  * | gate                        | target | paper | ink  |
  * |-----------------------------|--------|-------|------|
- * | neighbours, colourblind     | ≥ 8    | 9.1   | 8.4  |
- * | neighbours, full colour     | ≥ 15   | 19.6  | 19.3 |
+ * | neighbors, colorblind     | ≥ 8    | 9.1   | 8.4  |
+ * | neighbors, full color     | ≥ 15   | 19.6  | 19.3 |
  * | first three, every pair     | ≥ 8    | 13.0  | 13.0 |
  *
  * The last row is the one scatter needs, where any two dots can end up
- * touching and "neighbours" means nothing. Nine hues is not an option: a
+ * touching and "neighbors" means nothing. Nine hues is not an option: a
  * generated ninth is indistinguishable from one of these eight under
- * colourblindness, so a ninth series folds into an "Other" instead.
+ * colorblindness, so a ninth series folds into an "Other" instead.
  *
  * `palette.test.ts` recomputes every figure above from these hexes. It is the
  * gate, not a note about one: a hex edited here fails the suite.
@@ -48,8 +48,8 @@ export interface Slot {
 /**
  * The eight, in the order they are handed out.
  *
- * Read by index, so a series keeps its colour when its neighbours are switched
- * off in the legend. Colour follows the series, never its rank: an operator who
+ * Read by index, so a series keeps its color when its neighbors are switched
+ * off in the legend. Color follows the series, never its rank: an operator who
  * has learned that revenue is green is misled by a chart that repaints the
  * survivors when something is hidden.
  */
@@ -70,11 +70,11 @@ export const MAX_SERIES = SLOTS.length;
 /**
  * How many of them a form where any two marks can touch may carry.
  *
- * Scatter and bubble have no neighbours: every dot is potentially beside every
+ * Scatter and bubble have no neighbors: every dot is potentially beside every
  * other, so the gate is every pair rather than adjacent pairs, and that is a
  * strictly harder test no ordering of eight hues can pass. Three is what does
  * pass. Past three, a scatter leans on the shape of its marks as well as their
- * colour, which is the documented answer to running out of hues.
+ * color, which is the documented answer to running out of hues.
  */
 export const MAX_SCATTER_HUES = 3;
 
@@ -82,7 +82,7 @@ export const MAX_SCATTER_HUES = 3;
  * The marks a scatter draws its series with.
  *
  * A second channel beside the hue, and it is why a scatter here is not capped
- * at three series. Shape survives every kind of colourblindness, print, and a
+ * at three series. Shape survives every kind of colorblindness, print, and a
  * screenshot pasted into a document, none of which hue does.
  */
 export const SCATTER_MARKS = ["circle", "square", "triangle", "diamond"] as const;
@@ -90,7 +90,7 @@ export const SCATTER_MARKS = ["circle", "square", "triangle", "diamond"] as cons
 export type ScatterMark = (typeof SCATTER_MARKS)[number];
 
 /**
- * The colour for a series, as a CSS custom property reference.
+ * The color for a series, as a CSS custom property reference.
  *
  * A property rather than a hex, so the surface decides which of the two values
  * it resolves to and nothing here has to know which one is current. The

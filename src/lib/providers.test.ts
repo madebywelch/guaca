@@ -13,8 +13,8 @@ import type { Settings } from "./types";
  * survive the two ways an operator's paste differs from the same URL and it
  * has to refuse everything else: a hand-typed endpoint must read as chosen,
  * not as one of these with the highlight on the wrong row. And because the
- * Rust side normalises a base URL before it stores one, a preset that is not
- * already in that canonical form saves fine and comes back unrecognised, which
+ * Rust side normalizes a base URL before it stores one, a preset that is not
+ * already in that canonical form saves fine and comes back unrecognized, which
  * looks like the app forgetting the choice that was just made.
  *
  * Nothing here needs a running app. A preset the backend would rewrite, or one
@@ -62,7 +62,7 @@ describe("an endpoint that is not a preset", () => {
     expect(providerFor("///")).toBeUndefined();
   });
 
-  it("leaves an endpoint nobody ships unrecognised, because that is what chosen means", () => {
+  it("leaves an endpoint nobody ships unrecognized, because that is what chosen means", () => {
     // `Custom` is the absence of an entry. Answering with the nearest preset
     // would put the highlight on a row that is not what the app would call.
     expect(providerFor("https://llm.internal.example.com/v1")).toBeUndefined();
@@ -83,9 +83,9 @@ describe("an endpoint that is not a preset", () => {
 describe("the same endpoint, pasted the way a provider prints it", () => {
   it("resolves a base that still names the completions path", () => {
     // The most common paste there is, because it is the URL in a provider's own
-    // documentation. The Rust normaliser strips it before storing, so
-    // recognising it here is what stops the chosen row flipping across a save:
-    // the box read as unrecognised, the backend trimmed the path, and the very
+    // documentation. The Rust normalizer strips it before storing, so
+    // recognizing it here is what stops the chosen row flipping across a save:
+    // the box read as unrecognized, the backend trimmed the path, and the very
     // same setting then read as the preset.
     for (const provider of PROVIDERS) {
       expect(providerFor(`${provider.baseUrl}/chat/completions`), provider.name).toBe(provider);
@@ -262,7 +262,7 @@ describe("what a fresh install starts on", () => {
  *
  * A slug ranked at OpenRouter means nothing at any other endpoint, so offering
  * one where it will be refused is a button that quietly breaks every turn the
- * agent takes afterwards. The resolution has to match the backend's, because
+ * agent takes afterward. The resolution has to match the backend's, because
  * that is what actually decides where the call goes.
  */
 describe("whether OpenRouter is what pays", () => {
@@ -304,8 +304,8 @@ describe("whether OpenRouter is what pays", () => {
 
   // The endpoint the operator pastes is the one their provider's documentation
   // prints, and that one ends in /chat/completions. `providerFor` already
-  // normalises it; this is here so a rewrite of either cannot quietly stop.
-  it("recognises the endpoint the way it is actually pasted", () => {
+  // normalizes it; this is here so a rewrite of either cannot quietly stop.
+  it("recognizes the endpoint the way it is actually pasted", () => {
     expect(
       onOpenRouter(aGroup(), app({ baseUrl: "https://openrouter.ai/api/v1/chat/completions" })),
     ).toBe(true);

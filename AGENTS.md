@@ -23,7 +23,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
-  lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
+  lib/plugins.ts      A plugin's mark and color. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale and surface, as one write to the root element.
@@ -46,7 +46,7 @@ src-tauri/src/
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
-    catalogue.rs      Which models OpenRouter sees doing which kind of work.
+    catalog.rs        Which models OpenRouter sees doing which kind of work.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP. Three methods, one POST each.
@@ -106,7 +106,7 @@ repo: the frontend renders state and forwards intent.
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
-| A chart's colours, or how many series one may carry | *A chart's colours are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
+| A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
@@ -118,7 +118,7 @@ repo: the frontend renders state and forwards intent.
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
-| What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalogue.rs`, whose twelve use cases have to agree |
+| What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 | What a real crew of eight does with one directive, and what is different when you ask twice | *A crew is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
 
@@ -194,7 +194,7 @@ the model takes a screenshot to see what `browse` did.
 - **Every setting a group can hold is `None` when it is inherited, all the way
   down.** In the draft, in the column, and in the resolved overrides. An empty
   string is a field an operator blanked, which also means inherit, and it is
-  normalised to `None` on the way in so the two can never disagree.
+  normalized to `None` on the way in so the two can never disagree.
 - **A thread between two agents is `pair_messages`.** A send is filed under the
   recipient and the answer under the sender, so a thread assembled from one
   channel's rows is missing messages nobody can account for.
@@ -245,15 +245,15 @@ the model takes a screenshot to see what `browse` did.
   was showing them, and the agent needs a sentence it can act on next turn,
   which is why every refusal in `readChart` names the field and the fix. "Invalid
   chart" costs a whole turn and teaches nothing.
-- **The eight series colours are the output of a check, and the *order* is the
-  check.** Neighbouring slots are what touch in a stack and cross in a line
-  chart, so neighbours are the pairs that decide whether a chart is readable to a
-  colourblind operator, and nobody can verify that by looking. The order came out
+- **The eight series colors are the output of a check, and the *order* is the
+  check.** Neighboring slots are what touch in a stack and cross in a line
+  chart, so neighbors are the pairs that decide whether a chart is readable to a
+  colorblind operator, and nobody can verify that by looking. The order came out
   of enumerating all 40,320 and keeping the 160 that pass on this app's own two
   surfaces. `palette.test.ts` recomputes every figure in `palette.ts`'s comment
   from the hexes themselves, so a hex nudged because a screenshot looked slightly
   off fails the suite. A ninth hue is refused rather than generated: a generated
-  one is indistinguishable from one of the eight under colourblindness.
+  one is indistinguishable from one of the eight under colorblindness.
 - **Nothing inside a chart's drawing is focusable, and the Figures table is
   why.** The `svg` is one `role="img"` with a sentence on it, which makes its
   subtree invisible to a screen reader by definition, so a label on a band
@@ -304,7 +304,7 @@ the model takes a screenshot to see what `browse` did.
 - **The line drawn is the last sentence that *finished*, under the model's own
   heading.** Not the tail. A tail replaced every sixteen milliseconds is a
   flicker that says a turn is alive, which is what the pulse already said, and
-  nobody can read a sentence as it is typed. Waiting for the full stop costs a
+  nobody can read a sentence as it is typed. Waiting for the period costs a
   second of staleness and is the difference between a line and a blur.
 - **The live trail and the thinking have one lifetime, because they have one
   mechanism.** `ToolStarted` and `ToolFinished` are addressed to the placeholder
@@ -317,7 +317,7 @@ the model takes a screenshot to see what `browse` did.
   comes back is silence for exactly as long as the wait it was meant to explain,
   which is the state that reads as a hang.
 - **`ToolFinished` carries the whole `Part::ToolCall` and not its outcome.** The
-  chip a turn draws while it runs and the chip the transcript draws afterwards
+  chip a turn draws while it runs and the chip the transcript draws afterward
   are then one function over one value, rather than two that agree on the day
   they were written. The outcome alone was enough until `replaced` arrived, at
   which point a live memory rewrite silently stopped opening as a diff while the
@@ -336,7 +336,7 @@ the model takes a screenshot to see what `browse` did.
   anything arriving or scrolling, so a composer growing a line or the working
   panel opening put the newest message under the fold and left it there.
 - **What a plugin's sign-in asks for is the resource's list, not its
-  authorisation server's.** They are two documents and two lists: RFC 9728 names
+  authorization server's.** They are two documents and two lists: RFC 9728 names
   the scopes for *that resource*, RFC 8414 names everything the server can issue
   behind it. AgentMail's MCP server wants three and the Clerk instance behind it
   lists seven, four of which it refuses a registered client, as an
@@ -523,7 +523,7 @@ the model takes a screenshot to see what `browse` did.
 - **`--flesh` and `--flesh-soft` are pinned on `.rail`.** The rail is dark in
   both surfaces and reads both tokens, so a dark value for either would repaint
   it and no test would notice. Pinning them on the one element every rail rule
-  descends from makes the rail a colour scope rather than a naming convention.
+  descends from makes the rail a color scope rather than a naming convention.
 - **`data-surface` is only ever `light` or `dark`.** `system` is resolved before
   it reaches the document. A stylesheet rule keyed on `system` would have to
   duplicate the one keyed on `dark`, and CSS has no way to share them.
@@ -539,7 +539,7 @@ the model takes a screenshot to see what `browse` did.
   would close itself exactly when it was worth reading.
 - **The attention glyph is the one tray image that is not a template.** macOS
   tints a template image to match the menu bar, so a template glyph cannot have
-  a colour. Giving up the tint buys the one state that must not be missed, and
+  a color. Giving up the tint buys the one state that must not be missed, and
   the count beside the icon says the same thing in text.
 - **An ampersand in a menu item has to be doubled.** Every platform's menu reads
   `&` as a mnemonic marker and eats it, so an agent called `R&D` draws as `RD`.
@@ -554,12 +554,12 @@ the model takes a screenshot to see what `browse` did.
   each row is not decoration either: capability ordering ignores price, so
   without it the button is a one-click way to make every turn forty times
   dearer.
-- **An unknown category is refused in `catalogue.rs`, not by OpenRouter.**
+- **An unknown category is refused in `catalog.rs`, not by OpenRouter.**
   OpenRouter answers one with 200 and an empty list, so a slug it has renamed is
   indistinguishable from a use case nobody sends work to, and the dialog would
   draw nothing for exactly the agents it was built for. `ipc.contract.test.ts`
   compares the twelve in `CATEGORIES` against the twelve in `ROLES`, and the
-  `#[ignore]`d test in `catalogue.rs` asks the live service whether it still
+  `#[ignore]`d test in `catalog.rs` asks the live service whether it still
   ranks all of them, which is the failure no offline suite can see.
 - **`roleFor` returning nothing is the common answer, and a tie returns
   nothing too.** Most agents are a Manager or an Inbox and OpenRouter has no
@@ -581,9 +581,21 @@ the model takes a screenshot to see what `browse` did.
   and what to do about it. Both are read by a model or a human under pressure.
 - Errors an agent reads mid-turn need a way forward, not just a reason. A
   refusal that only says no gets reworded and retried.
-- New behaviour needs a test that would fail without it. Failure paths first.
+- New behavior needs a test that would fail without it. Failure paths first.
 - No dead code, no speculative API surface. The contract test fails on a command
   nothing calls.
+- **American spelling, everywhere this repo writes its own words.** Prose,
+  comments, test names, identifiers, schema, UI copy, commit messages. `color`,
+  `behavior`, `authorize`, `recognize`, `center`, `catalog`. This started as
+  British by accident in the first commit and drifted for a year: the account
+  subsystem ended up American while the plugin subsystem beside it stayed
+  British, and `oauth.rs` disagreed with itself inside one file. There are
+  exactly two things the rule does not reach, and both are somebody else's
+  spelling rather than a choice: a token named by a language, a spec or a vendor
+  keeps whatever they called it (`color-mix`, `grayscale()`, the `Authorization`
+  header, `authorization_endpoint`, `TransactionBehavior`), and a list matched
+  against what an operator typed carries both spellings, which is why `WORDS` in
+  `roles.ts` still holds `localisation`.
 
 ## Ownership
 
@@ -685,7 +697,7 @@ Another, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
 turn that calls a plugin tool end to end. Its live half runs `oauth::discover`
 against every vendor on the list and asks whether each still publishes what this
-build expects, which is the failure no offline test can see. It reaches the internet, authorises nothing and spends nothing.
+build expects, which is the failure no offline test can see. It reaches the internet, authorizes nothing and spends nothing.
 
 ```sh
 ./scripts/plugins.sh
@@ -706,10 +718,10 @@ The model suggestions beside an agent's model field have the same shape again,
 without a script because it is one test. It asks the live OpenRouter whether it
 still ranks models for all twelve of the use cases this build believes in, which
 is the one failure the offline suite cannot see: a category renamed there answers
-200 with an empty list. It reaches the internet, authorises nothing and spends
+200 with an empty list. It reaches the internet, authorizes nothing and spends
 nothing.
 
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --lib \
-  llm::catalogue::tests::every_use_case -- --ignored --nocapture
+  llm::catalog::tests::every_use_case -- --ignored --nocapture
 ```

@@ -207,7 +207,7 @@ impl Store {
             // used to fail on the journal_mode switch alone; once the migration
             // list grew long enough to hold the lock for a few milliseconds, the
             // same race started failing there too.
-            let _serialised = bootstrap_lock().lock();
+            let _serialized = bootstrap_lock().lock();
 
             let mut bootstrap = rusqlite::Connection::open(path)?;
             // Needed before the migration below, so a second process opening
@@ -388,7 +388,7 @@ impl Store {
     /// the meantime must not cost them the half of the intent that still holds.
     ///
     /// Renumbers every live agent densely rather than finding a gap between two
-    /// neighbours. A workspace holds tens of agents, so the write is trivial,
+    /// neighbors. A workspace holds tens of agents, so the write is trivial,
     /// and a scheme with gaps has a state where the gap is used up that this one
     /// does not have. Not an edit: like `pinned`, this is where a row is drawn,
     /// so the version does not move and no peer is told.
@@ -1415,7 +1415,7 @@ impl Store {
             .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
 
         // An empty access token is a plugin that needed no sign-in, not a
-        // broken one. A server that authorises everybody stores no grant, and
+        // broken one. A server that authorizes everybody stores no grant, and
         // reporting one with nothing in it would send the operator to a browser
         // to fix something that is working, and put `Bearer ` on every call.
         let grant = (!access.is_empty()).then(|| crate::oauth::Grant {
@@ -1651,7 +1651,7 @@ impl Store {
         let conn = self.conn()?;
         let id = PluginId::new();
         let encoded = serde_json::to_string(tools)
-            .map_err(|e| StoreError::Corrupt(format!("tool list will not serialise: {e}")))?;
+            .map_err(|e| StoreError::Corrupt(format!("tool list will not serialize: {e}")))?;
 
         conn.execute(
             "INSERT INTO plugins
@@ -1758,7 +1758,7 @@ impl Store {
             )?;
             let mut insert = tx.prepare(
                 "INSERT INTO signins
-                   (agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at)
+                   (agent_id,surface,domain,service,recognized,first_seen_at,last_seen_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7)",
             )?;
 
@@ -1783,7 +1783,7 @@ impl Store {
                     surface.as_str(),
                     signin.domain,
                     signin.service,
-                    signin.recognised as i64,
+                    signin.recognized as i64,
                     since,
                     signin.last_seen_at,
                 ])?;
@@ -1797,7 +1797,7 @@ impl Store {
     pub fn agent_signins(&self, agent: AgentId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT agent_id,surface,domain,service,recognised,first_seen_at,last_seen_at
+            "SELECT agent_id,surface,domain,service,recognized,first_seen_at,last_seen_at
                FROM signins WHERE agent_id=?1 ORDER BY service",
         )?;
         let rows = stmt.query_map(params![agent.to_string()], row_to_signin)?;
@@ -1815,7 +1815,7 @@ impl Store {
     pub fn group_signins(&self, group: GroupId) -> Result<Vec<Signin>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT s.agent_id,s.surface,s.domain,s.service,s.recognised,s.first_seen_at,
+            "SELECT s.agent_id,s.surface,s.domain,s.service,s.recognized,s.first_seen_at,
                       s.last_seen_at
                FROM signins s
                JOIN agents a ON a.id = s.agent_id
@@ -2856,7 +2856,7 @@ pub enum PluginReach {
     /// Somebody in the crew has it.
     ToolNotChosen,
     /// The row, and the grant to spend against it. `None` for a server that
-    /// authorised nobody because it asked for nothing.
+    /// authorized nobody because it asked for nothing.
     Granted { id: PluginId, grant: Option<crate::oauth::Grant> },
 }
 
@@ -2984,7 +2984,7 @@ fn row_to_signin(row: &Row<'_>) -> RowResult<Signin> {
             surface: Surface::parse(&row.get::<_, String>(1)?),
             domain: row.get(2)?,
             service: row.get(3)?,
-            recognised: row.get::<_, i64>(4)? != 0,
+            recognized: row.get::<_, i64>(4)? != 0,
             first_seen_at: row.get(5)?,
             last_seen_at: row.get(6)?,
         })
@@ -3058,7 +3058,7 @@ fn row_to_envelope(row: &Row<'_>) -> RowResult<Envelope> {
             trust,
             hop,
             expects_reply,
-            // Anything unrecognised reads as a courtesy, which is the same
+            // Anything unrecognized reads as a courtesy, which is the same
             // conservative default the parser uses: a stored word nobody
             // defined must not be the one that wakes an agent to act.
             intent: Intent::parse(&intent_raw),
@@ -3163,7 +3163,7 @@ mod tests {
             agent_id: agent,
             domain: domain.into(),
             service: service.into(),
-            recognised: true,
+            recognized: true,
             first_seen_at: at,
             last_seen_at: at,
         }
@@ -4141,7 +4141,7 @@ mod tests {
 
     #[test]
     fn a_provider_written_by_a_newer_build_reads_as_inherit() {
-        // A group whose provider nothing here recognises has to keep working on
+        // A group whose provider nothing here recognizes has to keep working on
         // the app settings. Refusing to read the row would take a whole crew
         // offline over a column this build has never heard of.
         let dir = tempfile::tempdir().unwrap();
@@ -5095,7 +5095,7 @@ mod tests {
     fn a_standing_grant_can_be_taken_back() {
         // "Always allow" is one click about every future request. A permission
         // that could only ever be given would make that click a decision to
-        // agonise over, which is the opposite of what it is for.
+        // agonize over, which is the opposite of what it is for.
         let f = fixture();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let request = ask(&f.store, &manager);

@@ -37,7 +37,7 @@ use std::time::Instant;
 use guac_lib::config::AppConfig;
 use guac_lib::domain::envelope::{Envelope, Part, Participant};
 use guac_lib::domain::ids::AgentId;
-use guac_lib::eval::{analyse, faults, Fault};
+use guac_lib::eval::{analyze, faults, Fault};
 use guac_lib::runtime::events::{EventSink, UiEvent};
 
 use harness::live::*;
@@ -72,7 +72,7 @@ const STANDING_INSTRUCTION: &str =
 /// have no part in it at all, which is the arrangement that separates a
 /// coordinator that chooses from one that hands everybody a piece. The
 /// Market Researcher overlaps the Content Marketer on positioning and the Data
-/// Analyst on sizing, so there is a real judgement to make rather than a lookup.
+/// Analyst on sizing, so there is a real judgment to make rather than a lookup.
 /// The Executive Assistant is bait: the directive mentions a meeting on Monday
 /// and never asks for anything to be done about it.
 ///
@@ -82,7 +82,7 @@ const STANDING_INSTRUCTION: &str =
 /// test of the briefs.
 fn crew() -> Vec<LiveAgent> {
     vec![
-        LiveAgent::told(CHIEF, &["coordination", "prioritisation"], STANDING_INSTRUCTION),
+        LiveAgent::told(CHIEF, &["coordination", "prioritization"], STANDING_INSTRUCTION),
         LiveAgent::skilled(
             "Executive Assistant",
             &["calendar", "inbox", "travel booking", "meeting logistics"],
@@ -260,7 +260,7 @@ async fn one_run(
 
     let messages = h.envelopes(names);
     let name_of = |id: AgentId| lookup.get(&id).cloned().unwrap_or_else(|| "?".into());
-    let convo = analyse(&messages, &name_of);
+    let convo = analyze(&messages, &name_of);
     let found = faults(&messages, &name_of);
     let trajectory = h.trajectory(run);
 
@@ -588,7 +588,7 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
 
     // One line per message before the messages themselves, because a cascade
     // is a shape and a shape cannot be read at the pace of full paragraphs.
-    // Everything a runaway is recognised by is in it: work going out to five
+    // Everything a runaway is recognized by is in it: work going out to five
     // peers at once, a hop count climbing past where the operator's message
     // started, a specialist answering the operator while its coordinator is
     // still consolidating.

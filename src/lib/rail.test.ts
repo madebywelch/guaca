@@ -165,7 +165,7 @@ describe("where a dropped row lands", () => {
 
   it("goes in front of the target when it came from another group", () => {
     // An agent arriving from elsewhere has no place in this section to have
-    // travelled from, so there is no direction to read.
+    // traveled from, so there is no direction to read.
     const rows = crew();
     expect(landsBefore(rows, "Outsider", "Cook")).toBe("Cook");
   });

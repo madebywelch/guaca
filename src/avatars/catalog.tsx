@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
  *
  * The crew is the recipe. Every agent is a different ingredient, because the
  * silhouette is the only thing that still separates two agents at the 22px the
- * composer draws them at. Colour does not: the previous set was one shared body
+ * composer draws them at. Color does not: the previous set was one shared body
  * in twelve accents, and a rail of it read as one agent twelve times.
  *
  * Variety in the outline only survives if nothing else varies. Every ingredient
@@ -45,10 +45,10 @@ export const FORM = {
   top: 6,
   bottom: 59,
   /** Where a character's mass wants to sit, so a row of them shares a baseline. */
-  centreX: 32,
-  centreY: 36,
+  centerX: 32,
+  centerY: 36,
   /** On every silhouette without exception. An edge is the difference between a
-      drawn character and a coloured region. */
+      drawn character and a colored region. */
   rim: 2.2,
   /** One stroke, always down the upper left. Light comes from one place. */
   sheen: 2.6,
@@ -68,7 +68,7 @@ type MouthKind = "smile" | "grin" | "flat" | "oh" | "smirk" | "cat" | "tiny" | "
  * different vegetables still reads as one crew.
  */
 export interface Face {
-  /** Centre of the eye line. */
+  /** Center of the eye line. */
   y: number;
   /** Half the gap between the eyes. Narrow bodies pull this in. */
   spread: number;
@@ -131,7 +131,7 @@ function hood(cx: number, cy: number, r: number) {
 
 function drawEyes(face: Face): ReactNode {
   const { y, r } = face;
-  const cx = face.cx ?? FORM.centreX;
+  const cx = face.cx ?? FORM.centerX;
   const left = cx - face.spread;
   const right = cx + face.spread;
 
@@ -238,7 +238,7 @@ function drawEyes(face: Face): ReactNode {
 }
 
 function drawMouth(face: Face): ReactNode {
-  const cx = face.cx ?? FORM.centreX;
+  const cx = face.cx ?? FORM.centerX;
   const y = face.y + face.r * FACE.drop;
   const w = face.r * FACE.width;
   const line = { stroke: INK, strokeWidth: face.r * FACE.stroke, fill: "none" } as const;
@@ -701,7 +701,7 @@ export function drawCharacter(character: Character): ReactNode {
 }
 
 /**
- * Accent colours. Drawn from the same palette as the app chrome so a random
+ * Accent colors. Drawn from the same palette as the app chrome so a random
  * pick never clashes with the surface behind it.
  */
 export const ACCENTS: { name: string; value: string }[] = [

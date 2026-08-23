@@ -130,7 +130,7 @@ async fn serve(
         return refuse(&mut client, "400 Bad Request", "Not a computer address.").await;
     };
 
-    // The token is looked up here rather than travelling in the URL, so it
+    // The token is looked up here rather than traveling in the URL, so it
     // never reaches the webview and never appears in a page's address.
     let token = match store.sandbox_traffic_token(&request.sandbox) {
         Ok(Some(token)) if !token.is_empty() => token,

@@ -19,7 +19,7 @@ import {
  * the drawing uses, so a change to one is caught here rather than by eye.
  */
 function faceBounds(face: Face) {
-  const cx = face.cx ?? FORM.centreX;
+  const cx = face.cx ?? FORM.centerX;
   const reach = face.spread + face.r;
   return {
     x0: cx - reach,
@@ -53,8 +53,8 @@ describe("the construction spec", () => {
 
   it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s sits on the baseline", (_key, c) => {
     const b = pathBounds(c.body.d);
-    expect(Math.abs((b.x0 + b.x1) / 2 - FORM.centreX)).toBeLessThanOrEqual(1.5);
-    expect(Math.abs((b.y0 + b.y1) / 2 - FORM.centreY)).toBeLessThanOrEqual(3);
+    expect(Math.abs((b.x0 + b.x1) / 2 - FORM.centerX)).toBeLessThanOrEqual(1.5);
+    expect(Math.abs((b.y0 + b.y1) / 2 - FORM.centerY)).toBeLessThanOrEqual(3);
   });
 
   it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s keeps its face on", (_key, c) => {
@@ -175,7 +175,7 @@ describe("suggestions", () => {
     expect(suggestAccent([first, second])).not.toBe(second);
   });
 
-  it("is case insensitive about taken colours", () => {
+  it("is case insensitive about taken colors", () => {
     const first = ACCENTS[0]!.value;
     expect(suggestAccent([first.toUpperCase()])).not.toBe(first);
   });

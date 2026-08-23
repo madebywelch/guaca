@@ -68,7 +68,7 @@ export function ComputerScreen({ agent }: Props) {
     // which is an element in this document. The mouse works throughout, which
     // is what makes this read as a broken keyboard rather than a focus problem.
     //
-    // Here rather than in an effect afterwards, because this webview is WebKit
+    // Here rather than in an effect afterward, because this webview is WebKit
     // and WebKit honours a focus change only as part of a user gesture. An
     // effect on the next render is not one.
     frame.current?.focus();

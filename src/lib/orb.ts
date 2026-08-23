@@ -1,12 +1,12 @@
 /**
  * Where a crew's faces sit inside its circle.
  *
- * A group is recognised by who is in it, and at the 38px the strip draws that
+ * A group is recognized by who is in it, and at the 38px the strip draws that
  * recognition is mostly shape: how many faces there are and how they stand.
  * Tiling every crew into the same square threw that away, so a strip of crews
  * read as one badge repeated.
  *
- * Here the arrangement is the count. One face is centred, two stand side by
+ * Here the arrangement is the count. One face is centered, two stand side by
  * side, and three to six stand on a ring, so the size of a crew is legible
  * before any single face in it is, and two crews of different sizes cannot draw
  * the same badge.
@@ -17,7 +17,7 @@
 
 /** A face's place in the ring. `x`, `y` and `size` are fractions of the ring. */
 export interface Seat {
-  /** Centre of the face, 0 at the ring's left and top edge, 1 at its right and bottom. */
+  /** Center of the face, 0 at the ring's left and top edge, 1 at its right and bottom. */
   x: number;
   y: number;
   /** Width of the face's box. */
@@ -84,7 +84,7 @@ function round(value: number): number {
  *
  * Each seat carries the member it was cut for, so nothing downstream has to
  * line two arrays up by index. Only the id is read: the lean has to survive a
- * rename and a recolour, or a crew rearranges itself when somebody is edited.
+ * rename and a recolor, or a crew rearranges itself when somebody is edited.
  */
 export function cluster<T extends { id: string }>(
   members: T[],

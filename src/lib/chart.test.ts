@@ -304,7 +304,7 @@ describe("laying a bar chart out", () => {
 
   it("stops a stacked fill at the series under it, not at the axis", () => {
     // Every band drawn down to zero is every band drawn over the one before
-    // it, which at a tenth opacity makes a stack whose colours are all
+    // it, which at a tenth opacity makes a stack whose colors are all
     // mixtures of each other.
     const stack = layout(
       good({
@@ -405,7 +405,7 @@ describe("laying a pie out", () => {
     const pie = layout(
       good({ type: "pie", labels: ["a", "b"], series: [{ data: [1, 1] }] }),
     ) as RadialPlot;
-    // A solid wedge is drawn from the centre out; a hollow one never goes there.
+    // A solid wedge is drawn from the center out; a hollow one never goes there.
     expect(pie.wedges[0]?.path.startsWith(`M${pie.center.x} ${pie.center.y}`)).toBe(true);
     expect(donut.wedges[0]?.path.startsWith(`M${donut.center.x} ${donut.center.y}`)).toBe(false);
   });

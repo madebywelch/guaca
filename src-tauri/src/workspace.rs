@@ -49,7 +49,7 @@ pub enum WorkspaceError {
     },
 }
 
-/// Turns an agent name into something safe and recognisable in a file listing.
+/// Turns an agent name into something safe and recognizable in a file listing.
 fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut last_dash = true;
@@ -124,7 +124,7 @@ impl Workspace {
     /// interface has, so the version it replaced exists nowhere else a moment
     /// later, and this is the only place it can be read without a race: the
     /// same memory is written from every thread an agent holds and edited by
-    /// the operator by hand, so anything that reads the file afterwards is
+    /// the operator by hand, so anything that reads the file afterward is
     /// reading somebody else's write.
     pub fn write(&self, id: AgentId, name: &str, content: &str) -> Result<Stored, WorkspaceError> {
         fs::create_dir_all(&self.root)
@@ -330,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn slugs_are_safe_and_recognisable() {
+    fn slugs_are_safe_and_recognizable() {
         assert_eq!(slug("Manager"), "manager");
         assert_eq!(slug("Head Chef"), "head-chef");
         assert_eq!(slug("  ../../etc/passwd  "), "etc-passwd");

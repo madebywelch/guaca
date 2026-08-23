@@ -363,7 +363,7 @@ mod tests {
             !risky.contains([';', '$', '`', '&', '|', '>', '<']),
             "a name that reaches a command line kept its metacharacters: {risky}"
         );
-        assert!(risky.ends_with(".md"), "and it is still recognisable: {risky}");
+        assert!(risky.ends_with(".md"), "and it is still recognizable: {risky}");
         assert!(files.put("...", b"x").is_err(), "a name that is only dots is not a name");
         assert!(files.put("   ", b"x").is_err());
     }

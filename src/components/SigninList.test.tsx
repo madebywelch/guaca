@@ -44,7 +44,7 @@ function signin(over: Partial<Signin> = {}): Signin {
     surface: "browser",
     domain: "linkedin.com",
     service: "LinkedIn",
-    recognised: true,
+    recognized: true,
     firstSeenAt: Date.now() - 86_400_000,
     lastSeenAt: Date.now() - 60_000,
     ...over,
@@ -89,10 +89,10 @@ describe("SigninList", () => {
     // The weaker rule matches a session-shaped cookie on a visited site. It is
     // usually right and must not be presented as though it were certain.
     agentSignins.mockResolvedValue([
-      signin({ service: "internal.example", domain: "internal.example", recognised: false }),
+      signin({ service: "internal.example", domain: "internal.example", recognized: false }),
     ]);
     scanAgentSignins.mockResolvedValue([
-      signin({ service: "internal.example", domain: "internal.example", recognised: false }),
+      signin({ service: "internal.example", domain: "internal.example", recognized: false }),
     ]);
     render(<SigninList agent={card()} />);
 

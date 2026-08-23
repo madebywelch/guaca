@@ -225,7 +225,7 @@ describe("an agent's own record of what it did", () => {
     expect(kind("Smith handles verification.")).toBe("same");
     expect(kind("Patel signs off.")).toBe("removed");
     expect(kind("Jones signs off.")).toBe("added");
-    // Marked as well as coloured. Red and green either side of a line are the
+    // Marked as well as colored. Red and green either side of a line are the
     // one distinction a reader may not have, and the marker is also what keeps
     // a diff copied out of the window reading as one.
     const marks = [...document.querySelectorAll(".diff__mark")].map((node) => node.textContent);
@@ -271,7 +271,7 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText(/Smith handles verification/)).toBeTruthy();
   });
 
-  it("names an unrecognised tool rather than guessing it was a send", () => {
+  it("names an unrecognized tool rather than guessing it was a send", () => {
     show(
       record({
         type: "toolCall",
@@ -299,7 +299,7 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText(/name a recipient/)).toBeTruthy();
   });
 
-  it("surfaces a guard stop as a centred notice", () => {
+  it("surfaces a guard stop as a centered notice", () => {
     show(record({ type: "notice", kind: "guardStop", text: "hop limit (8) reached" }));
     expect(screen.getByText("hop limit (8) reached")).toBeTruthy();
   });
@@ -478,7 +478,7 @@ describe("redrawing a transcript", () => {
     // The same envelope, the same lookups: a parent redraw with nothing new.
     view.rerender(<MessageItem message={message} lookups={lookups} continued={false} />);
 
-    // The node survives rather than being replaced, which is what memoisation
+    // The node survives rather than being replaced, which is what memoization
     // buys: React never called the component at all.
     expect(screen.getByText("the answer is 42")).toBe(drawn);
   });

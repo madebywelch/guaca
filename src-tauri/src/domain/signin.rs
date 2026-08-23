@@ -43,7 +43,7 @@ use serde::{Deserialize, Serialize};
 
 use super::ids::AgentId;
 
-/// A service whose session cookie is recognisable by name.
+/// A service whose session cookie is recognizable by name.
 ///
 /// Only cookies that mean "somebody is logged in" belong here. A preference or
 /// consent cookie set for anonymous visitors is what produced the false
@@ -128,7 +128,7 @@ impl Surface {
         }
     }
 
-    /// Anything unrecognised reads as the computer, which is where every
+    /// Anything unrecognized reads as the computer, which is where every
     /// session recorded before there was a second surface came from.
     pub fn parse(raw: &str) -> Self {
         match raw {
@@ -154,15 +154,15 @@ pub struct Signin {
     /// Which of the agent's two places this session is in. A session on one is
     /// not reachable from the other.
     pub surface: Surface,
-    /// The host, normalised: `linkedin.com`.
+    /// The host, normalized: `linkedin.com`.
     pub domain: String,
-    /// What to call it. A recognised service gets its real name; anything else
+    /// What to call it. A recognized service gets its real name; anything else
     /// is called by its domain rather than given an invented one.
     pub service: String,
     /// Whether this came from a known signature or from the weaker
     /// visited-plus-session-cookie rule. Shown to the operator so a guess is
     /// never presented as a certainty.
-    pub recognised: bool,
+    pub recognized: bool,
     pub first_seen_at: i64,
     pub last_seen_at: i64,
 }
@@ -205,7 +205,7 @@ fn collapse(host: &str) -> String {
     labels[labels.len() - 2..].join(".")
 }
 
-/// The host part of a URL, normalised the same way a cookie's domain is.
+/// The host part of a URL, normalized the same way a cookie's domain is.
 ///
 /// Hand-rolled rather than pulled from a URL crate because the only thing
 /// wanted here is the authority, and anything that fails to parse must come
@@ -253,7 +253,7 @@ pub fn detect(agent_id: AgentId, surface: Surface, state: &BrowserState, now: i6
     let mut found: Vec<Signin> = Vec::new();
     let mut claimed: Vec<&str> = Vec::new();
 
-    // Layer one: services recognised by signature.
+    // Layer one: services recognized by signature.
     for (suffix, service, proofs) in KNOWN {
         let signed_in = state.cookies.iter().any(|cookie| {
             !cookie.session
@@ -270,7 +270,7 @@ pub fn detect(agent_id: AgentId, surface: Surface, state: &BrowserState, now: i6
                 surface,
                 domain: (*suffix).to_string(),
                 service: (*service).to_string(),
-                recognised: true,
+                recognized: true,
                 first_seen_at: now,
                 last_seen_at: now,
             });
@@ -306,7 +306,7 @@ pub fn detect(agent_id: AgentId, surface: Surface, state: &BrowserState, now: i6
                 surface,
                 domain: domain.clone(),
                 service: domain,
-                recognised: false,
+                recognized: false,
                 first_seen_at: now,
                 last_seen_at: now,
             });
@@ -370,7 +370,7 @@ mod tests {
         assert_eq!(found.len(), 1, "expected LinkedIn and nothing else, got {found:?}");
         assert_eq!(found[0].service, "LinkedIn");
         assert_eq!(found[0].domain, "linkedin.com");
-        assert!(found[0].recognised);
+        assert!(found[0].recognized);
         assert_eq!(found[0].agent_id, agent);
     }
 
@@ -417,7 +417,7 @@ mod tests {
         let found = detect(AgentId::new(), Surface::Computer, &state, 100);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].domain, "internal.example");
-        assert!(!found[0].recognised, "a guess must not be presented as a certainty");
+        assert!(!found[0].recognized, "a guess must not be presented as a certainty");
     }
 
     #[test]
@@ -490,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn hosts_are_normalised_however_chrome_spells_them() {
+    fn hosts_are_normalized_however_chrome_spells_them() {
         assert_eq!(host_of(".www.LinkedIn.com"), "linkedin.com");
         assert_eq!(host_of("www.google.com"), "google.com");
         assert_eq!(host_of(".x.com"), "x.com");
@@ -525,7 +525,7 @@ mod tests {
             agent_id: AgentId::new(),
             domain: domain.into(),
             service: domain.into(),
-            recognised: true,
+            recognized: true,
             first_seen_at: 0,
             last_seen_at: 0,
         }

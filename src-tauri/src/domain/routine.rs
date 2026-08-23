@@ -248,7 +248,7 @@ impl Cadence {
     ///
     /// Counted from the anchor every time rather than from the previous answer,
     /// so a monthly routine set on the 31st is the 28th in February and the
-    /// 31st again in March instead of walking backwards down the calendar.
+    /// 31st again in March instead of walking backward down the calendar.
     fn nth_date(&self, anchor: NaiveDate, n: i64) -> Option<NaiveDate> {
         match self {
             Cadence::Daily => anchor.checked_add_signed(Duration::days(n)),
@@ -496,7 +496,7 @@ impl Routine {
     ///
     /// An agent naming its own routine is optional, so the title is often the
     /// instruction, and an instruction is written to be acted on with no other
-    /// context: several sentences. Whoever is reading a list is recognising a
+    /// context: several sentences. Whoever is reading a list is recognizing a
     /// routine rather than reading it, and the whole instruction is what the
     /// `list` action is for. Cut to the width a name is already held to, so a
     /// named row and an unnamed one are the same shape.
@@ -1127,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn a_second_routine_for_work_already_standing_is_recognised_as_the_same_job() {
+    fn a_second_routine_for_work_already_standing_is_recognized_as_the_same_job() {
         // The failure this exists for: an operator asks for an adjustment to
         // something the agent already keeps, and the agent writes a second
         // routine beside the first. Both fire, and the work happens twice.
@@ -1135,7 +1135,7 @@ mod tests {
             "Check the new listings and email me a summary.",
             "Check Zillow listings and send me a summary of what is new.",
         ));
-        // Reworded down to nothing recognisable in common is not the same job,
+        // Reworded down to nothing recognizable in common is not the same job,
         // and neither is a routine that merely works on the same subject.
         assert!(!same_job(
             "Check the new listings and email me a summary.",

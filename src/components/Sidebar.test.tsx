@@ -256,7 +256,7 @@ describe("arranging the rail", () => {
     await dragTo(row("Manager"), row("Scribe"));
 
     // In front of Scribe, not at the end: an agent arriving from another
-    // section has no place in this one to have travelled from, so there is no
+    // section has no place in this one to have traveled from, so there is no
     // direction to read and it takes the place of what it was dropped on.
     expect(setAgentPinned).toHaveBeenCalledWith("Manager", false);
     expect(moveAgent).toHaveBeenCalledWith("Manager", DEFAULT_GROUP, "Scribe");

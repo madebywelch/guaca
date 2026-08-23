@@ -113,7 +113,7 @@ function onRetry(agentId: AgentId, messageId: MessageId) {
  *   collapsed them into a burst.
  * - agent to system: that agent's own record of what it did on its turn.
  *
- * Memoised because a transcript is redrawn whenever any message is appended,
+ * Memoized because a transcript is redrawn whenever any message is appended,
  * and rendering one of these parses its markdown. Thirty messages re-parsed
  * every time an agent says anything is work nobody asked for: the envelopes
  * themselves never change, so an entry that is already on screen is already

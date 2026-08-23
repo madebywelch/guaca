@@ -30,7 +30,7 @@ by `channel_for`:
 - human → agent, and agent → human, file under that agent.
 - agent A → agent B files under **B**.
 
-That single rule produces the behaviour you want without any special-casing:
+That single rule produces the behavior you want without any special-casing:
 asking Manager to introduce itself fills every other agent's channel with the
 introduction, and fills Manager's channel with the replies as they come back.
 `#activity` is a query over the same table, not a second copy.
@@ -50,7 +50,7 @@ could account for.
 
 What a channel shows of peer traffic is therefore a summary, and a deliberately
 lossy one. `transcriptRows` collapses a burst (a fan-out, and the answers
-landing milliseconds apart) into one centred line per peer, counting what that
+landing milliseconds apart) into one centered line per peer, counting what that
 channel holds. The thread behind the line can hold more, which is the right way
 round: clicking reveals more, never less. Two things never fold in. A refusal is
 the runtime stopping a message rather than a message, so it keeps its own line
@@ -93,8 +93,8 @@ crew talking to itself.
 `work` or `courtesy`, and only the courtesy is turned away. Deciding it from the
 shape of the exchange was tried first and was wrong: a second instruction and a
 thank-you are identical on the wire, so the rule refused both. A real session
-lost an authorised external send that way. The operator authorised it, the
-coordinator relayed the authorisation, read the answer, and was refused when it
+lost an authorized external send that way. The operator authorized it, the
+coordinator relayed the authorization, read the answer, and was refused when it
 tried to instruct again, because by then nobody was waiting on it. Every
 delegation that takes two rounds died at exactly that point.
 
@@ -121,7 +121,7 @@ The field is trusted, and that is deliberate. A model can label a courtesy as
 work, and then the run pays for one extra turn and hits the same per-pair,
 hop and budget limits as before. The alternative was to keep guessing, and the
 guess was already refusing real work. `courtesy` is the default when nothing is
-declared, so a model that ignores the field gets the old, stricter behaviour
+declared, so a model that ignores the field gets the old, stricter behavior
 rather than a door quietly opened. The rule lives in two places and they have to
 agree: `runtime/prompt.rs` tells the model the same thing, in the mode where it
 matters.
@@ -282,7 +282,7 @@ An operator can pay for a turn two ways: an OpenAI-compatible endpoint with a ke
 they pasted, or a ChatGPT subscription they signed in to. `InferenceConfig`
 carries a `Provider` rather than a flag, because almost nothing about the call is
 shared. Different host, different wire protocol, different auth header, a model
-list that is not the operator's to choose, and no price on the answer. Modelling
+list that is not the operator's to choose, and no price on the answer. Modeling
 the subscription as "a base URL with a different key" would put all of that
 behind a string in a text box, and the first symptom would be an agent failing on
 a parameter nobody set.
@@ -437,7 +437,7 @@ milliseconds is a flicker that says a turn is alive, which is what the pulse
 already said. `lib/reasoning.ts` draws two things instead, both the model's own:
 the section heading it is working under, which changes every half minute, and
 the last sentence it *finished*, which is the newest thing anybody can actually
-read. Waiting for the full stop costs a second or two of staleness and is the
+read. Waiting for the period costs a second or two of staleness and is the
 difference between a line and a blur. Models that publish nothing (Anthropic's,
 over OpenRouter, unless thinking is asked for) leave it exactly as it was.
 
@@ -462,7 +462,7 @@ reported on.
 - **`ToolFinished` carries the whole `Part::ToolCall`**, not the outcome, so
   what the operator watches accumulate during the turn is the same chip, drawn
   by the same function in `lib/trail.ts` over the same value, that the
-  transcript holds afterwards. The outcome alone was tried and is the shape of
+  transcript holds afterward. The outcome alone was tried and is the shape of
   simplification that reads as tidier and is a divergence waiting to happen: a
   memory rewrite carries what it overwrote, nothing outside the runtime can
   supply it, and a live chip assembled from the fields somebody thought to list
@@ -490,7 +490,7 @@ principal. Guaca handles it in two places:
 2. The system prompt says what a peer may not do, and every incoming message is
    prefixed with its true origin (`[OPERATOR]`, `[AGENT "Chef"]`, `[SYSTEM]`),
    as the first thing the model reads. An agent that writes `[OPERATOR]` into
-   its own message still arrives labelled as an agent. There is a test for that.
+   its own message still arrives labeled as an agent. There is a test for that.
 
 The directory deliberately excludes `system_prompt`, so one agent cannot read
 another's instructions by listing peers. There is a test for that too.
@@ -513,7 +513,7 @@ Three things follow, and each is load-bearing:
 - **The row is the verdict, not the channel.** The operator's click and the
   turn's timeout can land in the same instant. `settle_approval` only moves a
   row out of `pending`, so whichever arrives second changes nothing, and the
-  parked turn reads its answer back from the row afterwards. A button that
+  parked turn reads its answer back from the row afterward. A button that
   visibly said "allowed" therefore allowed it.
 - **A restart expires everything pending.** Nothing holds a parked turn across
   one, so a `pending` row after a restart is a question that can no longer reach
@@ -531,7 +531,7 @@ describe creating an agent as tidying up.
 
 **The second protected action is acting in the operator's name**, and it exists
 because refusing was the only other move. An agent told by a peer that the
-operator authorised an email is being told a claim; declining it is right, and
+operator authorized an email is being told a claim; declining it is right, and
 the app's answer to that was for the agent to ask the operator to repeat the
 instruction in another channel. The operator had already decided, and was being
 asked to do the routing by hand. `request_permission` parks the turn and puts
@@ -887,7 +887,7 @@ check the runtime contains it. The live ones run the real prompts against your
 configured model and print the whole conversation, which is the only way to see
 that a prompt change made agents chattier.
 
-`src-tauri/src/eval.rs` is the analyser: it reads a run's envelopes and names
+`src-tauri/src/eval.rs` is the analyzer: it reads a run's envelopes and names
 what went wrong, and every fault it reports is decidable from the messages
 rather than judged.
 
@@ -919,7 +919,7 @@ and asks whether the machinery behaved.
 cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
 ```
 
-`src-tauri/src/trajectory.rs` is that analyser. A run's events become an ordered
+`src-tauri/src/trajectory.rs` is that analyzer. A run's events become an ordered
 ledger (asked, thinking, placeholder opened, model called, tool used, message
 persisted, settled) and the anomalies are properties of that ledger: a stream
 left open, text after a stream ended, a parked turn nobody released, a step
@@ -957,10 +957,10 @@ suite, because each individual message was correct.
 
 `tests/crew.rs` puts the question the only way it can be put: run the same
 directive several times and write down what happened. Eight roles an operator
-would recognise, one of them carrying the standing instruction and the other
+would recognize, one of them carrying the standing instruction and the other
 seven described by their skills alone; a directive with four asks, three of the
 crew with no part in it, and two pairs whose skills overlap so that choosing is
-a judgement rather than a lookup. Each run leaves its whole event stream,
+a judgment rather than a lookup. Each run leaves its whole event stream,
 timestamped as it arrived, its envelopes, a transcript a person can read, and
 its numbers. Beside them is the comparison, which is the actual product: for
 each thing worth comparing, the distinct answers and which runs gave them. A
@@ -1017,7 +1017,7 @@ Stated plainly rather than discovered later.
   reads the outcome where the operator does rather than being handed it. Routing
   it back means recording the declared intent on the envelope, which is a
   schema change.
-- **Prompt instructions are guidance, not guarantees.** Several behaviours here
+- **Prompt instructions are guidance, not guarantees.** Several behaviors here
   are steered by wording in `runtime/prompt.rs`: staying quiet when there is
   nothing to add, and not narrating that silence. A model can ignore any of it, so
   anything that must hold is enforced in the runtime and the rest is measured by

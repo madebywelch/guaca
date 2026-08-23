@@ -59,7 +59,7 @@ pub enum McpError {
     Unauthorized {
         endpoint: String,
         /// The challenge, verbatim. It carries the address of the metadata that
-        /// says which authorisation server can issue a grant for this resource.
+        /// says which authorization server can issue a grant for this resource.
         challenge: Option<String>,
     },
     #[error("{endpoint} returned HTTP {status}: {body}")]
@@ -108,10 +108,10 @@ pub struct Session {
 
 /// Opens a session, which is how Guaca finds out whether a grant is needed.
 ///
-/// Called with no token first, on purpose. A server that authorises everybody
-/// answers, and the operator is never sent to a browser to authorise something
+/// Called with no token first, on purpose. A server that authorizes everybody
+/// answers, and the operator is never sent to a browser to authorize something
 /// that was already open; one that does not answers 401 and says where its
-/// authorisation server is.
+/// authorization server is.
 pub async fn open(endpoint: &str, token: Option<&str>) -> Result<Session, McpError> {
     let http = client()?;
     let body = serde_json::json!({

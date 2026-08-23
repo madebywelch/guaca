@@ -30,7 +30,7 @@
 //! is a sign-in that works until the operator changes an unrelated setting.
 //!
 //! Plaintext and 0600, for the reason `config.rs` gives about the API key: this
-//! is a local app, and a key encrypted beside its own key is theatre. Worth
+//! is a local app, and a key encrypted beside its own key is theater. Worth
 //! being blunter here, though, because this credential is not Guaca's to lose:
 //! it belongs to a ChatGPT account that has more than Guaca behind it. The
 //! honest fix is the OS keychain, and it is the first thing to reach for if this
@@ -152,7 +152,7 @@ struct Stored {
     /// service quoted. A quoted lifetime plus the local clock at the moment of
     /// exchange drifts; the token says when it actually stops working.
     expires_at: i64,
-    /// Denormalised out of the id token so a signed-in status can be answered
+    /// Denormalized out of the id token so a signed-in status can be answered
     /// without decoding a JWT on every read.
     #[serde(default)]
     email: String,

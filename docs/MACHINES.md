@@ -201,7 +201,7 @@ anonymous visitor. Both were real false positives from a live machine. Detection
 is therefore a signature table plus a rule that needs the browser to have
 *visited* the site and to hold a cookie implying an identity rather than a
 session. The tests carry the real cookie names, and they are the whole
-defence: do not loosen them without a fresh capture.
+defense: do not loosen them without a fresh capture.
 
 ## A cookie value must never leave the sandbox
 
