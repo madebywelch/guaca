@@ -16,6 +16,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
@@ -75,6 +76,7 @@ repo: the frontend renders state and forwards intent.
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
@@ -189,7 +191,31 @@ the model takes a screenshot to see what `browse` did.
   attached has no record of handing anything over, so it attaches the document
   again and reports it as the first time.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
-  level higher, a single token re-renders every message in the transcript.
+  level higher, a single token re-renders every message in the transcript. The
+  same split is why the line above the composer, the turn's chips and the open
+  thinking are three components: they sit next to each other and change at
+  wildly different rates, and written as one every token re-rendered every chip.
+- **A turn's thinking is held whole and drawn one line at a time.** Those are
+  two decisions, and holding 240 characters made them one: the tail was all
+  there was, which is fine for a wait of thirty seconds and no use for one of
+  ten minutes. Nothing about holding it widens what "never kept" means. It is
+  the same slice, dropped by the same event, and it reaches no channel, no
+  prompt and no hash.
+- **The line drawn is the last sentence that *finished*, under the model's own
+  heading.** Not the tail. A tail replaced every sixteen milliseconds is a
+  flicker that says a turn is alive, which is what the pulse already said, and
+  nobody can read a sentence as it is typed. Waiting for the full stop costs a
+  second of staleness and is the difference between a line and a blur.
+- **The live trail and the thinking have one lifetime, because they have one
+  mechanism.** `ToolStarted` and `ToolFinished` are addressed to the placeholder
+  exactly as `ReasoningDelta` is, so a retry that reopens under a new id starts
+  both again. What was done is not lost by that: it is in the message that lands
+  at the end of the turn, which is the record. These are only what that record
+  looks like before it exists.
+- **`ToolStarted` is emitted before the call, and that ordering is the
+  feature.** A `run_command` can sit for a minute. A call reported only once it
+  comes back is silence for exactly as long as the wait it was meant to explain,
+  which is the state that reads as a hang.
 - **A transcript decides where the operator is by comparing the offset, not by
   listening for a scroll event.** The event is delivered after the fact and a
   token committing in between arrives first, so anything that waits to be told

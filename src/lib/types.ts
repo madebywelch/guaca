@@ -497,6 +497,22 @@ export type UiEvent =
    * is read from the stream it names, and it goes when that stream ends.
    */
   | { type: "reasoningDelta"; messageId: MessageId; text: string }
+  /**
+   * A tool call the turn has started, and then what came of it.
+   *
+   * Addressed to the placeholder for the same reason a thought is, and dropped
+   * with it: the record of what a turn did is the message that lands at the end
+   * of it, and these are only what that record looks like while it is still
+   * being made. `callId` is the provider's own, which is what pairs the two.
+   */
+  | {
+      type: "toolStarted";
+      messageId: MessageId;
+      callId: string;
+      name: string;
+      arguments: unknown;
+    }
+  | { type: "toolFinished"; messageId: MessageId; callId: string; outcome: ToolOutcome }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
   | { type: "channelsCleared"; agents: AgentId[] }

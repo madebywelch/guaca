@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { relativeTime, whenLabel } from "./time";
+import { elapsed, relativeTime, whenLabel } from "./time";
 
 const NOW = 1_700_000_000_000;
 const ago = (ms: number) => relativeTime(NOW - ms, NOW);
@@ -65,5 +65,31 @@ describe("whenLabel", () => {
 
   it("carries the clock, because a day on its own does not place a message", () => {
     expect(whenLabel(wednesday, wednesday)).toMatch(/\d{1,2}[:.]\d\d/);
+  });
+});
+
+describe("elapsed", () => {
+  const waiting = (ms: number) => elapsed(NOW, NOW - ms);
+
+  it("counts seconds, where relativeTime would say now", () => {
+    // Read while waiting on a call that has not come back, where the whole
+    // question is whether the number is still moving. "now" for the first
+    // forty-four seconds of a wait answers it wrong.
+    expect(waiting(4_000)).toBe("4s");
+    expect(waiting(59_000)).toBe("59s");
+  });
+
+  it("counts from zero, and leaves what is worth reporting to the caller", () => {
+    expect(waiting(0)).toBe("0s");
+    expect(waiting(900)).toBe("0s");
+  });
+
+  it("keeps the seconds once there are minutes, padded so they do not jump", () => {
+    expect(waiting(60_000)).toBe("1m 00s");
+    expect(waiting(184_000)).toBe("3m 04s");
+  });
+
+  it("does not count backwards from a clock that moved", () => {
+    expect(elapsed(NOW, NOW + 5_000)).toBe("0s");
   });
 });

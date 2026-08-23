@@ -102,6 +102,7 @@ function open(messages: Envelope[]) {
     messages: { [MANAGER]: messages },
     streams: {},
     reasoning: {},
+    trail: {},
     activity: {},
     lastActive: {},
     banner: null,
@@ -252,19 +253,20 @@ describe("while an agent is working", () => {
 
   it("shows what it is thinking, and stops when the thought is dropped", () => {
     // The complaint this answers: a pulsing avatar says a turn is alive and
-    // nothing says what it is doing, through a wait that can run to a minute
-    // of tool calls.
+    // nothing says what it is doing, through a wait that can run to ten
+    // minutes.
     open([envelope({})]);
     doing({ state: "thinking" });
 
-    act(() => useStore.setState({ reasoning: { [MANAGER]: "**Checking**\n\nthe totals now" } }));
-    expect(screen.getByText("the totals now")).toBeTruthy();
+    act(() => useStore.setState({ reasoning: { [MANAGER]: "**Checking**\n\nthe totals agree." } }));
+    expect(screen.getByText("Checking")).toBeTruthy();
+    expect(screen.getByText("the totals agree.")).toBeTruthy();
     expect(screen.queryByText("Manager is working")).toBeNull();
-    // And it stops being a live region while it holds a line that is replaced
-    // several times a second, or a screen reader reads out every half sentence
-    // of it over whatever else it was saying. Asked of this line rather than of
-    // the pane: an arriving message is announced by a region of its own, which
-    // is the one thing here that is meant to be heard.
+    // And it stops being a live region while it holds a line that moves under
+    // it, or a screen reader reads out every half sentence of it over whatever
+    // else it was saying. Asked of this line rather than of the pane: an
+    // arriving message is announced by a region of its own, which is the one
+    // thing here that is meant to be heard.
     expect(document.querySelector(".working")?.getAttribute("role")).toBeNull();
 
     // The runtime clears it when the stream ends, and the line goes back to
@@ -273,6 +275,154 @@ describe("while an agent is working", () => {
     const note = document.querySelector(".working");
     expect(note?.getAttribute("role")).toBe("status");
     expect(note?.textContent).toContain("Manager is working");
+  });
+
+  it("draws the heading alone until a sentence under it has finished", () => {
+    // A sentence being typed at streaming speed cannot be read, and replacing
+    // the line with half of the next one sixty times a second is the flicker
+    // the heading exists to stop.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() => useStore.setState({ reasoning: { [MANAGER]: "**Checking**\n\nthe totals do" } }));
+
+    expect(screen.getByText("Checking")).toBeTruthy();
+    expect(screen.queryByText("the totals do")).toBeNull();
+  });
+
+  it("opens the whole of the working, and closes it when the turn ends", () => {
+    // A peek is enough right up until the wait runs to ten minutes, when the
+    // question stops being "is it alive" and becomes "is it doing something
+    // sensible", which cannot be answered one sentence at a time.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    const held = "**Checking**\n\nthe totals agree.\n\nSo the third quarter is the one to redo.";
+    act(() => useStore.setState({ reasoning: { [MANAGER]: held } }));
+
+    expect(document.querySelector(".thought")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Show what Manager is working through/ }));
+    expect(document.querySelector(".thought__text")?.textContent).toBe(held);
+
+    // Asking to watch one turn's working is not a standing decision to watch
+    // every turn's.
+    doing({ state: "idle" });
+    doing({ state: "thinking" });
+    expect(document.querySelector(".thought")).toBeNull();
+  });
+
+  it("offers nothing to open where the model published nothing", () => {
+    // Anthropic's models over OpenRouter publish no working unless it is asked
+    // for. A control that opens an empty box is one the operator stops
+    // trusting the rest of.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+
+    expect(screen.queryByRole("button", { name: /working through/ })).toBeNull();
+  });
+
+  it("draws the calls the turn has already made, as the transcript will", () => {
+    // Until this, a turn's tool calls were invisible for as long as the turn
+    // ran: a browsing turn spends most of its twenty-four rounds in the
+    // browser and the operator watching had one line of prose.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        trail: {
+          [MANAGER]: [
+            {
+              callId: "call_1",
+              name: "browse",
+              arguments: { action: "open", url: "https://www.cnn.com/world" },
+              outcome: { status: "ok", summary: "read cnn.com" },
+              startedAt: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText("Opened cnn.com")).toBeTruthy();
+  });
+
+  it("says what it is waiting on, and how long it has been", () => {
+    // While a command runs the model is not thinking, so its last thought is
+    // frozen and stale, which is the state that reads as a hang.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        reasoning: { [MANAGER]: "I should check the tests." },
+        trail: {
+          [MANAGER]: [
+            {
+              callId: "call_1",
+              name: "run_command",
+              arguments: { command: "npm test" },
+              outcome: null,
+              // Half a second past the whole, so the floor is the same number
+              // whichever side of a millisecond the render lands on.
+              startedAt: Date.now() - 74_500,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.getByText("Running a command")).toBeTruthy();
+    expect(screen.getByText("1m 14s")).toBeTruthy();
+    // The thought is still there to open; it is just not what the line says.
+    expect(screen.queryByText("I should check the tests.")).toBeNull();
+    expect(screen.getByRole("button", { name: /working through/ })).toBeTruthy();
+  });
+
+  it("leaves the line alone for a call that answers immediately", () => {
+    // A directory lookup answers in milliseconds. A line that flashed
+    // "Checking who is available" for each of them would put back the flicker
+    // the sentence rule takes out.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        reasoning: { [MANAGER]: "I should see who is here." },
+        trail: {
+          [MANAGER]: [
+            {
+              callId: "call_1",
+              name: "directory",
+              arguments: {},
+              outcome: null,
+              startedAt: Date.now(),
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Checking who is available")).toBeNull();
+    expect(screen.getByText("I should see who is here.")).toBeTruthy();
+  });
+
+  it("draws another agent's calls in that agent's channel and not this one", () => {
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        trail: {
+          [CHEF]: [
+            {
+              callId: "call_1",
+              name: "run_command",
+              arguments: { command: "not this channel" },
+              outcome: { status: "ok", summary: "exit 0" },
+              startedAt: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(screen.queryByText("Ran a command")).toBeNull();
+    expect(screen.getByText("Manager is working")).toBeTruthy();
   });
 
   it("draws another agent's thinking in that agent's channel and not this one", () => {

@@ -1875,6 +1875,7 @@ impl Runtime {
                     .execute_tool(
                         &card,
                         run_id,
+                        stream.message_id,
                         inbound_hop,
                         cause,
                         settled,
@@ -2265,6 +2266,10 @@ impl Runtime {
         &self,
         card: &AgentCard,
         run_id: RunId,
+        // The placeholder this turn is writing into. Used for nothing but
+        // addressing the two events below, which is what keeps a turn's own
+        // work on screen for exactly as long as the thinking beside it.
+        stream_id: MessageId,
         inbound_hop: u16,
         cause: Option<MessageId>,
         // True when nothing this agent woke up to asked it for anything.
@@ -2278,6 +2283,13 @@ impl Runtime {
         call: &ToolCall,
     ) -> ToolResult {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
+
+        self.inner.events.emit(UiEvent::ToolStarted {
+            message_id: stream_id,
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: arguments.clone(),
+        });
 
         let (rendered, part, image) = self
             .dispatch_tool(
@@ -2293,6 +2305,19 @@ impl Runtime {
                 arguments,
             )
             .await;
+
+        // Every arm of `dispatch_tool` answers with a `ToolCall` part, so this
+        // is the outcome the message will carry rather than a second reading of
+        // it. A call left unfinished is not a leak either way: the whole live
+        // record goes when the stream ends.
+        if let Part::ToolCall { outcome, .. } = &part {
+            self.inner.events.emit(UiEvent::ToolFinished {
+                message_id: stream_id,
+                call_id: call.id.clone(),
+                outcome: outcome.clone(),
+            });
+        }
+
         ToolResult { rendered, part, image }
     }
 

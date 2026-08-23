@@ -99,6 +99,7 @@ function reset(messages: Record<string, Envelope[] | undefined> = {}) {
     messages,
     streams: {},
     reasoning: {},
+    trail: {},
     pulses: [],
     usage: {},
     pulse: {},
@@ -329,6 +330,95 @@ describe("what an agent is thinking", () => {
     apply({ type: "reasoningDelta", messageId: "s1", text: "weighing it up" });
     expect(JSON.stringify(useStore.getState().messages)).not.toContain("weighing");
     expect(useStore.getState().streams.s1?.text).toBe("");
+  });
+});
+
+describe("what an agent is reaching for", () => {
+  const started: UiEvent = {
+    type: "streamStarted",
+    messageId: "s1",
+    channelId: "manager",
+    agentId: "chef",
+    runId: "r1",
+    to: { kind: "agent", id: "manager" },
+  };
+  const opened: UiEvent = {
+    type: "toolStarted",
+    messageId: "s1",
+    callId: "call_1",
+    name: "run_command",
+    arguments: { command: "npm test" },
+  };
+
+  it("is filed under the agent making the call, like the thought beside it", () => {
+    apply(started);
+    apply(opened);
+    expect(useStore.getState().trail.chef?.[0]?.name).toBe("run_command");
+    expect(useStore.getState().trail.manager).toBeUndefined();
+  });
+
+  it("has no outcome until the call comes back", () => {
+    // Which is the whole reason it is reported before the call rather than
+    // after it: a command can sit for a minute, and that minute is the one the
+    // operator cannot otherwise account for.
+    apply(started);
+    apply(opened);
+    expect(useStore.getState().trail.chef?.[0]?.outcome).toBeNull();
+
+    apply({
+      type: "toolFinished",
+      messageId: "s1",
+      callId: "call_1",
+      outcome: { status: "ok", summary: "exit 0" },
+    });
+    expect(useStore.getState().trail.chef?.[0]?.outcome).toEqual({
+      status: "ok",
+      summary: "exit 0",
+    });
+  });
+
+  it("keeps two calls of one kind apart by the id the provider gave them", () => {
+    apply(started);
+    apply(opened);
+    apply({ ...opened, callId: "call_2" });
+    apply({
+      type: "toolFinished",
+      messageId: "s1",
+      callId: "call_2",
+      outcome: { status: "failed", error: "no machine" },
+    });
+
+    const held = useStore.getState().trail.chef;
+    expect(held?.[0]?.outcome).toBeNull();
+    expect(held?.[1]?.outcome).toEqual({ status: "failed", error: "no machine" });
+  });
+
+  it("is dropped when the turn ends", () => {
+    // The same contract as the thinking, from the same event: what a turn did
+    // is the message that lands at the end of it, and the transcript draws
+    // these chips again from that.
+    apply(started);
+    apply(opened);
+    apply({ type: "streamEnded", messageId: "s1", channelId: "manager" });
+    expect(useStore.getState().trail.chef).toBeUndefined();
+  });
+
+  it("starts again when a failed call reopens under a new id", () => {
+    apply(started);
+    apply(opened);
+    apply({ ...started, messageId: "s2" });
+    expect(useStore.getState().trail.chef).toBeUndefined();
+  });
+
+  it("ignores a call for a stream that never started", () => {
+    apply(opened);
+    expect(useStore.getState().trail).toEqual({});
+  });
+
+  it("never lands in the transcript", () => {
+    apply(started);
+    apply(opened);
+    expect(JSON.stringify(useStore.getState().messages)).not.toContain("npm test");
   });
 });
 

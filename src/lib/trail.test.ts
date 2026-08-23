@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { foldTrail, hasDetail, readSpent, type Step, tellsMore, trailStep } from "./trail";
+import {
+  callInFlight,
+  foldTrail,
+  hasDetail,
+  type LiveCall,
+  liveStep,
+  readSpent,
+  type Step,
+  tellsMore,
+  trailStep,
+} from "./trail";
 import type { Part, ToolOutcome } from "./types";
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
@@ -229,5 +239,51 @@ describe("whether a chip opens anything", () => {
     );
     expect(hasDetail(groups[0]!)).toBe(true);
     expect(groups[0]?.steps[0]?.target).toBe("Smith handles verification.");
+  });
+});
+
+describe("a call while it is still happening", () => {
+  const live = (name: string, args: unknown): LiveCall => ({
+    callId: "call_1",
+    name,
+    arguments: args,
+    outcome: null,
+    startedAt: 0,
+  });
+
+  it("draws the chip the message will draw, from the same rules", () => {
+    // The point of the live trail: what the operator watches accumulate during
+    // a turn is the same chip the transcript holds afterwards. Two sets of
+    // rules would be two things to be wrong about one call.
+    const held = live("browse", { action: "open", url: "https://www.cnn.com/world" });
+    const drawn = liveStep(held, ok("read cnn.com"), "live:0");
+    const recorded = trailStep(
+      { type: "toolCall", name: held.name, arguments: held.arguments, outcome: ok("read cnn.com") },
+      "live:0",
+    );
+    expect(drawn).toEqual(recorded);
+  });
+
+  it("says what it is waiting on in the present tense", () => {
+    // `describe` says what a call *was*, which is the wrong tense for the one
+    // thing the operator is waiting on: a command still running is not a
+    // command that ran.
+    expect(callInFlight("run_command", { command: "npm test" })).toBe("Running a command");
+    expect(callInFlight("update_notes", { content: "x" })).toBe("Updating its memory");
+  });
+
+  it("names the site a page is being opened at, because that is the wait", () => {
+    expect(callInFlight("browse", { action: "open", url: "https://www.cnn.com/world" })).toBe(
+      "Opening cnn.com",
+    );
+    // Anything else on that browser is the browser, which is what is being
+    // waited on and all the operator needs to know about it.
+    expect(callInFlight("browse", { action: "click", id: 4 })).toBe("Working the browser");
+  });
+
+  it("names a tool this build has never heard of after the tool", () => {
+    // A crew's plugin tools are named by that crew's servers. Guessing at what
+    // one does is how `update_notes` once drew as a message sent to nobody.
+    expect(callInFlight("linear__create_issue", {})).toBe("Using linear__create_issue");
   });
 });

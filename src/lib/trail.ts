@@ -26,6 +26,24 @@ import type { Part, ToolOutcome } from "./types";
 type ToolCall = Extract<Part, { type: "toolCall" }>;
 type Args = Record<string, unknown>;
 
+/**
+ * One tool call while the turn making it is still going.
+ *
+ * The same three fields the message will carry, plus the two things that only
+ * mean anything before it lands: no outcome yet, and when it started. A call
+ * that has not come back is the one thing a turn can be doing that neither the
+ * transcript nor the thinking says a word about, and it is the one that can
+ * take a minute.
+ */
+export interface LiveCall {
+  callId: string;
+  name: string;
+  arguments: unknown;
+  /** Null until the call comes back. */
+  outcome: ToolOutcome | null;
+  startedAt: number;
+}
+
 /** One tool call, as the row draws it. */
 export interface Step {
   key: string;
@@ -263,6 +281,63 @@ export function trailStep(part: ToolCall, key: string): Step {
     failed: part.outcome.status === "refused" || part.outcome.status === "failed",
     spent,
   };
+}
+
+/**
+ * A finished live call, drawn exactly as the message will draw it.
+ *
+ * The whole point of the live trail: what the operator watches accumulate
+ * during the turn is the same chip, from the same rules, that the transcript
+ * will hold once the turn ends. Anything decided twice would be two things to
+ * be wrong about one call.
+ */
+export function liveStep(call: LiveCall, outcome: ToolOutcome, key: string): Step {
+  return trailStep({ type: "toolCall", name: call.name, arguments: call.arguments, outcome }, key);
+}
+
+/**
+ * What a call that has not come back yet is, in the present tense.
+ *
+ * Coarser than the label a finished call gets, deliberately. `describe` says
+ * what a call *was*, which is the wrong tense for the one thing the operator is
+ * waiting on, and a second copy of it in the present would be forty more arms
+ * to keep in step with the first forty. What is worth knowing while a call is
+ * in flight is which machine is being waited on, and that is the tool. The one
+ * exception is a page being opened, because the wait is the site and the site
+ * is in the arguments.
+ */
+export function callInFlight(name: string, raw: unknown): string {
+  const args = asRecord(raw);
+  switch (name) {
+    case "run_command":
+      return "Running a command";
+    case "browse": {
+      const url = text(args, "url");
+      return url && text(args, "action") === "open"
+        ? `Opening ${place(url)}`
+        : "Working the browser";
+    }
+    case "use_screen":
+      return "Working its screen";
+    case "open_on_desktop":
+      return "Opening a program on its screen";
+    case "send_message":
+      return "Sending a message";
+    case "attach_file":
+      return "Attaching a file";
+    case "update_notes":
+      return "Updating its memory";
+    case "directory":
+      return "Checking who is available";
+    case "schedule":
+      return "Changing its schedule";
+    case "create_agent":
+      return "Asking to add an agent";
+    case "request_permission":
+      return "Asking for permission";
+    default:
+      return `Using ${name}`;
+  }
 }
 
 /**
