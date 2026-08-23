@@ -344,11 +344,7 @@ pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Opt
     let client = browsers(&state)?;
 
     match client.get(&browser).await? {
-        Some(session) => Ok(Some(Browser {
-            session_id: session.id,
-            state: "running".to_string(),
-            live_view_url: session.live_view_url,
-        })),
+        Some(session) => Ok(Some(Browser::running(session))),
         None => {
             // A dangling id is a dead end in the pane. Clearing it turns that
             // back into an offer to open one.
@@ -402,11 +398,7 @@ pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Rep
     let card = agent_card(&state, id)?;
     let (_, session) = state.runtime.ensure_browser(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Browser {
-        session_id: session.id,
-        state: "running".to_string(),
-        live_view_url: session.live_view_url,
-    })
+    Ok(Browser::running(session))
 }
 
 /// Ends an agent's browser, keeping what it is signed in to.

@@ -46,7 +46,8 @@ function card(id: string, name: string, given = true): AgentCard {
 const HAS_ONE: Browser = {
   sessionId: "kb-live",
   state: "running",
-  liveViewUrl: "https://x.onkernel.com:8443/browser/live/tok",
+  liveViewUrl: "https://prod-jfk-1.kernel.sh:8443/browser/live/tok",
+  unwatchable: null,
 };
 
 function configure(kernelKeySet: boolean) {
@@ -142,6 +143,26 @@ describe("BrowserScreen", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Give one" }));
     await waitFor(() => expect(giveAgentBrowser).toHaveBeenCalledWith("a"));
+  });
+
+  it("names an address it cannot frame, rather than drawing a black rectangle", async () => {
+    // What the window's CSP refuses draws as the surface behind the frame and
+    // reports nothing, so a provider moving its live view host looks exactly
+    // like a browser that failed to start. Kernel moved from `onkernel.com` to
+    // `kernel.sh` and the pane went black with the browser working throughout.
+    agentBrowser.mockResolvedValue({
+      sessionId: "kb-live",
+      state: "running",
+      liveViewUrl: null,
+      unwatchable: "https://prod-jfk-1.example.com:8443",
+    });
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+
+    expect(await screen.findByText(/prod-jfk-1\.example\.com:8443/)).toBeTruthy();
+    // The browser is fine and the agent can still use the web, so the pane must
+    // not read as one that has closed.
+    expect(screen.getByText(/still use the web/)).toBeTruthy();
+    expect(screen.queryByTitle("Cook's browser")).toBeNull();
   });
 
   it("takes it back from the empty pane as well as from the bar", async () => {
