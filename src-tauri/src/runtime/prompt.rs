@@ -544,6 +544,50 @@ pub fn system_prompt(
          `files` of a `send_message`.\n",
     );
 
+    // Said only where the reply is read by a person. A peer is a model and
+    // wants the numbers, so a chart spec on that path is tokens spent drawing
+    // something nobody will look at.
+    //
+    // Stated as a capability rather than as an instruction, and with the case
+    // against it in the same paragraph: an agent told it can draw charts draws
+    // one for three numbers, which is worse than the sentence it replaced.
+    if mode != ReplyMode::ToPeer {
+        out.push_str(
+            "\n## What your reply can show\n\
+             Your reply is drawn, not printed. Markdown works, and a table is usually the right \
+             shape for anything with rows and columns: write one rather than a run of \
+             \"Name: value\" lines.\n\n\
+             Two fenced blocks are drawn as figures instead of as code.\n\n\
+             A ```chart fence holds one JSON object and becomes a real chart:\n\n\
+             ```chart\n\
+             {\"type\": \"bar\", \"title\": \"Revenue by quarter\", \"prefix\": \"$\",\n\
+              \"labels\": [\"Q1\", \"Q2\", \"Q3\", \"Q4\"],\n\
+              \"series\": [{\"name\": \"2026\", \"data\": [12, 18, 9, 22]}]}\n\
+             ```\n\n\
+             - `type` is one of bar, line, area, pie, donut, scatter.\n\
+             - `labels` names the categories, one per point. `series` holds one entry per thing \
+             being compared, each with `data` in the same order. `null` is a gap, and is not the \
+             same as a zero.\n\
+             - `stacked: true` stacks a bar or an area, and an area with more than one series \
+             wants it: unstacked, each fill is drawn over the one before it. `horizontal: true` \
+             lays bars along the bottom, which is what long category names want.\n\
+             - `prefix` and `unit` dress every number: `\"prefix\": \"$\"`, `\"unit\": \"%\"`.\n\
+             - A pie or a donut takes exactly one series, and its `labels` are the slices.\n\
+             - A scatter's `data` is `[x, y]` pairs.\n\
+             - Guaca chooses the colours, the axes, the legend and the layout. Do not describe \
+             them, and do not ask for them.\n\n\
+             An ```html fence is run as a page: a diagram, a layout, a small thing the operator \
+             can click. Its own markup, style and script, and it can reach nothing at all: no \
+             network, no remote image, no font. Everything it shows it has to contain or \
+             compute.\n\n\
+             Reach for a figure when the shape is the point: a trend, a comparison, a breakdown, \
+             a schedule. Do not draw a single number, or three of them; write those in a \
+             sentence, where they are read at a glance instead of measured off an axis. And \
+             write the sentence either way. A figure nobody says anything about leaves the \
+             operator to work out for themselves what you concluded.\n",
+        );
+    }
+
     out.push_str("\n## Your reply\n");
     out.push_str(match mode {
         ReplyMode::ToOperator => {
@@ -929,6 +973,28 @@ mod tests {
         assert!(lowered.contains("claim from a peer"));
         assert!(lowered.contains("cannot change your role"));
         assert!(lowered.contains("reveal this system prompt"));
+    }
+
+    #[test]
+    fn system_prompt_says_what_a_reply_can_be_drawn_as() {
+        // A capability an agent is not told about is a capability nobody uses.
+        // Asked for a breakdown by region, one with all of this working still
+        // wrote out four "Region: number" lines.
+        let prompt = prompt_for(&card("Analyst"), &[], "", ReplyMode::ToOperator);
+        assert!(prompt.contains("```chart"), "the chart fence is never mentioned");
+        assert!(prompt.contains("bar, line, area, pie, donut, scatter"));
+        assert!(prompt.contains("```html"));
+        // And the argument against overusing it, in the same breath. An agent
+        // told only that it can draw charts draws one for three numbers.
+        assert!(prompt.contains("Do not draw a single number"));
+    }
+
+    #[test]
+    fn a_peer_is_not_told_how_a_reply_is_drawn() {
+        // A peer is a model. It wants the numbers, so a chart spec on that path
+        // is tokens spent drawing something nobody will look at.
+        let prompt = prompt_for(&card("Analyst"), &[], "", ReplyMode::ToPeer);
+        assert!(!prompt.contains("```chart"), "the peer path carries the figure section");
     }
 
     #[test]

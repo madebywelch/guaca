@@ -1460,6 +1460,375 @@ button {
 }
 
 /* ==========================================================================
+   Figures
+
+   A fenced block the transcript draws instead of printing: a chart, or a page
+   an agent wrote. One card either way, so a figure sits in a conversation the
+   way a file does rather than as a wall of markup mid-sentence.
+
+   The series colours are the one block of literal hex left in this file, and
+   they are literal on purpose. Every other colour here is a decision somebody
+   can revise; these eight are the output of a check (neighbouring slots must
+   stay apart for a red-green colourblind reader on this exact surface) and
+   `palette.test.ts` recomputes that check from these values. Editing one by eye
+   fails the suite, which is the intended experience.
+   ========================================================================== */
+
+.figure {
+  margin: 0.65rem 0;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  overflow: hidden;
+
+  --series-0: #008300;
+  --series-1: #2a78d6;
+  --series-2: #e87ba4;
+  --series-3: #eda100;
+  --series-4: #1baf7a;
+  --series-5: #eb6834;
+  --series-6: #4a3aa7;
+  --series-7: #e34948;
+
+  /* What separates two touching marks: the surface showing through, never a
+     stroke around each one. A stroke is ink that is not data. */
+  --chart-surface: var(--raised);
+}
+
+/* Not paper flipped. The same eight hues re-stepped for a dark ground and
+   measured as their own set, which is why green is the one value that repeats:
+   it already sat in both bands. */
+:root[data-surface="dark"] .figure {
+  --series-1: #3987e5;
+  --series-2: #d55181;
+  --series-3: #c98500;
+  --series-4: #199e70;
+  --series-5: #d95926;
+  --series-6: #9085e9;
+  --series-7: #e66767;
+}
+
+.figure--waiting {
+  padding: 1.1rem 0.9rem;
+}
+
+.figure__body {
+  padding: 0.7rem 0.8rem 0.2rem;
+}
+
+.figure__foot {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3rem 0.55rem 0.5rem;
+}
+
+/* Takes the row when it is open, so the table lands under both controls rather
+   than shoving the button off to one side of it. */
+.figure__foot .chart__table {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.figure__fault {
+  margin: 0;
+  padding: 0 0.25rem;
+  font-size: 0.8rem;
+  color: var(--alarm);
+}
+
+.figure__source {
+  margin-top: 0.55rem;
+}
+
+/* --- the chart itself --------------------------------------------------- */
+
+.chart__title {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 600;
+  margin: 0 0 0.4rem;
+  color: var(--text);
+}
+
+/* The readout is positioned against this, and it is the drawing's own box
+   rather than the card's: the percentages it is placed by are of the viewBox. */
+.chart__frame {
+  position: relative;
+}
+
+.chart__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* Recessive, hairline and solid. Dashed reads as a threshold or a projection
+   when it is only a grid. */
+.chart__grid {
+  stroke: var(--edge);
+  stroke-width: 1;
+}
+
+/* Zero is not a gridline: every bar is measured from it. */
+.chart__axis {
+  stroke: var(--faint);
+  stroke-width: 1;
+}
+
+.chart__tick,
+.chart__name {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  fill: var(--faint);
+  /* Ticks are a column of numbers, which is the one place equal-width digits
+     are worth having. */
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__name {
+  font-variant-numeric: normal;
+}
+
+/* Text never wears the data colour. A pale hue is illegible as type on the
+   surface, and identity comes from the coloured mark beside the words. */
+.chart__value {
+  font-family: var(--font-ui);
+  font-size: 10.5px;
+  font-weight: 600;
+  fill: var(--muted);
+}
+
+.chart__line {
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart__bar,
+.chart__wedge {
+  transition: opacity 120ms ease;
+}
+
+/* The mark under the pointer lifts, so the reader can see it respond. The
+   others recede rather than the hovered one brightening: brightening a fill
+   changes the colour a series is identified by. */
+.chart__frame:hover .chart__bar:not([data-lit]),
+.chart__frame:hover .chart__wedge:not([data-lit]) {
+  opacity: 0.55;
+}
+
+.chart__dot {
+  stroke: var(--chart-surface);
+  stroke-width: 2;
+}
+
+/* The ring keeps two overlapping points readable as two, and the transparent
+   circle over each is what the pointer is actually aiming at: a nine-pixel dot
+   is a pinpoint nobody hits. */
+.chart__mark > :first-child {
+  stroke: var(--chart-surface);
+  stroke-width: 2;
+}
+
+.chart__mark[data-lit] > :first-child {
+  stroke: var(--text);
+}
+
+.chart__hit,
+.chart__band {
+  fill: transparent;
+}
+
+.chart__band:hover,
+.chart__mark:hover {
+  cursor: default;
+}
+
+.chart__band:focus-visible,
+.chart__mark:focus-visible,
+.chart__wedge:focus-visible {
+  outline: 2px solid var(--flesh);
+  outline-offset: 1px;
+}
+
+/* --- what is under the pointer ------------------------------------------ */
+
+.chart__readout {
+  position: absolute;
+  transform: translate(-50%, 0);
+  pointer-events: none;
+  min-width: 6rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  font-size: 0.76rem;
+  z-index: 2;
+}
+
+.chart__readout-head {
+  margin: 0 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.chart__readout-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  margin: 0.1rem 0 0;
+}
+
+/* The value leads and the name follows, which is the legend's hierarchy
+   inverted: by the time somebody is hovering they know which series they want
+   and are after the number. */
+.chart__readout-value {
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart__readout-name {
+  color: var(--muted);
+}
+
+/* A short stroke rather than a filled box. At this density a box is
+   data-weight ink doing a label's job. */
+.chart__key {
+  display: inline-block;
+  width: 0.7rem;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+  align-self: center;
+}
+
+.chart__swatch {
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* The legend mirrors the mark, which for a scatter means the shape as well. */
+.chart__swatch[data-mark="circle"] { border-radius: 50%; }
+.chart__swatch[data-mark="diamond"] { border-radius: 1px; transform: rotate(45deg); }
+.chart__swatch[data-mark="triangle"] {
+  background: none;
+  width: 0;
+  height: 0;
+  border-left: 0.3rem solid transparent;
+  border-right: 0.3rem solid transparent;
+  border-bottom: 0.52rem solid currentColor;
+}
+
+/* --- legend and figures ------------------------------------------------- */
+
+.md .chart__legend,
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.7rem;
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+
+.chart__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 0;
+  background: none;
+  padding: 0.1rem 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* Switched off, said twice: struck through as well as faded, because faded
+   alone is a state somebody reads as "this one is less important". */
+.chart__legend-item[aria-pressed="false"] {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+
+/* A key rather than a switch. Nothing to press, so nothing that looks pressable. */
+.chart__legend-item[data-static] {
+  cursor: default;
+}
+
+.chart__table {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+/* Sized and spaced like the ghost button beside it, because they are two
+   controls doing the same kind of job and a summary that reads as body text
+   next to a button reads as a mistake. */
+.chart__table > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: var(--radius-sm);
+  list-style-position: inside;
+}
+
+.chart__table > summary:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.chart__table[open] > summary {
+  margin-bottom: 0.35rem;
+}
+
+.chart__table td {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- a page an agent wrote ---------------------------------------------- */
+
+.artifact {
+  position: relative;
+}
+
+.artifact__frame {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+}
+
+/* Revealed by the pointer. A transcript is a conversation, and a control on
+   every figure in it is a column of buttons down the side of the reading. */
+.artifact__open {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  opacity: 0;
+  background: var(--raised);
+}
+
+.artifact:hover .artifact__open,
+.artifact__open:focus-visible {
+  opacity: 1;
+}
+
+/* The full view is the one thing in the dialog that has room, so the frame
+   takes all of it. Nothing here may clip: the body is what scrolls. */
+.artifact__full .artifact,
+.artifact__full .artifact__frame {
+  height: 100%;
+  min-height: 60vh;
+}
+
+/* ==========================================================================
    Chips, controls, dialogs
    ========================================================================== */
 
