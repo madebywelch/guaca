@@ -12,6 +12,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::account::{Account, AccountError, Connectors};
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
@@ -45,6 +46,9 @@ pub struct AppState {
     /// The ChatGPT sign-in. The same one the runtime makes calls with, so a
     /// sign-in completed here is usable by the next turn without a restart.
     pub subscription: Arc<Subscription>,
+    /// The Guaca account, which is optional and which nothing else in the app
+    /// depends on. An install that never signs in never reaches the service.
+    pub account: Arc<Account>,
 }
 
 /// A structured error the UI can render as more than a toast.
@@ -99,6 +103,19 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
+        }
+    }
+}
+
+impl From<AccountError> for CommandError {
+    fn from(err: AccountError) -> Self {
+        match err {
+            // Its own kind: the UI redraws itself as signed out rather than
+            // showing a failure for a sign-in that simply ended.
+            AccountError::NotSignedIn | AccountError::Expired { .. } => {
+                CommandError::new("signedOut", err.to_string())
+            }
+            other => CommandError::new("account", other.to_string()),
         }
     }
 }
@@ -1385,6 +1402,62 @@ pub struct SettingsPatch {
 #[tauri::command]
 pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
     Ok(state.runtime.config().redacted())
+}
+
+// ---- the Guaca account ---------------------------------------------------
+
+/// Whether an account is signed in, and which service it is.
+///
+/// The origin is on it because in development it is not `guaca.bot`, and an
+/// operator who cannot see which service they linked cannot tell the two apart.
+#[tauri::command]
+pub fn account_status(state: State<'_, AppState>) -> Reply<crate::account::Status> {
+    Ok(state.account.status())
+}
+
+/// The whole sign-in, in one call.
+///
+/// One command rather than the subscription's two, because there is no code for
+/// the operator to carry: the browser opens, they say yes, and the answer comes
+/// back to a port this process is already listening on. Nothing needs drawing
+/// in between, so nothing needs a second round trip to draw it.
+///
+/// Parks for up to five minutes on purpose. An operator who closes the dialog
+/// abandons it, and what is left behind is a closed socket.
+#[tauri::command]
+pub async fn sign_in_account(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Reply<crate::account::Status> {
+    let account = state.account.clone();
+    Ok(account
+        .sign_in(|url| {
+            // The system browser, not the webview. The sign-in belongs to a
+            // session this app has no business holding, and the whole argument
+            // for a loopback redirect is that the browser is the operator's.
+            tauri_plugin_opener::OpenerExt::opener(&app)
+                .open_url(url, None::<&str>)
+                .map_err(|err| err.to_string())
+        })
+        .await?)
+}
+
+/// What the account holds, asked of the service rather than remembered.
+///
+/// The answer changes when the operator authorizes something in a browser, not
+/// when this app does anything, so a cached copy would be a list of
+/// capabilities an agent is told it has and does not.
+#[tauri::command]
+pub async fn account_connectors(state: State<'_, AppState>) -> Reply<Connectors> {
+    let account = state.account.clone();
+    Ok(account.connectors().await?)
+}
+
+/// Forgets the sign-in on this machine.
+#[tauri::command]
+pub fn sign_out_account(state: State<'_, AppState>) -> Reply<crate::account::Status> {
+    state.account.sign_out()?;
+    Ok(state.account.status())
 }
 
 // ---- the ChatGPT sign-in -------------------------------------------------
