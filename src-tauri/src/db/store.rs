@@ -97,6 +97,8 @@ fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
         sandbox_envd_token: None,
         sandbox_traffic_token: None,
         browser_id: None,
+        has_computer: false,
+        has_browser: false,
         lifecycle: Lifecycle::Active,
         pinned: false,
         rail_order,
@@ -321,7 +323,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -338,7 +340,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -487,6 +489,42 @@ impl Store {
         let changed = conn.execute(
             "UPDATE agents SET browser_id=?2 WHERE id=?1",
             params![id.to_string(), browser],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        Ok(())
+    }
+
+    /// Records that the operator has given this agent a computer, or taken it
+    /// back.
+    ///
+    /// A decision, not an acquisition, which is why it is here rather than
+    /// folded into `set_agent_sandbox`: the machine under it is made, slept,
+    /// reclaimed and made again, and none of that is the operator changing
+    /// their mind. It does not bump the card version for the same reason
+    /// `set_agent_pinned` does not: peers are told what an agent is for, not
+    /// what it is allowed to rent.
+    ///
+    /// Taking it back deliberately leaves `sandbox_id` alone. The disk is where
+    /// the operator's sign-ins live, and giving the computer back has to find
+    /// them there rather than starting a stranger.
+    pub fn set_has_computer(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
+        self.set_flag(id, "has_computer", given)
+    }
+
+    /// The same decision about the browser.
+    pub fn set_has_browser(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
+        self.set_flag(id, "has_browser", given)
+    }
+
+    /// One boolean column on one agent. The column name is a literal from the
+    /// two callers above and never a value from outside this file.
+    fn set_flag(&self, id: AgentId, column: &str, value: bool) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            &format!("UPDATE agents SET {column}=?2 WHERE id=?1"),
+            params![id.to_string(), i64::from(value)],
         )?;
         if changed == 0 {
             return Err(StoreError::AgentNotFound(id));
@@ -2196,7 +2234,7 @@ impl Store {
     pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
                FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid",
         )?;
         let rows = stmt.query_map(params![group.to_string()], row_to_card)?;
@@ -2336,6 +2374,8 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             pinned: row.get::<_, i64>(15)? != 0,
             rail_order: row.get(16)?,
             browser_id: row.get(17)?,
+            has_computer: row.get::<_, i64>(18)? != 0,
+            has_browser: row.get::<_, i64>(19)? != 0,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -2774,6 +2814,46 @@ mod tests {
             first_seen_at: at,
             last_seen_at: at,
         }
+    }
+
+    #[test]
+    fn an_agent_is_made_with_neither_place_and_keeps_the_one_it_is_given() {
+        // A new agent gets nothing, including one another agent made: handing
+        // out a machine is the operator's, and a crew that could grant itself
+        // one by hiring would route around the decision entirely.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Talker")).unwrap();
+        assert!(!card.has_computer);
+        assert!(!card.has_browser);
+
+        f.store.set_has_computer(card.id, true).unwrap();
+        let given = f.store.get_agent(card.id).unwrap().unwrap();
+        assert!(given.has_computer);
+        assert!(!given.has_browser, "the two are given separately or they are one switch");
+        assert_eq!(given.version, card.version, "a grant is not an edit to the card");
+
+        // Taken back, and the machine underneath deliberately left where it is:
+        // the disk holds whatever the operator signed it in to, and giving the
+        // computer back has to find those sessions rather than a stranger.
+        f.store.set_agent_sandbox(card.id, Some(("sb-1", "envd", "traffic"))).unwrap();
+        f.store.set_has_computer(card.id, false).unwrap();
+        let taken = f.store.get_agent(card.id).unwrap().unwrap();
+        assert!(!taken.has_computer);
+        assert_eq!(taken.sandbox_id.as_deref(), Some("sb-1"));
+    }
+
+    #[test]
+    fn a_grant_cannot_be_written_against_an_agent_that_is_not_there() {
+        let f = fixture();
+        let gone = AgentId::new();
+        assert!(matches!(
+            f.store.set_has_computer(gone, true),
+            Err(StoreError::AgentNotFound(id)) if id == gone
+        ));
+        assert!(matches!(
+            f.store.set_has_browser(gone, true),
+            Err(StoreError::AgentNotFound(id)) if id == gone
+        ));
     }
 
     #[test]

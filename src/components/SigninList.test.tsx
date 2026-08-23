@@ -20,6 +20,8 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     groupId: "g1",
     sandboxId: "sb-1",
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     name: "Researcher",
     avatar: "plain",
     color: "#c7d96b",

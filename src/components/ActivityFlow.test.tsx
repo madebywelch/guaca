@@ -15,6 +15,8 @@ function card(id: string, name: string, color = "#c7d96b"): AgentCard {
     groupId: "00000000-0000-4000-8000-000000000001",
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     name,
     avatar: "plain",
     color,

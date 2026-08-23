@@ -164,6 +164,12 @@ const RUN_TIMEOUT: Duration = Duration::from_secs(120);
 pub enum E2bError {
     #[error("no E2B API key is set; add one in app settings to give agents a computer")]
     NoKey,
+    /// The workspace can make machines and this agent is not one of the agents
+    /// allowed one. A policy answer rather than a provider one, and it lives
+    /// beside `NoKey` because both are reasons a machine was never made rather
+    /// than a machine that failed.
+    #[error("this agent has not been given a computer; the operator gives one from its panel")]
+    NotGiven,
     #[error("E2B request failed: {0}")]
     Transport(String),
     #[error("E2B rejected the request ({status}): {message}")]

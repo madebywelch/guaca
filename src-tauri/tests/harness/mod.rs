@@ -20,7 +20,7 @@ use axum::response::IntoResponse;
 use axum::routing::post;
 use axum::Router;
 
-use guac_lib::config::{AppConfig, E2bConfig, InferenceConfig};
+use guac_lib::config::{AppConfig, E2bConfig, InferenceConfig, KernelConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Participant};
@@ -75,6 +75,12 @@ pub enum Script {
     Retime { id: String, repeat: String },
     /// Emit a `request_permission` tool call.
     AskOperator { action: String, because: String },
+    /// Emit a `run_command` tool call: a model reaching for a computer, whether
+    /// or not it was offered one.
+    Shell(String),
+    /// Emit a `browse` tool call that opens a url: the same reach, at the other
+    /// place.
+    Open(String),
     /// Answer with a 503.
     ///
     /// Stands in for every failure worth retrying: a provider having a bad
@@ -184,6 +190,26 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_ask","type":"function",
                  "function":{"name":"request_permission","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Shell(command) => {
+            let args = serde_json::json!({ "command": command }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_shell","type":"function",
+                 "function":{"name":"run_command","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Open(url) => {
+            let args = serde_json::json!({ "action": "open", "url": url }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_browse","type":"function",
+                 "function":{"name":"browse","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
@@ -417,7 +443,7 @@ pub fn harness_in_groups(
 /// A crew whose agents differ from each other, which is what a scenario about
 /// delegation needs.
 pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness {
-    build(stub, crew, limits, E2bConfig::default())
+    build(stub, crew, limits, E2bConfig::default(), KernelConfig::default())
 }
 
 /// The same crew, in a workspace that has a computer provider configured.
@@ -430,10 +456,35 @@ pub fn harness_of(stub: &Stub, crew: &[Member], limits: GuardLimits) -> Harness 
 /// tools an agent is offered, and these tests script the model, not the machine.
 pub fn harness_with_computer(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
     let crew: Vec<Member> = names.iter().map(|name| Member::new(name, &["testing"])).collect();
-    build(stub, &crew, limits, E2bConfig { api_key: "e2b-test".into(), ..Default::default() })
+    build(
+        stub,
+        &crew,
+        limits,
+        E2bConfig { api_key: "e2b-test".into(), ..Default::default() },
+        KernelConfig::default(),
+    )
 }
 
-fn build(stub: &Stub, crew: &[Member], limits: GuardLimits, e2b: E2bConfig) -> Harness {
+/// The same crew, in a workspace that has a browser provider configured, each
+/// agent given one. Nothing here calls Kernel, for the reason above.
+pub fn harness_with_browser(stub: &Stub, names: &[&str], limits: GuardLimits) -> Harness {
+    let crew: Vec<Member> = names.iter().map(|name| Member::new(name, &["testing"])).collect();
+    build(
+        stub,
+        &crew,
+        limits,
+        E2bConfig::default(),
+        KernelConfig { api_key: "kernel-test".into(), ..Default::default() },
+    )
+}
+
+fn build(
+    stub: &Stub,
+    crew: &[Member],
+    limits: GuardLimits,
+    e2b: E2bConfig,
+    kernel: KernelConfig,
+) -> Harness {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
@@ -454,6 +505,16 @@ fn build(stub: &Stub, crew: &[Member], limits: GuardLimits, e2b: E2bConfig) -> H
             d.system_prompt = member.prompt.to_string();
         }
         let card = store.create_agent(&d).unwrap();
+        // A computer is the operator's to hand out one agent at a time, so a
+        // harness that configures the provider also gives it to the crew it
+        // builds: `harness_with_computer` means a crew with computers, and
+        // every test reaching for it is about what an agent does with one.
+        if !e2b.api_key.trim().is_empty() {
+            store.set_has_computer(card.id, true).unwrap();
+        }
+        if !kernel.api_key.trim().is_empty() {
+            store.set_has_browser(card.id, true).unwrap();
+        }
         ids.insert(member.name.to_string(), card.id);
     }
 
@@ -469,7 +530,7 @@ fn build(stub: &Stub, crew: &[Member], limits: GuardLimits, e2b: E2bConfig) -> H
         },
         limits,
         e2b,
-        kernel: Default::default(),
+        kernel,
     };
 
     let sink = RecordingSink::new();
@@ -556,6 +617,26 @@ pub fn prompts_by_agent(stub: &Stub) -> HashMap<String, String> {
             speaker(body),
             body["messages"][0]["content"].as_str().unwrap_or_default().to_string(),
         );
+    }
+    out
+}
+
+/// The tool names each agent was offered, by name.
+///
+/// What a turn may do is settled before the first token, so a tool that should
+/// not have been on the table shows up here rather than in what the model did
+/// with it. The last call wins, which for these scenarios is the only call.
+pub fn tools_by_agent(stub: &Stub) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    for body in stub.transcript.lock().iter() {
+        let names: Vec<String> = body["tools"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|tool| tool["function"]["name"].as_str().map(str::to_string))
+            .collect();
+        out.insert(speaker(body), names);
     }
     out
 }

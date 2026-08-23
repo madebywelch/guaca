@@ -85,6 +85,7 @@ repo: the frontend renders state and forwards intent.
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
 | What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
+| Whether an agent may have a computer or a browser at all | *A computer is given to one agent, not to the workspace* in `docs/MACHINES.md`, then `Runtime::surfaces_for` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
@@ -258,6 +259,29 @@ the model takes a screenshot to see what `browse` did.
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
+- **A key in settings says what the workspace can hand out; the card says who
+  was given it.** Both have to be true, and `Surfaces::given_to` is the only
+  place they meet. Deciding from the key alone is what this replaced: every
+  agent was offered `run_command` and `browse`, and the first one to think of it
+  rented a machine mid-turn. Deciding from what an agent is holding instead
+  would be worse than either, because a machine is reclaimed on the provider's
+  clock: the tools would vanish from a working agent the moment its sandbox
+  slept.
+- **The gate is in `ensure_computer` and `ensure_browser`, not at the tool call
+  sites.** Those two functions are the only places a machine or a browser is
+  made, and tools are not the only route to them: a file arriving for an agent
+  is placed on its machine, and a text file too long to inline is placed there
+  too. A gate at the call sites would rent a machine for an agent the operator
+  deliberately did not give one. `Runtime::not_given` sits in front of the
+  dispatcher as well, and that is not a duplicate: it is what turns a model
+  calling a tool it was never offered into a refusal it can act on rather than
+  an error that reads like a broken machine.
+- **Taking a computer back leaves `sandbox_id` where it is.** The machine sleeps
+  and its disk stays, because that disk is where the operator's sign-ins live.
+  A revoke that destroyed it would make giving the computer back mean signing
+  everything in again, which is the one thing an agent cannot do for itself.
+  Taking a browser back closes it instead, for the same reason from the other
+  end: closing is what writes the cookies to the profile.
 - **Every `use_screen` action answers with a picture, and only the newest one
   stays.** The first is what stops a model acting on a screen two actions old;
   the second is what keeps that affordable. Removing either breaks the other.

@@ -52,6 +52,36 @@ impl Surfaces {
     pub fn none() -> Self {
         Surfaces { computer: false, browser: false }
     }
+
+    /// What one agent has, out of what the workspace could hand out.
+    ///
+    /// Both halves are load-bearing and neither is enough alone: a provider
+    /// that is not configured cannot be given to anybody, and a provider that
+    /// is configured is still not everybody's. Taken from the card rather than
+    /// from what the agent is holding, because a machine is reclaimed on the
+    /// provider's clock and a browser is deleted minutes after it is used.
+    /// Deciding from possession would take the tools away from a working agent
+    /// the moment its machine went to sleep.
+    pub fn given_to(self, card: &crate::domain::agent::AgentCard) -> Self {
+        Surfaces {
+            computer: self.computer && card.has_computer,
+            browser: self.browser && card.has_browser,
+        }
+    }
+
+    /// Whether one named place is one this agent has.
+    ///
+    /// A sign-in is recorded against the surface it was found on, so this is
+    /// what keeps an account on a place the agent no longer has out of its
+    /// prompt and out of what peers are told it reaches. An overclaim there is
+    /// worse than saying nothing: it is a crew routing work to an agent that
+    /// will find it cannot do it.
+    pub fn has(self, surface: crate::domain::signin::Surface) -> bool {
+        match surface {
+            crate::domain::signin::Surface::Computer => self.computer,
+            crate::domain::signin::Surface::Browser => self.browser,
+        }
+    }
 }
 
 /// Tool definitions offered on one agent turn.

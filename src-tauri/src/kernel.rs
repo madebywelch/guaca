@@ -82,6 +82,11 @@ const TAG: &str = "guac";
 pub enum KernelError {
     #[error("no Kernel API key is set; add one in app settings to give agents a browser")]
     NoKey,
+    /// As `E2bError::NotGiven`, and for the same reason: a browser is handed
+    /// out one agent at a time, and an agent that was not given one cannot make
+    /// itself one.
+    #[error("this agent has not been given a browser; the operator gives one from its panel")]
+    NotGiven,
     #[error("Kernel request failed: {0}")]
     Transport(String),
     #[error("Kernel rejected the request ({status}): {message}")]

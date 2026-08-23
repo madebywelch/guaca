@@ -213,7 +213,54 @@ pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Op
     Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
 }
 
-/// Gives an agent a computer, or brings the desktop up on the one it has.
+/// Gives an agent a computer.
+///
+/// The decision and nothing else: no machine is made here, and an agent that
+/// never needs one never costs anything. What changes is what its turns are
+/// offered, which is the whole of what the operator is deciding.
+#[tauri::command]
+pub fn give_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    state.runtime.store().set_has_computer(id, true)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Takes it back, and puts the machine to sleep if there is one.
+///
+/// Asleep rather than destroyed, and the disk is the reason: it holds whatever
+/// the operator signed that machine in to, so giving the computer back later
+/// has to find those sessions rather than a stranger. Destroying is its own
+/// button and says what it does.
+///
+/// A sandbox that cannot be reached is not a failure here. The decision has
+/// already been recorded by then, and the machine sleeps on its own timeout;
+/// refusing would leave an agent holding a computer the operator has said it
+/// may not have.
+#[tauri::command]
+pub async fn take_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let card = agent_card(&state, id)?;
+    state.runtime.store().set_has_computer(id, false)?;
+
+    if let Some(sandbox) = card.sandbox_id {
+        match computers(&state) {
+            Ok(client) => {
+                if let Err(err) = client.pause(&sandbox).await {
+                    tracing::warn!(%err, %sandbox, "could not sleep a machine that was taken back");
+                }
+            }
+            Err(err) => tracing::warn!(?err, "no client to sleep a machine that was taken back"),
+        }
+    }
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Brings the desktop up, making or waking the machine as needed.
+///
+/// Refuses for an agent that has not been given a computer, which the panel
+/// does not offer: this is the operator's own route to the same gate the
+/// runtime uses, and one that granted by side effect would make the give
+/// button decorative.
 #[tauri::command]
 pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
     let card = agent_card(&state, id)?;
@@ -294,7 +341,45 @@ pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Opt
     }
 }
 
-/// Gives an agent a browser, or hands back the one it has.
+/// Gives an agent a browser.
+///
+/// As with the computer: the decision alone. A browser is opened on first use,
+/// or by the operator when they want to sign this agent in to something.
+#[tauri::command]
+pub fn give_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    state.runtime.store().set_has_browser(id, true)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Takes it back, and closes the browser if one is open.
+///
+/// Closing is what writes the cookies back to the agent's profile, so this
+/// keeps what the operator signed it in to exactly as the Close button does.
+/// The profile outlives every browser made against it and is deleted with the
+/// agent, so giving the browser back opens one signed in to the same accounts.
+#[tauri::command]
+pub async fn take_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let card = agent_card(&state, id)?;
+    state.runtime.store().set_has_browser(id, false)?;
+
+    if let Some(browser) = card.browser_id {
+        match browsers(&state) {
+            Ok(client) => {
+                if let Err(err) = client.delete(&browser).await {
+                    tracing::warn!(%err, %browser, "could not close a browser that was taken back");
+                } else {
+                    state.runtime.store().set_agent_browser(id, None)?;
+                }
+            }
+            Err(err) => tracing::warn!(?err, "no client to close a browser that was taken back"),
+        }
+    }
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Opens an agent's browser, or hands back the one it has.
 #[tauri::command]
 pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Browser> {
     let card = agent_card(&state, id)?;

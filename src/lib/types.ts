@@ -336,10 +336,21 @@ export interface Output {
 export interface AgentCard {
   id: AgentId;
   groupId: GroupId;
-  /** Set once the agent has been given a computer. */
+  /** The machine this agent is using, once it has needed one. */
   sandboxId: string | null;
-  /** Set once the agent has been given a browser, which is a separate thing. */
+  /** The hosted browser it is using, which is a separate thing. */
   browserId: string | null;
+  /**
+   * Whether the operator has given this agent a computer at all.
+   *
+   * A different question from `sandboxId`, which is only what it is holding
+   * right now: machines are reclaimed and remade, and this outlives all of
+   * them. False means no tool that reaches a machine is offered to its turns,
+   * and it cannot make one.
+   */
+  hasComputer: boolean;
+  /** The same decision about the browser, and separately. */
+  hasBrowser: boolean;
   name: string;
   avatar: string;
   color: string;

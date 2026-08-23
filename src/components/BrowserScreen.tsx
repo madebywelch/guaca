@@ -51,6 +51,11 @@ export function BrowserScreen({ agent }: Props) {
   // the settings rather than inferred from a failure: a message that has to be
   // matched on to be understood is one a reworded error breaks.
   const configured = settings?.kernelKeySet === true;
+  // Whether this agent is one of the agents allowed the web. Read from the
+  // card, never from whether a browser came back: every browser is deleted
+  // minutes after it is used, and an agent whose browser timed out has not had
+  // anything taken away from it.
+  const given = agent.hasBrowser;
 
   const look = useCallback(async () => {
     const asked = agent.id;
@@ -75,17 +80,18 @@ export function BrowserScreen({ agent }: Props) {
     setBusy(false);
     setError(null);
     setConfirming(false);
-    if (configured) void look();
-  }, [agent.id, look, configured]);
+    if (configured && given) void look();
+    else setChecked(true);
+  }, [agent.id, look, configured, given]);
 
   // A browser that has timed out leaves a live view URL that is no longer
   // valid, and an iframe pointed at one is a blank rectangle rather than an
   // error. Polling is what turns that back into an offer to open another.
   useEffect(() => {
-    if (!configured) return;
+    if (!configured || !given) return;
     const timer = setInterval(() => void look(), 20000);
     return () => clearInterval(timer);
-  }, [configured, look]);
+  }, [configured, given, look]);
 
   /**
    * Hands the keyboard to the live view.
@@ -159,6 +165,26 @@ export function BrowserScreen({ agent }: Props) {
     });
   }, [full]);
 
+  /**
+   * Giving a browser, and taking it back.
+   *
+   * Neither answers with a browser, for the reason `ComputerScreen.decide`
+   * gives: what changes is the card, and the roster refresh that follows is
+   * what sends the effect above to look again.
+   */
+  const decide = async (run: () => Promise<unknown>) => {
+    const asked = agent.id;
+    setBusy(true);
+    setError(null);
+    try {
+      await run();
+    } catch (caught) {
+      if (showing.current === asked) setError(errorMessage(caught));
+    } finally {
+      if (showing.current === asked) setBusy(false);
+    }
+  };
+
   const act = async (run: () => Promise<Browser | null>) => {
     const asked = agent.id;
     setBusy(true);
@@ -178,7 +204,7 @@ export function BrowserScreen({ agent }: Props) {
 
   if (!configured || !checked) return null;
 
-  const live = browser?.state === "running" && browser?.liveViewUrl;
+  const live = given && browser?.state === "running" && browser?.liveViewUrl;
 
   const asDialog = full
     ? { role: "dialog", "aria-modal": true, "aria-label": `${agent.name}'s browser` }
@@ -226,15 +252,26 @@ export function BrowserScreen({ agent }: Props) {
                 </button>
               </>
             ) : (
-              <button
-                type="button"
-                className="btn btn--small btn--ghost"
-                disabled={busy}
-                onClick={() => setConfirming(true)}
-                title="Close it. What it is signed in to is saved, and the next one opens signed in."
-              >
-                Close
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="btn btn--small btn--ghost"
+                  disabled={busy}
+                  onClick={() => setConfirming(true)}
+                  title="Close it. What it is signed in to is saved, and the next one opens signed in."
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small btn--ghost"
+                  disabled={busy}
+                  onClick={() => void decide(() => api.takeAgentBrowser(agent.id))}
+                  title="Take it back. It closes, and what it is signed in to is saved."
+                >
+                  Take it back
+                </button>
+              </>
             )}
 
             <div className="screen__actions">
@@ -274,21 +311,48 @@ export function BrowserScreen({ agent }: Props) {
               {error ??
                 (busy
                   ? "Working on it. This takes a moment."
-                  : browser
-                    ? `Closed. What it was signed in to is saved, so the next one opens signed in
-                       to the same accounts.`
-                    : `No browser yet. Agents get one the first time they use the web. Open it
-                       yourself to sign this agent in to something: that is the one thing an agent
-                       cannot do for itself.`)}
+                  : !given
+                    ? `${agent.name} has no browser, so it cannot open a page or read one. Give it
+                       one and it opens a browser the first time it uses the web.`
+                    : browser
+                      ? `Closed. What it was signed in to is saved, so the next one opens signed
+                         in to the same accounts.`
+                      : `${agent.name} has a browser and none open. It opens one the first time it
+                         uses the web. Open it yourself to sign this agent in to something: that
+                         is the one thing an agent cannot do for itself.`)}
             </p>
-            <button
-              type="button"
-              className="btn btn--small btn--primary"
-              disabled={busy}
-              onClick={() => void act(() => api.startAgentBrowser(agent.id))}
-            >
-              {busy ? "Working…" : browser ? "Open another" : "Open one"}
-            </button>
+            <div className="screen__offer">
+              {given ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--primary"
+                    disabled={busy}
+                    onClick={() => void act(() => api.startAgentBrowser(agent.id))}
+                  >
+                    {busy ? "Working…" : browser ? "Open another" : "Open one"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--ghost"
+                    disabled={busy}
+                    onClick={() => void decide(() => api.takeAgentBrowser(agent.id))}
+                    title="Take it back. Any open browser closes, and its sign-ins are saved."
+                  >
+                    Take it back
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--small btn--primary"
+                  disabled={busy}
+                  onClick={() => void decide(() => api.giveAgentBrowser(agent.id))}
+                >
+                  {busy ? "Working…" : "Give one"}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

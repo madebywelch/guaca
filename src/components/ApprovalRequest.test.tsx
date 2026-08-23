@@ -20,6 +20,8 @@ const MANAGER: AgentCard = {
   groupId: "g1",
   sandboxId: null,
   browserId: null,
+  hasComputer: false,
+  hasBrowser: false,
   name: "Manager",
   avatar: "avocado",
   color: "#c7d96b",

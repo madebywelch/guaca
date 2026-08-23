@@ -39,6 +39,8 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     groupId: GROUP,
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     name,
     avatar: "avocado",
     color: "#c7d96b",

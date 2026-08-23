@@ -75,6 +75,15 @@ export const api = {
   /** `null` when the agent has never been given a computer. */
   agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
 
+  /**
+   * Lets this agent have a computer. The decision alone: no machine is made
+   * here, and one is only rented when the agent or the operator needs it.
+   */
+  giveAgentComputer: (id: AgentId) => invoke<void>("give_agent_computer", { id }),
+
+  /** Takes it back, and sleeps the machine if there is one. The disk is kept. */
+  takeAgentComputer: (id: AgentId) => invoke<void>("take_agent_computer", { id }),
+
   /** Creates or wakes the sandbox, and brings the desktop up. Idempotent. */
   startAgentComputer: (id: AgentId) => invoke<Computer>("start_agent_computer", { id }),
 
@@ -86,6 +95,15 @@ export const api = {
 
   /** `null` when the agent has no browser, or the one it had has gone. */
   agentBrowser: (id: AgentId) => invoke<Browser | null>("agent_browser", { id }),
+
+  /** Lets this agent have a browser. The decision alone; nothing is opened. */
+  giveAgentBrowser: (id: AgentId) => invoke<void>("give_agent_browser", { id }),
+
+  /**
+   * Takes it back, and closes the browser if one is open. What it is signed in
+   * to is saved to the agent's profile, so giving it back opens it signed in.
+   */
+  takeAgentBrowser: (id: AgentId) => invoke<void>("take_agent_browser", { id }),
 
   /** Opens one, or hands back the one it already has. Idempotent. */
   startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),

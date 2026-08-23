@@ -768,6 +768,28 @@ CREATE TABLE plugin_agents (
 CREATE INDEX plugin_agents_agent ON plugin_agents (agent_id);
 "#,
     ),
+    (
+        28,
+        r#"
+-- A computer and a browser are the operator's to hand out, one agent at a
+-- time. Before this they belonged to the workspace: a key in settings meant
+-- every agent in it was offered `run_command`, `use_screen` and `browse`, and
+-- the first one to think of it made itself a machine. An operator who wanted a
+-- crew where one agent reads the web and the rest only talk had no way to say
+-- so, and no way to find out an agent had rented a machine except the bill.
+ALTER TABLE agents ADD COLUMN has_computer INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE agents ADD COLUMN has_browser  INTEGER NOT NULL DEFAULT 0;
+
+-- Backfilled from what each agent is holding rather than from the old rule.
+-- The old rule was "everyone", and applying it here would upgrade a workspace
+-- into exactly the state this column exists to end. What an agent already has
+-- is the one thing that cannot be taken away silently: its machine's disk and
+-- its browser profile are where the operator's sign-ins live, and an agent cut
+-- off from them reports accounts it can see and cannot reach.
+UPDATE agents SET has_computer = 1 WHERE sandbox_id IS NOT NULL;
+UPDATE agents SET has_browser  = 1 WHERE browser_id IS NOT NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1105,6 +1127,52 @@ mod tests {
             .unwrap();
         assert_eq!(steps, None);
         assert_eq!(provider, None, "a fresh group is paid for however the app is");
+    }
+
+    #[test]
+    fn an_agent_that_already_had_a_machine_keeps_it_when_the_two_places_become_a_decision() {
+        // The upgrade cannot apply the old rule, because the old rule was
+        // "every agent in the workspace" and that is the state this column
+        // exists to end. It cannot apply the new default to everybody either:
+        // an agent already holding a machine is holding the operator's sign-ins
+        // on its disk, and one cut off from them reports accounts it can see
+        // and cannot reach. What it is holding is the only honest answer.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 28) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        let insert = "INSERT INTO agents
+                        (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,
+                         created_at,updated_at,group_id,sandbox_id,browser_id)
+                      VALUES (?1,?2,'avocado','#7fb069','m','','[]','active',1,0,0,?3,?4,?5)";
+        let crew: [(&str, Option<&str>, Option<&str>); 3] = [
+            ("Runner", Some("sb-1"), None),
+            ("Reader", None, Some("kb-1")),
+            ("Talker", None, None),
+        ];
+        for (name, sandbox, browser) in crew {
+            conn.execute(insert, rusqlite::params![name, name, DEFAULT_GROUP_ID, sandbox, browser])
+                .unwrap();
+        }
+
+        run(&mut conn).unwrap();
+
+        let held = |name: &str| -> (i64, i64) {
+            conn.query_row(
+                "SELECT has_computer, has_browser FROM agents WHERE id=?1",
+                rusqlite::params![name],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap()
+        };
+        assert_eq!(held("Runner"), (1, 0), "a machine it is using is not taken away");
+        assert_eq!(held("Reader"), (0, 1), "and neither is a browser holding its cookies");
+        assert_eq!(
+            held("Talker"),
+            (0, 0),
+            "but an agent that never needed either is not handed both on upgrade"
+        );
     }
 
     #[test]

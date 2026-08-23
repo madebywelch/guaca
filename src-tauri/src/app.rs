@@ -348,10 +348,14 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::agent_computer,
+            commands::give_agent_computer,
+            commands::take_agent_computer,
             commands::start_agent_computer,
             commands::stop_agent_computer,
             commands::delete_agent_computer,
             commands::agent_browser,
+            commands::give_agent_browser,
+            commands::take_agent_browser,
             commands::start_agent_browser,
             commands::stop_agent_browser,
             commands::group_connectors,
