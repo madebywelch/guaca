@@ -540,7 +540,7 @@ mod tests {
         let response = file_response(
             &files,
             &asked(
-                Some("https://sessions.onkernel.com:8443"),
+                Some("https://prod-jfk-1.kernel.sh:8443"),
                 None,
                 &format!("{}/brief.md", brief.digest),
             ),
