@@ -637,7 +637,7 @@ export const useStore = create<State>((set, get) => ({
             callId: event.callId,
             name: event.name,
             arguments: event.arguments,
-            outcome: null,
+            done: null,
             // Read here rather than sent, because what this is used for is how
             // long the operator has been waiting, and the operator's clock is
             // the one they are waiting by.
@@ -662,7 +662,7 @@ export const useStore = create<State>((set, get) => ({
             trail: {
               ...state.trail,
               [stream.agentId]: held.map((call) =>
-                call.callId === event.callId ? { ...call, outcome: event.outcome } : call,
+                call.callId === event.callId ? { ...call, done: event.part } : call,
               ),
             },
           };

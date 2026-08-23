@@ -459,11 +459,15 @@ reported on.
   precisely as long as the wait it was meant to explain. It is also why the
   working line prefers it over the thinking: while a machine is being waited on
   the model is not thinking, and its last thought is stale.
-- **`ToolFinished` carries the outcome the message will carry**, from the same
-  value rather than a second reading of it. What the operator watches accumulate
-  during the turn is the same chip, from the same rules in `lib/trail.ts`, that
-  the transcript holds afterwards. Two sets of rules would be two things to be
-  wrong about one call.
+- **`ToolFinished` carries the whole `Part::ToolCall`**, not the outcome, so
+  what the operator watches accumulate during the turn is the same chip, drawn
+  by the same function in `lib/trail.ts` over the same value, that the
+  transcript holds afterwards. The outcome alone was tried and is the shape of
+  simplification that reads as tidier and is a divergence waiting to happen: a
+  memory rewrite carries what it overwrote, nothing outside the runtime can
+  supply it, and a live chip assembled from the fields somebody thought to list
+  had quietly stopped drawing the diff the recorded one drew. Whatever a call
+  has to say for itself next reaches both ends or neither.
 - **Both are addressed to the placeholder**, so the live record is filed under
   the agent that opened the stream and dropped when it ends. A retry that
   reopens under a new id therefore starts the live trail again, exactly as it

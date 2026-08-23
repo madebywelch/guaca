@@ -72,7 +72,37 @@ worth reading and a byte count can be ignored in peace.
 
 **A chip that opens nothing is not a button.** A directory lookup is one call
 whose whole content is the sentence already on it. A control that does nothing
-is one the operator stops trusting the rest of.
+is one the operator stops trusting the rest of. A memory that was cleared is the
+one call with no content and something to say anyway: what was thrown away is
+the whole of what happened, so it opens on that.
+
+**A memory rewrite opens as a diff, because the call is always the whole page.**
+`update_notes` replaces the file rather than appending to it, which is the right
+interface for an agent — it has to reconcile what it believed against what it
+just learned — and the wrong one for whoever reads the result. Opening a rewrite
+used to show a page of markdown, and "what did it decide to remember this time"
+meant holding two near-identical pages in your head. So the call carries what it
+overwrote, and `lib/diff.ts` draws the lines between the two.
+
+That previous version is recorded by the runtime at the moment of the write and
+cannot be worked out later by anybody. The same memory is written from an
+agent's wall and from every thread it holds, and the operator can edit it by
+hand from the agent's panel, so a previous version recovered from the transcript
+this call happens to sit in is wrong exactly when something interesting
+happened. It is on the call rather than in its arguments because the arguments
+are the model's own JSON, verbatim, and a reader has to be able to tell what the
+model asked for from what the runtime found. Calls recorded before any of this
+have nothing to compare against and draw as they always did.
+
+Every unchanged line is kept, unlike a patch. A page is short enough to show
+whole, and an operator opening this has a second question the changed lines
+alone do not answer: not only what the agent changed its mind about, but what it
+now believes. The marker in the gutter is a character rather than only a colour,
+because red and green either side of a line are the one distinction a reader may
+not have, and because it is what makes a diff copied out of the window still
+read as one. How much moved is said in words, in the place the runtime's own
+summary would have gone — that summary is a character count printed directly
+above the characters it counts.
 
 Nobody is named on any of it. There is exactly one agent whose own work this can
 be, its portrait and name are at the top of the pane, and the rows this replaced
@@ -81,8 +111,10 @@ above, applied to the last place it had not reached.
 
 **The same chips are drawn while the turn is still making them**, above the
 composer rather than in the transcript, from `trail` in the store rather than
-from a message. Same rules, same file, same fold: two sets would be two things
-to be wrong about one call. A ten-minute turn is otherwise ten minutes of a
+from a message. Same rules, same file, same fold, and the same value: the
+runtime reports a finished call as the whole part the message will carry, so a
+memory rewrite opens as the diff above while the turn is still running and not
+only once it has ended. A ten-minute turn is otherwise ten minutes of a
 pulsing avatar and a line of prose, and the transcript cannot help, because the
 record it draws this from does not exist until the turn ends. It goes when the
 turn does. *A turn's own work is watched while it happens* in
@@ -495,7 +527,7 @@ back to the message being opened, bounded at a thousand; past that the operator
 lands in the right channel at its newest end. Anything that jumps to a message
 goes through `openMessage` rather than `select`.
 
-## Settings is eight places, because it stopped being one subject
+## Settings is nine places, because it stopped being one subject
 
 An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
@@ -503,11 +535,23 @@ scroll made the operator read all five to change one. So it is a nav and a pane,
 on the Cafeteria's shape: a panel that owns its own height, a head and a foot
 pinned to it, one scrolling half.
 
-Two of those eight are defaults rather than orders. Whatever Provider and Limits
+Two of those nine are defaults rather than orders. Whatever Provider and Limits
 say is what a group falls back to, and a group that answers for itself is not
 affected by either. What stays app-wide is what is genuinely one of: the
 operator's name, the machine and browser accounts, and everything about how the
 app looks and when it may interrupt.
+
+One of them is optional in a way none of the others are. Account is the only
+pane that talks to a service Guaca's author runs, and an install that never
+opens it never sends that service a request: both of its reads happen when the
+pane is opened rather than at startup. That is the shape the feature has to keep.
+Most people will never sign in, everything else in the app works identically
+either way, and the pane says so in its first sentence rather than leaving an
+operator to work out whether they are missing something. What signing in buys is
+one thing that genuinely cannot be done from here: an OAuth client for a service
+that will only issue programmatic access to a registered application. A client
+secret shipped inside an open-source download is not a secret, so the client has
+to live somewhere else or not exist. `docs/ACCOUNT.md` is the long version.
 
 Every value lives in the shell rather than in the pane that draws it, and that is
 not tidiness. The shell is unmounted when the dialog closes, so a pane holding

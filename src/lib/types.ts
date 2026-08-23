@@ -56,7 +56,19 @@ export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
   | { type: "notice"; kind: NoticeKind; text: string }
-  | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
+  /**
+   * A call this agent made. `replaced` is what it overwrote, carried only by a
+   * memory rewrite and absent everywhere else, including on calls recorded
+   * before it existed. Empty means the call overwrote nothing, which is not the
+   * same as a call that overwrites nothing.
+   */
+  | {
+      type: "toolCall";
+      name: string;
+      arguments: unknown;
+      outcome: ToolOutcome;
+      replaced?: string;
+    }
   | ({ type: "file" } & Attachment)
   /**
    * A routine coming due, drawn as one line the operator can open rather than
@@ -77,6 +89,13 @@ export type Part =
       summary: string;
       detail: DetailField[];
     };
+
+/**
+ * The one part with two lives: drawn as a chip while the turn is making the
+ * call, and again out of the message that records it. Named because the live
+ * half is carried whole by `toolFinished`, so both are built from one value.
+ */
+export type ToolCallPart = Extract<Part, { type: "toolCall" }>;
 
 export type ApprovalId = string;
 
@@ -469,6 +488,43 @@ export interface SubscriptionStatus {
   includesCodex: boolean;
 }
 
+/**
+ * Whether a Guaca account is signed in, and which service it is.
+ *
+ * No token, for the same reason as above. The origin is on it because in
+ * development it is not `guaca.bot`, and an operator who cannot see which
+ * service they linked to cannot tell the two apart.
+ */
+export interface AccountStatus {
+  signedIn: boolean;
+  email: string;
+  origin: string;
+}
+
+/** One thing an authorized provider can do, as the service describes it. */
+export interface AccountCapability {
+  id: string;
+  label: string;
+  granted: boolean;
+}
+
+export interface AccountProvider {
+  id: string;
+  label: string;
+  capabilities: AccountCapability[];
+}
+
+/**
+ * What the account holds, as the service reports it.
+ *
+ * Read rather than kept. It changes when the operator authorizes something in
+ * a browser rather than when this app does anything.
+ */
+export interface AccountConnectors {
+  email: string;
+  providers: AccountProvider[];
+}
+
 /** What the operator carries to a browser to finish signing in. */
 export interface DeviceCode {
   verificationUrl: string;
@@ -504,6 +560,11 @@ export type UiEvent =
    * with it: the record of what a turn did is the message that lands at the end
    * of it, and these are only what that record looks like while it is still
    * being made. `callId` is the provider's own, which is what pairs the two.
+   *
+   * The finish carries the whole part rather than the outcome, so the chip
+   * drawn while the turn runs and the chip drawn afterwards are one value read
+   * once: a memory rewrite carries what it overwrote, and nothing outside the
+   * runtime could supply it.
    */
   | {
       type: "toolStarted";
@@ -512,7 +573,7 @@ export type UiEvent =
       name: string;
       arguments: unknown;
     }
-  | { type: "toolFinished"; messageId: MessageId; callId: string; outcome: ToolOutcome }
+  | { type: "toolFinished"; messageId: MessageId; callId: string; part: ToolCallPart }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
   | { type: "channelsCleared"; agents: AgentId[] }

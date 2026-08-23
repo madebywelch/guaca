@@ -1,5 +1,5 @@
 /**
- * Settings, as eight places rather than one scroll.
+ * Settings, as nine places rather than one scroll.
  *
  * Every piece of state lives here, in the shell, and the panes are given values
  * and setters. That is not tidiness: the shell is unmounted when the dialog
@@ -23,6 +23,8 @@ import { NOTIFY_KINDS, type NotifyKind, type SurfaceMode, UI_SCALES } from "../l
 import { type Provider as Preset, planLabel } from "../lib/providers";
 import { useStore } from "../lib/store";
 import {
+  type AccountConnectors,
+  type AccountStatus,
   type DeviceCode,
   errorMessage,
   type GuardLimits,
@@ -44,6 +46,7 @@ const SECTIONS = [
   "provider",
   "limits",
   "machines",
+  "account",
   "appearance",
   "notifications",
   "shortcuts",
@@ -57,6 +60,7 @@ const SECTION_LABELS: Record<Section, string> = {
   provider: "Provider",
   limits: "Limits",
   machines: "Machines",
+  account: "Account",
   appearance: "Appearance",
   notifications: "Notifications",
   shortcuts: "Shortcuts",
@@ -130,6 +134,15 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   // be discarded by a glance at Limits.
   const [subscription, setSubscription] = useState<SubscriptionStatus | null>(null);
   const [pendingCode, setPendingCode] = useState<DeviceCode | null>(null);
+
+  // The Guaca account, which is three states for the same reason: signed out,
+  // waiting on a browser, and signed in. `connectors` is what the service says
+  // the account holds, and it is read rather than kept because it changes when
+  // the operator authorizes something in a browser rather than when this app
+  // does anything.
+  const [account, setAccount] = useState<AccountStatus | null>(null);
+  const [connectors, setConnectors] = useState<AccountConnectors | null>(null);
+  const [linking, setLinking] = useState(false);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -252,6 +265,87 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       live = false;
     };
   }, [section, subscription]);
+
+  // Same rule as above: read when the pane is opened. An install that never
+  // opens this pane never asks the service anything, which is the whole point
+  // of the account being optional.
+  useEffect(() => {
+    if (section !== "account" || account) return;
+    let live = true;
+    void api
+      .accountStatus()
+      .then((value) => {
+        if (live) setAccount(value);
+      })
+      .catch(() => {
+        if (live) setAccount({ signedIn: false, email: "", origin: "" });
+      });
+    return () => {
+      live = false;
+    };
+  }, [section, account]);
+
+  // What the account holds, once there is one. Separate from the status because
+  // it is a network call to the service and the status is a local read, so a
+  // service that is slow or down still draws the account correctly.
+  useEffect(() => {
+    if (section !== "account" || !account?.signedIn || connectors) return;
+    let live = true;
+    void api
+      .accountConnectors()
+      .then((value) => {
+        if (live) setConnectors(value);
+      })
+      .catch((error) => {
+        // A sign-in the service no longer recognises comes back as `signedOut`,
+        // and the honest thing to draw is a signed-out pane rather than an
+        // account with an empty list under it.
+        if (!live) return;
+        if ((error as { kind?: string })?.kind === "signedOut") {
+          setAccount({ signedIn: false, email: "", origin: account.origin });
+        }
+      });
+    return () => {
+      live = false;
+    };
+  }, [section, account, connectors]);
+
+  /**
+   * The whole account sign-in, in one call.
+   *
+   * A browser opens and the answer comes back to a port Rust bound before it
+   * asked, so there is nothing for the operator to carry and nothing to draw in
+   * between. Closing the dialog abandons it and leaves nothing behind.
+   */
+  const linkAccount = async () => {
+    setStatus(null);
+    setLinking(true);
+    try {
+      const next = await api.signInAccount();
+      setAccount(next);
+      setConnectors(null);
+      setStatus({ tone: "ok", text: `Signed in as ${next.email || "your Guaca account"}.` });
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setLinking(false);
+    }
+  };
+
+  const unlinkAccount = async () => {
+    setLinking(true);
+    setStatus(null);
+    try {
+      const next = await api.signOutAccount();
+      setAccount(next);
+      setConnectors(null);
+      setStatus({ tone: "ok", text: "Signed out." });
+    } catch (error) {
+      setStatus({ tone: "error", text: errorMessage(error) });
+    } finally {
+      setLinking(false);
+    }
+  };
 
   /**
    * Starts the sign-in and then waits for it, in one action.
@@ -682,6 +776,126 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                     </span>
                   </span>
                 </label>
+              </>
+            )}
+
+            {section === "account" && (
+              <>
+                <h3 className="settings__title">Account</h3>
+                <p className="settings__lede">
+                  Optional, and it stays that way. Guaca runs on this machine with your own keys,
+                  and everything it does today it does without an account. Signing in adds one
+                  thing: guaca.bot holds an OAuth client, so an agent can reach a service that only
+                  issues access to a registered application. Gmail is the example. Guaca cannot be
+                  that application, because its client secret would be inside a download anybody can
+                  read.
+                </p>
+
+                <div className="preset preset--plain" aria-current={account?.signedIn === true}>
+                  <span className="preset__text">
+                    <span className="preset__name">Guaca account</span>
+                    <span className="preset__url">
+                      {account?.signedIn
+                        ? account.email || "signed in"
+                        : "Sign in to authorize Gmail, Drive or a GitHub repository for your agents"}
+                    </span>
+                  </span>
+                  {account?.signedIn ? (
+                    <span className="preset__actions">
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        disabled={linking}
+                        onClick={() => void openExternal(`${account.origin}/app`)}
+                      >
+                        Manage
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn--small"
+                        disabled={linking}
+                        onClick={() => void unlinkAccount()}
+                      >
+                        Sign out
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      disabled={linking}
+                      onClick={() => void linkAccount()}
+                    >
+                      Sign in
+                    </button>
+                  )}
+                </div>
+
+                {/* Shown for as long as the browser has it. There is no code to
+                    carry here, so this says what is happening rather than
+                    giving the operator something to do. */}
+                {linking && (
+                  <div className="devicecode" role="status">
+                    <p className="devicecode__lede">
+                      Finish in the browser window that just opened. Guaca is listening on a port on
+                      this machine for the answer, and gives up after five minutes.
+                    </p>
+                    <p className="hint">
+                      Only continue if you started this here. Nothing else can have opened it.
+                    </p>
+                  </div>
+                )}
+
+                {account?.signedIn && (
+                  <>
+                    <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
+                      What this account has authorized. Ticking and unticking happens on guaca.bot,
+                      in a browser, because that is where the consent screens are.
+                    </p>
+                    {connectors ? (
+                      <ul className="settings__list">
+                        {connectors.providers.map((provider) => {
+                          const granted = provider.capabilities.filter((c) => c.granted);
+                          return (
+                            <li key={provider.id}>
+                              <span className="field__label">{provider.label}</span>
+                              <span className="field__hint">
+                                {granted.length > 0
+                                  ? granted.map((c) => c.label).join(", ")
+                                  : "Nothing authorized yet."}
+                              </span>
+                            </li>
+                          );
+                        })}
+                        {connectors.providers.length === 0 && (
+                          <li>
+                            <span className="field__hint">
+                              This deployment offers no connectors.
+                            </span>
+                          </li>
+                        )}
+                      </ul>
+                    ) : (
+                      <p className="field__hint">Asking the service&hellip;</p>
+                    )}
+                  </>
+                )}
+
+                <p className="field__hint" style={{ marginTop: "1.4rem" }}>
+                  What leaves this machine, and only once you have signed in: a request for an
+                  access token when an agent uses a connector you authorized. Your conversations,
+                  your agents and your keys are not sent anywhere, with or without an account.
+                  Signing out here forgets the sign-in on this machine immediately.
+                </p>
+
+                {account && account.origin !== "https://guaca.bot" && account.origin !== "" && (
+                  /* Development, or a self-hosted service. Worth saying out loud
+                     rather than leaving an operator to assume guaca.bot: the two
+                     hold different accounts and only one of them is the real one. */
+                  <p className="field__hint">
+                    This build signs in to <code>{account.origin}</code>, not guaca.bot.
+                  </p>
+                )}
               </>
             )}
 

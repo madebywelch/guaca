@@ -5,7 +5,7 @@ import { api } from "../lib/ipc";
 import { thoughtNow } from "../lib/reasoning";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { elapsed, useNow } from "../lib/time";
-import { callInFlight, liveStep } from "../lib/trail";
+import { callInFlight, trailStep } from "../lib/trail";
 import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import {
   type Activity,
@@ -369,7 +369,7 @@ function ThoughtPanel({ id, agent }: { id: string; agent: AgentId }) {
 function LiveTrail({ agent }: { agent: AgentId }) {
   const calls = useStore((s) => s.trail[agent]);
   const steps = (calls ?? []).flatMap((call, index) =>
-    call.outcome ? [liveStep(call, call.outcome, `${call.callId}-${index}`)] : [],
+    call.done ? [trailStep(call.done, `${call.callId}-${index}`)] : [],
   );
 
   if (steps.length === 0) return null;
@@ -434,7 +434,7 @@ function WorkingNote({
 
   const thought = thoughtNow(held);
   // At most one: a turn makes its calls one at a time and waits for each.
-  const waiting = calls?.find((call) => call.outcome === null && now - call.startedAt >= WAITED_MS);
+  const waiting = calls?.find((call) => call.done === null && now - call.startedAt >= WAITED_MS);
   const saying = Boolean(waiting) || Boolean(thought.heading || thought.line);
 
   const line = waiting ? (

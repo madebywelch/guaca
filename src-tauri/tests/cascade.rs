@@ -582,6 +582,51 @@ async fn an_agent_asked_for_its_memory_writes_the_same_file_as_its_notes() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_memory_write_records_the_version_it_replaced() {
+    // What the operator wants from the transcript is what changed, and a
+    // rewrite is the whole file either way: two pages of near-identical
+    // markdown compared by eye. So the call carries what it overwrote, and it
+    // is carried rather than looked up because by the time anybody reads the
+    // channel the file says something else again.
+    let stub = serve(|body| {
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else if system.contains("Smith handles verification.") {
+            Script::Notes("Smith handles verification.\nJones signs off.".into())
+        } else {
+            Script::Notes("Smith handles verification.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "remember who verifies").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Manager"), "and who signs off").unwrap();
+    h.settle(second).await;
+
+    let replaced: Vec<Option<String>> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 200)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.parts.clone())
+        .filter_map(|part| match part {
+            Part::ToolCall { name, replaced, .. } if name == "update_notes" => Some(replaced),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        replaced,
+        vec![Some(String::new()), Some("Smith handles verification.".to_string())],
+        "the first write replaced nothing and the second replaced the first"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn what_one_agent_remembers_is_never_shown_to_another() {
     // A memory is written by an agent for itself, in whatever shorthand suits
     // it, and it holds whatever the operator has told that one agent in
@@ -745,7 +790,7 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
 
     let (
         UiEvent::ToolStarted { call_id: opened, .. },
-        UiEvent::ToolFinished { call_id: closed, outcome, .. },
+        UiEvent::ToolFinished { call_id: closed, part: watched, .. },
     ) = (&events[started], &events[finished])
     else {
         unreachable!("both were matched above")
@@ -755,9 +800,10 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
     // call succeeded when its twin is the one that did.
     assert_eq!(opened, closed);
 
-    // And what the operator watched land is what the transcript holds, from the
-    // same value rather than a second reading of it: the live chip and the
-    // recorded one must never be able to disagree about one call.
+    // And what the operator watched land is what the transcript holds: the same
+    // part, not a second reading of it. One function draws the chip from this
+    // value at both ends, so they cannot disagree about a call, and whatever a
+    // call has to say for itself next reaches both of them or neither.
     let recorded: Vec<_> = h
         .runtime
         .store()
@@ -765,14 +811,11 @@ async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
         .unwrap()
         .iter()
         .flat_map(|e| e.parts.clone())
-        .filter_map(|part| match part {
-            Part::ToolCall { name, outcome, .. } if name == "directory" => Some(outcome),
-            _ => None,
-        })
+        .filter(|part| matches!(part, Part::ToolCall { name, .. } if name == "directory"))
         .collect();
     assert_eq!(
         recorded.as_slice(),
-        std::slice::from_ref(outcome),
+        std::slice::from_ref(watched),
         "the record must agree with what was drawn"
     );
 

@@ -160,6 +160,23 @@ pub enum Part {
         name: String,
         arguments: serde_json::Value,
         outcome: ToolOutcome,
+        /// What the call overwrote, where it overwrote something whole.
+        ///
+        /// Only a memory rewrite fills this in, and it is here rather than in
+        /// `arguments` because `arguments` is the model's own JSON, verbatim:
+        /// a reader has to be able to tell what the model asked for from what
+        /// the runtime found. It is recorded at the moment of the write rather
+        /// than worked out later because nothing can work it out later. One
+        /// agent's memory is written from its wall and from every thread it
+        /// holds, and the operator can edit it by hand, so a previous version
+        /// taken from the transcript the call happens to appear in is wrong
+        /// exactly when something interesting happened.
+        ///
+        /// `None` on every other call and on every call that was refused or
+        /// failed, which is the plain truth: nothing was replaced. Absent in
+        /// rows written before this existed, which read as they always did.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replaced: Option<String>,
     },
     /// A file this message carries.
     ///
@@ -235,6 +252,30 @@ pub struct RefusedRecipient {
 impl Part {
     pub fn text(value: impl Into<String>) -> Self {
         Part::Text { text: value.into() }
+    }
+
+    /// A call that replaced nothing, which is every call but a memory rewrite.
+    ///
+    /// A constructor rather than a struct literal at each site, so that the one
+    /// tool with something to say about what it overwrote is the only place
+    /// that mentions it. Two dozen refusals declaring that they replaced
+    /// nothing is a field asking a question none of them was ever asked.
+    pub fn tool_call(
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+        outcome: ToolOutcome,
+    ) -> Self {
+        Part::ToolCall { name: name.into(), arguments, outcome, replaced: None }
+    }
+
+    /// A call that overwrote something whole, carrying what was there first.
+    pub fn tool_call_replacing(
+        name: impl Into<String>,
+        arguments: serde_json::Value,
+        outcome: ToolOutcome,
+        replaced: impl Into<String>,
+    ) -> Self {
+        Part::ToolCall { name: name.into(), arguments, outcome, replaced: Some(replaced.into()) }
     }
 
     /// The plain-text projection, used for prompts, dedup hashing, and search.

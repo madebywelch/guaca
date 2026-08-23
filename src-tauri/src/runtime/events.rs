@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::domain::approval::ApprovalState;
-use crate::domain::envelope::{Envelope, Participant, ToolOutcome};
+use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
@@ -106,11 +106,20 @@ pub enum UiEvent {
         name: String,
         arguments: serde_json::Value,
     },
-    /// The same call, and what came of it.
+    /// The same call, finished, as the record of it that the message will
+    /// carry.
+    ///
+    /// The whole `Part::ToolCall` rather than the outcome alone, and that is
+    /// what makes the chip drawn while a turn runs and the chip drawn
+    /// afterwards the same chip rather than two that agree today. A memory
+    /// rewrite carries what it overwrote and nothing outside the runtime could
+    /// supply it; the next thing a call has to say for itself will be the same,
+    /// and an event listing the fields it happened to need would have to be
+    /// remembered at that point.
     ToolFinished {
         message_id: MessageId,
         call_id: String,
-        outcome: ToolOutcome,
+        part: Part,
     },
 
     /// The placeholder is replaced by the persisted message that follows.
@@ -259,7 +268,7 @@ impl EventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::envelope::{Intent, Part, Participant, Trust};
+    use crate::domain::envelope::{Intent, Participant, ToolOutcome, Trust};
 
     fn envelope(text: &str) -> Envelope {
         Envelope {
@@ -386,12 +395,17 @@ mod tests {
         let finished = serde_json::to_value(UiEvent::ToolFinished {
             message_id: MessageId::new(),
             call_id: "call_1".into(),
-            outcome: ToolOutcome::Failed { error: "no machine".into() },
+            part: Part::tool_call(
+                "update_notes",
+                serde_json::json!({ "content": "now" }),
+                ToolOutcome::Failed { error: "no machine".into() },
+            ),
         })
         .unwrap();
         assert_eq!(finished["type"], "toolFinished");
-        assert_eq!(finished["outcome"]["status"], "failed");
-        assert_eq!(finished["outcome"]["error"], "no machine");
+        assert_eq!(finished["part"]["type"], "toolCall");
+        assert_eq!(finished["part"]["outcome"]["status"], "failed");
+        assert_eq!(finished["part"]["outcome"]["error"], "no machine");
     }
 
     #[test]

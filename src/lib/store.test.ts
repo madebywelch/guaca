@@ -349,6 +349,17 @@ describe("what an agent is reaching for", () => {
     name: "run_command",
     arguments: { command: "npm test" },
   };
+  const cameBack = {
+    type: "toolFinished",
+    messageId: "s1",
+    callId: "call_1",
+    part: {
+      type: "toolCall",
+      name: "run_command",
+      arguments: { command: "npm test" },
+      outcome: { status: "ok", summary: "exit 0" },
+    },
+  } as const satisfies UiEvent;
 
   it("is filed under the agent making the call, like the thought beside it", () => {
     apply(started);
@@ -357,40 +368,49 @@ describe("what an agent is reaching for", () => {
     expect(useStore.getState().trail.manager).toBeUndefined();
   });
 
-  it("has no outcome until the call comes back", () => {
+  it("has no record of the call until it comes back", () => {
     // Which is the whole reason it is reported before the call rather than
     // after it: a command can sit for a minute, and that minute is the one the
     // operator cannot otherwise account for.
     apply(started);
     apply(opened);
-    expect(useStore.getState().trail.chef?.[0]?.outcome).toBeNull();
+    expect(useStore.getState().trail.chef?.[0]?.done).toBeNull();
 
+    apply(cameBack);
+    expect(useStore.getState().trail.chef?.[0]?.done).toEqual(cameBack.part);
+  });
+
+  it("keeps the whole part, so a live chip draws what a recorded one does", () => {
+    // Not the outcome alone. A memory rewrite carries what it overwrote and
+    // nothing outside the runtime could supply it, so a chip assembled here
+    // from the fields somebody thought to list would quietly stop showing it.
+    apply(started);
+    apply(opened);
     apply({
       type: "toolFinished",
       messageId: "s1",
       callId: "call_1",
-      outcome: { status: "ok", summary: "exit 0" },
+      part: {
+        type: "toolCall",
+        name: "update_notes",
+        arguments: { content: "Smith handles verification." },
+        outcome: { status: "ok", summary: "Memory saved." },
+        replaced: "Jones handles verification.",
+      },
     });
-    expect(useStore.getState().trail.chef?.[0]?.outcome).toEqual({
-      status: "ok",
-      summary: "exit 0",
-    });
+
+    expect(useStore.getState().trail.chef?.[0]?.done?.replaced).toBe("Jones handles verification.");
   });
 
   it("keeps two calls of one kind apart by the id the provider gave them", () => {
     apply(started);
     apply(opened);
     apply({ ...opened, callId: "call_2" });
-    apply({
-      type: "toolFinished",
-      messageId: "s1",
-      callId: "call_2",
-      outcome: { status: "failed", error: "no machine" },
-    });
+    apply({ ...cameBack, callId: "call_2" });
 
     const held = useStore.getState().trail.chef;
-    expect(held?.[0]?.outcome).toBeNull();
-    expect(held?.[1]?.outcome).toEqual({ status: "failed", error: "no machine" });
+    expect(held?.[0]?.done).toBeNull();
+    expect(held?.[1]?.done).toEqual(cameBack.part);
   });
 
   it("is dropped when the turn ends", () => {

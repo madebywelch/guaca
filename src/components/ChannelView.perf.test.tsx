@@ -226,7 +226,12 @@ describe("ChannelView under streaming load", () => {
         type: "toolFinished",
         messageId: id as MessageId,
         callId: "call_1",
-        outcome: { status: "ok", summary: "exit 0" },
+        part: {
+          type: "toolCall",
+          name: "run_command",
+          arguments: { command: "ls" },
+          outcome: { status: "ok", summary: "exit 0" },
+        },
       },
     ]);
     const chips = rendersOfTrail;
@@ -264,7 +269,12 @@ describe("ChannelView under streaming load", () => {
         type: "toolFinished",
         messageId: id as MessageId,
         callId: "call_1",
-        outcome: { status: "ok", summary: "read cnn.com" },
+        part: {
+          type: "toolCall",
+          name: "browse",
+          arguments: { action: "open", url: "https://cnn.com" },
+          outcome: { status: "ok", summary: "read cnn.com" },
+        },
       },
     ]);
 

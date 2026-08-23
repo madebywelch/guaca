@@ -16,6 +16,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/diff.ts         Two versions of a page, as the lines between them.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
@@ -42,6 +43,7 @@ src-tauri/src/
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
+  account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP. Three methods, one POST each.
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
@@ -93,15 +95,17 @@ repo: the frontend renders state and forwards intent.
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
+| The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
+| What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
 | Deleting a group, deleting an agent, what goes with either | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `retire_agent` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
@@ -129,6 +133,18 @@ choose, and no price on the answer. The two meet in exactly one function,
 `LlmClient::stream_chat`, and `llm/codex.rs` translates. Anything above that line
 sees one shape of request. Keep it that way: a provider branch in the runtime, the
 prompt or the guard is the wrong half of the repo.
+
+**An account is optional and nothing depends on it.** `guaca.bot` holds one
+thing Guaca cannot: an OAuth client, for the services that will only issue
+programmatic access to a registered application. `Account` is a field on
+`AppState` that no turn, prompt, tool or guard reads, and both of its reads
+happen when the Settings pane is opened rather than at startup, so an install
+that never opens that pane never contacts the service. Signing in is
+authorization code with PKCE on a loopback port bound before the redirect is
+named, which is `oauth.rs`'s argument pointed at one known server; the device
+grant that was there first is gone rather than kept beside it, because two doors
+to one account means the weaker one decides what the account is worth.
+`docs/ACCOUNT.md`.
 
 **A Claude subscription cannot pay for a turn, and this is not an oversight.**
 Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
@@ -183,6 +199,14 @@ the model takes a screenshot to see what `browse` did.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **What a memory rewrite replaced is absent, empty or a page, and the three
+  mean different things.** Absent is a call that replaced nothing, which is
+  every other tool and every write recorded before the field existed: there is
+  nothing to compare and the content is drawn as it always was. Empty is an
+  agent's first memory, which replaced nothing because there was nothing, and
+  draws as a page that is all new. A truthiness check collapses the first two
+  and loses the only write where the whole page is the news. `Part::ToolCall`
+  in `domain/envelope.rs`, then `trailStep`.
 - **`emit_reply` delivers a reply that carries a file and no text.** Handing over
   a document with nothing typed is normal, and judging the reply empty by its
   text alone drops the thing the turn was spent producing.
@@ -216,6 +240,12 @@ the model takes a screenshot to see what `browse` did.
   feature.** A `run_command` can sit for a minute. A call reported only once it
   comes back is silence for exactly as long as the wait it was meant to explain,
   which is the state that reads as a hang.
+- **`ToolFinished` carries the whole `Part::ToolCall` and not its outcome.** The
+  chip a turn draws while it runs and the chip the transcript draws afterwards
+  are then one function over one value, rather than two that agree on the day
+  they were written. The outcome alone was enough until `replaced` arrived, at
+  which point a live memory rewrite silently stopped opening as a diff while the
+  recorded one still did.
 - **A transcript decides where the operator is by comparing the offset, not by
   listening for a scroll event.** The event is delivered after the fact and a
   token committing in between arrives first, so anything that waits to be told
@@ -455,6 +485,19 @@ failure worth catching is that belief going stale.
 
 ```sh
 ./scripts/subscription.sh    # a real call against your own ChatGPT plan
+```
+
+`tests/account.rs` is the same shape again for the guaca.bot sign-in: a scripted
+authorization server, and the real `Account` driven through discovery, the
+loopback listener, the PKCE exchange and the first call the token is spent on.
+Its stub checks that the verifier presented at the token endpoint actually
+hashes to the challenge that was sent, because a sign-in that stops proving that
+still works. Its `#[ignore]`d half asks whether the live service still publishes
+what this build reads, and `GUACA_ACCOUNT_ORIGIN` points it at a Worker on this
+machine instead. It authorizes nothing and stores nothing.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 ```
 
 A fifth, `tests/plugins.rs`, does the same job for MCP: a scripted server that
