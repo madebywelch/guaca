@@ -242,6 +242,17 @@ export interface PluginOffer {
 }
 
 /**
+ * Who in a crew may call one plugin's tools.
+ *
+ * The sign-in belongs to the group either way; this is who is allowed to spend
+ * it. Two shapes rather than a list that means everybody when it is empty:
+ * `everyone` covers agents that do not exist yet, and an empty `chosen` is a
+ * plugin nobody may call, which is where an operator is standing the moment
+ * before they tick the first name.
+ */
+export type PluginAccess = { mode: "everyone" } | { mode: "chosen"; agents: AgentId[] };
+
+/**
  * A plugin a group has connected.
  *
  * The grant is never on this side of the boundary: there is no command that
@@ -256,6 +267,8 @@ export interface Plugin {
   account: string;
   /** What the crew can call, by the server's own name for each. */
   tools: string[];
+  /** Which of the crew is offered them. `everyone` until somebody says else. */
+  access: PluginAccess;
   signedIn: boolean;
   connectedAt: number;
 }

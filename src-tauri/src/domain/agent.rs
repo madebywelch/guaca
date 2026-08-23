@@ -143,12 +143,15 @@ pub struct DirectoryEntry {
     pub id: AgentId,
     pub name: String,
     pub skills: Vec<String>,
-    /// Accounts signed in on this agent's machine, as `Gmail as robert@…`.
+    /// What this peer can reach and the reader cannot: accounts signed in on its
+    /// machine, as `Gmail as robert@…`, and any of the crew's plugins the
+    /// reader was not chosen for, as `the Stripe plugin`.
     ///
     /// A skill is a claim its agent wrote about itself; this is a fact the
     /// operator established. It is here so an agent asked for something it has
     /// no account for can name the peer that does, instead of reporting that
-    /// the crew cannot do it.
+    /// the crew cannot do it. Only what the reader lacks: listing something it
+    /// holds itself reads as a reason to delegate work it can already do.
     #[serde(default)]
     pub reaches: Vec<String>,
     pub lifecycle: Lifecycle,

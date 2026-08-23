@@ -359,6 +359,7 @@ pub fn run() {
             commands::delete_connector,
             commands::plugin_catalogue,
             commands::group_plugins,
+            commands::set_plugin_access,
             commands::connect_plugin,
             commands::disconnect_plugin,
             commands::scan_agent_signins,

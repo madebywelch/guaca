@@ -1,10 +1,14 @@
 //! Plugins: the services a crew can reach through their own MCP server.
 //!
 //! A plugin is not a credential. It is a remote server the operator signs in
-//! to once, on behalf of a group, after which that server's tools are offered
-//! to every agent in the crew on every turn. Nothing is pasted, nothing is put
+//! to once, on behalf of a group, after which the agents that group chose are
+//! offered that server's tools on every turn. Nothing is pasted, nothing is put
 //! into a machine's environment, and the agent never holds a token: the call
 //! goes out of Guaca over HTTP with the group's own grant on it.
+//!
+//! Signing in and being allowed to spend the sign-in are two decisions, and
+//! [`PluginAccess`] is the second. Everyone in the crew is the default and the
+//! usual answer; Stripe is the one that is not.
 //!
 //! That is the whole reason this exists beside [`super::connector`], which is
 //! the other half and stays. A credential is for a service an agent reaches by
@@ -42,7 +46,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::{GroupId, PluginId};
+use super::ids::{AgentId, GroupId, PluginId};
 
 /// One of the servers Guaca knows how to sign in to.
 ///
@@ -191,6 +195,74 @@ pub struct PluginTool {
     pub input_schema: serde_json::Value,
 }
 
+/// Who in a crew may call one plugin's tools.
+///
+/// A plugin is signed in once, for the group, and until this existed that
+/// sign-in was the whole decision: every agent in the crew was offered every
+/// tool it published. That reading only holds while a crew is uniform. A crew
+/// is not: agents run on different models at different competencies, and the
+/// one that files issues has no business holding the account that issues
+/// refunds. So the sign-in stays the group's and who may spend it becomes a
+/// second question, asked per plugin because that is the shape the answer has:
+/// most plugins are for everybody and one or two are for one agent.
+///
+/// Two states rather than a list with a sentinel, and the empty list is why.
+/// `Everyone` is a decision about agents that do not exist yet — an agent hired
+/// tomorrow gets it — which no list of today's ids can express. And a list that
+/// meant "everyone" when it was empty would hand a plugin back to the whole
+/// crew at the moment the operator unticked the last agent, which is the exact
+/// opposite of what unticking means.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum PluginAccess {
+    /// Everyone in the group, including whoever joins it later.
+    Everyone,
+    /// These agents and nobody else. Legally empty: a plugin nobody may call is
+    /// what an operator has on the way to naming the first one, and it is a
+    /// state the UI says out loud rather than one this type forbids.
+    Chosen { agents: Vec<AgentId> },
+}
+
+/// The stored form of [`PluginAccess::Everyone`], and the only value that
+/// widens a plugin past its named agents.
+///
+/// Compared rather than parsed, in SQL and here, so that a value neither side
+/// recognises reads as a restriction rather than as an opening. A permission
+/// that cannot be read must fail closed: the crew loses a plugin, which the
+/// operator can see and fix, rather than gaining one nobody chose.
+pub const ACCESS_EVERYONE: &str = "everyone";
+
+/// The stored form of [`PluginAccess::Chosen`].
+pub const ACCESS_CHOSEN: &str = "chosen";
+
+impl PluginAccess {
+    /// Whether this agent may be offered the plugin's tools, and may spend its
+    /// grant. The same question in both places, asked of the same value.
+    pub fn allows(&self, agent: AgentId) -> bool {
+        match self {
+            PluginAccess::Everyone => true,
+            PluginAccess::Chosen { agents } => agents.contains(&agent),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PluginAccess::Everyone => ACCESS_EVERYONE,
+            PluginAccess::Chosen { .. } => ACCESS_CHOSEN,
+        }
+    }
+
+    /// Reads a row back. See [`ACCESS_EVERYONE`] for why anything else is a
+    /// restriction rather than an error.
+    pub fn from_row(access: &str, agents: Vec<AgentId>) -> Self {
+        if access == ACCESS_EVERYONE {
+            PluginAccess::Everyone
+        } else {
+            PluginAccess::Chosen { agents }
+        }
+    }
+}
+
 /// A plugin a group has connected.
 ///
 /// Serialisable in full: there is no grant on it. The tokens live in the store
@@ -210,6 +282,10 @@ pub struct Plugin {
     /// they are bulk the webview has no use for, and the runtime reads them
     /// from the store on the turn that needs them.
     pub tools: Vec<String>,
+    /// Which of the crew may call them. The sign-in behind this row is the
+    /// group's either way: this decides who is allowed to spend it, not who
+    /// holds it.
+    pub access: PluginAccess,
     /// False for a server that authorised nothing because it asked for nothing.
     /// Every server on the list today asks, so this is true in practice; it is
     /// read off whether a grant was actually issued rather than off the fact

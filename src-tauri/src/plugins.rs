@@ -26,8 +26,8 @@
 //! environment. This is the same boundary a pasted credential has, and it is
 //! stronger, because with a plugin there is no variable for the agent to echo.
 
-use crate::db::store::{Store, StoreError};
-use crate::domain::ids::{GroupId, PluginId};
+use crate::db::store::{PluginReach, Store, StoreError};
+use crate::domain::ids::{AgentId, GroupId, PluginId};
 use crate::domain::now_ms;
 use crate::domain::plugin::{Plugin, PluginKind, PluginTool};
 use crate::mcp::{self, McpError};
@@ -46,6 +46,12 @@ pub enum PluginError {
          Plugins settings; nothing you can do from here will connect it."
     )]
     NotConnected { label: &'static str },
+    #[error(
+        "{label} is connected for this group, but not for you: the operator chose which agents \
+         may use it. Ask a peer who has it to do that part, or ask the operator to add you in \
+         the group's Plugins settings. Nothing you can do from here will add you."
+    )]
+    NotChosen { label: &'static str },
     #[error(
         "{label}'s sign-in is no longer accepted, and renewing it did not work. Ask the operator \
          to connect it again in the group's Plugins settings."
@@ -113,6 +119,11 @@ pub async fn connect(
 
 /// Runs one of a plugin's tools on behalf of an agent.
 ///
+/// Asked of the agent rather than of its group, and that is the check rather
+/// than a second one: a model can name a tool it was never offered, so
+/// filtering the definitions decides what an agent is *told* it has and this
+/// decides what it *gets*. The two read the same rule, in `plugin_reach`.
+///
 /// Renews the grant first when it is close to expiring, and once more if the
 /// server rejects it anyway: a token can be revoked at the vendor between one
 /// turn and the next, and a clock that is a little wrong makes "close to
@@ -120,14 +131,17 @@ pub async fn connect(
 pub async fn call(
     store: &Store,
     group: GroupId,
+    agent: AgentId,
     kind: PluginKind,
     // See `connect`: production passes `kind.endpoint()`.
     endpoint: &str,
     tool: &str,
     arguments: &serde_json::Value,
 ) -> Result<String, PluginError> {
-    let Some((id, grant)) = store.plugin_grant(group, kind)? else {
-        return Err(PluginError::NotConnected { label: kind.label() });
+    let (id, grant) = match store.plugin_reach(group, agent, kind)? {
+        PluginReach::Granted { id, grant } => (id, grant),
+        PluginReach::NotConnected => return Err(PluginError::NotConnected { label: kind.label() }),
+        PluginReach::NotChosen => return Err(PluginError::NotChosen { label: kind.label() }),
     };
 
     let grant = match grant {
@@ -188,6 +202,19 @@ mod tests {
         assert!(refusal.contains("Neon"));
         assert!(refusal.contains("operator"));
         assert!(refusal.contains("nothing you can do"));
+    }
+
+    #[test]
+    fn a_plugin_this_agent_was_not_chosen_for_does_not_read_as_a_missing_sign_in() {
+        // Two refusals, two different answers. An agent told "not connected"
+        // about a plugin the crew is using would send the operator to a panel
+        // that already says Disconnect, and would never think to ask the peer
+        // who can actually do it.
+        let refusal = PluginError::NotChosen { label: "Stripe" }.to_string();
+        assert!(refusal.contains("Stripe"));
+        assert!(refusal.contains("not for you"), "{refusal}");
+        assert!(refusal.contains("peer"), "the way forward is delegation: {refusal}");
+        assert!(!refusal.contains("is not connected"), "{refusal}");
     }
 
     #[test]
