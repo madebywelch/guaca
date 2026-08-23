@@ -56,11 +56,21 @@ struct Rules {
     /// True makes the first token stale on arrival, so a call has to refresh
     /// before it can be made.
     issue_expired: bool,
+    /// A bearer the server accepts without ever having issued it, which is what
+    /// an account-backed plugin presents: the token is the machine's Guaca
+    /// account, minted somewhere this server's sign-in never ran.
+    account_token: Option<String>,
 }
 
 impl Default for Rules {
     fn default() -> Self {
-        Rules { needs_token: true, registers: true, expires_in: Some(3600), issue_expired: false }
+        Rules {
+            needs_token: true,
+            registers: true,
+            expires_in: Some(3600),
+            issue_expired: false,
+            account_token: None,
+        }
     }
 }
 
@@ -92,6 +102,9 @@ impl Server {
     fn accepts(&self, token: &str) -> bool {
         if self.revoked.lock().iter().any(|dead| dead == token) {
             return false;
+        }
+        if self.rules.account_token.as_deref() == Some(token) {
+            return true;
         }
         self.issued.lock().iter().any(|held| held == token)
     }
@@ -423,13 +436,16 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
         group,
         PluginKind::Neon,
         &format!("{}/mcp", server.base()),
+        None,
         |_| panic!("a public server must not open a browser"),
     )
     .await
     .expect("a public server connects");
 
     assert!(!plugin.signed_in, "nothing was authorised, so nothing may claim to have been");
-    assert_eq!(plugin.tools, vec!["run_sql".to_string(), "list_projects".to_string()]);
+    let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(named, vec!["run_sql", "list_projects"]);
+    assert!(plugin.tools.iter().all(|tool| tool.allowed), "a plugin arrives with nothing off");
     assert_eq!(server.registrations.load(Ordering::SeqCst), 0);
 }
 
@@ -443,6 +459,7 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
         group,
         PluginKind::Neon,
         &format!("{}/mcp", server.base()),
+        None,
         browser(Outcome::Allowed),
     )
     .await
@@ -473,6 +490,7 @@ async fn a_redirect_that_does_not_match_is_refused() {
         group,
         PluginKind::Neon,
         &format!("{}/mcp", server.base()),
+        None,
         browser(Outcome::WrongState),
     )
     .await
@@ -492,6 +510,7 @@ async fn a_refusal_in_the_browser_is_reported_as_one() {
         group,
         PluginKind::Neon,
         &format!("{}/mcp", server.base()),
+        None,
         browser(Outcome::Refused),
     )
     .await
@@ -517,6 +536,7 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
         group,
         PluginKind::Neon,
         &format!("{}/mcp", server.base()),
+        None,
         browser(Outcome::Allowed),
     )
     .await
@@ -531,16 +551,19 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
     let answer = plugins::call(
         &store,
-        group,
-        agent,
-        PluginKind::Neon,
-        &endpoint,
+        plugins::Target {
+            group,
+            agent,
+            kind: PluginKind::Neon,
+            endpoint: &endpoint,
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({ "sql": "select 1" }),
     )
@@ -559,16 +582,287 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     );
 }
 
+/// A plugin whose credential is the operator's own Guaca account.
+///
+/// Google is the one of these today. It is not a vendor's server the crew signs
+/// in to: it is `guaca.bot`, which already holds the Google grant and already
+/// refreshes it, so the sign-in is the account's and the only decision left is
+/// the group's. Everything else about a plugin has to keep working unchanged,
+/// and that is what these check: the tool list is read the same way, the reach
+/// rule still decides who may call it, and the token still never appears
+/// anywhere an agent could read it.
+mod account_backed {
+    use super::*;
+
+    const ACCOUNT: &str = "account-access-token";
+
+    async fn account_server() -> Server {
+        serve(Rules { account_token: Some(ACCOUNT.to_string()), ..Default::default() }).await
+    }
+
+    #[tokio::test]
+    async fn it_connects_with_the_account_and_never_opens_a_browser() {
+        let server = account_server().await;
+        let (_dir, store, group, _agent) = workspace();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &format!("{}/mcp", server.base()),
+            Some(ACCOUNT),
+            |_| panic!("an account-backed plugin must not send anyone to a browser"),
+        )
+        .await
+        .expect("the account token is the sign-in");
+
+        assert_eq!(plugin.kind, PluginKind::Google);
+        assert!(!plugin.tools.is_empty(), "the tool list is read the same way as any other");
+        // Nothing was registered, because no client was: the account's own
+        // sign-in already happened somewhere this server never saw.
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 0);
+        assert!(
+            server.seen.lock().iter().flatten().any(|token| token == ACCOUNT),
+            "the account token has to reach the server or nothing is authenticated"
+        );
+    }
+
+    #[tokio::test]
+    async fn it_stores_no_grant_of_its_own() {
+        // The account rotates its own token. A copy on this row would be a
+        // second thing to keep fresh and a second thing to be stale, and the
+        // renewal path would race the account's.
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
+            .await
+            .unwrap();
+
+        match store.plugin_reach(group, agent, PluginKind::Google, "gmail_search").unwrap() {
+            guac_lib::db::store::PluginReach::Granted { grant, .. } => {
+                assert!(grant.is_none(), "an account-backed plugin holds no grant of its own");
+            }
+            other => panic!("expected the plugin to be reachable, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn connecting_without_an_account_says_what_to_do_about_it() {
+        let server = account_server().await;
+        let (_dir, store, group, _agent) = workspace();
+
+        let failed = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &format!("{}/mcp", server.base()),
+            None,
+            |_| Ok(()),
+        )
+        .await
+        .expect_err("there is no account to sign in with");
+
+        let said = failed.to_string();
+        assert!(said.contains("Guaca account"), "{said}");
+        assert!(said.contains("Settings"), "{said}");
+        assert!(said.contains("guaca.bot"), "{said}");
+    }
+
+    #[tokio::test]
+    async fn a_call_carries_the_account_token() {
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
+            .await
+            .unwrap();
+
+        let answer = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: PluginKind::Google,
+                endpoint: &endpoint,
+                account: Some(ACCOUNT),
+            },
+            "run_sql",
+            &serde_json::json!({ "sql": "select 1" }),
+        )
+        .await
+        .expect("the call goes through on the account's token");
+
+        assert_eq!(answer, "run_sql ran");
+    }
+
+    #[tokio::test]
+    async fn a_call_after_signing_out_says_so_rather_than_failing_on_the_wire() {
+        // Signing the account out mid-session reads as no token at all. The
+        // agent gets the sentence about signing in, not a transport error it
+        // would reword and retry.
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
+            .await
+            .unwrap();
+
+        let failed = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: PluginKind::Google,
+                endpoint: &endpoint,
+                account: None,
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("there is no account token any more");
+
+        assert!(failed.to_string().contains("Guaca account"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn an_agent_the_operator_did_not_choose_still_cannot_call_it() {
+        // The whole reason this is a plugin rather than a second kind of
+        // credential. The reach rule is the same one every other plugin gets,
+        // and the account being the credential must not quietly widen it.
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        let plugin =
+            plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| {
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        // Chosen, and this agent is not among them.
+        store
+            .set_plugin_access(
+                plugin.id,
+                &guac_lib::domain::plugin::PluginAccess::Chosen { agents: Vec::new() },
+            )
+            .unwrap();
+
+        let failed = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: PluginKind::Google,
+                endpoint: &endpoint,
+                account: Some(ACCOUNT),
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("this agent was not chosen");
+
+        let said = failed.to_string();
+        assert!(said.contains("not for you"), "{said}");
+        assert_eq!(
+            server.called.lock().len(),
+            0,
+            "a refusal must happen before the server is dialled, or the check is decoration"
+        );
+    }
+}
+
+/// The real client against a real `guaca.bot`, which no stub can stand in for.
+///
+/// Everything above drives `plugins::connect` against a scripted server that
+/// this repository also wrote, so the two agree by construction. The failure
+/// worth catching is the one where they stop agreeing with the service: a
+/// header the Worker does not read, a content type Guaca does not sniff, a
+/// session id one side invents. It reaches the network, authorises nothing and
+/// spends nothing.
+///
+/// Needs an account token, because the sign-in behind one is a browser and a
+/// person. `scripts/account.sh` in guaca-bot prints one against a local Worker.
+///
+/// ```sh
+/// GUACA_ACCOUNT_ORIGIN=http://localhost:8787 GUACA_ACCOUNT_TOKEN=... \
+///   cargo test --manifest-path src-tauri/Cargo.toml --test plugins -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "reaches a running guaca.bot"]
+async fn the_real_account_server_still_speaks_what_this_client_sends() {
+    let Ok(token) = std::env::var("GUACA_ACCOUNT_TOKEN") else {
+        panic!("set GUACA_ACCOUNT_TOKEN to an account access token");
+    };
+    let origin = std::env::var("GUACA_ACCOUNT_ORIGIN")
+        .unwrap_or_else(|_| guac_lib::account::DEFAULT_ORIGIN.to_string());
+    let endpoint = format!("{}/mcp", origin.trim_end_matches('/'));
+
+    let (_dir, store, group, agent) = workspace();
+
+    let plugin =
+        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(&token), |_| {
+            panic!("an account-backed plugin must not open a browser")
+        })
+        .await
+        .expect("the account token should connect");
+
+    // A grant with nothing authorised offers nothing, which is a real state and
+    // not a failure: it means the operator has not authorised Google yet.
+    let offered: Vec<&str> = plugin.tools.iter().map(|card| card.name.as_str()).collect();
+    println!("connected with {} tool(s): {offered:?}", offered.len());
+
+    if let Some(tool) = offered.first().copied() {
+        // Whatever it answers, it has to answer as MCP rather than as a
+        // transport failure. A refusal from Google is a legitimate result here.
+        let called = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: PluginKind::Google,
+                endpoint: &endpoint,
+                account: Some(&token),
+            },
+            tool,
+            &serde_json::json!({}),
+        )
+        .await;
+        match called {
+            Ok(answer) => {
+                println!("{tool} answered: {}", answer.chars().take(200).collect::<String>())
+            }
+            // A tool that ran and said no is an MCP answer, not a broken one:
+            // calling it with no arguments is exactly how a tool refuses. What
+            // must not happen is a transport or protocol failure, which is
+            // every other variant.
+            Err(guac_lib::plugins::PluginError::Server(guac_lib::mcp::McpError::Rejected {
+                message,
+            })) => println!("{tool} refused, which is an answer: {message}"),
+            Err(err) => panic!("{tool} did not answer as MCP: {err}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
     let (_dir, store, group, agent) = workspace();
 
     let failed = plugins::call(
         &store,
-        group,
-        agent,
-        PluginKind::Neon,
-        "http://127.0.0.1:1/mcp",
+        plugins::Target {
+            group,
+            agent,
+            kind: PluginKind::Neon,
+            endpoint: "http://127.0.0.1:1/mcp",
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({}),
     )
@@ -590,7 +884,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
@@ -601,10 +895,13 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
 
     plugins::call(
         &store,
-        group,
-        agent,
-        PluginKind::Neon,
-        &endpoint,
+        plugins::Target {
+            group,
+            agent,
+            kind: PluginKind::Neon,
+            endpoint: &endpoint,
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({}),
     )
@@ -627,7 +924,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
@@ -635,10 +932,13 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
 
     let answer = plugins::call(
         &store,
-        group,
-        agent,
-        PluginKind::Neon,
-        &endpoint,
+        plugins::Target {
+            group,
+            agent,
+            kind: PluginKind::Neon,
+            endpoint: &endpoint,
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({}),
     )
@@ -651,7 +951,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     // And the renewed grant is written back, or every later turn pays for the
     // same discovery.
     let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("the plugin is connected and this agent was not excluded from it")
     };
@@ -664,15 +964,21 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    let plugin =
-        plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
-            .await
-            .unwrap();
+    let plugin = plugins::connect(
+        &store,
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        None,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     assert!(store.delete_plugin(plugin.id).unwrap());
     assert!(store.group_plugins(group).unwrap().is_empty());
     assert!(matches!(
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap(),
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap(),
         PluginReach::NotConnected
     ));
 }
@@ -686,16 +992,16 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
     assert_eq!(store.group_plugins(group).unwrap().len(), 1);
     let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("connecting again leaves a plugin the crew can use")
     };
@@ -711,7 +1017,7 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
@@ -778,6 +1084,7 @@ async fn a_crew_with_a_plugin_calls_it_through_a_real_turn() {
         group,
         PluginKind::Neon,
         &endpoint,
+        None,
         browser(Outcome::Allowed),
     )
     .await
@@ -881,6 +1188,7 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
         group,
         PluginKind::Neon,
         &endpoint,
+        None,
         browser(Outcome::Allowed),
     )
     .await
@@ -921,6 +1229,76 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
 }
 
 #[tokio::test]
+async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_the_call() {
+    // The other axis, on the same three seams. Being chosen for a plugin is not
+    // being handed every tool on it: the operator decides that per tool, for
+    // the whole crew, and the agent has to be able to tell the difference
+    // between a capability that does not exist and one that is switched off.
+    // Named in the prompt, missing from the definitions, refused on the call.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("Told the operator.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "neon__run_sql".into(),
+                arguments: serde_json::json!({ "sql": "select 1" }),
+            }
+        }
+    })
+    .await;
+
+    let h =
+        harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        None,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime.store().set_plugin_tool(plugin.id, "run_sql", false).unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "Check the database.").unwrap();
+    h.settle(run).await;
+
+    // Not offered, and the plugin's other tool still is: switching one off is
+    // not disconnecting the plugin.
+    let offered: Vec<String> = model.transcript.lock()[0]["tools"]
+        .as_array()
+        .expect("a turn carries tool definitions")
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(!offered.contains(&"neon__run_sql".to_string()), "offered {offered:?}");
+    assert!(offered.contains(&"neon__list_projects".to_string()), "offered {offered:?}");
+
+    // And said out loud, because the alternative is an agent answering "we
+    // cannot query the database" to the one person who can switch it back on.
+    let prompt = harness::prompts_by_agent(&model).remove("Manager").expect("Manager had a turn");
+    assert!(prompt.contains("Switched off by the operator"), "{prompt}");
+    assert!(prompt.contains("run_sql"), "{prompt}");
+
+    // The call it made anyway was refused here rather than at Neon, and the
+    // refusal does not send it round the crew: nobody has it.
+    let results = harness::tool_results(&model);
+    assert!(
+        results.iter().any(|r| r.contains("switched off") && r.contains("Do not ask a peer")),
+        "got {results:?}"
+    );
+    assert!(server.called.lock().is_empty(), "a switched-off tool must not reach the vendor");
+    assert_eq!(h.channel_texts("Manager").len(), 2, "the operator is answered either way");
+}
+
+#[tokio::test]
 async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
     // What narrowing costs if nothing replaces it: an agent that can only say
     // no, sitting beside the one that can say yes. The roster is where the crew
@@ -943,6 +1321,7 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
         group,
         PluginKind::Neon,
         &endpoint,
+        None,
         browser(Outcome::Allowed),
     )
     .await
@@ -966,6 +1345,48 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
 }
 
 #[tokio::test]
+async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
+    // The roster's whole job is to stop work being routed to an agent that
+    // cannot do it. A plugin narrowed to one agent and then switched off tool
+    // by tool is exactly that case from the other end: the peer holds it and
+    // can call none of it, so naming them costs two turns to find out.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let model = harness::serve(|_| harness::Script::Say("Noted.".into())).await;
+
+    let h = harness::harness(
+        &model,
+        &["Revenue", "Scribe"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        None,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![h.id("Revenue")] })
+        .unwrap();
+    for tool in ["run_sql", "list_projects"] {
+        h.runtime.store().set_plugin_tool(plugin.id, tool, false).unwrap();
+    }
+
+    let run = h.runtime.send_from_human(h.id("Scribe"), "Anything to report?").unwrap();
+    h.settle(run).await;
+    let scribe = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
+    assert!(!scribe.contains("the Neon plugin"), "{scribe}");
+}
+
+#[tokio::test]
 async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     // The store's own boundary, under the call path rather than under a query.
     // An agent id from another group names nobody on this plugin and is in no
@@ -974,7 +1395,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
         .await
         .unwrap();
 
@@ -986,10 +1407,13 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
 
     let failed = plugins::call(
         &store,
-        other,
-        outsider,
-        PluginKind::Neon,
-        &endpoint,
+        plugins::Target {
+            group: other,
+            agent: outsider,
+            kind: PluginKind::Neon,
+            endpoint: &endpoint,
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({}),
     )
@@ -1000,10 +1424,13 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     // And the crew that did connect it is unaffected.
     plugins::call(
         &store,
-        group,
-        agent,
-        PluginKind::Neon,
-        &endpoint,
+        plugins::Target {
+            group,
+            agent,
+            kind: PluginKind::Neon,
+            endpoint: &endpoint,
+            account: None,
+        },
         "run_sql",
         &serde_json::json!({}),
     )

@@ -192,6 +192,27 @@ too. A test in `kernel.rs` reads `tauri.conf.json` and asserts all three,
 because every check at the HTTP layer passes when the CSP is wrong: curl does
 not enforce CSP, and the pane simply stays blank.
 
+## Two hosts, and a runtime check because a test cannot see the provider
+
+Kernel serves a live view from `kernel.sh` today and served it from
+`onkernel.com` before that. Both are in the CSP and in `LIVE_VIEW_HOSTS`, which
+is one list rather than two: the test above builds the entries it looks for out
+of that constant, so the config and the runtime cannot drift apart.
+
+The old host stays because which one an account is issued is the provider's
+decision and not one it announces. An entry for a host nobody is issued costs a
+line in an allowlist. A missing one costs the whole pane, silently: an iframe
+the CSP refuses draws the surface behind it and reports nothing, so a browser
+that is running, signed in and working looks exactly like one that failed to
+start. Black full screen, grey in the panel, no error anywhere.
+
+That is why `framable` asks the same question of the URL that actually arrived,
+and `Browser::running` hands the pane the origin instead of the URL when the
+answer is no. The pane then says which address it could not show, and says that
+the agent can still use the web, which is true: only watching is refused. The
+test can only prove the config agrees with what this build believes, and what
+moved the last two times was what the provider sends.
+
 The frame is given `allow="autoplay; clipboard-read; clipboard-write"`. Signing
 in means pasting a password out of a manager, and without it the paste silently
 does nothing, which reads as a password manager that will not fill.

@@ -90,6 +90,13 @@ export type Part =
       detail: DetailField[];
     };
 
+/**
+ * The one part with two lives: drawn as a chip while the turn is making the
+ * call, and again out of the message that records it. Named because the live
+ * half is carried whole by `toolFinished`, so both are built from one value.
+ */
+export type ToolCallPart = Extract<Part, { type: "toolCall" }>;
+
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
@@ -240,7 +247,7 @@ export interface ConnectorDraft {
 export type PluginId = string;
 
 /** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */
-export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail";
+export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
 
 /** A plugin on offer, before anybody has connected it. */
 export interface PluginOffer {
@@ -265,6 +272,22 @@ export interface PluginOffer {
 export type PluginAccess = { mode: "everyone" } | { mode: "chosen"; agents: AgentId[] };
 
 /**
+ * One of a connected plugin's tools, and what the operator decided about it.
+ *
+ * The description and not the schema: an operator deciding whether the crew may
+ * call `delete_customer` needs the sentence the vendor wrote about it and has
+ * no use for the shape of its arguments. `allowed` is true unless it was
+ * switched off, which is the way round the store keeps it too, so a tool a
+ * vendor ships next month arrives switched on rather than invisible.
+ */
+export interface PluginToolCard {
+  /** The server's own name for it. Prefixed with the plugin, a model calls it. */
+  name: string;
+  description: string;
+  allowed: boolean;
+}
+
+/**
  * A plugin a group has connected.
  *
  * The grant is never on this side of the boundary: there is no command that
@@ -277,8 +300,11 @@ export interface Plugin {
   kind: PluginKind;
   /** Whose account, when the server said. Usually blank. */
   account: string;
-  /** What the crew can call, by the server's own name for each. */
-  tools: string[];
+  /**
+   * Every tool the server published, switched off ones included: a list that
+   * left them out would be a panel with no way to switch one back on.
+   */
+  tools: PluginToolCard[];
   /** Which of the crew is offered them. `everyone` until somebody says else. */
   access: PluginAccess;
   signedIn: boolean;
@@ -336,6 +362,14 @@ export interface Browser {
   state: string;
   /** Where the operator watches and takes over. Absent once it has gone. */
   liveViewUrl: string | null;
+  /**
+   * Where a live view this window may not frame is served from.
+   *
+   * Set instead of `liveViewUrl`, never beside it. A frame the CSP refuses
+   * draws the surface behind it and reports nothing, so the pane says which
+   * address it was rather than showing a blank rectangle.
+   */
+  unwatchable: string | null;
 }
 
 /** One command's result, from the agent's computer. */
@@ -567,6 +601,27 @@ export type UiEvent =
    * is read from the stream it names, and it goes when that stream ends.
    */
   | { type: "reasoningDelta"; messageId: MessageId; text: string }
+  /**
+   * A tool call the turn has started, and then what came of it.
+   *
+   * Addressed to the placeholder for the same reason a thought is, and dropped
+   * with it: the record of what a turn did is the message that lands at the end
+   * of it, and these are only what that record looks like while it is still
+   * being made. `callId` is the provider's own, which is what pairs the two.
+   *
+   * The finish carries the whole part rather than the outcome, so the chip
+   * drawn while the turn runs and the chip drawn afterwards are one value read
+   * once: a memory rewrite carries what it overwrote, and nothing outside the
+   * runtime could supply it.
+   */
+  | {
+      type: "toolStarted";
+      messageId: MessageId;
+      callId: string;
+      name: string;
+      arguments: unknown;
+    }
+  | { type: "toolFinished"; messageId: MessageId; callId: string; part: ToolCallPart }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
   | { type: "channelsCleared"; agents: AgentId[] }

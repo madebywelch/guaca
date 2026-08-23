@@ -314,12 +314,17 @@ export function BrowserScreen({ agent }: Props) {
                   : !given
                     ? `${agent.name} has no browser, so it cannot open a page or read one. Give it
                        one and it opens a browser the first time it uses the web.`
-                    : browser
-                      ? `Closed. What it was signed in to is saved, so the next one opens signed
-                         in to the same accounts.`
-                      : `${agent.name} has a browser and none open. It opens one the first time it
-                         uses the web. Open it yourself to sign this agent in to something: that
-                         is the one thing an agent cannot do for itself.`)}
+                    : browser?.unwatchable
+                      ? `${agent.name}'s browser is open and working, and this build cannot show
+                         it: Kernel is serving the live view from ${browser.unwatchable}, which
+                         this window is not allowed to frame. The agent can still use the web.
+                         Update Guaca, or allow that address in the window's CSP.`
+                      : browser
+                        ? `Closed. What it was signed in to is saved, so the next one opens signed
+                           in to the same accounts.`
+                        : `${agent.name} has a browser and none open. It opens one the first time
+                           it uses the web. Open it yourself to sign this agent in to something:
+                           that is the one thing an agent cannot do for itself.`)}
             </p>
             <div className="screen__offer">
               {given ? (

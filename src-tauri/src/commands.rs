@@ -51,8 +51,8 @@ pub struct AppState {
     /// depends on. An install that never signs in never reaches the service.
     pub account: Arc<Account>,
     /// OpenRouter's ranked model list, read while an agent's dialog is open and
-    /// at no other time. Like the account, no turn, prompt, tool or guard reads
-    /// it, and an install that never opens that dialog never asks for it.
+    /// at no other time. No turn, prompt, tool or guard reads it, and an install
+    /// that never opens that dialog never asks for it.
     pub catalogue: Arc<Catalogue>,
 }
 
@@ -364,11 +364,7 @@ pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Opt
     let client = browsers(&state)?;
 
     match client.get(&browser).await? {
-        Some(session) => Ok(Some(Browser {
-            session_id: session.id,
-            state: "running".to_string(),
-            live_view_url: session.live_view_url,
-        })),
+        Some(session) => Ok(Some(Browser::running(session))),
         None => {
             // A dangling id is a dead end in the pane. Clearing it turns that
             // back into an offer to open one.
@@ -422,11 +418,7 @@ pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Rep
     let card = agent_card(&state, id)?;
     let (_, session) = state.runtime.ensure_browser(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Browser {
-        session_id: session.id,
-        state: "running".to_string(),
-        live_view_url: session.live_view_url,
-    })
+    Ok(Browser::running(session))
 }
 
 /// Ends an agent's browser, keeping what it is signed in to.
@@ -501,11 +493,17 @@ pub async fn connect_plugin(
     group_id: GroupId,
     kind: PluginKind,
 ) -> Reply<Plugin> {
+    // Read here rather than inside the flow, so a machine that is not signed in
+    // is told so before a browser opens. An account-backed plugin has no
+    // sign-in of its own: see `PluginKind::account_backed`.
+    let account = if kind.account_backed() { state.account.access().await.ok() } else { None };
+
     let plugin = crate::plugins::connect(
         state.runtime.store(),
         group_id,
         kind,
-        kind.endpoint(),
+        state.runtime.plugin_endpoint(kind),
+        account.as_deref(),
         move |url| {
             // The one line in this feature that knows the app is a Tauri app. The
             // flow itself takes a callback so that `oauth.rs` does not have to.
@@ -534,6 +532,26 @@ pub fn set_plugin_access(
     let plugin = state.runtime.store().set_plugin_access(id, &access)?;
     // Changes what every agent in the crew is offered on its next turn, and
     // what the roster says its peers can reach.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(plugin)
+}
+
+/// Switches one of a connected plugin's tools on or off for the whole crew.
+///
+/// One tool per call, and the answer explicitly rather than a toggle, so that
+/// two panels open on the same group cannot swap a decision between them. The
+/// plugin comes back so the caller draws what was stored rather than what it
+/// asked for.
+#[tauri::command]
+pub fn set_plugin_tool(
+    state: State<'_, AppState>,
+    id: PluginId,
+    tool: String,
+    allowed: bool,
+) -> Reply<Plugin> {
+    let plugin = state.runtime.store().set_plugin_tool(id, &tool, allowed)?;
+    // Changes the tool definitions every agent in the crew is offered on its
+    // next turn, and the line in each of their prompts that says what is off.
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(plugin)
 }

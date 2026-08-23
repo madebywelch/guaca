@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  callInFlight,
   foldTrail,
   hasDetail,
   readSpent,
@@ -286,5 +287,30 @@ describe("what a rewrite changed", () => {
     // open is a control that opens onto nothing.
     const [step] = steps(rewrote("", ""));
     expect(stepDiff(step!)).toBeNull();
+  });
+});
+
+describe("a call while it is still happening", () => {
+  it("says what it is waiting on in the present tense", () => {
+    // `describe` says what a call *was*, which is the wrong tense for the one
+    // thing the operator is waiting on: a command still running is not a
+    // command that ran.
+    expect(callInFlight("run_command", { command: "npm test" })).toBe("Running a command");
+    expect(callInFlight("update_notes", { content: "x" })).toBe("Updating its memory");
+  });
+
+  it("names the site a page is being opened at, because that is the wait", () => {
+    expect(callInFlight("browse", { action: "open", url: "https://www.cnn.com/world" })).toBe(
+      "Opening cnn.com",
+    );
+    // Anything else on that browser is the browser, which is what is being
+    // waited on and all the operator needs to know about it.
+    expect(callInFlight("browse", { action: "click", id: 4 })).toBe("Working the browser");
+  });
+
+  it("names a tool this build has never heard of after the tool", () => {
+    // A crew's plugin tools are named by that crew's servers. Guessing at what
+    // one does is how `update_notes` once drew as a message sent to nobody.
+    expect(callInFlight("linear__create_issue", {})).toBe("Using linear__create_issue");
   });
 });

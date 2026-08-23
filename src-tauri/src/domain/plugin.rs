@@ -61,15 +61,18 @@ pub enum PluginKind {
     Linear,
     Stripe,
     Agentmail,
+    /// The operator's own Guaca account, as a server. See [`PluginKind::account_backed`].
+    Google,
 }
 
 impl PluginKind {
-    pub const ALL: [PluginKind; 5] = [
+    pub const ALL: [PluginKind; 6] = [
         PluginKind::Neon,
         PluginKind::Cloudflare,
         PluginKind::Linear,
         PluginKind::Stripe,
         PluginKind::Agentmail,
+        PluginKind::Google,
     ];
 
     /// The stored form, and the prefix every one of its tools is offered under.
@@ -83,6 +86,7 @@ impl PluginKind {
             PluginKind::Linear => "linear",
             PluginKind::Stripe => "stripe",
             PluginKind::Agentmail => "agentmail",
+            PluginKind::Google => "google",
         }
     }
 
@@ -97,6 +101,7 @@ impl PluginKind {
             PluginKind::Linear => "Linear",
             PluginKind::Stripe => "Stripe",
             PluginKind::Agentmail => "AgentMail",
+            PluginKind::Google => "Google",
         }
     }
 
@@ -125,7 +130,32 @@ impl PluginKind {
             PluginKind::Linear => "https://mcp.linear.app/mcp",
             PluginKind::Stripe => "https://mcp.stripe.com",
             PluginKind::Agentmail => "https://mcp.agentmail.to/mcp",
+            // The operator's own account. `account.rs` may be pointed elsewhere
+            // for development, and `Runtime::plugin_endpoint` is what moves it;
+            // this is the address a bundled build talks to and the one the tile
+            // shows before anything is connected.
+            PluginKind::Google => "https://guaca.bot/mcp",
         }
+    }
+
+    /// Whether this plugin's credential is the machine's Guaca account rather
+    /// than a grant of its own.
+    ///
+    /// The other five are somebody else's servers, and a crew signs in to each
+    /// one separately because there is nothing else it could do. Google is not
+    /// a server: it is the operator's own account at `guaca.bot`, which already
+    /// holds the grant and already refreshes it. Running a second OAuth dance
+    /// for it would send an operator to a consent screen to authorise something
+    /// they authorised when they signed in, and would leave a per-group grant
+    /// beside a per-account one for the same access, expiring on its own clock.
+    ///
+    /// So the sign-in is the account's and the *decision to use it* stays the
+    /// group's. Connecting it in a crew is what puts the tools in front of that
+    /// crew's agents, and `PluginAccess` still decides which of them. Nothing
+    /// else about a plugin changes: the call still goes out of Guaca, the token
+    /// still never reaches a model, and the tool list is still read once.
+    pub const fn account_backed(self) -> bool {
+        matches!(self, PluginKind::Google)
     }
 
     /// One line on the tile, in terms of what the crew gets.
@@ -136,6 +166,9 @@ impl PluginKind {
             PluginKind::Linear => "Issues and projects: find them, file them, move them on.",
             PluginKind::Stripe => "The live account: payments, customers, invoices, refunds.",
             PluginKind::Agentmail => "Inboxes an agent owns: read a thread, send, reply, forward.",
+            PluginKind::Google => {
+                "Your Gmail, Calendar and Drive, through the Guaca account you signed in to."
+            }
         }
     }
 
@@ -149,6 +182,7 @@ impl PluginKind {
             PluginKind::Linear => "https://linear.app/docs/mcp",
             PluginKind::Stripe => "https://docs.stripe.com/mcp",
             PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
+            PluginKind::Google => "https://guaca.bot/app",
         }
     }
 }
@@ -193,6 +227,44 @@ pub struct PluginTool {
     pub description: String,
     /// JSON Schema, straight from the server and passed to the model as-is.
     pub input_schema: serde_json::Value,
+}
+
+/// One of a connected plugin's tools, as the panel draws it.
+///
+/// The schema is not here and the description is, and that split is what the
+/// row is for: an operator deciding whether a crew may call `delete_customer`
+/// needs the sentence the vendor wrote about it, and has no use for the shape
+/// of its arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginToolCard {
+    /// The server's own name for it, unprefixed. Prefixed with the plugin's
+    /// slug it becomes the name a model calls.
+    pub name: String,
+    pub description: String,
+    /// Whether the crew may call it. True unless the operator switched it off,
+    /// which is the way round the store keeps it too: what is written down is
+    /// the refusals, so a tool a vendor ships next month arrives allowed.
+    pub allowed: bool,
+}
+
+/// What one agent may call on one of its crew's plugins this turn, and what the
+/// operator has switched off.
+///
+/// Both halves, from one read, because both are used on the same turn and by
+/// different consumers: `offered` becomes the tool definitions the model is
+/// given, and `withheld` becomes the line in the prompt that says a capability
+/// exists and is off. An agent that is only shown `offered` reports "we cannot
+/// do refunds" when the true answer is "the operator switched refunds off, and
+/// can switch them back on".
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginToolset {
+    pub kind: PluginKind,
+    /// Callable, in the server's own order.
+    pub offered: Vec<PluginTool>,
+    /// Names only. A description and a schema for something that cannot be
+    /// called is context paid for on every turn to describe an absence.
+    pub withheld: Vec<String>,
 }
 
 /// Who in a crew may call one plugin's tools.
@@ -278,10 +350,15 @@ pub struct Plugin {
     /// an MCP server is under no obligation to name the account it authorised,
     /// and inventing a label would be worse than an empty one.
     pub account: String,
-    /// What this crew can call, by unprefixed name. The schemas are not here:
-    /// they are bulk the webview has no use for, and the runtime reads them
-    /// from the store on the turn that needs them.
-    pub tools: Vec<String>,
+    /// Every tool this server published, each with what the operator has
+    /// decided about it. The schemas are not here: they are bulk the webview
+    /// has no use for, and the runtime reads them from the store on the turn
+    /// that needs them.
+    ///
+    /// The whole list, including the switched-off ones. A panel that only drew
+    /// the allowed ones would be a panel with no way to switch anything back
+    /// on, and no way to see what the crew is not being offered.
+    pub tools: Vec<PluginToolCard>,
     /// Which of the crew may call them. The sign-in behind this row is the
     /// group's either way: this decides who is allowed to spend it, not who
     /// holds it.

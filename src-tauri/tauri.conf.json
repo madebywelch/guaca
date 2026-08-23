@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: guacfile: http://guacfile.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost guacfile: http://guacfile.localhost https://*.onkernel.com:8443 wss://*.onkernel.com:8443; frame-src http://127.0.0.1:* http://localhost:* blob: https://*.onkernel.com:8443"
+      "csp": "default-src 'self'; img-src 'self' data: guacfile: http://guacfile.localhost; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost guacfile: http://guacfile.localhost https://*.kernel.sh:8443 wss://*.kernel.sh:8443 https://*.onkernel.com:8443 wss://*.onkernel.com:8443; frame-src http://127.0.0.1:* http://localhost:* blob: https://*.kernel.sh:8443 https://*.onkernel.com:8443"
     }
   },
   "bundle": {

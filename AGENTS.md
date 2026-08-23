@@ -17,6 +17,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/diff.ts         Two versions of a page, as the lines between them.
+  lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
   lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
@@ -79,6 +80,7 @@ repo: the frontend renders state and forwards intent.
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
+| What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
@@ -95,6 +97,7 @@ repo: the frontend renders state and forwards intent.
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
+| Which of a plugin's tools a crew may call at all | *And which of its tools, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_denied_tools` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
@@ -135,17 +138,21 @@ choose, and no price on the answer. The two meet in exactly one function,
 sees one shape of request. Keep it that way: a provider branch in the runtime, the
 prompt or the guard is the wrong half of the repo.
 
-**An account is optional and nothing depends on it.** `guaca.bot` holds one
-thing Guaca cannot: an OAuth client, for the services that will only issue
-programmatic access to a registered application. `Account` is a field on
-`AppState` that no turn, prompt, tool or guard reads, and both of its reads
-happen when the Settings pane is opened rather than at startup, so an install
-that never opens that pane never contacts the service. Signing in is
-authorization code with PKCE on a loopback port bound before the redirect is
-named, which is `oauth.rs`'s argument pointed at one known server; the device
-grant that was there first is gone rather than kept beside it, because two doors
-to one account means the weaker one decides what the account is worth.
-`docs/ACCOUNT.md`.
+**An account is optional, and an install that never signs in never contacts
+it.** `guaca.bot` holds one thing Guaca cannot: an OAuth client, for the
+services that will only issue programmatic access to a registered application.
+Signing in is authorization code with PKCE on a loopback port bound before the
+redirect is named, which is `oauth.rs`'s argument pointed at one known server;
+the device grant that was there first is gone rather than kept beside it,
+because two doors to one account means the weaker one decides what the account
+is worth. `docs/ACCOUNT.md`.
+
+One thing does depend on it, and only one: the Google plugin, whose server is
+that account. `Runtime::account_token` is read on a turn that calls one of its
+tools and nowhere else, so a machine with no account is a machine where that
+plugin refuses to connect and every other part of the app is unchanged. Keep it
+that way: the account is a credential for one plugin, not a thing the runtime,
+the prompt or the guard may consult.
 
 **A Claude subscription cannot pay for a turn, and this is not an oversight.**
 Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
@@ -216,7 +223,37 @@ the model takes a screenshot to see what `browse` did.
   attached has no record of handing anything over, so it attaches the document
   again and reports it as the first time.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
-  level higher, a single token re-renders every message in the transcript.
+  level higher, a single token re-renders every message in the transcript. The
+  same split is why the line above the composer, the turn's chips and the open
+  thinking are three components: they sit next to each other and change at
+  wildly different rates, and written as one every token re-rendered every chip.
+- **A turn's thinking is held whole and drawn one line at a time.** Those are
+  two decisions, and holding 240 characters made them one: the tail was all
+  there was, which is fine for a wait of thirty seconds and no use for one of
+  ten minutes. Nothing about holding it widens what "never kept" means. It is
+  the same slice, dropped by the same event, and it reaches no channel, no
+  prompt and no hash.
+- **The line drawn is the last sentence that *finished*, under the model's own
+  heading.** Not the tail. A tail replaced every sixteen milliseconds is a
+  flicker that says a turn is alive, which is what the pulse already said, and
+  nobody can read a sentence as it is typed. Waiting for the full stop costs a
+  second of staleness and is the difference between a line and a blur.
+- **The live trail and the thinking have one lifetime, because they have one
+  mechanism.** `ToolStarted` and `ToolFinished` are addressed to the placeholder
+  exactly as `ReasoningDelta` is, so a retry that reopens under a new id starts
+  both again. What was done is not lost by that: it is in the message that lands
+  at the end of the turn, which is the record. These are only what that record
+  looks like before it exists.
+- **`ToolStarted` is emitted before the call, and that ordering is the
+  feature.** A `run_command` can sit for a minute. A call reported only once it
+  comes back is silence for exactly as long as the wait it was meant to explain,
+  which is the state that reads as a hang.
+- **`ToolFinished` carries the whole `Part::ToolCall` and not its outcome.** The
+  chip a turn draws while it runs and the chip the transcript draws afterwards
+  are then one function over one value, rather than two that agree on the day
+  they were written. The outcome alone was enough until `replaced` arrived, at
+  which point a live memory rewrite silently stopped opening as a diff while the
+  recorded one still did.
 - **A transcript decides where the operator is by comparing the offset, not by
   listening for a scroll event.** The event is delivered after the fact and a
   token committing in between arrives first, so anything that waits to be told
@@ -254,6 +291,32 @@ the model takes a screenshot to see what `browse` did.
   path, from the same SQL fragment, and its two refusals are different
   sentences: "nobody connected this" is the operator's to fix, "connected, but
   not for you" is a peer's to do.
+- **A plugin's switched-off tools are stored as refusals, not as an allow
+  list.** A plugin with no rows in `plugin_denied_tools` offers everything it
+  published, which is what every plugin connected before this control existed
+  does and what a tool the vendor ships next month does. An allow list would
+  switch that new tool off with nothing on screen saying a decision had been
+  taken about it, and it is the same reading `access` takes with `everyone`:
+  the default has to cover what nobody has seen yet. Reconnecting keeps the
+  refusals and switches the new tool on.
+- **A switched-off tool is refused before a not-chosen agent is.** Both can be
+  true of one call, and the tool-level answer is the one that is true of
+  everybody. `PluginError::NotChosen` sends an agent to a peer, which is right
+  for a narrowed plugin and a wasted turn for a tool nobody has, so
+  `plugin_reach` checks the tool first and `ToolDenied` says outright not to
+  ask around.
+- **The tool half of that rule is Rust and the agent half is SQL, and that is
+  not an oversight.** `PLUGIN_REACHED_BY_AGENT` is one fragment pasted into two
+  queries; the tools cannot be, because the tool list is a JSON column and
+  there is nothing for SQL to filter without taking it apart inside the
+  database. `Store::plugin_tools` partitions it in Rust, `Store::plugin_reach`
+  asks in SQL, both compare the server's own unprefixed name, and a store test
+  drives one refusal through both.
+- **A tool an agent cannot call is named in its prompt anyway.** The name only:
+  no description, no schema, and never a definition. An agent that is simply
+  not shown `create_refund` answers "we cannot do refunds" to the one person
+  who could switch it back on, which is the same failure the roster's `reaches`
+  exists to prevent one level up.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
   crew, to re-learn something that changes when a vendor ships rather than when

@@ -369,6 +369,20 @@ pub fn run() {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| data_dir.clone());
 
+            // The account, and where its MCP server is. Both are one write at
+            // startup: the runtime is what makes a plugin call, and the Google
+            // plugin's server is the operator's own account rather than a
+            // vendor's, so a build pointed at a development service has to
+            // point that plugin there too or it would sign in to one origin and
+            // call another.
+            runtime.with_account(account.clone());
+            if account.origin() != crate::account::DEFAULT_ORIGIN {
+                runtime.plugins_at(std::collections::HashMap::from([(
+                    crate::domain::plugin::PluginKind::Google,
+                    format!("{}/mcp", account.origin()),
+                )]));
+            }
+
             app.manage(AppState {
                 runtime,
                 config_path,
@@ -397,6 +411,7 @@ pub fn run() {
             commands::plugin_catalogue,
             commands::group_plugins,
             commands::set_plugin_access,
+            commands::set_plugin_tool,
             commands::connect_plugin,
             commands::disconnect_plugin,
             commands::scan_agent_signins,
@@ -549,7 +564,7 @@ mod tests {
         let response = file_response(
             &files,
             &asked(
-                Some("https://sessions.onkernel.com:8443"),
+                Some("https://prod-jfk-1.kernel.sh:8443"),
                 None,
                 &format!("{}/brief.md", brief.digest),
             ),

@@ -22,10 +22,35 @@
 
 import { type DiffLine, lineDiff } from "./diff";
 import { asRecord, attachedNames, sendRecipients } from "./toolArgs";
-import type { Part, ToolOutcome } from "./types";
+import type { ToolCallPart, ToolOutcome } from "./types";
 
-type ToolCall = Extract<Part, { type: "toolCall" }>;
 type Args = Record<string, unknown>;
+
+/**
+ * One tool call while the turn making it is still going.
+ *
+ * What it is, said before the call so that a wait can be named while it is
+ * being waited on, and the record of it once it has come back. A call that has
+ * not come back is the one thing a turn can be doing that neither the
+ * transcript nor the thinking says a word about, and it is the one that can
+ * take a minute.
+ */
+export interface LiveCall {
+  callId: string;
+  name: string;
+  arguments: unknown;
+  /**
+   * The record of the call once it has come back, and null until then.
+   *
+   * The whole part rather than the outcome alone, because this is what the chip
+   * is drawn from and the transcript draws the same chip from the same shape a
+   * minute later. A memory rewrite carries what it overwrote, and a live chip
+   * assembled from the fields somebody thought to list would quietly have
+   * stopped showing it.
+   */
+  done: ToolCallPart | null;
+  startedAt: number;
+}
 
 /** One tool call, as the row draws it. */
 export interface Step {
@@ -262,7 +287,7 @@ function describe(tool: string, args: Args): Described {
 }
 
 /** One tool call, read out of a stored message. */
-export function trailStep(part: ToolCall, key: string): Step {
+export function trailStep(part: ToolCallPart, key: string): Step {
   const { title, target, where } = describe(part.name, asRecord(part.arguments));
   const { spent, rest } = readSpent(outcomeText(part.outcome));
   return {
@@ -279,6 +304,51 @@ export function trailStep(part: ToolCall, key: string): Step {
     failed: part.outcome.status === "refused" || part.outcome.status === "failed",
     spent,
   };
+}
+
+/**
+ * What a call that has not come back yet is, in the present tense.
+ *
+ * Coarser than the label a finished call gets, deliberately. `describe` says
+ * what a call *was*, which is the wrong tense for the one thing the operator is
+ * waiting on, and a second copy of it in the present would be forty more arms
+ * to keep in step with the first forty. What is worth knowing while a call is
+ * in flight is which machine is being waited on, and that is the tool. The one
+ * exception is a page being opened, because the wait is the site and the site
+ * is in the arguments.
+ */
+export function callInFlight(name: string, raw: unknown): string {
+  const args = asRecord(raw);
+  switch (name) {
+    case "run_command":
+      return "Running a command";
+    case "browse": {
+      const url = text(args, "url");
+      return url && text(args, "action") === "open"
+        ? `Opening ${place(url)}`
+        : "Working the browser";
+    }
+    case "use_screen":
+      return "Working its screen";
+    case "open_on_desktop":
+      return "Opening a program on its screen";
+    case "send_message":
+      return "Sending a message";
+    case "attach_file":
+      return "Attaching a file";
+    case "update_notes":
+      return "Updating its memory";
+    case "directory":
+      return "Checking who is available";
+    case "schedule":
+      return "Changing its schedule";
+    case "create_agent":
+      return "Asking to add an agent";
+    case "request_permission":
+      return "Asking for permission";
+    default:
+      return `Using ${name}`;
+  }
 }
 
 /**

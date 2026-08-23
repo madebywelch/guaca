@@ -53,6 +53,23 @@ use crate::domain::signin::BrowserState;
 
 const API_BASE: &str = "https://api.onkernel.com";
 
+/// The hosts a live view is served from, and the port it is served on.
+///
+/// Two hosts because the provider moved: a browser created today answers on
+/// `kernel.sh`, and this app framed `onkernel.com` until it did. The old one
+/// stays because which host an account is issued is Kernel's decision and not
+/// one it announces. An entry for a host nobody is issued any more costs a
+/// line in an allowlist; a missing one costs the whole pane.
+///
+/// The window's CSP has to allow exactly these, and `framable` is the runtime
+/// half of the same rule. A test can only prove the config agrees with what
+/// this build believes, and what changed here was what the provider sends.
+const LIVE_VIEW_HOSTS: [&str; 2] = ["kernel.sh", "onkernel.com"];
+
+/// Part of the origin rather than decoration: a live view answers on 8443
+/// rather than 443, and a CSP entry without the port matches nothing.
+const LIVE_VIEW_PORT: u16 = 8443;
+
 /// Long enough for a browser to boot, short enough that a stuck control-plane
 /// call does not hold an agent's turn open.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
@@ -107,8 +124,80 @@ pub struct Browser {
     /// so reporting it would be reporting something the operator cannot act on.
     pub state: String,
     /// Where the operator watches, and takes over. Absent once the browser has
-    /// gone, because the URL dies with it.
+    /// gone, because the URL dies with it, and absent when the provider served
+    /// one this window may not frame, which `unwatchable` then names.
     pub live_view_url: Option<String>,
+    /// The origin of a live view this window is not allowed to frame.
+    ///
+    /// Set instead of `live_view_url` and never beside it: the pane has either
+    /// a picture to draw or a sentence to say about why there is none.
+    pub unwatchable: Option<String>,
+}
+
+impl Browser {
+    /// A running browser, as its pane needs it.
+    ///
+    /// The live view is separated from its origin here because an iframe the
+    /// CSP refuses is not an error anywhere. Nothing throws, nothing is logged,
+    /// and the pane draws the surface behind the frame, which is a black
+    /// rectangle full screen and a grey one in the panel: exactly what a
+    /// browser that failed to start looks like. Kernel moving this host from
+    /// `onkernel.com` to `kernel.sh` is what that cost, and the CSP test could
+    /// not see it because both halves it compares are this build's own.
+    pub fn running(session: Session) -> Self {
+        let (live_view_url, unwatchable) = match session.live_view_url {
+            Some(url) if !framable(&url) => {
+                let origin = origin_of(&url);
+                tracing::warn!(
+                    %origin,
+                    session = %session.id,
+                    "Kernel served a live view this window is not allowed to frame; \
+                     the browser is running and only watching it is refused"
+                );
+                (None, Some(origin))
+            }
+            watchable => (watchable, None),
+        };
+        Browser { session_id: session.id, state: "running".to_string(), live_view_url, unwatchable }
+    }
+}
+
+/// Whether the window is allowed to frame this live view.
+///
+/// The same question the CSP answers, asked of the URL that actually arrived.
+/// Scheme, host and port all count, and the host has to be *under* one of the
+/// allowed names rather than equal to it, because a `*.` entry does not match
+/// the bare domain either.
+fn framable(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+    let Some((host, port)) = authority.rsplit_once(':') else {
+        return false;
+    };
+    if port.parse::<u16>() != Ok(LIVE_VIEW_PORT) {
+        return false;
+    }
+    LIVE_VIEW_HOSTS.iter().any(|allowed| host.ends_with(&format!(".{allowed}")))
+}
+
+/// The `scheme://host:port` of a URL, which is the part a CSP entry is made of
+/// and the part worth naming to whoever has to add one.
+///
+/// Anything before an `@` is dropped rather than shown. A live view URL carries
+/// its token in the path and has never had credentials in it, but this string
+/// reaches the pane, and a rule that only holds while a vendor keeps a habit is
+/// not a rule.
+fn origin_of(url: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("", url));
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if scheme.is_empty() {
+        authority.to_string()
+    } else {
+        format!("{scheme}://{authority}")
+    }
 }
 
 /// A live browser, with everything needed to drive it.
@@ -580,19 +669,18 @@ mod tests {
 
     use super::*;
 
-    /// Where a live view is served from, and the port it is served on.
-    ///
-    /// Named here because the window's CSP has to allow exactly this, and the
-    /// two silently disagreeing is a blocked iframe that looks identical to a
-    /// browser that failed to start. The port is part of it: the origin is on
-    /// 8443 rather than 443, and a CSP entry without it matches nothing.
-    const LIVE_VIEW_ORIGIN: &str = "https://*.onkernel.com:8443";
+    /// One CSP entry, built from the same constants the runtime check uses.
+    fn live_view_origin(scheme: &str, host: &str) -> String {
+        format!("{scheme}://*.{host}:{LIVE_VIEW_PORT}")
+    }
 
     #[test]
-    fn the_window_is_allowed_to_frame_and_reach_a_live_view() {
+    fn the_window_is_allowed_to_frame_and_reach_every_host_a_live_view_arrives_on() {
         // The computer's viewer learned this the hard way: the CSP was left
         // behind when the address changed, every check at the HTTP layer passed
-        // because curl does not enforce CSP, and the pane stayed black.
+        // because curl does not enforce CSP, and the pane stayed black. Kernel
+        // then moved its own live view from `onkernel.com` to `kernel.sh` and
+        // it happened again, which is why `framable` exists beside this test.
         //
         // A live view needs two entries rather than one. The frame loads over
         // HTTPS and then opens a WebSocket of its own for the pixels, so a
@@ -609,14 +697,76 @@ mod tests {
         };
 
         let frame_src = directive("frame-src");
-        assert!(frame_src.contains(LIVE_VIEW_ORIGIN), "got {frame_src:?}");
-
         let connect_src = directive("connect-src");
-        assert!(connect_src.contains(LIVE_VIEW_ORIGIN), "got {connect_src:?}");
+        for host in LIVE_VIEW_HOSTS {
+            let https = live_view_origin("https", host);
+            assert!(frame_src.contains(&https), "got {frame_src:?}");
+            assert!(connect_src.contains(&https), "got {connect_src:?}");
+            assert!(
+                connect_src.contains(&live_view_origin("wss", host)),
+                "the pixels arrive over a WebSocket: {connect_src:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_live_view_the_window_cannot_frame_is_named_rather_than_drawn() {
+        // What the CSP refuses draws as the surface behind the frame and not as
+        // an error, so this is the only place the mismatch can be noticed. Both
+        // hosts the provider has used are accepted, because an account is
+        // issued one or the other and neither is this app's choice.
+        for host in LIVE_VIEW_HOSTS {
+            assert!(
+                framable(&format!("https://prod-jfk-1.{host}:8443/browser/live/tok")),
+                "{host}"
+            );
+        }
+
+        // Each of these is a way the provider could move again, and each draws
+        // the same black rectangle if it is trusted rather than checked.
+        assert!(!framable("https://prod-jfk-1.example.com:8443/browser/live/tok"));
         assert!(
-            connect_src.contains("wss://*.onkernel.com:8443"),
-            "the pixels arrive over a WebSocket: {connect_src:?}"
+            !framable("https://prod-jfk-1.kernel.sh/browser/live/tok"),
+            "the port is the origin"
         );
+        assert!(!framable("http://prod-jfk-1.kernel.sh:8443/browser/live/tok"), "TLS is too");
+        // `*.kernel.sh` does not match the bare domain, so neither does this.
+        assert!(!framable("https://kernel.sh:8443/browser/live/tok"));
+        assert!(!framable("https://kernel.sh.example.com:8443/live"), "a suffix, not a substring");
+
+        let refused = Browser::running(Session {
+            id: "s".into(),
+            cdp_ws_url: "wss://x".into(),
+            live_view_url: Some("https://prod-jfk-1.example.com:8443/browser/live/tok".into()),
+        });
+        // The pane is told the origin and never handed the URL: a frame pointed
+        // at it is the blank rectangle this exists to replace.
+        assert_eq!(refused.live_view_url, None);
+        assert_eq!(refused.unwatchable.as_deref(), Some("https://prod-jfk-1.example.com:8443"));
+        assert_eq!(refused.state, "running", "the browser is fine; only watching it is refused");
+
+        let shown = Browser::running(Session {
+            id: "s".into(),
+            cdp_ws_url: "wss://x".into(),
+            live_view_url: Some("https://prod-jfk-1.kernel.sh:8443/browser/live/tok".into()),
+        });
+        assert_eq!(
+            shown.live_view_url.as_deref(),
+            Some("https://prod-jfk-1.kernel.sh:8443/browser/live/tok")
+        );
+        assert_eq!(shown.unwatchable, None);
+    }
+
+    #[test]
+    fn an_origin_names_the_address_and_nothing_that_was_in_front_of_it() {
+        // This string reaches the pane. A URL that carried credentials would
+        // put them there, and the provider not doing that today is a habit
+        // rather than a guarantee.
+        assert_eq!(
+            origin_of("https://user:secret@prod-jfk-1.kernel.sh:8443/browser/live/tok?jwt=abc"),
+            "https://prod-jfk-1.kernel.sh:8443"
+        );
+        assert_eq!(origin_of("https://host:8443"), "https://host:8443");
     }
 
     #[test]
@@ -626,8 +776,10 @@ mod tests {
         // carries its own token in the path, so it needs no relay: pointing it
         // at the loopback proxy would send it to a host that only knows how to
         // reach E2B.
-        assert!(LIVE_VIEW_ORIGIN.starts_with("https://"), "{LIVE_VIEW_ORIGIN}");
-        assert!(!LIVE_VIEW_ORIGIN.contains(crate::e2b::VIEWER_HOST), "{LIVE_VIEW_ORIGIN}");
+        for host in LIVE_VIEW_HOSTS {
+            let origin = live_view_origin("https", host);
+            assert!(!origin.contains(crate::e2b::VIEWER_HOST), "{origin}");
+        }
     }
 
     #[test]
