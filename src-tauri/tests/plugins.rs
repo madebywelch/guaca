@@ -866,6 +866,41 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
             "{} no longer supports the only PKCE method this build sends",
             kind.label()
         );
-        println!("{}: signs in at {}", kind.label(), found.issuer);
+
+        // 4. And that the scope this build would send is one the vendor
+        //    publishes. Everything above passed while AgentMail refused every
+        //    sign-in: Guaca asked its Clerk instance for all seven scopes the
+        //    *authorisation server* lists, and four of those are ones a
+        //    registered client may not have. Discovery is not the only thing
+        //    that goes stale, and `invalid_scope` arrives in the operator's
+        //    browser where no error message can reach it.
+        let asked = found.requested_scope();
+        for scope in asked.iter().flat_map(|s| s.split(' ')) {
+            let published = if found.resource_scopes.is_empty() {
+                found.server.scopes_supported.iter().any(|s| s == scope)
+            } else {
+                // `offline_access` is the one this build adds, and only ever on
+                // the authorisation server's say-so.
+                found.resource_scopes.iter().any(|s| s == scope)
+                    || (scope == "offline_access"
+                        && found.server.scopes_supported.iter().any(|s| s == scope))
+            };
+            assert!(
+                published,
+                "{} would be asked for `{scope}`, which it does not publish: \
+                 resource {:?}, server {:?}",
+                kind.label(),
+                found.resource_scopes,
+                found.server.scopes_supported
+            );
+            assert_ne!(scope, "*", "{} would be asked for everything", kind.label());
+        }
+
+        println!(
+            "{}: signs in at {}, asking for {}",
+            kind.label(),
+            found.issuer,
+            asked.as_deref().unwrap_or("nothing (the server's own default)")
+        );
     }
 }
