@@ -4,10 +4,10 @@ A plugin is a server a crew signs in to once. After that, every agent in the
 group is offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
-There are three: Neon, Cloudflare and Clerk. That is the whole list, and it is a
-decision rather than a starting position.
+There are five: Neon, Cloudflare, Linear, Stripe and AgentMail. That is the
+whole list, and it is a decision rather than a starting position.
 
-## Why three, and why these
+## Why these, and why the list is short
 
 The list this replaced was twelve brands and a text box. Each tile filled in an
 environment variable name and a note, and then asked the operator for a token.
@@ -18,9 +18,35 @@ left to work out an API from whatever it happened to know.
 
 A server that publishes its own tools answers all of that itself. `tools/list`
 is the documentation, the schema and the capability list in one call, and it is
-current because it comes from the vendor at the moment of connecting. The three
-here are the ones that publish one *and* let an application register itself,
-which is the second half of why the list is short.
+current because it comes from the vendor at the moment of connecting.
+
+Three conditions decide who is on the list, and all three are mechanical:
+
+1. **It publishes its own tools.** `tools/list` at the moment of connecting,
+   not a note in this repo about what the vendor's API can do.
+2. **Those tools act on the operator's account.** A plugin is a thing a crew
+   *has*, named in the prompt as something that reaches the real world.
+3. **Its authorisation server lets an application register itself.** The next
+   section is why this one is not negotiable.
+
+## Why Clerk was withdrawn
+
+Clerk was on the list and is not any more, and the second condition is why.
+`mcp.clerk.com` publishes two tools, `clerk_sdk_snippet` and
+`list_clerk_sdk_snippets`, and both return SDK code samples. Nothing there
+reads or writes an operator's Clerk account, so what the tile actually offered
+was documentation reached through a connect button, sitting beside four servers
+that can drop a database, deploy a Worker, close an issue and refund a payment.
+It also failed the third condition on the merits: its server is public, so it
+was the one entry on the list that never signed anything in, and the row said so
+in the UI.
+
+Documentation an agent reads is not nothing, but it is not this. It arrives
+through the model's own training, through a docs tool the vendor already exposes
+elsewhere, or through the web. What a plugin is for is the account.
+
+Migration 25 deletes the rows. No grant is lost, because Clerk's server issued
+none.
 
 ## Why dynamic client registration decides who is on the list
 
@@ -34,12 +60,19 @@ RFC 7591 removes the problem. Guaca registers itself, on the spot, each time an
 operator connects, with a redirect URI it has already bound. No vendor
 relationship is needed and nothing is baked into the build.
 
-So the rule for what can be a plugin is mechanical rather than editorial: the
-server has to publish protected-resource metadata, and its authorisation server
-has to publish a registration endpoint. Clerk's authorisation server does not —
-its MCP server is public today, which is why Clerk is here at all. If that ever
-changes, the plugin has to be withdrawn rather than debugged, and
-`scripts/plugins.sh` is what says so.
+So the third condition is mechanical rather than editorial: the server has to
+publish protected-resource metadata, and its authorisation server has to publish
+a registration endpoint. A vendor that stops has to be withdrawn rather than
+debugged, and `scripts/plugins.sh` is what says so, because nothing offline can.
+
+The five answer that question in three different shapes, which is what the
+fallbacks in `oauth::discover` are for rather than defensiveness. Neon publishes
+its resource metadata at the bare well-known path and Linear under the
+endpoint's path. Stripe's authorisation server is `https://access.stripe.com/mcp`
+— an issuer with a path, where RFC 8414 puts the well-known segment *before* it
+and everybody's first guess puts it after. AgentMail's authorisation server is
+Clerk's, hosted at `clerk.console.agentmail.to`, which is a fair description of
+what Clerk is for.
 
 ## The loopback redirect, and why it is allowed here
 
@@ -57,10 +90,30 @@ Neither applies here, because nothing is chosen in advance. The order is:
 
 The port cannot be taken between choosing it and listening on it, because it was
 never chosen: it was allocated. Dynamic registration is what makes the ordering
-possible, and it is the same mechanism that puts the three vendors on the list.
+possible, and it is the same mechanism that decides who is on the list at all.
 
-The device flow is not an option here anyway. None of the three advertises it,
+The device flow is not an option here anyway. None of the five advertises it,
 and the MCP authorisation specification mandates authorisation code with PKCE.
+
+## What a plugin asks for is the server's list, not Guaca's
+
+Connecting Cloudflare shows a consent screen with four permissions on it: user
+read, account read, Workers write, D1 write. That is not Guaca choosing a
+cautious subset. Cloudflare's Workers Bindings server hardcodes that scope set
+for every client that connects to it, and its authorisation-server metadata
+publishes no `scopes_supported` at all, so Guaca sends no `scope` parameter and
+has nothing to widen.
+
+Where a server does publish a list, Guaca asks for all of it minus `*`, because
+a scope it invented is a scope the server refuses in a browser window that
+cannot explain why, and a wildcard is not what an operator agreed to by
+connecting a database. `oauth::requested_scope` is the whole rule.
+
+The way to reach more of a vendor's surface is therefore another entry on the
+list, not another parameter on the request. Cloudflare publishes fifteen MCP
+servers, one per product area; Workers Bindings is the one that makes things
+rather than reads about them, and offering all fifteen would put a hundred tools
+in front of a model that asked for "Cloudflare".
 
 ## What crosses which boundary
 
@@ -81,7 +134,7 @@ arrive in, and no command that returns one.
 ## A tool name is `plugin__tool`
 
 Two underscores, because MCP servers use one inside tool names constantly and
-none of the three uses two. Split on the *first* separator, so a server tool
+none of the five uses two. Split on the *first* separator, so a server tool
 called `run__sql` keeps its own name whole.
 
 A prefixed name that a provider would refuse — anything outside
@@ -148,8 +201,11 @@ Three layers, and each catches something the others cannot.
   store code against a server that publishes all four metadata documents and
   answers MCP as an event stream. Includes a full runtime turn, so the tool
   definitions, the dispatch and the grant being spent are proved to meet.
-- **Live**, `./scripts/plugins.sh`: whether the three vendors still publish what
-  this build expects. Reaches the internet, authorises nothing, spends nothing.
+- **Live**, `./scripts/plugins.sh`: whether the five vendors still publish what
+  this build expects. It runs `oauth::discover` — the same call a sign-in makes
+  — rather than rebuilding the metadata URLs beside it, because a test with its
+  own copy of RFC 8414 passes on a server this build cannot reach. Reaches the
+  internet, authorises nothing, spends nothing.
 
 The live one is the one that matters over time. Everything offline is a stub
 agreeing with what this app believes MCP authorisation is, and the failure worth

@@ -12,13 +12,19 @@
 //! whatever the operator holds a token for. A plugin is a service that
 //! publishes tools, and the list is short on purpose.
 //!
-//! ## Why the catalogue is three entries and lives in Rust
+//! ## Why the catalogue is short and lives in Rust
 //!
 //! The old list was twelve brands and a text box, which asked the operator to
 //! know four things about a token they had: the variable it belongs in, the
 //! account it acts as, a note for the agent, and whether the service was worth
-//! wiring up at all. Three servers that answer all four themselves is a better
-//! offer than twelve that answer none.
+//! wiring up at all. A handful of servers that answer all four themselves is a
+//! better offer than twelve that answer none.
+//!
+//! What is on it is decided mechanically rather than editorially: a server has
+//! to publish its own tools, act on the operator's account rather than describe
+//! how to, and let an application register itself. `docs/PLUGINS.md` argues each
+//! of the three, and the third is what `scripts/plugins.sh` checks against the
+//! live vendors.
 //!
 //! It is in Rust rather than in the webview because the runtime is what makes
 //! the call. The old catalogue could live in the front end precisely because
@@ -48,11 +54,19 @@ use super::ids::{GroupId, PluginId};
 pub enum PluginKind {
     Neon,
     Cloudflare,
-    Clerk,
+    Linear,
+    Stripe,
+    Agentmail,
 }
 
 impl PluginKind {
-    pub const ALL: [PluginKind; 3] = [PluginKind::Neon, PluginKind::Cloudflare, PluginKind::Clerk];
+    pub const ALL: [PluginKind; 5] = [
+        PluginKind::Neon,
+        PluginKind::Cloudflare,
+        PluginKind::Linear,
+        PluginKind::Stripe,
+        PluginKind::Agentmail,
+    ];
 
     /// The stored form, and the prefix every one of its tools is offered under.
     ///
@@ -62,7 +76,9 @@ impl PluginKind {
         match self {
             PluginKind::Neon => "neon",
             PluginKind::Cloudflare => "cloudflare",
-            PluginKind::Clerk => "clerk",
+            PluginKind::Linear => "linear",
+            PluginKind::Stripe => "stripe",
+            PluginKind::Agentmail => "agentmail",
         }
     }
 
@@ -74,11 +90,21 @@ impl PluginKind {
         match self {
             PluginKind::Neon => "Neon",
             PluginKind::Cloudflare => "Cloudflare",
-            PluginKind::Clerk => "Clerk",
+            PluginKind::Linear => "Linear",
+            PluginKind::Stripe => "Stripe",
+            PluginKind::Agentmail => "AgentMail",
         }
     }
 
     /// The MCP server this plugin is.
+    ///
+    /// Written out in full rather than assembled from a host and a path,
+    /// because this string is two things at once: the URL the runtime POSTs to
+    /// and the RFC 8707 resource indicator the sign-in is scoped to. Stripe's
+    /// has no path and the other four do, and each is the identifier that
+    /// vendor publishes in its own protected-resource metadata. A tidier
+    /// `format!("{host}/mcp")` would be a resource the server does not
+    /// recognise, and the refusal arrives in the operator's browser.
     ///
     /// Cloudflare publishes fifteen of these, one per product area. Workers
     /// bindings is the one that makes things rather than reads about them, and
@@ -88,7 +114,9 @@ impl PluginKind {
         match self {
             PluginKind::Neon => "https://mcp.neon.tech/mcp",
             PluginKind::Cloudflare => "https://bindings.mcp.cloudflare.com/mcp",
-            PluginKind::Clerk => "https://mcp.clerk.com/mcp",
+            PluginKind::Linear => "https://mcp.linear.app/mcp",
+            PluginKind::Stripe => "https://mcp.stripe.com",
+            PluginKind::Agentmail => "https://mcp.agentmail.to/mcp",
         }
     }
 
@@ -96,8 +124,10 @@ impl PluginKind {
     pub const fn blurb(self) -> &'static str {
         match self {
             PluginKind::Neon => "Postgres databases: branch one, run SQL, migrate it.",
-            PluginKind::Cloudflare => "Workers and their bindings: KV, R2, D1, queues.",
-            PluginKind::Clerk => "Authentication: the SDK, its patterns and its docs.",
+            PluginKind::Cloudflare => "Workers and their bindings: KV, R2, D1, Hyperdrive.",
+            PluginKind::Linear => "Issues and projects: find them, file them, move them on.",
+            PluginKind::Stripe => "The live account: payments, customers, invoices, refunds.",
+            PluginKind::Agentmail => "Inboxes an agent owns: read a thread, send, reply, forward.",
         }
     }
 
@@ -106,7 +136,9 @@ impl PluginKind {
         match self {
             PluginKind::Neon => "https://neon.com/docs/ai/neon-mcp-server",
             PluginKind::Cloudflare => "https://github.com/cloudflare/mcp-server-cloudflare",
-            PluginKind::Clerk => "https://github.com/clerk/cursor-plugin",
+            PluginKind::Linear => "https://linear.app/docs/mcp",
+            PluginKind::Stripe => "https://docs.stripe.com/mcp",
+            PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
         }
     }
 }
@@ -173,8 +205,10 @@ pub struct Plugin {
     /// from the store on the turn that needs them.
     pub tools: Vec<String>,
     /// False for a server that authorised nothing because it asked for nothing.
-    /// Clerk's is public, and showing it as signed in would be a claim about
-    /// the operator's account that is not true.
+    /// Every server on the list today asks, so this is true in practice; it is
+    /// read off whether a grant was actually issued rather than off the fact
+    /// that connecting succeeded, because a server that stops asking must not
+    /// make the row claim a sign-in that never happened.
     pub signed_in: bool,
     pub connected_at: i64,
 }
@@ -212,6 +246,11 @@ mod tests {
     fn a_slug_that_is_not_offered_is_not_a_plugin() {
         assert_eq!(PluginKind::from_slug("github"), None);
         assert_eq!(PluginKind::from_slug(""), None);
+        // Clerk was withdrawn: its server hands out SDK snippets and touches no
+        // account, so it was documentation behind a sign-in prompt. Migration 25
+        // deletes the rows, and this is what keeps one that survives a downgrade
+        // from resolving to a plugin again.
+        assert_eq!(PluginKind::from_slug("clerk"), None);
     }
 
     #[test]

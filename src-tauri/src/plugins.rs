@@ -55,10 +55,13 @@ pub enum PluginError {
 
 /// Signs in to a plugin's server and records what it can do.
 ///
-/// The first `initialize` goes out with no token deliberately: it is the only
-/// honest way to find out whether this server wants one. Clerk's does not, and
-/// sending an operator to a browser to authorise a public server would be a
-/// consent prompt for nothing.
+/// The first `initialize` goes out with no token deliberately, and it is doing
+/// two jobs. It is the only honest way to find out whether this server wants
+/// one — sending an operator to a browser to authorise a server that authorises
+/// everybody is a consent prompt for nothing — and its refusal is where the
+/// address of the sign-in comes from: the `WWW-Authenticate` challenge names
+/// the server's own protected-resource metadata, which is the answer the vendor
+/// just gave rather than a well-known path Guaca guessed at.
 pub async fn connect(
     store: &Store,
     group: GroupId,

@@ -40,10 +40,13 @@ use guac_lib::plugins;
 /// How the scripted server behaves. Every field is something a real one does.
 #[derive(Debug, Clone)]
 struct Rules {
-    /// False is Clerk's server: it authorises everybody and asks for nothing.
+    /// False is a server that authorises everybody and asks for nothing. None
+    /// of the five on the list does today, and the row must not claim a
+    /// sign-in if one starts.
     needs_token: bool,
-    /// Absent is a server with no dynamic registration, like Clerk's own
-    /// authorisation server. Guaca cannot sign in to one of those at all.
+    /// False is a server that publishes no RFC 7591 registration endpoint.
+    /// Guaca cannot sign in to one of those at all, and the rule that keeps a
+    /// vendor on the list is that it does.
     registers: bool,
     /// Seconds until the issued token expires. `None` is a server that does not
     /// say, which means the token is used until it is refused.
@@ -281,8 +284,8 @@ async fn rpc(
         }
     };
 
-    // Answered as an event stream rather than as JSON, because Clerk's real
-    // server does and parsing only JSON made a working server look broken.
+    // Answered as an event stream rather than as JSON, because a real server on
+    // the list does and parsing only JSON made a working server look broken.
     (
         [("content-type", "text/event-stream")],
         format!(
@@ -387,16 +390,17 @@ fn workspace() -> (tempfile::TempDir, Store, GroupId) {
 
 #[tokio::test]
 async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_browser() {
-    // Clerk's is public. An operator sent to authorise a server that authorises
-    // everybody is a consent prompt for nothing, and the row would claim a
-    // sign-in that never happened.
+    // An operator sent to authorise a server that authorises everybody is a
+    // consent prompt for nothing, and the row would claim a sign-in that never
+    // happened. No vendor on the list is public today; this is the behaviour if
+    // one becomes it, and the live test is what would say so.
     let server = serve(Rules { needs_token: false, ..Default::default() }).await;
     let (_dir, store, group) = workspace();
 
     let plugin = plugins::connect(
         &store,
         group,
-        PluginKind::Clerk,
+        PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         |_| panic!("a public server must not open a browser"),
     )
@@ -480,9 +484,10 @@ async fn a_refusal_in_the_browser_is_reported_as_one() {
 
 #[tokio::test]
 async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
-    // Clerk's authorisation server publishes no registration endpoint. If its
-    // MCP server ever starts asking for a token, this is the error an operator
-    // gets, and it has to say what is actually wrong.
+    // Publishing a registration endpoint is the rule that decides who can be a
+    // plugin at all. This is the error an operator gets on the day a vendor
+    // stops, and it has to say what is actually wrong rather than fail at the
+    // next leg with a client id nobody issued.
     let server = serve(Rules { registers: false, ..Default::default() }).await;
     let (_dir, store, group) = workspace();
 
@@ -799,7 +804,7 @@ async fn an_agent_calling_a_plugin_its_crew_has_not_connected_is_told_who_can() 
 
 // ---- live --------------------------------------------------------------
 
-/// What the three vendors actually publish, right now.
+/// What the vendors on the list actually publish, right now.
 ///
 /// Everything above is a stub agreeing with what this app believes MCP
 /// authorisation looks like, and the failure worth catching is that belief
@@ -807,70 +812,60 @@ async fn an_agent_calling_a_plugin_its_crew_has_not_connected_is_told_who_can() 
 /// registration, or start requiring a token on a server that used to be open,
 /// and every offline test here keeps passing while no operator can connect.
 ///
+/// Discovery is `oauth::discover`, the same call a sign-in makes, rather than
+/// metadata URLs rebuilt beside it. A test with its own copy of RFC 8414 passes
+/// on a vendor this build cannot reach: Stripe's authorisation server is
+/// `https://access.stripe.com/mcp`, and the well-known segment goes before that
+/// path, not after it.
+///
 /// Run with `./scripts/plugins.sh`. It reaches the real internet and spends
 /// nothing: no account is authorised and no tool is called.
 #[tokio::test]
 #[ignore = "reaches the real vendors; run ./scripts/plugins.sh"]
-async fn the_three_servers_still_publish_what_this_build_expects() {
-    let http = reqwest::Client::new();
-
+async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
     for kind in PluginKind::ALL {
         let endpoint = kind.endpoint();
-        let origin = endpoint.rsplit_once('/').map(|(base, _)| base).unwrap_or(endpoint);
 
-        // 1. The resource says who can authorise for it.
-        let metadata: serde_json::Value = http
-            .get(format!("{origin}/.well-known/oauth-protected-resource"))
-            .send()
-            .await
-            .unwrap_or_else(|err| panic!("{} is unreachable: {err}", kind.label()))
-            .json()
-            .await
-            .unwrap_or_else(|err| panic!("{} published no metadata: {err}", kind.label()));
-        let issuer = metadata["authorization_servers"][0]
-            .as_str()
-            .unwrap_or_else(|| panic!("{} names no authorisation server", kind.label()))
-            .to_string();
-
-        // 2. An unauthenticated open, which is how Guaca finds out whether this
-        //    server wants a grant at all.
+        // 1. An unauthenticated open, which is how Guaca finds out whether this
+        //    server wants a grant at all, and where the address of the sign-in
+        //    comes from when it does.
         let opened = guac_lib::mcp::open(endpoint, None).await;
-        match opened {
+        let challenge = match &opened {
             Ok(session) => {
-                let tools = guac_lib::mcp::list_tools(&session).await.unwrap_or_else(|err| {
+                let tools = guac_lib::mcp::list_tools(session).await.unwrap_or_else(|err| {
                     panic!("{} authorised us and then refused a tool list: {err}", kind.label())
                 });
                 assert!(!tools.is_empty(), "{} offered no tools", kind.label());
                 println!("{}: open, {} tools", kind.label(), tools.len());
+                continue;
             }
-            Err(err) if err.is_unauthorized() => {
-                // 3. And if it does, that it still lets an application register
-                //    itself. Without this Guaca cannot sign in at all, and the
-                //    plugin has to be withdrawn rather than debugged.
-                let server: serde_json::Value = http
-                    .get(format!("{issuer}/.well-known/oauth-authorization-server"))
-                    .send()
-                    .await
-                    .unwrap_or_else(|e| panic!("{issuer} is unreachable: {e}"))
-                    .json()
-                    .await
-                    .unwrap_or_else(|e| panic!("{issuer} published no metadata: {e}"));
-                assert!(
-                    server["registration_endpoint"].is_string(),
-                    "{} no longer lets an application register itself, so Guaca cannot sign in \
-                     to it: {server}",
-                    kind.label()
-                );
-                assert!(
-                    server["code_challenge_methods_supported"]
-                        .as_array()
-                        .is_some_and(|methods| methods.iter().any(|m| m == "S256")),
-                    "{} no longer supports the only PKCE method this build sends",
-                    kind.label()
-                );
-                println!("{}: signs in at {issuer}", kind.label());
-            }
+            Err(err) if err.is_unauthorized() => match err {
+                guac_lib::mcp::McpError::Unauthorized { challenge, .. } => challenge.clone(),
+                _ => None,
+            },
             Err(err) => panic!("{} answered something unexpected: {err}", kind.label()),
-        }
+        };
+
+        // 2. Discovery, through the code a sign-in runs. A vendor that has moved
+        //    its metadata somewhere none of the fallbacks look fails here, which
+        //    is the whole point of doing it this way.
+        let found = guac_lib::oauth::discover(endpoint, challenge.as_deref())
+            .await
+            .unwrap_or_else(|err| panic!("{} cannot be discovered: {err}", kind.label()));
+
+        // 3. And that it still lets an application register itself. Without this
+        //    Guaca cannot sign in at all, and the plugin has to be withdrawn
+        //    rather than debugged.
+        assert!(
+            found.server.registration_endpoint.is_some(),
+            "{} no longer lets an application register itself, so Guaca cannot sign in to it",
+            kind.label()
+        );
+        assert!(
+            found.server.code_challenge_methods_supported.iter().any(|m| m == "S256"),
+            "{} no longer supports the only PKCE method this build sends",
+            kind.label()
+        );
+        println!("{}: signs in at {}", kind.label(), found.issuer);
     }
 }

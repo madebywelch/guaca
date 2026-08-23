@@ -31,7 +31,7 @@ src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
     group.rs          A crew's wall, and the settings its agents run on.
-    plugin.rs         The three servers a crew can sign in to, and what it got.
+    plugin.rs         The servers a crew can sign in to, and what it got.
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
@@ -196,6 +196,12 @@ the model takes a screenshot to see what `browse` did.
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
   pair thread or the activity board, and an effect cannot re-bind on that.
+- **What a plugin's sign-in asks for is the server's list, not Guaca's.**
+  Cloudflare's consent screen names four permissions because its Workers
+  Bindings server hardcodes that scope set and publishes no `scopes_supported`,
+  so Guaca sends no `scope` at all. Where a server does publish a list, Guaca
+  asks for all of it except `*`. Reaching more of a vendor is another entry on
+  the list, not another parameter: `docs/PLUGINS.md`.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
   crew, to re-learn something that changes when a vendor ships rather than when
@@ -205,10 +211,12 @@ the model takes a screenshot to see what `browse` did.
   validate a function name against `[A-Za-z0-9_-]{1,64}`. Renaming to fit needs
   a mapping back at call time, and a mapping nothing can see is how a call lands
   on the wrong tool.
-- **`plugins::connect` opens the server with no token first.** That is the only
-  honest way to find out whether it wants one. Clerk's is public, and sending an
-  operator to a browser to authorise a server that authorises everybody is a
-  consent prompt for nothing and a row claiming a sign-in that never happened.
+- **`plugins::connect` opens the server with no token first.** It is the only
+  honest way to find out whether the server wants one, and its refusal is where
+  the address of the sign-in comes from: the `WWW-Authenticate` challenge names
+  the vendor's own protected-resource metadata, which beats any well-known path
+  Guaca guessed at. Every server on the list asks today; a public one connects
+  with `signed_in` false rather than claiming a sign-in that never happened.
 - **The loopback port is bound before the client is registered.** That ordering
   is the whole reason a redirect is acceptable here at all, and it is the
   difference between this flow and the one `subscription.rs` argues against:
@@ -371,9 +379,9 @@ failure worth catching is that belief going stale.
 
 A fifth, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
-turn that calls a plugin tool end to end. Its live half asks whether the three
-vendors still publish what this build expects, which is the failure no offline
-test can see. It reaches the internet, authorises nothing and spends nothing.
+turn that calls a plugin tool end to end. Its live half runs `oauth::discover`
+against every vendor on the list and asks whether each still publishes what this
+build expects, which is the failure no offline test can see. It reaches the internet, authorises nothing and spends nothing.
 
 ```sh
 ./scripts/plugins.sh
