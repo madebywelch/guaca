@@ -315,6 +315,15 @@ export const api = {
   saveFile: (digest: string, name: string) => invoke<string>("save_file", { digest, name }),
 
   /**
+   * Puts a page an agent wrote somewhere it can be framed, and says where.
+   *
+   * A round trip rather than a `srcdoc`, because a frame given its markup
+   * inline inherits this document's content policy, and this document forbids
+   * script. What the returned origin permits is `artifact.rs`'s argument.
+   */
+  frameArtifact: (html: string) => invoke<{ port: number; id: string }>("frame_artifact", { html }),
+
+  /**
    * Sends what the operator typed, with the files they attached.
    *
    * Only the digest and the name go over: the runtime resolves both against

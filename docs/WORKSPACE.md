@@ -133,6 +133,139 @@ back the flicker the sentence rule in `lib/reasoning.ts` takes out. What the
 line is for is the wait an operator notices, so a call has to become one before
 it earns the line.
 
+## A reply can be a figure, and a figure is a fenced block
+
+An operator asking for last quarter by region gets four numbers, and four
+numbers written as `Enterprise: $810K` lines is a shape they have to hold in
+their head. What they wanted was to see which one was biggest, which is a
+picture. So a reply can carry one.
+
+**A fence, not a tool call.** An agent has the numbers in hand at the moment it
+writes the sentence about them, so a chart it asks for through a tool call is a
+round trip spent sending back something it had already finished computing. A
+fence costs nothing, streams in with the rest of the reply, and needs no change
+to the runtime at all: `as_plain_text` already returns the text of a message, so
+the record, the prompt, the dedup fingerprint, search and a peer's copy all keep
+working exactly as they did. It also means the agent can read back what it drew,
+and an agent that cannot see its own last chart draws it again.
+
+Three tags are figures (`chart`, `graph`, `plot` for the first, `html` or
+`artifact` for the second) and every other fence is source, which is the rule
+that keeps ```python from turning into something nobody asked for.
+
+**Guaca draws the chart, from a spec.** `lib/chart.ts` reads a model's JSON into
+a value that cannot be wrong (a pie with two series is not a thing that file can
+produce) and turns it into coordinates; `components/Chart.tsx` turns those into
+elements. Neither half touches the DOM, which is the point: jsdom performs no
+layout, so a chart that worked out its own geometry from a measured element
+would be exercised by no test in this repo and checked by nobody but the
+operator. Every geometry decision this app makes is a pure function with a test
+on it.
+
+The spec is deliberately the shape every plotting library uses: `type`, `labels`,
+`series: [{ name, data }]`. That is not a lack of imagination. A model has seen
+it ten thousand times and writes it right first try; a novel schema of our own
+would be a thing every agent has to be taught in a prompt it is already
+skimming.
+
+**A figure that will not draw shows what was asked for and why.** Not instead of
+it. The operator needs to see the request to know what their agent thought it
+was showing them, and the agent needs a sentence it can act on next turn: every
+refusal in `readChart` names the field and the fix, because "invalid chart"
+costs a whole turn and teaches nothing. And a spec that has not finished
+arriving is neither drawn nor refused. A reply lands a token at a time, so a
+chart spends most of its life on screen as half an object, and called an error
+that is a red box under every figure for a second, which teaches an operator the
+feature is broken. `looksComplete` counts braces outside strings; until they
+balance, the figure says it is still drawing.
+
+## A chart's colours are the output of a check, not a decision
+
+Every other colour in `styles.css` is a judgement somebody can revise. The eight
+series hues are not. What makes a chart readable to a red-green colourblind
+operator is that *neighbouring* slots stay far apart, because neighbours are
+what touch in a stack, sit side by side in a group and cross in a line chart,
+and no one can check that by looking.
+
+So the order was not chosen by looking. The eight hexes are a documented set;
+what this app chose is the order, by enumerating all 40,320 of them and keeping
+the 160 that clear every gate on this app's own two surfaces. Guaca opens on
+green because Guaca is green, and it cost nothing: of the orders that pass, this
+is one of the best, and it beats the set's own default on the gate that scatter
+needs.
+
+`palette.test.ts` recomputes all of it from the hexes themselves: sRGB to
+linear, Machado-Oliveira-Fernandes at full severity, distance in OKLab. The
+figures in `palette.ts`'s comment cannot drift from the values they describe,
+and a hex nudged because a screenshot looked slightly off fails the suite. That
+is the intended experience.
+
+**Nine hues is not an option.** A generated ninth is indistinguishable from one
+of the eight under colourblindness, so a ninth series is refused with the fix in
+the sentence: fold the tail into an "Other". A pie past six wedges folds itself,
+because past six nobody is comparing them, they are reading the big ones and the
+remainder.
+
+**Every chart carries its own numbers, and that is not a fallback.** The Figures
+table beside the source control is how a value is read by a screen reader, by an
+operator who cannot separate two of the hues, and by anybody who wants the
+figure rather than the shape. Three light-mode hues sit under 3:1 against the
+surface, which is allowed only because the table and the direct labels are
+there; a change that drops either has to change the palette too, and
+`palette.test.ts` asserts the debt so it cannot be dropped quietly.
+
+The drawing itself is one `role="img"` with one sentence on it, and nothing
+inside it is focusable. That is deliberate: a `role="img"` subtree is invisible
+to a screen reader by definition, so labels on the bands would be announced to
+nobody, and tab stops would put twelve invisible rectangles between the message
+above and the message below for a readout the table already holds in a form
+somebody can actually read. The readout enhances; it never gates.
+
+## A page an agent wrote runs somewhere else entirely
+
+A chart is drawn by Guaca and needs nowhere to run. A page is different: asked
+for a diagram, a layout or a small thing to click, an agent writes markup and
+script, and the only honest way to show that is to run it.
+
+Not in this document. The webview's policy is `script-src 'self'` and it stays
+that way. A frame pointed at `srcdoc:`, `blob:` or `about:blank` inherits the
+policy of whoever framed it, so the page would draw and its script would
+silently never run: an empty rectangle that passes every test, which is the
+worst thing this app could ship and is the same failure `FileCard` already has
+a note about.
+
+So a page gets an origin of its own: `artifact.rs`, a loopback server serving
+one document by the SHA-256 of its own bytes, on a port already in the app's
+`frame-src` because the computer viewer needed one first. It is deliberately not
+part of `proxy.rs`, whose request parser is where the token that reaches a
+running machine gets decided; a second unrelated route in front of that is a
+branch nobody wants to reason about at three in the morning.
+
+**What the page may do is the whole argument.** It is the least trustworthy
+content in the app: written by a model that may have read a hostile web page
+earlier in the same turn. It may compute and it may draw, and it may not talk to
+anybody. `default-src 'none'` closes every fetch, socket, remote font and remote
+image, and `<img src="https://…/?data=">` is the cheapest exfiltration there is.
+`script-src 'unsafe-inline'` lets its own script run and nothing loaded from
+elsewhere. `sandbox allow-scripts` on the header and on the frame gives it an
+opaque origin with no same-origin access, and the two values must never gain
+`allow-same-origin` beside `allow-scripts`: together they let a page take its own
+sandbox off and reload out of it.
+
+Nothing is persisted. The message that carried the document is the record; the
+server holds a copy of the last two dozen while a transcript is drawing them,
+and a restart re-registers whatever is on screen.
+
+**The page reports its own height, because nothing outside it can measure it.**
+A cross-origin frame cannot be read, so `artifact.rs` prepends a reporter that
+posts its height on every change. Prepended rather than appended: a model's page
+is exactly where an unclosed tag lives, and an unclosed tag swallows everything
+after it. The parent trusts the message by the window that sent it and by
+nothing else, because an opaque origin reports itself as `"null"` and checking
+the origin would either reject every real message or accept every forged one. It
+clamps what it is told, too: a page claiming a height of a hundred thousand has
+made itself the whole channel.
+
 ## A transcript is a log, and says one thing out loud
 
 Waiting for a reply is the shape of using this app, and a reader who cannot see

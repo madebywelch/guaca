@@ -5,12 +5,14 @@
 //! the cascade tests can drive the real runtime without a window.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, OnceLock};
 
 use tauri::http::{Request, Response};
 use tauri::{Emitter, Manager, UriSchemeContext};
 
 use crate::account::Account;
+use crate::artifact::{self, Artifacts};
 use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
@@ -320,6 +322,16 @@ pub fn run() {
                 .map_err(|e| format!("could not start the computer viewer: {e}"))?;
             runtime.set_viewer_port(viewer_port);
 
+            // And the origin a page an agent wrote is allowed to run on, which
+            // is separate from the app's for exactly one reason: the app's
+            // content policy forbids script and must keep forbidding it.
+            // `artifact.rs` says what that origin does and does not permit.
+            let artifacts = Artifacts::new();
+            let artifact_port = Arc::new(AtomicU16::new(
+                tauri::async_runtime::block_on(artifact::start(artifacts.clone()))
+                    .map_err(|e| format!("could not start the artifact viewer: {e}"))?,
+            ));
+
             // Anything this app left running that no agent still refers to is
             // released, since a forgotten sandbox bills exactly like a used one.
             {
@@ -390,6 +402,8 @@ pub fn run() {
                 subscription,
                 account,
                 catalogue: Arc::new(Catalogue::new()),
+                artifacts,
+                artifact_port,
             });
             Ok(())
         })
@@ -446,6 +460,7 @@ pub fn run() {
             commands::stage_files,
             commands::save_file,
             commands::send_message,
+            commands::frame_artifact,
             commands::retry_turn,
             commands::stop_run,
             commands::clear_channel,

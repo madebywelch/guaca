@@ -16,6 +16,9 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/figure.ts       A fenced block the transcript draws instead of printing.
+  lib/chart.ts        A chart spec, and where every mark goes. No DOM.
+  lib/palette.ts      Eight hues in one order, and why that order and not another.
   lib/diff.ts         Two versions of a page, as the lines between them.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
@@ -52,6 +55,8 @@ src-tauri/src/
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
+  artifact.rs         The other loopback origin: where a page an agent wrote
+                      is allowed to run, and everything it may not reach.
   sessions.py         Reports what a machine's Chrome is signed in to.
   kernel.rs           Browsers: a hosted Chrome, which is where the web belongs.
   cdp.rs              The DevTools protocol. Asks a page instead of looking.
@@ -100,6 +105,9 @@ repo: the frontend renders state and forwards intent.
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
+| Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
+| A chart's colours, or how many series one may carry | *A chart's colours are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
+| Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
@@ -215,6 +223,65 @@ the model takes a screenshot to see what `browse` did.
   draws as a page that is all new. A truthiness check collapses the first two
   and loses the only write where the whole page is the news. `Part::ToolCall`
   in `domain/envelope.rs`, then `trailStep`.
+- **A figure is a fence in the reply, not a tool call and not a new part.** An
+  agent has the numbers in hand at the moment it writes the sentence about them,
+  so a chart behind a tool call is a round trip spent sending back something it
+  had already finished computing. A fence also needs no runtime change at all:
+  `as_plain_text` returns the text of a message, so the record, the prompt, the
+  dedup fingerprint, search and a peer's copy keep working untouched, and the
+  agent can read back what it drew. `Part::Json` is still unused and is still
+  not this.
+- **A chart spec that has not finished arriving is neither drawn nor refused.**
+  A reply lands a token at a time, so a chart spends most of its life on screen
+  as half a JSON object, and calling that an error puts a red box under every
+  figure for a second, which teaches an operator the feature is broken.
+  `looksComplete` counts braces outside strings, since a category legitimately
+  named `}` must not end the document early, and until they balance the figure
+  says it is still drawing. Once they balance, a spec that still will not parse is
+  wrong rather than late, and says so.
+- **A refused chart is drawn as its own source with the reason under it.** Both
+  halves are load-bearing. The operator needs to see what their agent thought it
+  was showing them, and the agent needs a sentence it can act on next turn,
+  which is why every refusal in `readChart` names the field and the fix. "Invalid
+  chart" costs a whole turn and teaches nothing.
+- **The eight series colours are the output of a check, and the *order* is the
+  check.** Neighbouring slots are what touch in a stack and cross in a line
+  chart, so neighbours are the pairs that decide whether a chart is readable to a
+  colourblind operator, and nobody can verify that by looking. The order came out
+  of enumerating all 40,320 and keeping the 160 that pass on this app's own two
+  surfaces. `palette.test.ts` recomputes every figure in `palette.ts`'s comment
+  from the hexes themselves, so a hex nudged because a screenshot looked slightly
+  off fails the suite. A ninth hue is refused rather than generated: a generated
+  one is indistinguishable from one of the eight under colourblindness.
+- **Nothing inside a chart's drawing is focusable, and the Figures table is
+  why.** The `svg` is one `role="img"` with a sentence on it, which makes its
+  subtree invisible to a screen reader by definition, so a label on a band
+  would be announced to nobody, and tab stops would put twelve invisible
+  rectangles between one message and the next for a readout the table already
+  holds in a form somebody can read. The table is also the relief that lets
+  three light-mode hues sit under 3:1 against the surface, and
+  `palette.test.ts` asserts that debt so it cannot be dropped quietly.
+- **A page an agent wrote is framed from `artifact.rs`, never from `srcdoc`.**
+  A frame pointed at `srcdoc:`, `blob:` or `about:blank` inherits the framing
+  document's content policy, and this app's forbids script. The page would draw
+  and its script would silently never run: an empty rectangle that passes every
+  test, which is the same failure `FileCard` has a note about. So it gets an
+  origin of its own, and the round trip through `frame_artifact` is what buys it.
+- **`allow-scripts` and `allow-same-origin` must never appear together.** On the
+  frame or in `ARTIFACT_CSP`. Together they let the page remove its own sandbox
+  attribute and reload out of the box, which is the whole lock. `default-src
+  'none'` is the other half and is not decoration: `<img src="https://…/?data=">`
+  is the cheapest exfiltration there is, and a model's page is content written by
+  something that may have read a hostile web page earlier in the same turn.
+- **The height reporter is prepended to a model's page, not appended.** A
+  model's page is exactly where an unclosed tag lives, and an unclosed tag
+  swallows everything after it. Ahead of the doctype it is still parsed and run.
+  The parent trusts the message by the window that sent it and by nothing else:
+  an opaque origin reports itself as `"null"`, so an origin check would either
+  reject every real message or accept every forged one.
+- **A peer is not told any of this.** The figure section is in the prompt for
+  every reply mode but `ToPeer`. A peer is a model and wants the numbers, so a
+  chart spec on that path is tokens spent drawing something nobody will look at.
 - **`emit_reply` delivers a reply that carries a file and no text.** Handing over
   a document with nothing typed is normal, and judging the reply empty by its
   text alone drops the thing the turn was spent producing.
