@@ -457,6 +457,14 @@ struct Inner {
     ///
     /// Empty in the app, and written at most once. See `Runtime::plugins_at`.
     plugin_endpoints: std::sync::OnceLock<HashMap<PluginKind, String>>,
+    /// The machine's Guaca account, when it has one.
+    ///
+    /// Absent in every test that does not care and in any install that never
+    /// signed in, which is the state this has to keep working in: nothing here
+    /// reads it except a plugin whose credential is the account, and an absent
+    /// account makes that plugin refuse with a sentence rather than making the
+    /// runtime behave differently. See `PluginKind::account_backed`.
+    account: std::sync::OnceLock<Arc<crate::account::Account>>,
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
@@ -514,6 +522,7 @@ impl Runtime {
                 last_signin_scan: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
+                account: std::sync::OnceLock::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 events,
             }),
@@ -533,6 +542,26 @@ impl Runtime {
     /// lives, and a mistyped one is a crew's sign-in sent somewhere nobody chose.
     pub fn plugins_at(&self, endpoints: HashMap<PluginKind, String>) {
         let _ = self.inner.plugin_endpoints.set(endpoints);
+    }
+
+    /// Hands the runtime the machine's Guaca account, once, at startup.
+    ///
+    /// Written rather than passed to the constructor because it is optional and
+    /// almost nothing reads it: threading it through every call site would make
+    /// every test that builds a runtime say something about an account it does
+    /// not have.
+    pub fn with_account(&self, account: Arc<crate::account::Account>) {
+        let _ = self.inner.account.set(account);
+    }
+
+    /// A token for the machine's account, or nothing.
+    ///
+    /// Nothing means either no account was handed over or the operator is not
+    /// signed in, and those are the same thing to a caller: there is no
+    /// credential, so the plugin that wanted one refuses and says why.
+    pub async fn account_token(&self) -> Option<String> {
+        let account = self.inner.account.get()?;
+        account.access().await.ok()
     }
 
     /// Where one plugin's server is for this runtime.
@@ -2697,12 +2726,19 @@ impl Runtime {
                 // work went to; `run_sql` on its own is not a chip anybody can
                 // read a week later.
                 let name = format!("{}{}{tool}", kind.slug(), tools::PLUGIN_SEPARATOR);
+                // Read per call rather than held: the account refreshes its own
+                // token, and a copy taken when the turn started is one that can
+                // be stale by the time the tool is reached.
+                let account = if kind.account_backed() { self.account_token().await } else { None };
                 let called = plugins::call(
                     self.store(),
-                    card.group_id,
-                    card.id,
-                    kind,
-                    self.plugin_endpoint(kind),
+                    plugins::Target {
+                        group: card.group_id,
+                        agent: card.id,
+                        kind,
+                        endpoint: self.plugin_endpoint(kind),
+                        account: account.as_deref(),
+                    },
                     &tool,
                     &sent,
                 )

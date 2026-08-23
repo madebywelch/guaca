@@ -61,15 +61,18 @@ pub enum PluginKind {
     Linear,
     Stripe,
     Agentmail,
+    /// The operator's own Guaca account, as a server. See [`PluginKind::account_backed`].
+    Google,
 }
 
 impl PluginKind {
-    pub const ALL: [PluginKind; 5] = [
+    pub const ALL: [PluginKind; 6] = [
         PluginKind::Neon,
         PluginKind::Cloudflare,
         PluginKind::Linear,
         PluginKind::Stripe,
         PluginKind::Agentmail,
+        PluginKind::Google,
     ];
 
     /// The stored form, and the prefix every one of its tools is offered under.
@@ -83,6 +86,7 @@ impl PluginKind {
             PluginKind::Linear => "linear",
             PluginKind::Stripe => "stripe",
             PluginKind::Agentmail => "agentmail",
+            PluginKind::Google => "google",
         }
     }
 
@@ -97,6 +101,7 @@ impl PluginKind {
             PluginKind::Linear => "Linear",
             PluginKind::Stripe => "Stripe",
             PluginKind::Agentmail => "AgentMail",
+            PluginKind::Google => "Google",
         }
     }
 
@@ -125,7 +130,32 @@ impl PluginKind {
             PluginKind::Linear => "https://mcp.linear.app/mcp",
             PluginKind::Stripe => "https://mcp.stripe.com",
             PluginKind::Agentmail => "https://mcp.agentmail.to/mcp",
+            // The operator's own account. `account.rs` may be pointed elsewhere
+            // for development, and `Runtime::plugin_endpoint` is what moves it;
+            // this is the address a bundled build talks to and the one the tile
+            // shows before anything is connected.
+            PluginKind::Google => "https://guaca.bot/mcp",
         }
+    }
+
+    /// Whether this plugin's credential is the machine's Guaca account rather
+    /// than a grant of its own.
+    ///
+    /// The other five are somebody else's servers, and a crew signs in to each
+    /// one separately because there is nothing else it could do. Google is not
+    /// a server: it is the operator's own account at `guaca.bot`, which already
+    /// holds the grant and already refreshes it. Running a second OAuth dance
+    /// for it would send an operator to a consent screen to authorise something
+    /// they authorised when they signed in, and would leave a per-group grant
+    /// beside a per-account one for the same access, expiring on its own clock.
+    ///
+    /// So the sign-in is the account's and the *decision to use it* stays the
+    /// group's. Connecting it in a crew is what puts the tools in front of that
+    /// crew's agents, and `PluginAccess` still decides which of them. Nothing
+    /// else about a plugin changes: the call still goes out of Guaca, the token
+    /// still never reaches a model, and the tool list is still read once.
+    pub const fn account_backed(self) -> bool {
+        matches!(self, PluginKind::Google)
     }
 
     /// One line on the tile, in terms of what the crew gets.
@@ -136,6 +166,9 @@ impl PluginKind {
             PluginKind::Linear => "Issues and projects: find them, file them, move them on.",
             PluginKind::Stripe => "The live account: payments, customers, invoices, refunds.",
             PluginKind::Agentmail => "Inboxes an agent owns: read a thread, send, reply, forward.",
+            PluginKind::Google => {
+                "Your Gmail, Calendar and Drive, through the Guaca account you signed in to."
+            }
         }
     }
 
@@ -149,6 +182,7 @@ impl PluginKind {
             PluginKind::Linear => "https://linear.app/docs/mcp",
             PluginKind::Stripe => "https://docs.stripe.com/mcp",
             PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
+            PluginKind::Google => "https://guaca.bot/app",
         }
     }
 }

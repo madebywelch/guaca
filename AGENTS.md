@@ -135,17 +135,21 @@ choose, and no price on the answer. The two meet in exactly one function,
 sees one shape of request. Keep it that way: a provider branch in the runtime, the
 prompt or the guard is the wrong half of the repo.
 
-**An account is optional and nothing depends on it.** `guaca.bot` holds one
-thing Guaca cannot: an OAuth client, for the services that will only issue
-programmatic access to a registered application. `Account` is a field on
-`AppState` that no turn, prompt, tool or guard reads, and both of its reads
-happen when the Settings pane is opened rather than at startup, so an install
-that never opens that pane never contacts the service. Signing in is
-authorization code with PKCE on a loopback port bound before the redirect is
-named, which is `oauth.rs`'s argument pointed at one known server; the device
-grant that was there first is gone rather than kept beside it, because two doors
-to one account means the weaker one decides what the account is worth.
-`docs/ACCOUNT.md`.
+**An account is optional, and an install that never signs in never contacts
+it.** `guaca.bot` holds one thing Guaca cannot: an OAuth client, for the
+services that will only issue programmatic access to a registered application.
+Signing in is authorization code with PKCE on a loopback port bound before the
+redirect is named, which is `oauth.rs`'s argument pointed at one known server;
+the device grant that was there first is gone rather than kept beside it,
+because two doors to one account means the weaker one decides what the account
+is worth. `docs/ACCOUNT.md`.
+
+One thing does depend on it, and only one: the Google plugin, whose server is
+that account. `Runtime::account_token` is read on a turn that calls one of its
+tools and nowhere else, so a machine with no account is a machine where that
+plugin refuses to connect and every other part of the app is unchanged. Keep it
+that way: the account is a credential for one plugin, not a thing the runtime,
+the prompt or the guard may consult.
 
 **A Claude subscription cannot pay for a turn, and this is not an oversight.**
 Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
