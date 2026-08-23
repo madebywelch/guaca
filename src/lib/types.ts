@@ -343,6 +343,14 @@ export interface Browser {
   state: string;
   /** Where the operator watches and takes over. Absent once it has gone. */
   liveViewUrl: string | null;
+  /**
+   * Where a live view this window may not frame is served from.
+   *
+   * Set instead of `liveViewUrl`, never beside it. A frame the CSP refuses
+   * draws the surface behind it and reports nothing, so the pane says which
+   * address it was rather than showing a blank rectangle.
+   */
+  unwatchable: string | null;
 }
 
 /** One command's result, from the agent's computer. */
