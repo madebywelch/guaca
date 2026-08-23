@@ -89,7 +89,7 @@ describe("elapsed", () => {
     expect(waiting(184_000)).toBe("3m 04s");
   });
 
-  it("does not count backwards from a clock that moved", () => {
+  it("does not count backward from a clock that moved", () => {
     expect(elapsed(NOW, NOW + 5_000)).toBe("0s");
   });
 });

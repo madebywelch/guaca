@@ -25,7 +25,7 @@ import { NOTIFY_KINDS, type NotifyKind, type NotifyPrefs } from "./prefs";
  * weekend of overdue schedule announced at launch: any one of those and the
  * switch goes off for good.
  *
- * The judgement is in `Moment`. "Away" is graded, not binary, so the same three
+ * The judgment is in `Moment`. "Away" is graded, not binary, so the same three
  * booleans mean three different things depending on the kind, and the class
  * table is the only thing that says which. A kind that quietly changes class is
  * a permission request nobody is told about, or a settled run announced from a
@@ -149,7 +149,7 @@ describe("attention", () => {
 
   it("breaks through a focused window when the request is on a channel that is not on screen", () => {
     // The one rule that survives a window the operator is looking at. Nobody
-    // finds a parked turn by noticing a row change colour three screens up the
+    // finds a parked turn by noticing a row change color three screens up the
     // rail, and the turn stays parked until it is answered.
     expect(shouldNotify("approval", wanted(), moment({ away: false, onScreen: false }))).toBe(true);
   });
@@ -229,7 +229,7 @@ describe("away", () => {
     expect(away()).toBe(true);
   });
 
-  it("is true for a minimised or fully covered window without consulting focus", () => {
+  it("is true for a minimized or fully covered window without consulting focus", () => {
     const hasFocus = vi.fn(() => true);
     put({ hidden: true });
     document.hasFocus = hasFocus;

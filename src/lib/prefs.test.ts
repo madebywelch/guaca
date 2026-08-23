@@ -214,7 +214,7 @@ describe("a preference that outlives the window", () => {
     }
   });
 
-  it("keeps every surface, including the one that is not a colour", () => {
+  it("keeps every surface, including the one that is not a color", () => {
     // System is the one worth naming: dropped from the reader, it reverts to
     // light, and the operator's window stops following the OS at every launch.
     for (const surface of ["light", "dark", "system"] as const) {

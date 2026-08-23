@@ -52,7 +52,7 @@ export function RoutineList({ agentId, onOpen }: Props) {
   const [routines, setRoutines] = useState<Routine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const now = useNow(30_000);
-  // A routine set, retimed, cancelled or fired since this was drawn. The
+  // A routine set, retimed, canceled or fired since this was drawn. The
   // operator watching an agent work is the one most likely to be looking at
   // this list while it changes, and until this existed the only way to see the
   // change was to close the panel and open it again.

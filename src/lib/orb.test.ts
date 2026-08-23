@@ -7,7 +7,7 @@ import { cluster, SEATS } from "./orb";
 const BOX = 64;
 
 /**
- * How far a face's ink reaches from its own centre, as a fraction of its box.
+ * How far a face's ink reaches from its own center, as a fraction of its box.
  *
  * Taken from the catalog's construction spec rather than assumed, because the
  * seating is sized against the drawing and not against the box around it: a

@@ -93,7 +93,7 @@ async fn manager_introduces_itself_to_every_other_agent() {
 
     // Two Manager calls to send and then speak, four peer calls, and between
     // one and four more for the Manager to read the replies, depending on how
-    // many batches they land in. That last part is scheduling, not behaviour,
+    // many batches they land in. That last part is scheduling, not behavior,
     // so this bounds amplification rather than pinning a number: batching
     // itself is asserted deterministically in
     // `replies_queued_together_are_read_in_a_single_turn`.
@@ -339,7 +339,7 @@ async fn an_agents_tool_trail_stays_in_its_own_channel() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_guard_refusal_is_reported_to_the_agent_that_hit_it() {
     // The refusal is about what this agent tried to do, so it belongs in this
-    // agent's channel rather than travelling to whoever it was aimed at.
+    // agent's channel rather than traveling to whoever it was aimed at.
     let stub = serve(|body| {
         let who = speaker(body);
         let other = if who == "Ping" { "Pong" } else { "Ping" };
@@ -1146,7 +1146,7 @@ async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked(
     // The carve-out in the rule above, and the reason it is not "drop whatever
     // a turn trails". Text written after the answer went is a restatement of
     // it; a file is not. `send_message` carries its own files, so one attached
-    // afterwards has reached nobody at all, and the agent that asked for the
+    // afterward has reached nobody at all, and the agent that asked for the
     // work is who it belongs to. Silently filing it as commentary would lose
     // the only thing the turn produced.
     let stub = serve(|body| {
@@ -1158,7 +1158,7 @@ async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked(
         if speaker(body) == "Chef" {
             match calls {
                 // Answer the way the real models do, then hand the document
-                // over afterwards, then say so.
+                // over afterward, then say so.
                 0 => Script::SendTo { recipients: vec!["Manager".into()], text: "On it.".into() },
                 1 => Script::Attach { tool: "attach_file".into(), files: vec!["menu.md".into()] },
                 _ => Script::Say("Tidied and attached.".into()),
@@ -1253,7 +1253,7 @@ async fn a_refused_courtesy_tells_the_agent_what_to_do_instead() {
 
 #[tokio::test]
 async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
-    // Found in a real session. The operator authorised an external send, the
+    // Found in a real session. The operator authorized an external send, the
     // coordinator relayed it, read the answer, and was refused when it tried to
     // instruct again: the guard cannot tell a second instruction from a thank
     // you, and it was aimed at the thank you. Every delegation needing two
@@ -2266,7 +2266,7 @@ fn signin_on(agent: guac_lib::domain::ids::AgentId, service: &str) -> Signin {
         surface: Surface::Browser,
         domain: format!("{}.example", service.to_lowercase()),
         service: service.into(),
-        recognised: true,
+        recognized: true,
         first_seen_at: 0,
         last_seen_at: 0,
     }
@@ -2517,9 +2517,9 @@ async fn an_agent_made_by_an_agent_is_given_neither_place_and_its_maker_is_told(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instead_of_refusing() {
-    // The live failure this exists for. The operator authorised an email, the
-    // coordinator relayed the authorisation, and the sending agent declined:
+async fn an_agent_told_by_a_peer_that_it_was_authorized_asks_the_operator_instead_of_refusing() {
+    // The live failure this exists for. The operator authorized an email, the
+    // coordinator relayed the authorization, and the sending agent declined:
     // correctly, because a peer's word is a claim. It then asked the operator
     // to repeat the instruction in another channel, which is the operator
     // doing the routing by hand for a decision they had already made. Asking
@@ -2537,7 +2537,7 @@ async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instea
         } else {
             Script::AskOperator {
                 action: "Email the SCDOT response to robert@madebywelch.com for review".into(),
-                because: "Manager says the operator authorised it; a peer's word is not \
+                because: "Manager says the operator authorized it; a peer's word is not \
                           permission to send mail in their name."
                     .into(),
             }
@@ -2546,7 +2546,7 @@ async fn an_agent_told_by_a_peer_that_it_was_authorised_asks_the_operator_instea
     .await;
 
     // A workspace with a machine, because an agent with no way out of the
-    // workspace has nothing for the operator to authorise and is refused
+    // workspace has nothing for the operator to authorize and is refused
     // before they are asked.
     let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
@@ -2607,7 +2607,7 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
     .await;
 
     // A workspace with a machine, because an agent with no way out of the
-    // workspace has nothing for the operator to authorise and is refused
+    // workspace has nothing for the operator to authorize and is refused
     // before they are asked.
     let h = harness_with_computer(&stub, &["Outreach"], GuardLimits::default());
     let run =
@@ -2739,7 +2739,7 @@ async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_oper
     // The live failure. An agent worked out that it could not reach the
     // operator's calendar, and asked them for permission to have it. This
     // workspace has no computer and no browser, so there was no action to
-    // authorise and nothing a click could have handed over: what was missing
+    // authorize and nothing a click could have handed over: what was missing
     // was access. The operator got a decision that changed nothing instead of a
     // sentence saying what they would have to add.
     let stub = serve(|body| {
@@ -3074,7 +3074,7 @@ async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing
 }
 
 #[tokio::test]
-async fn an_agent_reading_an_acknowledgement_may_still_say_nothing_quietly() {
+async fn an_agent_reading_an_acknowledgment_may_still_say_nothing_quietly() {
     // The other side of the same line, and the one that must not regress. The
     // asymmetry that terminates cascades depends on a peer being able to read a
     // courtesy and write nothing at all. Reporting that as a failure would put

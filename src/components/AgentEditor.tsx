@@ -62,17 +62,17 @@ export function AgentEditor({ agent, onClose }: Props) {
   // dialog was open.
   useEffect(() => {
     if (!agent) return;
-    let cancelled = false;
+    let canceled = false;
     void api
       .agentNotes(agent.id)
       .then((content) => {
-        if (cancelled) return;
+        if (canceled) return;
         setNotes(content);
         setNotesLoaded(true);
       })
       .catch(() => setNotesLoaded(true));
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [agent]);
 
@@ -171,7 +171,7 @@ export function AgentEditor({ agent, onClose }: Props) {
         </label>
 
         <div className="field">
-          <span className="field__label">Colour</span>
+          <span className="field__label">Color</span>
           <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
             {ACCENTS.map((accent) => (
               <button

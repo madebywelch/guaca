@@ -274,7 +274,7 @@ export function ActivityFlow({ messages, byId }: Props) {
                             />
                             <circle cx={x1} cy={13} r="3" fill={sender.color} />
                             {/* Drawn rather than a marker so it can point either
-                                way without a second marker per colour. */}
+                                way without a second marker per color. */}
                             <path
                               d={rightwards ? `M${x2} 13l-6-4v8z` : `M${x2} 13l6-4v8z`}
                               fill={sender.color}

@@ -101,7 +101,7 @@ file, and never print a field of it without redacting nested objects**), and
 There is one profile per bundle identifier, so every workspace on this machine
 shares it. Treat it as production:
 
-- Back it up before writing to it, and put it back afterwards.
+- Back it up before writing to it, and put it back afterward.
 - For anything experimental, rename it aside and let the app make a fresh one.
   A running app follows its open file descriptors, so you can rename the
   scratch profile out and the real one back in without stopping it.

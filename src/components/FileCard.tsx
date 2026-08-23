@@ -384,7 +384,7 @@ function SaveButton({ file }: { file: Attachment }) {
  *
  * The margin is generous because the point is to have mounted before the
  * operator arrives rather than as they arrive: a frame that starts loading once
- * it is already on screen is a grey rectangle they watch fill in.
+ * it is already on screen is a gray rectangle they watch fill in.
  */
 function useNearViewport<T extends HTMLElement>() {
   const ref = useRef<T>(null);

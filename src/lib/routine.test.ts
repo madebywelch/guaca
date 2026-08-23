@@ -185,7 +185,7 @@ describe("firstRunDelay", () => {
 
   it("takes a monthly 31st to a month that has one rather than clamping", () => {
     // Clamping to the end of a short month would anchor the routine on the
-    // 30th, and every firing after it would keep that day: the walk backwards
+    // 30th, and every firing after it would keep that day: the walk backward
     // down the calendar the backend is careful to avoid.
     const june = at(2025, 6, 10, 12, 0);
     const landed = new Date(

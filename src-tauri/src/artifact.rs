@@ -234,7 +234,7 @@ fn requested(head: &[u8]) -> Option<String> {
 ///
 /// A frame on another origin cannot be measured from outside, so a page that
 /// says nothing about its own size is drawn at whatever height was guessed,
-/// which for a one-line diagram is a tall grey box and for a long one is a
+/// which for a one-line diagram is a tall gray box and for a long one is a
 /// nested scrollbar. So the page is asked, and it answers on the only channel
 /// an opaque origin has.
 ///

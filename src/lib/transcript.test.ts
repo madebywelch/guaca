@@ -255,7 +255,7 @@ describe("an agent's own trail", () => {
 
   it("keeps the text a turn trailed after answering through the tool", () => {
     // The answer went through `send_message`, so it is peer traffic and lifts
-    // into the burst. What the turn typed afterwards reached nobody and is on
+    // into the burst. What the turn typed afterward reached nobody and is on
     // the record instead. Folding it away with the send would delete the only
     // copy of it there is.
     const rows = transcriptRows(

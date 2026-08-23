@@ -8,7 +8,7 @@
 //!
 //! What CI can reach is everything up to the sandbox. Placing a document on an
 //! agent's machine needs a real E2B key, so those paths are exercised here for
-//! their failure behaviour and verified for real by `./scripts/evals.sh`.
+//! their failure behavior and verified for real by `./scripts/evals.sh`.
 
 mod harness;
 

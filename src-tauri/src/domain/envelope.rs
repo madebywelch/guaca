@@ -51,10 +51,10 @@ impl Participant {
 pub enum Intent {
     /// The recipient has something to do or answer because of this.
     Work,
-    /// Thanks, an acknowledgement, a closing note.
+    /// Thanks, an acknowledgment, a closing note.
     ///
     /// The default on purpose. A model that does not say gets today's
-    /// behaviour, so a field nobody fills in cannot quietly open the door the
+    /// behavior, so a field nobody fills in cannot quietly open the door the
     /// guard is holding shut.
     #[default]
     Courtesy,

@@ -86,7 +86,7 @@ def main() -> int:
                      json.dumps(parts), trust, 0, 0, None, clock, intent))
 
     add("human", None, "agent", manager,
-        [{"type": "text", "text": "Check the top three stories on cnn, then summarise them."}], "operator")
+        [{"type": "text", "text": "Check the top three stories on cnn, then summarize them."}], "operator")
 
     # One turn writes one envelope, however many tools it reached for. This is
     # what the trail row folds.

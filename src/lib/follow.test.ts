@@ -233,7 +233,7 @@ describe("following the newest line", () => {
     expect(view.top()).toBe(500);
   });
 
-  it("does not let go of the end for a nudge down towards it", () => {
+  it("does not let go of the end for a nudge down toward it", () => {
     // A burst lands while the operator is at the bottom, and they scroll down
     // to read the rest of it. They were following the newest line and they
     // still are, whatever the arithmetic says about how far below them it is.

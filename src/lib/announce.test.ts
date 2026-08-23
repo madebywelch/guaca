@@ -7,7 +7,7 @@
  * that happened is a badge for every token of a reply, and the operator's only
  * answer to that is the master switch. And the channel is not decoration:
  * `notify` holds a completion back unless the operator was already looking at
- * that channel, so a kind labelled with the wrong one reaches nobody, or
+ * that channel, so a kind labeled with the wrong one reaches nobody, or
  * reaches them for a run they have never opened.
  *
  * The one piece of state here, a run's channel, is module-level and outlives a

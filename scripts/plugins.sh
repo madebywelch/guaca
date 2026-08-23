@@ -4,7 +4,7 @@
 # expects to find.
 #
 # CI cannot answer this. Everything in the offline suite is a scripted server
-# agreeing with what this app believes MCP authorisation looks like, and the
+# agreeing with what this app believes MCP authorization looks like, and the
 # failure worth catching is that belief going stale: a vendor can move an
 # endpoint, stop offering dynamic client registration, or start asking for a
 # token on a server that used to be open, and every offline test keeps passing
@@ -12,7 +12,7 @@
 #
 #   ./scripts/plugins.sh
 #
-# It reaches the real internet and spends nothing: no account is authorised, no
+# It reaches the real internet and spends nothing: no account is authorized, no
 # browser is opened and no tool is called.
 
 set -euo pipefail

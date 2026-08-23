@@ -16,7 +16,7 @@
 //!   the menu      the whole picture, and the answers.
 //!
 //! Nothing here knows Tauri exists. This file decides what the strip says and
-//! `tray.rs` draws it, which is what makes every judgement below arguable in a
+//! `tray.rs` draws it, which is what makes every judgment below arguable in a
 //! test rather than by opening the app and squinting at the corner.
 
 use std::collections::HashMap;
@@ -50,7 +50,7 @@ pub enum Glyph {
     /// Something is. The same shape, filled.
     Working,
     /// A turn is parked on the operator. Filled, and the only one with a
-    /// colour, which costs the menu bar's own light-and-dark tinting and is
+    /// color, which costs the menu bar's own light-and-dark tinting and is
     /// worth it exactly once.
     Attention,
 }
@@ -318,7 +318,7 @@ impl Presence {
                         .iter()
                         .take(MAX_DETAIL)
                         .map(|field| {
-                            // Labelled, always, and the label is Guaca's word
+                            // Labeled, always, and the label is Guaca's word
                             // rather than the model's. A bare value crafted to
                             // read like an answer would sit in a menu of
                             // answers with nothing to distinguish it.
@@ -399,7 +399,7 @@ fn overflow(total: usize, shown: usize) -> Option<usize> {
 pub enum Update {
     Nothing,
     /// These rows say something new and the menu keeps its shape, so the items
-    /// are edited where they are. That is not an optimisation: replacing the
+    /// are edited where they are. That is not an optimization: replacing the
     /// menu closes one the operator is reading, and the numbers in here move
     /// every few seconds while a crew works.
     Text(Vec<(usize, String)>),

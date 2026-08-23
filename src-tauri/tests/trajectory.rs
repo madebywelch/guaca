@@ -12,7 +12,7 @@
 //! every message it produced looks exactly the same as one that did not.
 //!
 //! These drive the real runtime against the scripted model and read the event
-//! stream the UI is drawn from. `guac_lib::trajectory` is the analyser;
+//! stream the UI is drawn from. `guac_lib::trajectory` is the analyzer;
 //! everything it reports is decidable from the record, so a failure here names
 //! a defect rather than a suspicion.
 
@@ -186,7 +186,7 @@ async fn a_dropped_connection_starts_a_new_placeholder_rather_than_appending_to_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_provider_that_never_answers_is_named_and_still_spent_its_step() {
-    // A run that reached nobody is not a normal run, and the analyser has to
+    // A run that reached nobody is not a normal run, and the analyzer has to
     // say so rather than pass it as quiet. The step still went: the request
     // was made, and a budget that refunded it would let a broken endpoint be
     // retried without limit.
@@ -325,7 +325,7 @@ async fn a_run_stopped_by_its_budget_stops_cleanly_and_spends_exactly_its_allowa
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn what_the_operator_watched_is_what_the_run_was_billed_for() {
     // Two independent accounts of the same run: the events the UI counts as
-    // they arrive, and the rows the usage screen reads back afterwards. A run
+    // they arrive, and the rows the usage screen reads back afterward. A run
     // is only observable if they agree.
     let stub = serve(|body| {
         let who = speaker(body);

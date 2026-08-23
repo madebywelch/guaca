@@ -172,7 +172,7 @@ struct Stored {
     /// a token with no stated expiry is used until it is refused.
     #[serde(default)]
     expires_at: Option<i64>,
-    /// Denormalised so a signed-in status can be answered without a round trip.
+    /// Denormalized so a signed-in status can be answered without a round trip.
     #[serde(default)]
     email: String,
     /// Kept with the tokens because a refresh needs it, and rediscovering the

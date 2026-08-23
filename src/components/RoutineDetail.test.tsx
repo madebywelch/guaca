@@ -297,7 +297,7 @@ describe("RoutineDetail", () => {
   });
 
   it("goes back when the routine has been deleted from under it", async () => {
-    // The panel can be looking at a row an agent has since cancelled itself.
+    // The panel can be looking at a row an agent has since canceled itself.
     agentRoutines.mockResolvedValue([]);
     const onBack = vi.fn();
     render(<RoutineDetail agentId="a1" routineId="r1" onBack={onBack} />);

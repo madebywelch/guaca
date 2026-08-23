@@ -75,7 +75,7 @@ number the backend takes.
 Two rules in there are not obvious. A monthly 31st goes to the next month that
 *has* a 31st rather than clamping to the end of a short one, because clamping
 would anchor the routine on the 28th and every firing after it would inherit
-that day: the walk backwards down the calendar `months_after` is careful to
+that day: the walk backward down the calendar `months_after` is careful to
 avoid. And a moment already gone is refused rather than sent, because a negative
 delay reaches the scheduler as a routine overdue and fires on the next tick,
 which is not what picking a date means. A one-off takes a date for the same
@@ -116,7 +116,7 @@ reports work as in hand that nobody is going to do.
 
 `schedule` had `list`, `add` and `cancel`. There was no verb for "the routine
 you already have, differently", so an agent asked for one could only add, or
-cancel and add, and cancelling first means losing the wording it was keeping if
+cancel and add, and canceling first means losing the wording it was keeping if
 the second call is refused. `update` takes an id and any of a name, an
 instruction, a repeat or a delay, and leaves every field it was not sent alone.
 That last part is the whole point: making an agent restate the instruction in

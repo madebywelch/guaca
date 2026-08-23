@@ -158,7 +158,7 @@ impl Browser {
     /// The live view is separated from its origin here because an iframe the
     /// CSP refuses is not an error anywhere. Nothing throws, nothing is logged,
     /// and the pane draws the surface behind the frame, which is a black
-    /// rectangle full screen and a grey one in the panel: exactly what a
+    /// rectangle full screen and a gray one in the panel: exactly what a
     /// browser that failed to start looks like. Kernel moving this host from
     /// `onkernel.com` to `kernel.sh` is what that cost, and the CSP test could
     /// not see it because both halves it compares are this build's own.
@@ -589,7 +589,7 @@ impl KernelClient {
 /// One function because the two are never wanted apart, and because both have
 /// to be repeatable against a page that has been replaced: a description taken
 /// before the page settled is a description of the page before the action, and
-/// a wait with no description afterwards answers nothing.
+/// a wait with no description afterward answers nothing.
 async fn settle_and_collect(page: &mut Page, settle_ms: u32) -> Result<Value, CdpError> {
     if settle_ms > 0 {
         page.settle(settle_ms).await?;
@@ -934,7 +934,7 @@ mod tests {
     /// A browser that speaks enough of the protocol for one action.
     ///
     /// A real socket rather than a stubbed client, because what is being tested
-    /// is the protocol's own behaviour: a session stops answering the moment the
+    /// is the protocol's own behavior: a session stops answering the moment the
     /// page it names is replaced, and nothing but a connection can express
     /// that. Every expression it is asked to evaluate is kept, which is how a
     /// test can say an action was not performed twice.

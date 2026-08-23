@@ -136,7 +136,7 @@ impl AgentCard {
     ///
     /// `reaches` is passed in rather than read from the card because accounts
     /// live in their own table, and because deciding what a peer may know about
-    /// them is a judgement the caller has to make deliberately.
+    /// them is a judgment the caller has to make deliberately.
     pub fn directory_entry(&self, reaches: Vec<String>) -> DirectoryEntry {
         DirectoryEntry {
             id: self.id,
@@ -262,7 +262,7 @@ pub struct CleanDraft {
 /// The character keys and accents the UI offers when a person picks a look.
 ///
 /// Here so an agent created by another agent gets one too. This is a courtesy
-/// and not a contract with the frontend catalog: an unrecognised key still
+/// and not a contract with the frontend catalog: an unrecognized key still
 /// draws, from a hash of the key itself, so the two drifting apart costs a
 /// character somebody did not choose rather than a blank avatar.
 const CHARACTERS: [&str; 16] = [
@@ -550,7 +550,7 @@ mod tests {
             hire_names(&taken_names(&["Manager"]), &taken_names(&["Manager"])),
             taken_names(&["Manager copy"])
         );
-        // Case is not a difference the database recognises, so it is not one
+        // Case is not a difference the database recognizes, so it is not one
         // here either.
         assert_eq!(
             hire_names(&taken_names(&["Manager"]), &taken_names(&["manager"])),

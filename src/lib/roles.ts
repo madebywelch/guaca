@@ -44,7 +44,7 @@ export interface Role {
 /**
  * The twelve, in OpenRouter's own spelling.
  *
- * `llm/catalogue.rs` holds the same list because it refuses anything else
+ * `llm/catalog.rs` holds the same list because it refuses anything else
  * before spending a request, and `ipc.contract.test.ts` compares the two files.
  * Neither is the source: OpenRouter is, and the pair failing together is how a
  * use case renamed there is noticed here.
@@ -102,6 +102,12 @@ const FLOOR = 4;
  * technology, and an agent with one word of evidence either way should get no
  * suggestion rather than an arbitrary one: that is the tie rule below doing its
  * job, not a table that needs tidying.
+ *
+ * These are matched against what an operator typed, so both spellings of a word
+ * that has two are here. That is the one list in this repo the American-spelling
+ * convention does not reach: an operator who writes "localisation" is describing
+ * the same agent as one who writes "localization", and dropping the first is a
+ * suggestion silently not made.
  */
 const WORDS: Record<string, string[]> = {
   programming: [
@@ -249,10 +255,10 @@ const WORDS: Record<string, string[]> = {
     "translate",
     "translation",
     "translator",
-    "localise",
     "localize",
-    "localisation",
+    "localise",
     "localization",
+    "localisation",
     "multilingual",
     "bilingual",
     "interpreter",

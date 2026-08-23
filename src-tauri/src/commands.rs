@@ -32,7 +32,7 @@ use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::kernel::{Browser, KernelClient, KernelError};
-use crate::llm::catalogue::{Catalogue, CatalogueError, RankedModel};
+use crate::llm::catalog::{Catalog, CatalogError, RankedModel};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -54,7 +54,7 @@ pub struct AppState {
     /// OpenRouter's ranked model list, read while an agent's dialog is open and
     /// at no other time. No turn, prompt, tool or guard reads it, and an install
     /// that never opens that dialog never asks for it.
-    pub catalogue: Arc<Catalogue>,
+    pub catalog: Arc<Catalog>,
     /// The pages a transcript currently has framed. Not a store: see
     /// `frame_artifact`.
     pub artifacts: Artifacts,
@@ -203,17 +203,17 @@ impl From<SigninError> for CommandError {
     }
 }
 
-impl From<CatalogueError> for CommandError {
-    fn from(err: CatalogueError) -> Self {
+impl From<CatalogError> for CommandError {
+    fn from(err: CatalogError) -> Self {
         match err {
             // Its own kind because it is this app's defect, not OpenRouter's:
             // the webview asked for a use case the vendor does not rank, so the
             // two lists have drifted. Nothing an operator can do about it, and
             // nothing an operator should be shown a network failure for.
-            CatalogueError::Unsupported { .. } | CatalogueError::Withdrawn(_) => {
+            CatalogError::Unsupported { .. } | CatalogError::Withdrawn(_) => {
                 CommandError::new("useCase", err.to_string())
             }
-            other => CommandError::new("catalogue", other.to_string()),
+            other => CommandError::new("catalog", other.to_string()),
         }
     }
 }
@@ -476,8 +476,8 @@ pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()
 /// The servers Guaca knows how to sign in to. Static, and the same for every
 /// group: what differs is which of them a crew has connected.
 #[tauri::command]
-pub fn plugin_catalogue() -> Reply<Vec<PluginOffer>> {
-    Ok(plugin::catalogue())
+pub fn plugin_catalog() -> Reply<Vec<PluginOffer>> {
+    Ok(plugin::catalog())
 }
 
 /// What one crew has connected, and what each of those can do. No grant is on
@@ -492,7 +492,7 @@ pub fn group_plugins(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec
 ///
 /// Runs the whole flow inside one command, so the webview has no half-finished
 /// sign-in to hold or to clean up. It can take minutes: the operator has to
-/// authorise in a browser, and the command is what is waiting for them. Five
+/// authorize in a browser, and the command is what is waiting for them. Five
 /// minutes and it gives up, which is also when the loopback socket closes.
 #[tauri::command]
 pub async fn connect_plugin(
@@ -609,8 +609,8 @@ pub fn set_plugin_tool(
 /// Forgets a plugin, and the grant with it.
 ///
 /// The grant is dropped locally rather than revoked at the vendor: not every
-/// authorisation server publishes a revocation endpoint, and an operator who
-/// wants the authorisation itself withdrawn has to do that where they granted
+/// authorization server publishes a revocation endpoint, and an operator who
+/// wants the authorization itself withdrawn has to do that where they granted
 /// it. Said in the UI rather than assumed.
 #[tauri::command]
 pub fn disconnect_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<()> {
@@ -1414,7 +1414,7 @@ pub fn routine_runs(state: State<'_, AppState>, id: RoutineId) -> Reply<Vec<Rout
 #[tauri::command]
 pub fn delete_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<()> {
     // Read before the delete, because the event names the agent whose schedule
-    // changed and afterwards there is nothing left to ask.
+    // changed and afterward there is nothing left to ask.
     let whose = state.runtime.store().get_routine(id)?.map(|routine| routine.agent_id);
     state.runtime.store().delete_routine(id)?;
     if let Some(agent_id) = whose {
@@ -1721,7 +1721,7 @@ pub async fn test_connection(
 
 /// The models OpenRouter sees doing one kind of work, most capable first.
 ///
-/// The one command that reads a catalogue rather than this install's own state,
+/// The one command that reads a catalog rather than this install's own state,
 /// and it is still not the frontend performing network access: the host is a
 /// constant here and the use case is checked against a published set before a
 /// request is spent, so the webview names a use case rather than a URL.
@@ -1733,7 +1733,7 @@ pub async fn ranked_models(
     state: State<'_, AppState>,
     category: String,
 ) -> Reply<Vec<RankedModel>> {
-    Ok(state.catalogue.ranked(&category).await?)
+    Ok(state.catalog.ranked(&category).await?)
 }
 
 #[cfg(test)]

@@ -71,7 +71,7 @@ describe("ModelSuggestions", () => {
   });
 
   // A slug ranked at OpenRouter means nothing at api.openai.com. Offering one
-  // there is a button that breaks every turn the agent takes afterwards, with a
+  // there is a button that breaks every turn the agent takes afterward, with a
   // refusal an operator has no way to connect back to this dialog.
   it("says nothing when OpenRouter is not what pays", () => {
     draw({ active: false });

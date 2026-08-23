@@ -4,7 +4,7 @@
  * Everything a plugin *is* — its name, what it offers, where it signs in — comes
  * from Rust, because Rust is what dials the endpoint. A second copy of that here
  * would be a second place for it to be wrong. What is left on this side is the
- * part the runtime has no use for: a logo and a colour.
+ * part the runtime has no use for: a logo and a color.
  *
  * The marks are Simple Icons (https://simpleicons.org), CC0 1.0, copied in as
  * path data rather than pulled as a dependency: a handful of glyphs do not
@@ -24,7 +24,7 @@ import type { PluginKind } from "./types";
 export interface Brand {
   /** The `d` of a single path on a 24x24 viewBox, verbatim from Simple Icons. */
   path: string;
-  /** The brand's own colour, which is what makes the row scannable. */
+  /** The brand's own color, which is what makes the row scannable. */
   color: string;
 }
 
@@ -59,7 +59,7 @@ export const BRANDS: Record<PluginKind, Brand> = {
  * The host a plugin's calls go to, for the line under its name.
  *
  * Read off the endpoint the backend reported rather than written down again
- * here: what an operator is about to authorise has to be the address that is
+ * here: what an operator is about to authorize has to be the address that is
  * actually dialled, not a second copy of it that can drift.
  */
 export function hostOf(endpoint: string): string {

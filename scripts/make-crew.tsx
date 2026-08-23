@@ -12,7 +12,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import { CHARACTERS, drawCharacter, FORM } from "../src/avatars/catalog";
 
-/** Who appears, in which colour, and where they are looking. */
+/** Who appears, in which color, and where they are looking. */
 const CREW: { key: string; color: string; look: "left" | "right" | "up" | "down" | null }[] = [
   { key: "avocado", color: "#c7d96b", look: "right" },
   { key: "tomato", color: "#d9534f", look: "left" },
@@ -79,7 +79,7 @@ function markup(): string {
 }
 
 // Sanity: the catalog promises nothing is drawn outside this box, and a strip
-// that violated it would clip its neighbours.
+// that violated it would clip its neighbors.
 if (FORM.right > CELL || FORM.bottom > CELL) {
   throw new Error("a character no longer fits its cell; the strip would clip");
 }

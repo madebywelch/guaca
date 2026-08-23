@@ -10,7 +10,7 @@
  * It is a starting point, never a restriction. Anything else is typed in, which
  * is what the box was for; a preset only fills it. `Custom` is not an entry in
  * the list, it is the absence of one, so a hand-typed endpoint reads as chosen
- * rather than as unrecognised.
+ * rather than as unrecognized.
  *
  * Local endpoints are marked because they change what the API key field means:
  * a server on this machine wants no key, and an empty key field beside a
@@ -86,12 +86,12 @@ export const PROVIDERS: Provider[] = [
 /**
  * The preset an endpoint is, if it is one.
  *
- * Normalised the same three ways `normalize_base_url` in `config.rs` does,
- * because the endpoint it stores is the one this has to recognise afterwards.
+ * Normalized the same three ways `normalize_base_url` in `config.rs` does,
+ * because the endpoint it stores is the one this has to recognize afterward.
  * Whitespace and case are the two ways a pasted URL differs from the same URL;
  * a trailing `/chat/completions` is the third and the most common, since it is
- * the URL a provider's own documentation prints. Recognising only two of the
- * three had the chosen row flip across a save: the box read as unrecognised,
+ * the URL a provider's own documentation prints. Recognizing only two of the
+ * three had the chosen row flip across a save: the box read as unrecognized,
  * the backend trimmed the path, and the same setting then read as the preset.
  */
 export function providerFor(baseUrl: string): Provider | undefined {
@@ -150,7 +150,7 @@ export function onOpenRouter(group: Group | undefined, settings: Settings | null
  *
  * The service sends lowercase identifiers, and the point of showing one at all
  * is so an operator can tell which of their accounts they signed in to. An
- * unrecognised plan is title-cased rather than replaced: a plan this list has
+ * unrecognized plan is title-cased rather than replaced: a plan this list has
  * not heard of still works, and "Unknown" beside a working sign-in reads as a
  * problem.
  */

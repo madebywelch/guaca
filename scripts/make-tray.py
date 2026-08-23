@@ -13,18 +13,18 @@ tall on a strip shared with a dozen other apps:
 
   idle        an outline. Present, quiet, nothing happening.
   working     the same shape filled, with the pit punched out of it. Mass is
-              the one difference that reads at this size without colour.
+              the one difference that reads at this size without color.
   attention   filled, in warm red, and the only one that is not a template
               image. macOS tints a template image to match the menu bar, so a
-              template glyph cannot be a colour; giving up the tint is what
+              template glyph cannot be a color; giving up the tint is what
               buys the one state that must not be missed. The count beside the
-              icon says the same thing in text, for anyone the colour does not
+              icon says the same thing in text, for anyone the color does not
               reach.
 
 Template tinting is macOS-only. When there is a Windows build, `idle` and
 `working` need a light variant and something to pick between them: pure black
 on a dark taskbar is an icon nobody can see, and there is nothing to tint it.
-`attention` already carries its own colour and needs nothing.
+`attention` already carries its own color and needs nothing.
 
   ./scripts/make-tray.py            writes the three glyphs
   ./scripts/make-tray.py --preview  also writes 8x copies to eyeball
@@ -116,7 +116,7 @@ def render(sample, size: int) -> bytes:
                 for sx in range(SUPERSAMPLE):
                     xx = (px + offset + sx * step) / size
                     cr, cg, cb, ca = sample(xx, yy)
-                    # Premultiplied, so a transparent sample drags no colour in.
+                    # Premultiplied, so a transparent sample drags no color in.
                     r += cr * ca
                     g += cg * ca
                     b += cb * ca

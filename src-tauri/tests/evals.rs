@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use guac_lib::domain::ids::{AgentId, RunId};
-use guac_lib::eval::{analyse, faults, Conversation, Fault};
+use guac_lib::eval::{analyze, faults, Conversation, Fault};
 use guac_lib::runtime::guard::GuardLimits;
 use guac_lib::trajectory::Trajectory;
 
@@ -124,7 +124,7 @@ fn read(h: &Harness, run: RunId, names: &[&str]) -> Eval {
     let messages = h.envelopes(names);
 
     Eval {
-        convo: analyse(&messages, &name_of),
+        convo: analyze(&messages, &name_of),
         faults: faults(&messages, &name_of),
         trajectory: h.trajectory(run),
     }
@@ -142,7 +142,7 @@ fn history(body: &serde_json::Value) -> String {
 
 /// Whether this agent has already told the operator this.
 ///
-/// A model that has reported once and is then woken by an acknowledgement
+/// A model that has reported once and is then woken by an acknowledgment
 /// should say nothing the second time. A stub that repeats itself every turn
 /// is only testing the stub, and every scenario here would fail on its own
 /// noise rather than on the runtime's.
@@ -421,7 +421,7 @@ async fn a_lone_agent_answers_without_inventing_anyone_to_talk_to() {
 #[tokio::test]
 async fn a_crew_told_to_stay_quiet_costs_one_model_call_per_agent() {
     // What a well-behaved wake-up looks like from the outside: an agent reads
-    // an acknowledgement, has nothing to add, and says nothing. The cost of
+    // an acknowledgment, has nothing to add, and says nothing. The cost of
     // being polite is measured in model calls, so it is asserted in them.
     let stub = serve(|body: &serde_json::Value| {
         let text = history(body);
@@ -1619,7 +1619,7 @@ mod live {
     #[ignore = "live: costs money, needs a configured key"]
     async fn live_a_change_to_a_standing_job_changes_it_rather_than_adding_a_second() {
         // The one this whole path exists for, and it is a question about
-        // judgement rather than about machinery: half an hour after booking
+        // judgment rather than about machinery: half an hour after booking
         // something, the operator asks for it differently without saying which
         // routine they mean. An agent that cannot see what it keeps writes a
         // second one, tells the operator it has made the change, and both fire

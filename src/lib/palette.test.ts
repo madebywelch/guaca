@@ -4,12 +4,12 @@
  * Every number in `palette.ts`'s doc comment is worked out here from the hexes
  * themselves, so the comment cannot drift away from the values it describes and
  * a hex changed by eye fails the suite. That is the whole point of this file:
- * colourblind separation is not something anybody can check by looking, and a
+ * colorblind separation is not something anybody can check by looking, and a
  * palette is exactly the kind of thing somebody adjusts because a screenshot
  * looked slightly off.
  *
- * The maths is the standard one for this: sRGB to linear, Machado, Oliveira &
- * Fernandes (2009) at full severity for the two red-green colourblindnesses,
+ * The math is the standard one for this: sRGB to linear, Machado, Oliveira &
+ * Fernandes (2009) at full severity for the two red-green colorblindnesses,
  * then Euclidean distance in OKLab ×100. The simulation model is part of the
  * standard rather than an implementation detail, because the thresholds below
  * are calibrated against it and a different model moves every borderline pair.
@@ -22,16 +22,16 @@ import { MAX_SCATTER_HUES, SCATTER_MARKS, SLOTS, seriesColor, seriesMark } from 
 /** The surface a figure card is drawn on, which is `--raised` in both. */
 const SURFACE = { paper: "#ffffff", ink: "#222622" };
 
-/** Neighbours must clear this under simulated colourblindness. */
+/** Neighbors must clear this under simulated colorblindness. */
 const CVD_TARGET = 8;
-/** And this under ordinary colour vision, which is a separate failure. */
+/** And this under ordinary color vision, which is a separate failure. */
 const NORMAL_FLOOR = 15;
 /** OKLCH lightness a hue has to sit inside, per surface. */
 const BAND: Record<"paper" | "ink", readonly [number, number]> = {
   paper: [0.43, 0.77],
   ink: [0.48, 0.67],
 };
-/** Below this a hue reads as grey and stops telling series apart at all. */
+/** Below this a hue reads as gray and stops telling series apart at all. */
 const CHROMA_FLOOR = 0.1;
 
 const MACHADO = {
@@ -80,7 +80,7 @@ function simulate(hex: string, vision: Vision): [number, number, number] {
   ];
 }
 
-/** Perceived distance between two colours, optionally through one vision. */
+/** Perceived distance between two colors, optionally through one vision. */
 function distance(one: string, other: string, vision?: Vision): number {
   const a = oklab(vision ? simulate(one, vision) : linear(one));
   const b = oklab(vision ? simulate(other, vision) : linear(other));
@@ -106,11 +106,11 @@ function contrast(one: string, other: string): number {
 }
 
 /** Every pair of slots that can touch in a stack, a group or a line chart. */
-function neighbours(colors: string[]): [string, string][] {
+function neighbors(colors: string[]): [string, string][] {
   return colors.slice(0, -1).map((color, at) => [color, colors[at + 1] as string]);
 }
 
-/** Every pair, full stop, which is what a scatter has. */
+/** Every pair, period, which is what a scatter has. */
 function everyPair(colors: string[]): [string, string][] {
   return colors.flatMap((color, at) => colors.slice(at + 1).map((other) => [color, other])) as [
     string,
@@ -124,12 +124,12 @@ const surfaces = [
 ] as const;
 
 describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, band) => {
-  it("keeps neighbouring slots apart for a red-green colourblind reader", () => {
-    // The gate the order exists to pass. Neighbours are what touch in a stack
+  it("keeps neighboring slots apart for a red-green colorblind reader", () => {
+    // The gate the order exists to pass. Neighbors are what touch in a stack
     // and cross in a line chart, so this is the pair list that decides whether
-    // a chart is readable rather than merely colourful.
+    // a chart is readable rather than merely colorful.
     for (const vision of ["protan", "deutan"] as const) {
-      for (const [one, other] of neighbours([...colors])) {
+      for (const [one, other] of neighbors([...colors])) {
         expect(
           distance(one, other, vision),
           `${one} and ${other} collapse under ${vision}`,
@@ -140,18 +140,18 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
 
   it("keeps them apart for everybody else too", () => {
     // A separate failure from the one above, and not excused by it: a pair can
-    // be safe under simulation and still be two colours an ordinary reader has
+    // be safe under simulation and still be two colors an ordinary reader has
     // to squint at.
-    for (const [one, other] of neighbours([...colors])) {
+    for (const [one, other] of neighbors([...colors])) {
       expect(
         distance(one, other),
-        `${one} and ${other} are hard to tell apart in full colour`,
+        `${one} and ${other} are hard to tell apart in full color`,
       ).toBeGreaterThanOrEqual(NORMAL_FLOOR);
     }
   });
 
   it("keeps a scatter's first three apart from each other, in every pairing", () => {
-    // Scatter has no neighbours: any dot can land beside any other, so the
+    // Scatter has no neighbors: any dot can land beside any other, so the
     // adjacent test above says nothing about it. This is the harder gate, and
     // it is why `MAX_SCATTER_HUES` is three.
     const three = [...colors].slice(0, MAX_SCATTER_HUES);
@@ -173,14 +173,14 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
     }
   });
 
-  it("stays colourful enough to carry identity", () => {
+  it("stays colorful enough to carry identity", () => {
     for (const color of colors) {
-      expect(chroma(color), `${color} reads as grey`).toBeGreaterThanOrEqual(CHROMA_FLOOR);
+      expect(chroma(color), `${color} reads as gray`).toBeGreaterThanOrEqual(CHROMA_FLOOR);
     }
   });
 
   it("says which hues need the numbers written next to them", () => {
-    // Contrast under 3:1 is allowed here and is not a licence to ship a chart
+    // Contrast under 3:1 is allowed here and is not a license to ship a chart
     // that cannot be read: every figure carries direct labels and a table of
     // its own numbers, which is what makes a pale fill legible. This asserts
     // the relief is owed, so removing the table twin is not a silent change.
@@ -190,9 +190,9 @@ describe.each(surfaces)("the chart palette on %s", (_surface, colors, ground, ba
   });
 });
 
-describe("handing colours out", () => {
-  it("gives a series the same colour wherever its neighbours went", () => {
-    // Colour follows the series, never its rank. An operator who has learned
+describe("handing colors out", () => {
+  it("gives a series the same color wherever its neighbors went", () => {
+    // Color follows the series, never its rank. An operator who has learned
     // that revenue is green is misled by a legend that repaints what is left
     // when something is switched off.
     expect(seriesColor(0)).toBe("var(--series-0)");
@@ -201,13 +201,13 @@ describe("handing colours out", () => {
 
   it("wraps rather than inventing a ninth hue", () => {
     // A generated ninth is indistinguishable from one of the eight under
-    // colourblindness. Wrapping is at least honest about repeating.
+    // colorblindness. Wrapping is at least honest about repeating.
     expect(seriesColor(SLOTS.length)).toBe(seriesColor(0));
   });
 
   it("gives a scatter a shape as well as a hue", () => {
     // The second channel, and the reason a scatter is not capped at three
-    // series. Shape survives every colourblindness, grayscale print and a
+    // series. Shape survives every colorblindness, grayscale print and a
     // screenshot; hue survives none of them.
     expect(seriesMark(0)).toBe(SCATTER_MARKS[0]);
     expect(seriesMark(MAX_SCATTER_HUES)).not.toBe(seriesMark(0));

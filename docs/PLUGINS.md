@@ -29,7 +29,7 @@ Three conditions decide who is on the list, and all three are mechanical:
    not a note in this repo about what the vendor's API can do.
 2. **Those tools act on the operator's account.** A plugin is a thing a crew
    *has*, named in the prompt as something that reaches the real world.
-3. **Its authorisation server lets an application register itself.** The next
+3. **Its authorization server lets an application register itself.** The next
    section is why this one is not negotiable.
 
 ## Why Clerk was withdrawn
@@ -64,16 +64,16 @@ operator connects, with a redirect URI it has already bound. No vendor
 relationship is needed and nothing is baked into the build.
 
 So the third condition is mechanical rather than editorial: the server has to
-publish protected-resource metadata, and its authorisation server has to publish
+publish protected-resource metadata, and its authorization server has to publish
 a registration endpoint. A vendor that stops has to be withdrawn rather than
 debugged, and `scripts/plugins.sh` is what says so, because nothing offline can.
 
 The five answer that question in three different shapes, which is what the
 fallbacks in `oauth::discover` are for rather than defensiveness. Neon publishes
 its resource metadata at the bare well-known path and Linear under the
-endpoint's path. Stripe's authorisation server is `https://access.stripe.com/mcp`
+endpoint's path. Stripe's authorization server is `https://access.stripe.com/mcp`
 — an issuer with a path, where RFC 8414 puts the well-known segment *before* it
-and everybody's first guess puts it after. AgentMail's authorisation server is
+and everybody's first guess puts it after. AgentMail's authorization server is
 Clerk's, hosted at `clerk.console.agentmail.to`, which is a fair description of
 what Clerk is for.
 
@@ -89,14 +89,14 @@ Neither applies here, because nothing is chosen in advance. The order is:
 1. Bind `127.0.0.1:0`. The operating system hands back a port that is free by
    construction.
 2. Register a client whose redirect URI names *that* port.
-3. Send the operator to the authorisation endpoint.
+3. Send the operator to the authorization endpoint.
 
 The port cannot be taken between choosing it and listening on it, because it was
 never chosen: it was allocated. Dynamic registration is what makes the ordering
 possible, and it is the same mechanism that decides who is on the list at all.
 
 The device flow is not an option here anyway. None of the five advertises it,
-and the MCP authorisation specification mandates authorisation code with PKCE.
+and the MCP authorization specification mandates authorization code with PKCE.
 
 ## What a plugin asks for is the resource's list, not Guaca's
 
@@ -109,7 +109,7 @@ Two documents publish a list, and they are not the same list.
 | Document | RFC | What its `scopes_supported` means |
 |---|---|---|
 | Protected resource, at the MCP server | 9728 | What to ask for to reach *this resource* |
-| Authorisation server, at the issuer | 8414 | Everything the issuer can grant, for every resource behind it and every client registered by any means |
+| Authorization server, at the issuer | 8414 | Everything the issuer can grant, for every resource behind it and every client registered by any means |
 
 The resource's is the one asked for. The server's is the fallback for a resource
 that says nothing, which is most of them.
@@ -117,7 +117,7 @@ that says nothing, which is most of them.
 AgentMail is why, and it was found the hard way. Its MCP server names three
 scopes: `openid email profile`. The Clerk instance behind it lists seven, and
 four of those are ones a vendor grants to clients it created by hand, not to one
-that registered itself. Asking the resource's question of the authorisation
+that registered itself. Asking the resource's question of the authorization
 server got every sign-in refused: *The OAuth 2.0 Client is not allowed to
 request scope 'public_metadata'*. Linear has the same shape and had not broken
 yet: its resource wants `read write` and its issuer also lists `openid email`.
@@ -128,7 +128,7 @@ published:
 - **`*` is dropped wherever it appears.** Neon offers one. An operator
   connecting a database has not agreed to hand over everything their account can
   do, and the named scopes beside it add up to the part Guaca needs.
-- **`offline_access` is added when the authorisation server names it.** It is
+- **`offline_access` is added when the authorization server names it.** It is
   not access to anything. It is the scope that decides whether a refresh token
   comes back, and without one a plugin works until the access token expires and
   then asks the operator to sign in again, every hour, for as long as they keep
@@ -204,7 +204,7 @@ Google grant, already refreshes it, and already knows which capabilities were
 authorized. `PluginKind::account_backed` is the one bit that says so.
 
 Running the ordinary flow for it would be wrong twice. It would send an operator
-to a consent screen to authorise something they authorised when they signed in
+to a consent screen to authorize something they authorized when they signed in
 to the account, and it would leave a per-group grant sitting beside a
 per-account one for the same access, each expiring on its own clock, each
 renewable independently, and only one of them the truth.
@@ -323,7 +323,7 @@ sign-ins, and disconnecting a plugin takes every place on it. A row naming an
 agent that no longer exists, or a plugin that is gone, is a standing permission
 attached to nothing.
 
-An access value this build does not recognise reads as a restriction, not as an
+An access value this build does not recognize reads as a restriction, not as an
 opening. Only the literal `everyone` widens a plugin past its named agents, in
 the SQL and in `PluginAccess::from_row`. A permission that cannot be read has to
 fail closed: a crew losing a plugin is visible and one click to fix, and a crew
@@ -356,7 +356,7 @@ and switches the new tool on.
 **Inside a narrowed tool it is the other way round, and that is not an
 inconsistency.** The named agents are stored and everybody else is refused. The
 two defaults point at different unknowns: an unseen *tool* should behave like
-the rest of the server the operator already authorised, and an unhired *agent*
+the rest of the server the operator already authorized, and an unhired *agent*
 must not inherit the one capability the operator went out of their way to fence
 off. `PLUGIN_TOOL_REACHED_BY_AGENT` is both rules in one fragment.
 
@@ -496,8 +496,8 @@ a URL that Guaca then sends a crew's tokens to. The set is closed for the same
 reason the tool list is not.
 
 **No revocation at the vendor on disconnect.** The grant is dropped locally. Not
-every authorisation server publishes a revocation endpoint, and an operator who
-wants the authorisation itself withdrawn has to do that where they granted it.
+every authorization server publishes a revocation endpoint, and an operator who
+wants the authorization itself withdrawn has to do that where they granted it.
 
 ## Testing
 
@@ -516,8 +516,8 @@ Three layers, and each catches something the others cannot.
   this build expects. It runs `oauth::discover` — the same call a sign-in makes
   — rather than rebuilding the metadata URLs beside it, because a test with its
   own copy of RFC 8414 passes on a server this build cannot reach. Reaches the
-  internet, authorises nothing, spends nothing.
+  internet, authorizes nothing, spends nothing.
 
 The live one is the one that matters over time. Everything offline is a stub
-agreeing with what this app believes MCP authorisation is, and the failure worth
+agreeing with what this app believes MCP authorization is, and the failure worth
 catching is that belief going stale.

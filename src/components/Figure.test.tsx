@@ -56,7 +56,7 @@ describe("a chart in a message", () => {
   });
 
   it("offers a legend past one series and none at one", () => {
-    // One colour, and the title above already says what is plotted. A box with
+    // One color, and the title above already says what is plotted. A box with
     // a single swatch in it restates the title and costs a line.
     const { container } = render(<Markdown>{fence("chart", BARS)}</Markdown>);
     expect(container.querySelector(".chart__legend")).toBeNull();

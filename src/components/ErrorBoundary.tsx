@@ -10,7 +10,7 @@ interface State {
 }
 
 /**
- * Last line of defence against a blank window.
+ * Last line of defense against a blank window.
  *
  * When a render or a layout effect throws, React unmounts the entire tree. The
  * window is left painted with the body background and nothing else: no error,

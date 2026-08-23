@@ -51,15 +51,15 @@ export function SigninList({ agent }: Props) {
   // and corrected a moment later rather than leaving the panel empty.
   useEffect(() => {
     if (!somewhere) return;
-    let cancelled = false;
+    let canceled = false;
     void api
       .scanAgentSignins(agent.id)
       .then((found) => {
-        if (!cancelled) setSignins(found);
+        if (!canceled) setSignins(found);
       })
       .catch(() => {});
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [agent.id, somewhere]);
 
@@ -119,7 +119,7 @@ export function SigninList({ agent }: Props) {
             >
               {signin.surface === "browser" ? "in its browser" : "on its screen"}
             </span>
-            {!signin.recognised && (
+            {!signin.recognized && (
               <span
                 className="access__account"
                 title="Matched by a session cookie on a site this browser has visited, rather than by a known signature."
