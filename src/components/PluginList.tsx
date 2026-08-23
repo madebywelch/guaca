@@ -173,6 +173,11 @@ export function PluginList({ groupId, crew }: Props) {
   // which is why a failure here is swallowed rather than surfaced: it means
   // there is nothing to choose between, not that the panel is broken.
   const [connections, setConnections] = useState<AccountConnection[]>([]);
+  // Which Guaca account those came from. Named on screen because an operator
+  // can have more than one, and the failure that costs the most time is a
+  // machine signed in to the account that does not hold the grant they are
+  // looking at in a browser. Nothing else can tell them apart.
+  const [accountEmail, setAccountEmail] = useState<string>("");
   // Which identity the operator picked for a plugin that is not connected yet,
   // keyed by kind. Only ever holds a pre-connect choice: once connected, the
   // stored row is what the picker reads, because that is what a turn will use.
@@ -192,8 +197,14 @@ export function PluginList({ groupId, crew }: Props) {
       // not keep the plugin list from drawing.
       void api
         .accountConnectors()
-        .then((account) => setConnections(account.connections))
-        .catch(() => setConnections([]));
+        .then((account) => {
+          setConnections(account.connections);
+          setAccountEmail(account.email);
+        })
+        .catch(() => {
+          setConnections([]);
+          setAccountEmail("");
+        });
     } catch (caught) {
       setError(errorMessage(caught));
       setOffers([]);
@@ -292,8 +303,9 @@ export function PluginList({ groupId, crew }: Props) {
               (mine.length === 0 ? (
                 <div className="access__empty">
                   <p className="field__hint">
-                    No {offer.name} account is authorized on your Guaca account yet. Authorize one,
-                    then connect it here.
+                    No {offer.name} account is authorized on
+                    {accountEmail ? ` your Guaca account, ${accountEmail}` : " your Guaca account"}.
+                    Authorize one there, then connect it here.
                   </p>
                   <button
                     type="button"
@@ -309,8 +321,12 @@ export function PluginList({ groupId, crew }: Props) {
                 // It is still said out loud: a crew acting as somebody's mail
                 // should never leave you guessing whose.
                 <p className="field__hint">
-                  Acting as{" "}
-                  {mine.find((connection) => connection.id === using)?.label ?? mine[0]?.label}.
+                  {/* Tense matters. A group that has not connected this plugin
+                      is not acting as anybody, and saying it is reads as a
+                      grant that exists and does not. */}
+                  {held ? "Acting as " : "Will connect as "}
+                  {mine.find((connection) => connection.id === using)?.label ?? mine[0]?.label}
+                  {accountEmail ? `, from your Guaca account ${accountEmail}.` : "."}
                 </p>
               ) : (
                 <label className="field">
@@ -341,7 +357,8 @@ export function PluginList({ groupId, crew }: Props) {
                     ))}
                   </select>
                   <span className="field__hint">
-                    Which {offer.name} account this crew acts as.{" "}
+                    Which {offer.name} account this crew acts as
+                    {accountEmail ? `, from your Guaca account ${accountEmail}` : ""}.{" "}
                     {held
                       ? "Its tools are re-read when you change it, because two accounts do not always authorize the same things."
                       : "Pick before connecting; you can change it afterwards."}

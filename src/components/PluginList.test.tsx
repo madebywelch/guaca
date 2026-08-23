@@ -469,6 +469,15 @@ describe("PluginList", () => {
  * reached whichever the service returned first.
  */
 describe("choosing which account a crew uses", () => {
+  /**
+   * Matches against an element's whole text content.
+   *
+   * The default matcher reads only an element's direct text-node children, and
+   * these sentences are built from several JSX interpolations, so it sees each
+   * fragment separately and matches none of them.
+   */
+  const saying = (pattern: RegExp) => (_content: string, element: Element | null) =>
+    element?.tagName === "P" && pattern.test(element.textContent ?? "");
   const GOOGLE_OFFER: PluginOffer = {
     kind: "google",
     name: "Google",
@@ -500,8 +509,46 @@ describe("choosing which account a crew uses", () => {
     groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
-    await waitFor(() => expect(screen.getByText(/Acting as work@example.com/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(saying(/Acting as work@example.com/))).toBeTruthy(),
+    );
     expect(screen.queryByLabelText(/^Account/)).toBeNull();
+  });
+
+  it("does not claim a group is acting as anyone before it is connected", async () => {
+    // A group with nothing connected is not acting as anybody, and saying it is
+    // reads as a grant that exists and does not.
+    accountConnectors.mockResolvedValue(one);
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    await waitFor(() => expect(screen.getByText(saying(/Will connect as/))).toBeTruthy());
+    expect(screen.queryByText(saying(/Acting as/))).toBeNull();
+  });
+
+  it("names the Guaca account the identities came from", async () => {
+    // The failure that costs the most time is a machine signed in to the
+    // account that does not hold the grant the operator is looking at in a
+    // browser. Nothing else on this panel can tell those two apart.
+    accountConnectors.mockResolvedValue(one);
+    groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(
+      await screen.findByText(saying(/from your Guaca account robert@example.com/)),
+    ).toBeTruthy();
+  });
+
+  it("names it in the empty state too, which is where it matters most", async () => {
+    accountConnectors.mockResolvedValue({ ...two, connections: [] });
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(
+      await screen.findByText(
+        saying(/No Google account is authorized on your Guaca account, robert@example.com/),
+      ),
+    ).toBeTruthy();
   });
 
   it("offers the picker before connecting, not only after", async () => {
@@ -536,9 +583,7 @@ describe("choosing which account a crew uses", () => {
     groupPlugins.mockResolvedValue([]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
-    expect(
-      await screen.findByText(/No Google account is authorized on your Guaca account yet/),
-    ).toBeTruthy();
+    expect(await screen.findByText(saying(/No Google account is authorized/))).toBeTruthy();
     expect(screen.getByText("Authorize a Google account")).toBeTruthy();
   });
 
