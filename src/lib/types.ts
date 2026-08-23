@@ -247,7 +247,7 @@ export interface ConnectorDraft {
 export type PluginId = string;
 
 /** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */
-export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail";
+export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
 
 /** A plugin on offer, before anybody has connected it. */
 export interface PluginOffer {

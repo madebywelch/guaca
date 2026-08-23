@@ -184,12 +184,55 @@ tile says "Connect" and one consent screen fixes it.
 | Client registration | `plugins.client_id`, `client_secret` | No | No |
 | Tool names and schemas | `plugins.tools` | Yes, as tool definitions | Names only |
 | Which plugins are connected | `plugins` | Yes, one line each | Yes |
+| The account token, for Google | `account.json`, read per call | No | No |
 
 This is the boundary `connector_env` draws around a pasted secret, moved one
 layer further out. A credential is at least handed to a sandbox, where the agent
 can echo it; a plugin's grant never leaves the host process except onto the wire
 back to the server that issued it. There is no field on `Plugin` for a token to
 arrive in, and no command that returns one.
+
+## Google is a plugin whose sign-in is the account's
+
+Five of the six plugins are somebody else's server, and a crew signs in to each
+one separately because there is nothing else it could do. Google is not a
+server. It is the operator's own account at `guaca.bot`, which already holds the
+Google grant, already refreshes it, and already knows which capabilities were
+authorized. `PluginKind::account_backed` is the one bit that says so.
+
+Running the ordinary flow for it would be wrong twice. It would send an operator
+to a consent screen to authorise something they authorised when they signed in
+to the account, and it would leave a per-group grant sitting beside a
+per-account one for the same access, each expiring on its own clock, each
+renewable independently, and only one of them the truth.
+
+So the credential is the account's and the *decision to use it* stays the
+group's. Connecting Google in a crew is what puts its tools in front of that
+crew, and `PluginAccess` still decides which of its agents. Nothing else about a
+plugin changes:
+
+- The tool list is read once, on connect, the same way.
+- The call still goes out of Guaca, never off an agent's machine.
+- The token still never reaches a prompt, a transcript, an event or a sandbox.
+- The reach check runs before the server is dialled, so an agent the operator
+  did not choose is refused here rather than there.
+
+The row stores no grant, and that is the point rather than an omission: the
+account rotates its own token, so a copy on the row would be a second thing to
+keep fresh, a second thing to be stale, and a renewal path racing the account's.
+`Runtime::account_token` reads a live one per call.
+
+**What the tools are is decided at `guaca.bot`, not here.** The server offers a
+tool only when every scope it needs came back from Google, so a grant that can
+read mail and not send it offers `gmail_search` and not `gmail_send`. A crew
+that sees a tool it cannot use is a turn spent discovering a 403.
+
+**Why the tools live there rather than here.** Guaca could have asked for a
+Google access token and called Google itself: `/api/connectors/:provider/token`
+exists and does exactly that. It would mean a live Google credential sitting on
+a laptop for an hour at a time, and the app becoming responsible for it. Serving
+tools instead keeps the token beside the refresh token that produced it, and
+means the app needs no new machinery at all — it already speaks MCP.
 
 ## Signing in is one decision, and handing it out is another
 

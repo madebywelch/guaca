@@ -473,11 +473,17 @@ pub async fn connect_plugin(
     group_id: GroupId,
     kind: PluginKind,
 ) -> Reply<Plugin> {
+    // Read here rather than inside the flow, so a machine that is not signed in
+    // is told so before a browser opens. An account-backed plugin has no
+    // sign-in of its own: see `PluginKind::account_backed`.
+    let account = if kind.account_backed() { state.account.access().await.ok() } else { None };
+
     let plugin = crate::plugins::connect(
         state.runtime.store(),
         group_id,
         kind,
-        kind.endpoint(),
+        state.runtime.plugin_endpoint(kind),
+        account.as_deref(),
         move |url| {
             // The one line in this feature that knows the app is a Tauri app. The
             // flow itself takes a callback so that `oauth.rs` does not have to.

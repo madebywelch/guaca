@@ -161,13 +161,23 @@ consent screens are Google's and GitHub's. The pane has a link and no controls,
 which is the truthful shape: a tick box here would be a control that cannot
 work.
 
+## How an agent actually reaches it
+
+As a plugin. `guaca.bot` serves an MCP server at `/mcp`, authenticated by the
+same account token, and Google appears in a group's Plugins list like any other.
+`docs/PLUGINS.md`, *Google is a plugin whose sign-in is the account's*, has the
+argument; the short version is that it makes per-agent reach, the trust boundary
+and the tool plumbing all work without a line of new machinery.
+
+`POST /api/connectors/:provider/token` still exists on the service and the app
+still does not call it. That is deliberate rather than unfinished: it would put
+a live Google credential on a laptop for an hour at a time, and the rule from
+`docs/MACHINES.md` is the one that decides it — **a secret never reaches a
+model.** Keeping the token at the origin that holds the refresh token is the
+stronger position, and the app gets tools instead.
+
 ## What is not built yet
 
-`POST /api/connectors/:provider/token` exists on the service and nothing in the
-app calls it. That is the step where an authorized connector becomes something
-an agent can use, and it is a change to prompts, tool definitions and the trust
-boundary rather than to this module. When it lands, the rule from
-`docs/MACHINES.md` applies unchanged and is the hard part: **a secret never
-reaches a model.** A provider access token fetched here must reach the process
-making the call and nothing else — not a prompt, not a transcript, not an event,
-not the webview.
+Cloud-run agents and managed provider keys, both of which were named as reasons
+an account might exist and neither of which has been argued. Nothing in this
+module assumes them.
