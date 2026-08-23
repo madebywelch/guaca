@@ -4031,6 +4031,14 @@ impl Runtime {
             if plugin.access.allows(me) {
                 continue;
             }
+            // And not one the operator has switched off entirely. A plugin with
+            // nothing left on is a plugin its own crew cannot call, so naming
+            // the peer who holds it is the failure this loop exists to prevent
+            // rather than the one it prevents: work routed to an agent that
+            // will be refused in turn, having spent a turn finding out.
+            if plugin.tools.iter().all(|tool| !tool.allowed) {
+                continue;
+            }
             for card in &agents {
                 if card.id != me && card.group_id == group && plugin.access.allows(card.id) {
                     reaches

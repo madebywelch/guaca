@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Plugin, PluginAccess, PluginOffer } from "../lib/types";
+import type { AgentCard, Plugin, PluginAccess, PluginOffer, PluginToolCard } from "../lib/types";
 import { PluginList } from "./PluginList";
 
 const pluginCatalogue = vi.fn<() => Promise<PluginOffer[]>>();
@@ -9,6 +9,7 @@ const groupPlugins = vi.fn<() => Promise<Plugin[]>>();
 const connectPlugin = vi.fn<(groupId: string, kind: string) => Promise<Plugin>>();
 const disconnectPlugin = vi.fn();
 const setPluginAccess = vi.fn<(id: string, access: PluginAccess) => Promise<Plugin>>();
+const setPluginTool = vi.fn<(id: string, tool: string, allowed: boolean) => Promise<Plugin>>();
 const openExternal = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
@@ -18,6 +19,7 @@ vi.mock("../lib/ipc", () => ({
     connectPlugin: (groupId: string, kind: string) => connectPlugin(groupId, kind),
     disconnectPlugin: (id: string) => disconnectPlugin(id),
     setPluginAccess: (id: string, access: PluginAccess) => setPluginAccess(id, access),
+    setPluginTool: (id: string, tool: string, allowed: boolean) => setPluginTool(id, tool, allowed),
   },
   openExternal: (url: string) => openExternal(url),
 }));
@@ -42,13 +44,18 @@ const OFFERS: PluginOffer[] = [
   },
 ];
 
+/** One tool as the server published it, switched on unless said otherwise. */
+function tool(name: string, allowed = true): PluginToolCard {
+  return { name, description: `Runs ${name}.`, allowed };
+}
+
 function plugin(over: Partial<Plugin> = {}): Plugin {
   return {
     id: "p1",
     groupId: GROUP,
     kind: "neon",
     account: "",
-    tools: ["run_sql", "create_branch"],
+    tools: [tool("run_sql"), tool("create_branch")],
     access: { mode: "everyone" },
     signedIn: true,
     connectedAt: 0,
@@ -89,6 +96,7 @@ describe("PluginList", () => {
     connectPlugin.mockReset();
     disconnectPlugin.mockReset();
     setPluginAccess.mockReset();
+    setPluginTool.mockReset();
     openExternal.mockReset();
     pluginCatalogue.mockResolvedValue(OFFERS);
     groupPlugins.mockResolvedValue([]);
@@ -142,7 +150,9 @@ describe("PluginList", () => {
     // Every server on the list asks for one today. This is what the row says
     // if one stops, because reporting it as signed in would be a claim about
     // the operator's account that is not true.
-    groupPlugins.mockResolvedValue([plugin({ kind: "stripe", signedIn: false, tools: ["docs"] })]);
+    groupPlugins.mockResolvedValue([
+      plugin({ kind: "stripe", signedIn: false, tools: [tool("docs")] }),
+    ]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText(/asked for no sign-in/)).toBeTruthy();
@@ -232,6 +242,73 @@ describe("PluginList", () => {
     expect(screen.getByRole("button", { name: "Scribe" }).getAttribute("aria-pressed")).toBe(
       "false",
     );
+  });
+
+  it("keeps the tool list shut until it is asked for", async () => {
+    // A crew with three plugins connected has sixty of these between the
+    // operator and the button they came here for. The count on the line above
+    // is what says whether opening one is worth it.
+    groupPlugins.mockResolvedValue([plugin()]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText("Show all 2")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Deny run_sql" })).toBe(null);
+
+    fireEvent.click(screen.getByText("Show all 2"));
+    expect(screen.getByText("run_sql")).toBeTruthy();
+    // The vendor's own sentence, because `execute` and `create_refund` are not
+    // decisions anybody can make off the name alone.
+    expect(screen.getByText("Runs run_sql.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Allow run_sql" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("switches one tool off, and back on again", async () => {
+    const off = plugin({ tools: [tool("run_sql", false), tool("create_branch")] });
+    groupPlugins.mockResolvedValueOnce([plugin()]);
+    groupPlugins.mockResolvedValue([off]);
+    setPluginTool.mockResolvedValue(off);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 2"));
+    fireEvent.click(screen.getByRole("button", { name: "Deny run_sql" }));
+
+    // The tool by name and the answer it should have, never a toggle: two
+    // panels open on one group cannot swap a decision between them.
+    await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", false));
+    // And the row draws what came back, not what was clicked.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Deny run_sql" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(screen.getByText(/1 switched off/)).toBeTruthy();
+
+    setPluginTool.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Allow run_sql" }));
+    await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", true));
+  });
+
+  it("says when a connected plugin has nothing left switched on", async () => {
+    // The same state the crew-of-nobody row says out loud, one axis over: a
+    // plugin that is signed in and can call nothing looks identical to a
+    // working one until something says so.
+    groupPlugins.mockResolvedValue([
+      plugin({ tools: [tool("run_sql", false), tool("create_branch", false)] }),
+    ]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText(/all switched off/)).toBeTruthy();
+  });
+
+  it("asks nothing about tools of a plugin nobody has connected", async () => {
+    // There is nothing to switch off, and the question is noise on four tiles.
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    await screen.findAllByText("Connect");
+    expect(screen.queryByText(/Show all/)).toBe(null);
   });
 
   it("asks nothing about who can use a plugin nobody has connected", async () => {

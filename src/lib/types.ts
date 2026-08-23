@@ -272,6 +272,22 @@ export interface PluginOffer {
 export type PluginAccess = { mode: "everyone" } | { mode: "chosen"; agents: AgentId[] };
 
 /**
+ * One of a connected plugin's tools, and what the operator decided about it.
+ *
+ * The description and not the schema: an operator deciding whether the crew may
+ * call `delete_customer` needs the sentence the vendor wrote about it and has
+ * no use for the shape of its arguments. `allowed` is true unless it was
+ * switched off, which is the way round the store keeps it too, so a tool a
+ * vendor ships next month arrives switched on rather than invisible.
+ */
+export interface PluginToolCard {
+  /** The server's own name for it. Prefixed with the plugin, a model calls it. */
+  name: string;
+  description: string;
+  allowed: boolean;
+}
+
+/**
  * A plugin a group has connected.
  *
  * The grant is never on this side of the boundary: there is no command that
@@ -284,8 +300,11 @@ export interface Plugin {
   kind: PluginKind;
   /** Whose account, when the server said. Usually blank. */
   account: string;
-  /** What the crew can call, by the server's own name for each. */
-  tools: string[];
+  /**
+   * Every tool the server published, switched off ones included: a list that
+   * left them out would be a panel with no way to switch one back on.
+   */
+  tools: PluginToolCard[];
   /** Which of the crew is offered them. `everyone` until somebody says else. */
   access: PluginAccess;
   signedIn: boolean;

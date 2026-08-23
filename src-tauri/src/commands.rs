@@ -510,6 +510,26 @@ pub fn set_plugin_access(
     Ok(plugin)
 }
 
+/// Switches one of a connected plugin's tools on or off for the whole crew.
+///
+/// One tool per call, and the answer explicitly rather than a toggle, so that
+/// two panels open on the same group cannot swap a decision between them. The
+/// plugin comes back so the caller draws what was stored rather than what it
+/// asked for.
+#[tauri::command]
+pub fn set_plugin_tool(
+    state: State<'_, AppState>,
+    id: PluginId,
+    tool: String,
+    allowed: bool,
+) -> Reply<Plugin> {
+    let plugin = state.runtime.store().set_plugin_tool(id, &tool, allowed)?;
+    // Changes the tool definitions every agent in the crew is offered on its
+    // next turn, and the line in each of their prompts that says what is off.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(plugin)
+}
+
 /// Forgets a plugin, and the grant with it.
 ///
 /// The grant is dropped locally rather than revoked at the vendor: not every

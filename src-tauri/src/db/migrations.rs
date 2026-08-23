@@ -790,6 +790,38 @@ UPDATE agents SET has_computer = 1 WHERE sandbox_id IS NOT NULL;
 UPDATE agents SET has_browser  = 1 WHERE browser_id IS NOT NULL;
 "#,
     ),
+    (
+        29,
+        r#"
+-- Which of a plugin's tools a crew may call, which until now was "all of
+-- them". Connecting a server was one decision covering everything it publishes,
+-- and a server does not publish one kind of thing: Stripe lists the call that
+-- reads an invoice beside the one that refunds it, and Neon lists `run_sql`
+-- beside the call that deletes a project. An operator who wanted the reading
+-- and not the writing had one control, and it was Disconnect.
+--
+-- The refusals are what is written down, not the permissions. A row here is a
+-- tool the operator switched off; everything else is on. That is the same
+-- reading `access` takes with 'everyone', and for the same reason: the default
+-- has to cover what nobody has seen yet. A vendor ships a tool between one
+-- connection and the next, and an allow-list would leave it switched off with
+-- nothing on screen saying a decision had been made about it.
+--
+-- Keyed by name rather than by an index into the stored list, because that
+-- list is replaced wholesale every time the plugin is connected again. An
+-- index would silently move a refusal onto whatever tool the vendor put in
+-- that position.
+--
+-- No ON DELETE CASCADE, for the reason `plugin_agents` has none: foreign keys
+-- are off while migrations run, so the deletes are written out at every call
+-- site instead.
+CREATE TABLE plugin_denied_tools (
+    plugin_id TEXT NOT NULL REFERENCES plugins(id),
+    tool      TEXT NOT NULL,
+    PRIMARY KEY (plugin_id, tool)
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -993,6 +1025,32 @@ mod tests {
         let named: i64 =
             conn.query_row("SELECT count(*) FROM plugin_agents", [], |row| row.get(0)).unwrap();
         assert_eq!(named, 0, "nobody was named, and nobody needs to be");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_tools_could_be_switched_off_keeps_all_of_them() {
+        // The same thing this migration must not do, one axis over. Nothing is
+        // written down, and nothing written down is what "everything is on"
+        // means: the refusals are the rows.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 29) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[{\"name\":\"run_sql\",\"description\":\"\",
+                                          \"inputSchema\":{}}]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let off: i64 = conn
+            .query_row("SELECT count(*) FROM plugin_denied_tools", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(off, 0, "a migration that switched anything off would break a working crew");
     }
 
     #[test]

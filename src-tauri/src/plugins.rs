@@ -53,6 +53,14 @@ pub enum PluginError {
     )]
     NotChosen { label: &'static str },
     #[error(
+        "{label}'s `{tool}` is switched off for this group: the operator decides which of a \
+         plugin's tools the crew may call, and this one is off for everybody. Do not ask a peer, \
+         because no peer has it. Use another of {label}'s tools if one will do, or tell the \
+         operator which tool you need and that it is switched off in the group's Plugins \
+         settings."
+    )]
+    ToolDenied { label: &'static str, tool: String },
+    #[error(
         "{label}'s sign-in is no longer accepted, and renewing it did not work. Ask the operator \
          to connect it again in the group's Plugins settings."
     )]
@@ -119,10 +127,10 @@ pub async fn connect(
 
 /// Runs one of a plugin's tools on behalf of an agent.
 ///
-/// Asked of the agent rather than of its group, and that is the check rather
-/// than a second one: a model can name a tool it was never offered, so
-/// filtering the definitions decides what an agent is *told* it has and this
-/// decides what it *gets*. The two read the same rule, in `plugin_reach`.
+/// Asked of the agent and of the tool, and that is the check rather than a
+/// second one: a model can name a tool it was never offered, so filtering the
+/// definitions decides what an agent is *told* it has and this decides what it
+/// *gets*. Both halves of the rule are read again here, in `plugin_reach`.
 ///
 /// Renews the grant first when it is close to expiring, and once more if the
 /// server rejects it anyway: a token can be revoked at the vendor between one
@@ -138,10 +146,13 @@ pub async fn call(
     tool: &str,
     arguments: &serde_json::Value,
 ) -> Result<String, PluginError> {
-    let (id, grant) = match store.plugin_reach(group, agent, kind)? {
+    let (id, grant) = match store.plugin_reach(group, agent, kind, tool)? {
         PluginReach::Granted { id, grant } => (id, grant),
         PluginReach::NotConnected => return Err(PluginError::NotConnected { label: kind.label() }),
         PluginReach::NotChosen => return Err(PluginError::NotChosen { label: kind.label() }),
+        PluginReach::ToolDenied => {
+            return Err(PluginError::ToolDenied { label: kind.label(), tool: tool.to_string() })
+        }
     };
 
     let grant = match grant {
@@ -215,6 +226,23 @@ mod tests {
         assert!(refusal.contains("not for you"), "{refusal}");
         assert!(refusal.contains("peer"), "the way forward is delegation: {refusal}");
         assert!(!refusal.contains("is not connected"), "{refusal}");
+    }
+
+    #[test]
+    fn a_switched_off_tool_does_not_send_the_agent_round_the_crew() {
+        // The difference from `NotChosen`, and it is the whole reason this is a
+        // third sentence rather than a reuse of that one. Narrowing a plugin
+        // leaves a peer who can; switching a tool off leaves nobody, so an
+        // agent told to ask around spends a turn proving it.
+        let refusal =
+            PluginError::ToolDenied { label: "Stripe", tool: "create_refund".into() }.to_string();
+        assert!(refusal.contains("create_refund"), "{refusal}");
+        assert!(refusal.contains("off for everybody"), "{refusal}");
+        assert!(refusal.contains("Do not ask a peer"), "{refusal}");
+        assert!(
+            refusal.contains("operator"),
+            "the way forward is the one person who can: {refusal}"
+        );
     }
 
     #[test]

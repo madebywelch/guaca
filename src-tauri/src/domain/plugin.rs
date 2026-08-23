@@ -195,6 +195,44 @@ pub struct PluginTool {
     pub input_schema: serde_json::Value,
 }
 
+/// One of a connected plugin's tools, as the panel draws it.
+///
+/// The schema is not here and the description is, and that split is what the
+/// row is for: an operator deciding whether a crew may call `delete_customer`
+/// needs the sentence the vendor wrote about it, and has no use for the shape
+/// of its arguments.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginToolCard {
+    /// The server's own name for it, unprefixed. Prefixed with the plugin's
+    /// slug it becomes the name a model calls.
+    pub name: String,
+    pub description: String,
+    /// Whether the crew may call it. True unless the operator switched it off,
+    /// which is the way round the store keeps it too: what is written down is
+    /// the refusals, so a tool a vendor ships next month arrives allowed.
+    pub allowed: bool,
+}
+
+/// What one agent may call on one of its crew's plugins this turn, and what the
+/// operator has switched off.
+///
+/// Both halves, from one read, because both are used on the same turn and by
+/// different consumers: `offered` becomes the tool definitions the model is
+/// given, and `withheld` becomes the line in the prompt that says a capability
+/// exists and is off. An agent that is only shown `offered` reports "we cannot
+/// do refunds" when the true answer is "the operator switched refunds off, and
+/// can switch them back on".
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginToolset {
+    pub kind: PluginKind,
+    /// Callable, in the server's own order.
+    pub offered: Vec<PluginTool>,
+    /// Names only. A description and a schema for something that cannot be
+    /// called is context paid for on every turn to describe an absence.
+    pub withheld: Vec<String>,
+}
+
 /// Who in a crew may call one plugin's tools.
 ///
 /// A plugin is signed in once, for the group, and until this existed that
@@ -278,10 +316,15 @@ pub struct Plugin {
     /// an MCP server is under no obligation to name the account it authorised,
     /// and inventing a label would be worse than an empty one.
     pub account: String,
-    /// What this crew can call, by unprefixed name. The schemas are not here:
-    /// they are bulk the webview has no use for, and the runtime reads them
-    /// from the store on the turn that needs them.
-    pub tools: Vec<String>,
+    /// Every tool this server published, each with what the operator has
+    /// decided about it. The schemas are not here: they are bulk the webview
+    /// has no use for, and the runtime reads them from the store on the turn
+    /// that needs them.
+    ///
+    /// The whole list, including the switched-off ones. A panel that only drew
+    /// the allowed ones would be a panel with no way to switch anything back
+    /// on, and no way to see what the crew is not being offered.
+    pub tools: Vec<PluginToolCard>,
     /// Which of the crew may call them. The sign-in behind this row is the
     /// group's either way: this decides who is allowed to spend it, not who
     /// holds it.
