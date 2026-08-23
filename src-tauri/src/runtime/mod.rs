@@ -1678,12 +1678,14 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
-        // What the crew has signed in to, read once for the same two uses as
-        // everything above: it is named in the prompt and offered as tools, and
-        // a turn where those two disagree is a model calling something it was
-        // never told it had, or being told about something it cannot call.
-        let plugins = self.inner.store.plugin_tools(card.group_id).unwrap_or_else(|err| {
-            tracing::warn!(%err, "could not read this group's plugins for its turn");
+        // What the crew has signed in to *and this agent may spend*, read once
+        // for the same two uses as everything above: it is named in the prompt
+        // and offered as tools, and a turn where those two disagree is a model
+        // calling something it was never told it had, or being told about
+        // something it cannot call. A plugin the crew has and this agent was
+        // not chosen for is neither, which is the whole point of the filter.
+        let plugins = self.inner.store.plugin_tools(card.group_id, card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's plugins for its turn");
             Vec::new()
         });
         // What this agent actually has, decided once and used twice: the prompt
@@ -2634,6 +2636,7 @@ impl Runtime {
                 let called = plugins::call(
                     self.store(),
                     card.group_id,
+                    card.id,
                     kind,
                     self.plugin_endpoint(kind),
                     &tool,
@@ -3859,6 +3862,26 @@ impl Runtime {
         let mut reaches: HashMap<AgentId, Vec<String>> = HashMap::new();
         for signin in self.inner.store.group_signins(group).unwrap_or_default() {
             reaches.entry(signin.agent_id).or_default().push(signin.label());
+        }
+
+        // And the crew's plugins, under exactly the rule the credentials above
+        // are left out by: a plugin this agent may call itself is not a reason
+        // to ask anybody. What is left is the one case narrowing a plugin
+        // creates — the crew can refund a payment and this agent cannot — and
+        // without it the honest answer to "refund this" becomes "we can't",
+        // from an agent sitting next to the one who can.
+        for plugin in self.inner.store.group_plugins(group).unwrap_or_default() {
+            if plugin.access.allows(me) {
+                continue;
+            }
+            for card in &agents {
+                if card.id != me && card.group_id == group && plugin.access.allows(card.id) {
+                    reaches
+                        .entry(card.id)
+                        .or_default()
+                        .push(format!("the {} plugin", plugin.kind.label()));
+                }
+            }
         }
 
         agents

@@ -30,10 +30,12 @@ use axum::routing::{get, post};
 use axum::Router;
 use parking_lot::Mutex;
 
+use guac_lib::db::store::PluginReach;
 use guac_lib::db::Store;
+use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::group::CleanGroup;
-use guac_lib::domain::ids::GroupId;
-use guac_lib::domain::plugin::PluginKind;
+use guac_lib::domain::ids::{AgentId, GroupId};
+use guac_lib::domain::plugin::{PluginAccess, PluginKind};
 use guac_lib::llm::tools::{self, ToolInvocation};
 use guac_lib::plugins;
 
@@ -378,14 +380,33 @@ fn unescape(raw: &str) -> String {
 }
 
 /// A store with one group in it, in a directory that dies with the test.
-fn workspace() -> (tempfile::TempDir, Store, GroupId) {
+/// A crew of one, which is what every call below is made on behalf of. A
+/// plugin call is an agent's, not a group's: the group holds the sign-in and
+/// the agent has to be one the operator allowed to spend it.
+fn workspace() -> (tempfile::TempDir, Store, GroupId, AgentId) {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
     let group = store
         .create_group(&CleanGroup { name: "Crew".to_string(), ..Default::default() })
         .unwrap()
         .id;
-    (dir, store, group)
+    let agent = crew(&store, group, "Manager");
+    (dir, store, group, agent)
+}
+
+fn crew(store: &Store, group: GroupId, name: &str) -> AgentId {
+    store
+        .create_agent(&CleanDraft {
+            group_id: Some(group),
+            name: name.to_string(),
+            avatar: "avocado".to_string(),
+            color: "#7fb069".to_string(),
+            model: "anthropic/claude-sonnet-4.5".to_string(),
+            system_prompt: "be useful".to_string(),
+            skills: Vec::new(),
+        })
+        .unwrap()
+        .id
 }
 
 #[tokio::test]
@@ -395,7 +416,7 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
     // happened. No vendor on the list is public today; this is the behaviour if
     // one becomes it, and the live test is what would say so.
     let server = serve(Rules { needs_token: false, ..Default::default() }).await;
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, _agent) = workspace();
 
     let plugin = plugins::connect(
         &store,
@@ -415,7 +436,7 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
 #[tokio::test]
 async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
     let server = serve(Rules::default()).await;
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, _agent) = workspace();
 
     let plugin = plugins::connect(
         &store,
@@ -445,7 +466,7 @@ async fn a_redirect_that_does_not_match_is_refused() {
     // Nothing else can arrive on that port with the wrong state, so this is an
     // attack rather than a mistake, and it must not produce a usable plugin.
     let server = serve(Rules::default()).await;
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, _agent) = workspace();
 
     let failed = plugins::connect(
         &store,
@@ -464,7 +485,7 @@ async fn a_redirect_that_does_not_match_is_refused() {
 #[tokio::test]
 async fn a_refusal_in_the_browser_is_reported_as_one() {
     let server = serve(Rules::default()).await;
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, _agent) = workspace();
 
     let failed = plugins::connect(
         &store,
@@ -489,7 +510,7 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
     // stops, and it has to say what is actually wrong rather than fail at the
     // next leg with a client id nobody issued.
     let server = serve(Rules { registers: false, ..Default::default() }).await;
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, _agent) = workspace();
 
     let failed = plugins::connect(
         &store,
@@ -508,7 +529,7 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
 async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     let server = serve(Rules::default()).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
         .await
@@ -517,6 +538,7 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     let answer = plugins::call(
         &store,
         group,
+        agent,
         PluginKind::Neon,
         &endpoint,
         "run_sql",
@@ -539,11 +561,12 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
 
 #[tokio::test]
 async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     let failed = plugins::call(
         &store,
         group,
+        agent,
         PluginKind::Neon,
         "http://127.0.0.1:1/mcp",
         "run_sql",
@@ -565,7 +588,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
     // discovers the token expired has already spent the operator's wait.
     let server = serve(Rules { issue_expired: true, ..Default::default() }).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
         .await
@@ -576,9 +599,17 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
     // the next turn.
     let after_connecting = server.seen.lock().len();
 
-    plugins::call(&store, group, PluginKind::Neon, &endpoint, "run_sql", &serde_json::json!({}))
-        .await
-        .expect("a stale grant is renewed rather than refused");
+    plugins::call(
+        &store,
+        group,
+        agent,
+        PluginKind::Neon,
+        &endpoint,
+        "run_sql",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect("a stale grant is renewed rather than refused");
 
     assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
     assert!(
@@ -594,7 +625,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     // allowance: a refresh that does not fix it is a sign-in to redo.
     let server = serve(Rules::default()).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
         .await
@@ -605,6 +636,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     let answer = plugins::call(
         &store,
         group,
+        agent,
         PluginKind::Neon,
         &endpoint,
         "run_sql",
@@ -618,7 +650,11 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
 
     // And the renewed grant is written back, or every later turn pays for the
     // same discovery.
-    let (_, grant) = store.plugin_grant(group, PluginKind::Neon).unwrap().unwrap();
+    let PluginReach::Granted { grant, .. } =
+        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+    else {
+        panic!("the plugin is connected and this agent was not excluded from it")
+    };
     assert_eq!(grant.unwrap().access_token, "access-1");
 }
 
@@ -626,7 +662,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
 async fn disconnecting_forgets_the_plugin_and_its_grant() {
     let server = serve(Rules::default()).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     let plugin =
         plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
@@ -635,7 +671,10 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
 
     assert!(store.delete_plugin(plugin.id).unwrap());
     assert!(store.group_plugins(group).unwrap().is_empty());
-    assert!(store.plugin_grant(group, PluginKind::Neon).unwrap().is_none());
+    assert!(matches!(
+        store.plugin_reach(group, agent, PluginKind::Neon).unwrap(),
+        PluginReach::NotConnected
+    ));
 }
 
 #[tokio::test]
@@ -645,7 +684,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
     // with no way back except disconnecting first.
     let server = serve(Rules::default()).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
         .await
@@ -655,7 +694,11 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         .unwrap();
 
     assert_eq!(store.group_plugins(group).unwrap().len(), 1);
-    let (_, grant) = store.plugin_grant(group, PluginKind::Neon).unwrap().unwrap();
+    let PluginReach::Granted { grant, .. } =
+        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+    else {
+        panic!("connecting again leaves a plugin the crew can use")
+    };
     assert_eq!(grant.unwrap().access_token, "access-1", "the newer sign-in is the one held");
 }
 
@@ -666,13 +709,13 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
     // cannot be called.
     let server = serve(Rules::default()).await;
     let endpoint = format!("{}/mcp", server.base());
-    let (_dir, store, group) = workspace();
+    let (_dir, store, group, agent) = workspace();
 
     plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
         .await
         .unwrap();
 
-    let connected = store.plugin_tools(group).unwrap();
+    let connected = store.plugin_tools(group, agent).unwrap();
     let specs = tools::plugin_specs(&connected);
     let names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
     assert_eq!(names, vec!["neon__run_sql", "neon__list_projects"]);
@@ -800,6 +843,172 @@ async fn an_agent_calling_a_plugin_its_crew_has_not_connected_is_told_who_can() 
     // deliberately not asserted here: the trajectory suite counts that failure,
     // which is exactly what it is for.
     assert_eq!(h.channel_texts("Manager").len(), 2, "the operator is answered either way");
+}
+
+#[tokio::test]
+async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed() {
+    // The whole feature, on the two seams it has to hold at once. A crew signs
+    // in once and the operator decides who may spend it: the agent that was not
+    // chosen is not offered the tools, is not told the crew has the plugin, and
+    // is refused if it names one anyway. The third is not redundant. A model
+    // emits a tool name it read somewhere often enough that the tool list is a
+    // description of what an agent has, never a fence.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("I could not do that part.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "neon__run_sql".into(),
+                arguments: serde_json::json!({ "sql": "select 1" }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness::harness(
+        &model,
+        &["Revenue", "Scribe"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![h.id("Revenue")] })
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Scribe"), "Check the database.").unwrap();
+    h.settle(run).await;
+
+    // Nothing was offered.
+    let offered: Vec<String> = model.transcript.lock()[0]["tools"]
+        .as_array()
+        .expect("a turn carries tool definitions")
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(!offered.iter().any(|name| name.starts_with("neon__")), "offered {offered:?}");
+    assert!(offered.contains(&"send_message".to_string()), "the app's own tools stay");
+
+    // And nothing was claimed. The prompt and the tool list are built from one
+    // read for exactly this reason: an agent told its crew has Neon and offered
+    // no Neon tools spends the turn looking for them.
+    let prompt = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
+    assert!(!prompt.contains("plugins connected"), "{prompt}");
+
+    // The call it made anyway was refused here rather than at Neon, and the
+    // refusal points at the peer who can, not at the operator.
+    let results = harness::tool_results(&model);
+    assert!(
+        results.iter().any(|r| r.contains("not for you") && r.contains("peer")),
+        "got {results:?}"
+    );
+    assert!(server.called.lock().is_empty(), "an unauthorised call must not reach the vendor");
+    assert_eq!(h.channel_texts("Scribe").len(), 2, "the operator is answered either way");
+}
+
+#[tokio::test]
+async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
+    // What narrowing costs if nothing replaces it: an agent that can only say
+    // no, sitting beside the one that can say yes. The roster is where the crew
+    // already answers this for browser sign-ins, so it answers it here too, and
+    // only for a plugin this agent does not have itself.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let model = harness::serve(|_| harness::Script::Say("Noted.".into())).await;
+
+    let h = harness::harness(
+        &model,
+        &["Revenue", "Scribe"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![h.id("Revenue")] })
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Scribe"), "Anything to report?").unwrap();
+    h.settle(run).await;
+    let scribe = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
+    assert!(scribe.contains("Revenue"), "{scribe}");
+    assert!(scribe.contains("the Neon plugin"), "{scribe}");
+
+    // And the agent that holds it is not told to go and ask itself.
+    let run = h.runtime.send_from_human(h.id("Revenue"), "Anything to report?").unwrap();
+    h.settle(run).await;
+    let revenue = harness::prompts_by_agent(&model).remove("Revenue").expect("Revenue had a turn");
+    assert!(!revenue.contains("the Neon plugin"), "{revenue}");
+}
+
+#[tokio::test]
+async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
+    // The store's own boundary, under the call path rather than under a query.
+    // An agent id from another group names nobody on this plugin and is in no
+    // crew that connected it, so the grant is not there to be spent.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let (_dir, store, group, agent) = workspace();
+
+    plugins::connect(&store, group, PluginKind::Neon, &endpoint, browser(Outcome::Allowed))
+        .await
+        .unwrap();
+
+    let other = store
+        .create_group(&CleanGroup { name: "Elsewhere".to_string(), ..Default::default() })
+        .unwrap()
+        .id;
+    let outsider = crew(&store, other, "Outsider");
+
+    let failed = plugins::call(
+        &store,
+        other,
+        outsider,
+        PluginKind::Neon,
+        &endpoint,
+        "run_sql",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect_err("another crew's sign-in is not this agent's to spend");
+    assert!(failed.to_string().contains("not connected"), "{failed}");
+
+    // And the crew that did connect it is unaffected.
+    plugins::call(
+        &store,
+        group,
+        agent,
+        PluginKind::Neon,
+        &endpoint,
+        "run_sql",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect("the crew that signed in still has it");
 }
 
 // ---- live --------------------------------------------------------------

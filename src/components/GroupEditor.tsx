@@ -58,6 +58,7 @@ const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 export function GroupEditor({ group, onClose }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const settings = useStore((s) => s.settings);
+  const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
   const [name, setName] = useState(group?.name ?? "");
@@ -142,6 +143,18 @@ export function GroupEditor({ group, onClose }: Props) {
 
   /** Live agents. Terminated ones are not in the count and are not deleted twice. */
   const crew = group?.agentCount ?? 0;
+
+  /**
+   * The crew itself, for the plugins panel: who a plugin can be narrowed to.
+   *
+   * Read from the rail's own list rather than fetched, so a rename or a hiring
+   * is on this screen at the moment it is anywhere else. A terminated agent is
+   * left out because it cannot be given anything; the runtime drops its place
+   * on every plugin when it goes.
+   */
+  const members = agents.filter(
+    (agent) => agent.groupId === group?.id && agent.lifecycle !== "terminated",
+  );
 
   const save = async () => {
     setBusy(true);
@@ -533,17 +546,20 @@ export function GroupEditor({ group, onClose }: Props) {
               </>
             )}
 
-            {/* What a crew can reach belongs to the crew, not to any one agent
-                in it: a plugin's sign-in and a machine's credentials are both
-                handed to everybody here. */}
+            {/* What a crew can reach is signed in to once, here, and handing it
+                out is a second decision: a plugin can be narrowed to named
+                agents, because the one that files issues has no business
+                holding the account that issues refunds. Credentials are still
+                the whole group's. */}
             {section === "plugins" && group && (
               <>
                 <h3 className="settings__title">Plugins</h3>
                 <p className="settings__lede">
-                  Sign in once, on behalf of this group. Every agent in it can then call that
-                  service's tools, and none of them ever holds the sign-in.
+                  Sign in once, on behalf of this group, then choose which agents get it. Every
+                  agent is the default; narrow the ones that reach money or production. None of them
+                  ever holds the sign-in.
                 </p>
-                <PluginList groupId={group.id} />
+                <PluginList groupId={group.id} crew={members} />
                 <CredentialList groupId={group.id} />
               </>
             )}

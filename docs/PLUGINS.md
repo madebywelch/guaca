@@ -1,7 +1,7 @@
 # Plugins
 
-A plugin is a server a crew signs in to once. After that, every agent in the
-group is offered that server's tools on every turn, and none of them ever holds
+A plugin is a server a crew signs in to once. After that, the agents that crew
+chose are offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
 There are five: Neon, Cloudflare, Linear, Stripe and AgentMail. That is the
@@ -191,6 +191,77 @@ can echo it; a plugin's grant never leaves the host process except onto the wire
 back to the server that issued it. There is no field on `Plugin` for a token to
 arrive in, and no command that returns one.
 
+## Signing in is one decision, and handing it out is another
+
+A group holds the sign-in. Who may spend it is a second question, asked per
+plugin, and until it was asked the answer was always "everybody in the crew".
+
+That answer only holds while a crew is uniform, and a crew is not. Agents run on
+different models at different competencies and cost, and they have different
+jobs. The one that files issues has no business holding the account that issues
+refunds, and an agent on a cheap model with Stripe in its tool list is a bad
+trade whichever way the turn goes: it is either being asked to be careful with
+something it cannot be careful with, or it is being paid for on every turn for a
+capability it will never use.
+
+So each connected plugin carries one of two answers:
+
+- **Every agent.** The default, what every plugin connected before this existed
+  keeps, and the right answer for most of them. It covers agents that do not
+  exist yet: an agent hired next week gets it without anybody going back to the
+  panel.
+- **Only these agents.** A list, and it may be empty. An empty one means nobody,
+  which is where an operator stands for the second between narrowing a plugin
+  and ticking the first name.
+
+Two states rather than a list with a sentinel, and the empty list is the reason.
+"Everyone" is a decision about people who have not been hired, which no list of
+today's ids can express, and a list that meant everyone when it was empty would
+hand a plugin back to the whole crew at the moment the operator unticked the
+last agent. `PluginAccess` is the type; `plugins.access` and `plugin_agents` are
+the two columns it reads back out of.
+
+### The rule is written once and read twice
+
+`Store::plugin_tools` decides what an agent is *told* it has, and
+`Store::plugin_reach` decides what it *gets*. Both paste the same SQL fragment,
+`PLUGIN_REACHED_BY_AGENT`, because the two disagreeing is either a model calling
+something it was never offered, or a model refused something the prompt told it
+to use, which it will then try again with different arguments.
+
+Filtering the tool definitions is not the enforcement. A model emits a tool name
+it read somewhere often enough that a tool list has to be treated as a
+description of what an agent has, never a fence: the call path asks the same
+question again and refuses on its own. The refusal is a different sentence from
+the one for a plugin nobody connected, and that matters more than it looks.
+"Neon is not connected" sends the operator to a panel that says Disconnect, and
+it never occurs to the agent to ask the peer who can. "Connected, but not for
+you" names the way forward, which is the peer.
+
+The peer is named for it too. An agent's roster already lists what each peer's
+browser is signed in to, so that an agent asked for something it has no account
+for can name the one who does rather than reporting that the crew cannot do it.
+A plugin this agent does not have and a peer does is exactly that case, and it
+is listed under exactly the same rule: only when this agent does not have it
+itself, or the roster reads as a reason to delegate work it could do.
+
+### What a change does not do
+
+Reconnecting does not widen. `save_plugin` leaves `access` alone and keeps the
+row's id, so an operator fixing a grant that was revoked at the vendor does not
+silently hand Stripe back to the crew while they are fixing something else.
+
+Retiring an agent takes its place with it, beside its approvals and its
+sign-ins, and disconnecting a plugin takes every place on it. A row naming an
+agent that no longer exists, or a plugin that is gone, is a standing permission
+attached to nothing.
+
+An access value this build does not recognise reads as a restriction, not as an
+opening. Only the literal `everyone` widens a plugin past its named agents, in
+the SQL and in `PluginAccess::from_row`. A permission that cannot be read has to
+fail closed: a crew losing a plugin is visible and one click to fix, and a crew
+silently gaining one is neither.
+
 ## A tool name is `plugin__tool`
 
 Two underscores, because MCP servers use one inside tool names constantly and
@@ -241,6 +312,12 @@ gated, because a prompt on every call would make plugins unusable, and the
 existing gate is aimed at the case where a page an agent has just read chose the
 button. The prompt carries the warning instead. This is the open question worth
 revisiting first.
+
+**No per-agent sign-in.** An agent is chosen from the crew's one grant; it does
+not get its own. Two sign-ins to the same vendor for one group would be two sets
+of tools under names a model cannot tell apart, and `plugins_kind_unique` says
+so at the schema. An operator who wants two accounts at one vendor wants two
+groups.
 
 **No operator-typed endpoint.** "Any MCP server" would mean an operator pasting
 a URL that Guaca then sends a crew's tokens to. The set is closed for the same
