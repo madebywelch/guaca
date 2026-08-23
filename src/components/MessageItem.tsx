@@ -179,10 +179,13 @@ export const MessageItem = memo(function MessageItem({
  * `send_message` and then carried on typing. That text has no recipient, so it
  * is drawn as an aside rather than as anything addressed to the operator.
  *
- * A `json` part is the one kind that reaches here and draws nothing. Nothing in
- * the runtime emits one yet; it is the seam a model-authored artifact would
- * arrive through, and a renderer for it before there is a producer is surface
- * with no caller.
+ * A `json` part is the one kind that reaches here and draws nothing, and it is
+ * still the case that nothing in the runtime emits one. It used to be described
+ * here as the seam a model-authored artifact would arrive through; artifacts
+ * arrived, and they came through the text instead. A chart or a page is a
+ * fenced block in the reply, which costs no round trip and needs no new part:
+ * `lib/figure.ts`. A renderer for `json` before there is a producer is still
+ * surface with no caller.
  */
 function ActivityRecord({ message }: { message: Envelope }) {
   const rows: React.ReactNode[] = [];

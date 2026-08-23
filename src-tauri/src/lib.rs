@@ -1,5 +1,6 @@
 pub mod account;
 pub mod app;
+pub mod artifact;
 pub mod cdp;
 pub mod commands;
 pub mod config;

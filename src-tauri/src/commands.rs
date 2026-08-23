@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::account::{Account, AccountError, Connectors};
+use crate::artifact::Artifacts;
 use crate::config::{self, AppConfig, RedactedConfig};
 use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
@@ -54,6 +55,12 @@ pub struct AppState {
     /// at no other time. No turn, prompt, tool or guard reads it, and an install
     /// that never opens that dialog never asks for it.
     pub catalogue: Arc<Catalogue>,
+    /// The pages a transcript currently has framed. Not a store: see
+    /// `frame_artifact`.
+    pub artifacts: Artifacts,
+    /// Where those are served from. Set once, at startup, after the OS has
+    /// picked the port.
+    pub artifact_port: Arc<std::sync::atomic::AtomicU16>,
 }
 
 /// A structured error the UI can render as more than a toast.
@@ -1227,6 +1234,35 @@ pub fn save_file(state: State<'_, AppState>, digest: String, name: String) -> Re
         .save_copy(&digest, &name, &state.downloads)
         .map_err(|err| CommandError::new("file", err.to_string()))?;
     Ok(saved.display().to_string())
+}
+
+/// Where a page an agent wrote can be framed.
+///
+/// The renderer hands over the document and gets back an address on the
+/// artifact server, which is a loopback origin of its own. It has to be a round
+/// trip rather than a `srcdoc`: a frame given its markup inline inherits the
+/// app's own content policy, and the app's policy forbids script, so the page
+/// would draw and quietly do nothing. What the page is then allowed to do is
+/// `artifact.rs`'s argument, and none of it is negotiable from here.
+///
+/// The document is not persisted and this is not a store. The message that
+/// carried it is the record; this is a copy held while a transcript is drawing
+/// one, and an id that has been evicted is registered again by the next draw.
+#[tauri::command]
+pub fn frame_artifact(state: State<'_, AppState>, html: String) -> Reply<ArtifactAddress> {
+    let id = state
+        .artifacts
+        .keep(&html)
+        .map_err(|err| CommandError::new("artifact", err.to_string()))?;
+    Ok(ArtifactAddress { port: state.artifact_port.load(std::sync::atomic::Ordering::SeqCst), id })
+}
+
+/// Where the renderer should point a frame.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactAddress {
+    pub port: u16,
+    pub id: String,
 }
 
 /// Sends a failed turn's message again, as a new run.
