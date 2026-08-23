@@ -11,12 +11,12 @@
 //! the client is registered with that port in its redirect URI. Dynamic client
 //! registration is what makes the ordering possible, and it is also why there
 //! is no client id in this file: an MCP server issues one on the spot, so Guaca
-//! does not have to be a registered application at three vendors before an
-//! operator can use it.
+//! does not have to be a registered application at every vendor on the list
+//! before an operator can use it.
 //!
-//! The device flow is not available here anyway. None of the three servers
-//! advertises it, and the MCP authorisation spec mandates authorisation code
-//! with PKCE, so this is the flow or there is no flow.
+//! The device flow is not available here anyway. None of the servers on the
+//! list advertises it, and the MCP authorisation spec mandates authorisation
+//! code with PKCE, so this is the flow or there is no flow.
 //!
 //! ## The order of the dance
 //!
@@ -27,9 +27,14 @@
 //! 5. Send the operator to the authorisation endpoint with a PKCE challenge.
 //! 6. Catch the redirect, check the state, trade the code for a grant.
 //!
-//! Steps 1 and 2 are discovery and every one of their fallbacks is a real
-//! server: the three Guaca ships answer three different shapes of the same
-//! question, which is what the fallbacks are for rather than defensiveness.
+//! Steps 1 and 2 are [`discover`], and every one of their fallbacks is a real
+//! server rather than defensiveness. Stripe's authorisation server is
+//! `https://access.stripe.com/mcp`, and RFC 8414 says the well-known segment
+//! goes *before* that path; Linear publishes its resource metadata under the
+//! endpoint's path and Neon's under the bare one. Getting any of those wrong is
+//! a plugin that cannot be connected at all, which is why `scripts/plugins.sh`
+//! runs this same function against the live vendors instead of rebuilding the
+//! URLs beside it.
 
 use std::time::Duration;
 
@@ -136,8 +141,7 @@ pub async fn authorize(
     now_ms: impl Fn() -> i64,
 ) -> Result<Grant, OauthError> {
     let http = http()?;
-    let issuer = issuer_for(&http, resource, challenge_header).await?;
-    let server = server_metadata(&http, &issuer).await?;
+    let Discovered { issuer, server } = discover(resource, challenge_header).await?;
 
     let Some(registration_endpoint) = server.registration_endpoint.clone() else {
         return Err(OauthError::NoRegistration { issuer });
@@ -214,6 +218,30 @@ pub async fn refresh(grant: &Grant, now_ms: impl Fn() -> i64) -> Result<Grant, O
 
 // ---- discovery -----------------------------------------------------------
 
+/// What a server publishes about signing in to it, before anybody signs in.
+#[derive(Debug, Clone)]
+pub struct Discovered {
+    pub issuer: String,
+    pub server: ServerMetadata,
+}
+
+/// Steps 1 and 2 of the dance, on their own.
+///
+/// Split out because the live vendor test needs exactly this and nothing after
+/// it: whether the five servers still publish what this build knows how to
+/// read. A test that rebuilt the metadata URLs beside these ones would pass
+/// while an operator could not connect, which is the only failure it exists to
+/// catch.
+pub async fn discover(
+    resource: &str,
+    challenge_header: Option<&str>,
+) -> Result<Discovered, OauthError> {
+    let http = http()?;
+    let issuer = issuer_for(&http, resource, challenge_header).await?;
+    let server = server_metadata(&http, &issuer).await?;
+    Ok(Discovered { issuer, server })
+}
+
 /// Who can issue a grant for this resource.
 ///
 /// The challenge on a 401 is consulted first because it is the answer the
@@ -261,14 +289,21 @@ async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<String>
     metadata.authorization_servers.into_iter().next()
 }
 
+/// RFC 8414 authorisation-server metadata, as far as this build reads it.
 #[derive(Debug, Clone, Deserialize)]
-struct ServerMetadata {
-    authorization_endpoint: String,
-    token_endpoint: String,
+pub struct ServerMetadata {
+    pub authorization_endpoint: String,
+    pub token_endpoint: String,
+    /// Absent is a server Guaca cannot sign in to at all: with no RFC 7591
+    /// endpoint there is nothing to register a loopback redirect against.
     #[serde(default)]
-    registration_endpoint: Option<String>,
+    pub registration_endpoint: Option<String>,
     #[serde(default)]
-    scopes_supported: Vec<String>,
+    pub scopes_supported: Vec<String>,
+    /// S256 is the only challenge this build sends, so a server that stops
+    /// naming it is one every sign-in would be refused by.
+    #[serde(default)]
+    pub code_challenge_methods_supported: Vec<String>,
 }
 
 async fn server_metadata(
@@ -727,7 +762,9 @@ mod tests {
     #[test]
     fn metadata_addresses_put_the_well_known_segment_before_the_path() {
         // The part of RFC 8414 that is most often got wrong, and the reason
-        // Clerk's authorisation server is found at all.
+        // Stripe's authorisation server is found at all: its issuer is
+        // `https://access.stripe.com/mcp`, and the first form below is the only
+        // one of the three that answers.
         assert_eq!(
             well_known("https://example.test/tenant", "oauth-authorization-server"),
             vec![
@@ -765,6 +802,7 @@ mod tests {
             token_endpoint: "https://x.test/t".into(),
             registration_endpoint: None,
             scopes_supported: vec!["read".into(), "write".into(), "*".into()],
+            code_challenge_methods_supported: vec!["S256".into()],
         };
         assert_eq!(requested_scope(&server).as_deref(), Some("read write"));
     }
@@ -778,6 +816,7 @@ mod tests {
             token_endpoint: "https://x.test/t".into(),
             registration_endpoint: None,
             scopes_supported: Vec::new(),
+            code_challenge_methods_supported: vec!["S256".into()],
         };
         assert_eq!(requested_scope(&server), None);
     }

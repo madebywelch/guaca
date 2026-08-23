@@ -9,7 +9,7 @@ interface Props {
 }
 
 /**
- * The plugins a crew has, and the three it can have.
+ * The plugins a crew has, and the ones it can have.
  *
  * A plugin is a server the operator signs in to once, on behalf of the whole
  * group, after which every agent in it can call that server's tools. Nothing is
@@ -17,11 +17,15 @@ interface Props {
  * group's own sign-in on it, so the agent never holds a token and has nothing
  * to leak.
  *
- * Three of them, and that is the design rather than a starting point. The list
+ * A short list, and that is the design rather than a starting point. The list
  * this replaced was twelve brands and a text box, which asked the operator for
  * four things about a token they had — the variable it belongs in, the account
  * it acts as, a note for the agent, and whether the service was worth wiring up
  * at all. A server that publishes its own tools answers all four itself.
+ *
+ * What is on the list comes from Rust, in order, and is drawn as it arrives: a
+ * catalogue the webview sorted or filtered would be a second opinion about
+ * which servers exist, and the runtime is the one that dials them.
  *
  * Connecting can take minutes, because part of it happens in a browser in front
  * of a person. The row says so while it waits: a spinner with no explanation on

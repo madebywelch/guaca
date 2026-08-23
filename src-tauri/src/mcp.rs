@@ -1,15 +1,16 @@
 //! The client end of the Model Context Protocol, over streamable HTTP.
 //!
-//! Small on purpose. Guaca is not a general MCP host: it dials three servers it
-//! ships the addresses of, asks each what it can do, and calls those tools on
-//! behalf of an agent. Three methods cover all of that — `initialize`,
+//! Small on purpose. Guaca is not a general MCP host: it dials the handful of
+//! servers it ships the addresses of, asks each what it can do, and calls those
+//! tools on behalf of an agent. Three methods cover all of that — `initialize`,
 //! `tools/list`, `tools/call` — and the transport is one POST each.
 //!
 //! ## Two content types, one request
 //!
 //! A streamable-HTTP server may answer a POST with `application/json` or with
-//! `text/event-stream`, and it chooses per request. Clerk's answers every call
-//! as an event stream; Neon's answers in JSON. Neither is wrong and the spec
+//! `text/event-stream`, and it chooses per request. Both are in use across the
+//! servers on the list: one answers every call as an event stream including
+//! `initialize`, and Neon's answers in JSON. Neither is wrong and the spec
 //! requires a client to accept both, which is why the reply is parsed by
 //! sniffing the content type rather than by trusting the one a server used
 //! last. This is not the streaming case `llm/sse.rs` handles: nothing here is
@@ -403,7 +404,7 @@ mod tests {
 
     #[test]
     fn an_event_stream_reply_decodes() {
-        // Clerk's server answers every call this way, including `initialize`.
+        // A real server answers every call this way, `initialize` included.
         // Parsing only JSON made a working server look like a broken one.
         let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":1}}\n\n";
         let value = decode("text/event-stream; charset=utf-8", body);
