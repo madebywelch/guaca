@@ -22,6 +22,22 @@ export function relativeTime(at: number, now: number): string {
   return `${Math.round(days / 7)}w`;
 }
 
+/**
+ * How long something has been going, counted in seconds.
+ *
+ * Not {@link relativeTime}, which rounds anything under three quarters of a
+ * minute to "now". This is read while waiting on a call that has not come back,
+ * where the whole question is whether the number is still moving, and "now" for
+ * the first forty-four seconds of a wait answers it wrong. Whether a wait is
+ * long enough to be worth reporting at all is the caller's decision, not this
+ * one's.
+ */
+export function elapsed(now: number, since: number): string {
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  return `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 /** Local midnight, so a day is a day and not a fixed number of milliseconds. */
 function midnight(at: number): number {
   const day = new Date(at);

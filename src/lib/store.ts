@@ -13,6 +13,7 @@ import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
 import { keepThought } from "./reasoning";
+import type { LiveCall } from "./trail";
 import type {
   Activity,
   AgentCard,
@@ -132,6 +133,18 @@ interface State {
    * reading its own.
    */
   reasoning: Record<AgentId, string | undefined>;
+  /**
+   * What each agent's turn has reached for, while it is reaching.
+   *
+   * The same lifetime as `reasoning`, from the same mechanism: the runtime
+   * addresses both to the placeholder, so both are filed under the agent that
+   * opened it and both go when it ends. What a turn did is the message that
+   * lands at the end of it, and the transcript draws these chips again from
+   * that; this is the only account of the same work while it is still under
+   * way, which for a turn that spends ten minutes on tool calls is the whole of
+   * what there is to watch.
+   */
+  trail: Record<AgentId, LiveCall[] | undefined>;
   pulses: Pulse[];
 
   /**
@@ -280,6 +293,7 @@ export const useStore = create<State>((set, get) => ({
   messages: {},
   streams: {},
   reasoning: {},
+  trail: {},
   pulses: [],
   focused: null,
   openingRoutine: null,
@@ -557,11 +571,15 @@ export const useStore = create<State>((set, get) => ({
         set((state) => {
           // Whatever this agent was thinking belonged to the attempt this one
           // replaces. A failed call reopens under a new id, and its half-formed
-          // last thought is not what the retry is doing.
+          // last thought is not what the retry is doing. The trail goes with
+          // it, for the plainer reason that this is where a turn begins.
           const reasoning = { ...state.reasoning };
           delete reasoning[event.agentId];
+          const trail = { ...state.trail };
+          delete trail[event.agentId];
           return {
             reasoning,
+            trail,
             activeRun: { ...state.activeRun, [event.agentId]: event.runId },
             streams: {
               ...state.streams,
@@ -608,6 +626,50 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "toolStarted": {
+        set((state) => {
+          // The stream says whose call this is, exactly as it does for a
+          // thought, and a call for a placeholder that has gone is dropped for
+          // the same reason: there is nobody left waiting on it.
+          const stream = state.streams[event.messageId];
+          if (!stream) return state;
+          const call: LiveCall = {
+            callId: event.callId,
+            name: event.name,
+            arguments: event.arguments,
+            done: null,
+            // Read here rather than sent, because what this is used for is how
+            // long the operator has been waiting, and the operator's clock is
+            // the one they are waiting by.
+            startedAt: Date.now(),
+          };
+          return {
+            trail: {
+              ...state.trail,
+              [stream.agentId]: [...(state.trail[stream.agentId] ?? []), call],
+            },
+          };
+        });
+        break;
+      }
+
+      case "toolFinished": {
+        set((state) => {
+          const stream = state.streams[event.messageId];
+          const held = stream && state.trail[stream.agentId];
+          if (!stream || !held) return state;
+          return {
+            trail: {
+              ...state.trail,
+              [stream.agentId]: held.map((call) =>
+                call.callId === event.callId ? { ...call, done: event.part } : call,
+              ),
+            },
+          };
+        });
+        break;
+      }
+
       case "streamEnded": {
         set((state) => {
           const streams = { ...state.streams };
@@ -615,11 +677,14 @@ export const useStore = create<State>((set, get) => ({
           delete streams[event.messageId];
           if (!ending) return { streams };
 
-          // The turn is over, so the thinking goes with it. This is the whole
-          // of what makes it ephemeral: nothing else ever clears it.
+          // The turn is over, so the thinking goes with it, and so does the
+          // record of what it reached for. This is the whole of what makes both
+          // ephemeral: nothing else ever clears them.
           const reasoning = { ...state.reasoning };
           delete reasoning[ending.agentId];
-          return { streams, reasoning };
+          const trail = { ...state.trail };
+          delete trail[ending.agentId];
+          return { streams, reasoning, trail };
         });
         break;
       }

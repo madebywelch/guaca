@@ -1875,6 +1875,7 @@ impl Runtime {
                     .execute_tool(
                         &card,
                         run_id,
+                        stream.message_id,
                         inbound_hop,
                         cause,
                         settled,
@@ -2265,6 +2266,10 @@ impl Runtime {
         &self,
         card: &AgentCard,
         run_id: RunId,
+        // The placeholder this turn is writing into. Used for nothing but
+        // addressing the two events below, which is what keeps a turn's own
+        // work on screen for exactly as long as the thinking beside it.
+        stream_id: MessageId,
         inbound_hop: u16,
         cause: Option<MessageId>,
         // True when nothing this agent woke up to asked it for anything.
@@ -2278,6 +2283,13 @@ impl Runtime {
         call: &ToolCall,
     ) -> ToolResult {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
+
+        self.inner.events.emit(UiEvent::ToolStarted {
+            message_id: stream_id,
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            arguments: arguments.clone(),
+        });
 
         let (rendered, part, image) = self
             .dispatch_tool(
@@ -2293,6 +2305,20 @@ impl Runtime {
                 arguments,
             )
             .await;
+
+        // The part itself, so what is drawn while the turn runs and what is
+        // drawn afterwards are the same value and not two readings of it. Every
+        // arm of `dispatch_tool` answers with a `ToolCall`, and a call that
+        // somehow did not is left unfinished rather than reported wrongly: the
+        // whole live record goes when the stream ends.
+        if matches!(part, Part::ToolCall { .. }) {
+            self.inner.events.emit(UiEvent::ToolFinished {
+                message_id: stream_id,
+                call_id: call.id.clone(),
+                part: part.clone(),
+            });
+        }
+
         ToolResult { rendered, part, image }
     }
 

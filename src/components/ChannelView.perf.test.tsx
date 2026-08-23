@@ -20,6 +20,7 @@ import { ChannelView } from "./ChannelView";
 
 let rendersOfMessages = 0;
 let rendersOfBubbles = 0;
+let rendersOfTrail = 0;
 let latestBubble = "";
 
 vi.mock("./MessageItem", () => ({
@@ -31,6 +32,13 @@ vi.mock("./MessageItem", () => ({
     rendersOfBubbles += 1;
     latestBubble = text;
     return <div>{text}</div>;
+  },
+}));
+
+vi.mock("./Trail", () => ({
+  TrailRow: () => {
+    rendersOfTrail += 1;
+    return <div />;
   },
 }));
 
@@ -113,12 +121,14 @@ describe("ChannelView under streaming load", () => {
   beforeEach(() => {
     rendersOfMessages = 0;
     rendersOfBubbles = 0;
+    rendersOfTrail = 0;
     latestBubble = "";
     useStore.setState({
       agents: [agent(AGENT, "Manager"), agent(OTHER, "Chef")],
       messages: { [AGENT]: Array.from({ length: 30 }, (_, i) => message(i)) },
       streams: {},
       reasoning: {},
+      trail: {},
       activity: { [AGENT]: { state: "thinking" } },
     });
   });
@@ -194,5 +204,80 @@ describe("ChannelView under streaming load", () => {
 
     // And the line itself kept up, which is the point of drawing it at all.
     expect(useStore.getState().reasoning[AGENT]?.endsWith("thinking ")).toBe(true);
+  });
+
+  it("does not re-render the turn's chips for a thought", async () => {
+    // The reason the line and the chips are two components. They sit next to
+    // each other and change at wildly different rates: the line sixty times a
+    // second, the chips a few times a minute. Written as one, every token
+    // re-rendered every chip the turn had made.
+    const id = "00000000-0000-4000-8000-0000000000d4";
+    draw();
+    await feed([
+      ...stream(id, AGENT, AGENT, 1),
+      {
+        type: "toolStarted",
+        messageId: id as MessageId,
+        callId: "call_1",
+        name: "run_command",
+        arguments: { command: "ls" },
+      },
+      {
+        type: "toolFinished",
+        messageId: id as MessageId,
+        callId: "call_1",
+        part: {
+          type: "toolCall",
+          name: "run_command",
+          arguments: { command: "ls" },
+          outcome: { status: "ok", summary: "exit 0" },
+        },
+      },
+    ]);
+    const chips = rendersOfTrail;
+    expect(chips).toBeGreaterThan(0);
+
+    await feed(
+      Array.from({ length: 200 }, () => ({
+        type: "reasoningDelta" as const,
+        messageId: id as MessageId,
+        text: "thinking ",
+      })),
+    );
+
+    expect(rendersOfTrail).toBe(chips);
+  });
+
+  it("does not re-render the transcript for a tool call", async () => {
+    // A turn's own work is drawn above the composer while it happens and in
+    // the transcript once it lands. The transcript has nothing to say about it
+    // until then.
+    const id = "00000000-0000-4000-8000-0000000000d5";
+    draw();
+    await feed(stream(id, AGENT, AGENT, 1));
+    rendersOfMessages = 0;
+
+    await feed([
+      {
+        type: "toolStarted",
+        messageId: id as MessageId,
+        callId: "call_1",
+        name: "browse",
+        arguments: { action: "open", url: "https://cnn.com" },
+      },
+      {
+        type: "toolFinished",
+        messageId: id as MessageId,
+        callId: "call_1",
+        part: {
+          type: "toolCall",
+          name: "browse",
+          arguments: { action: "open", url: "https://cnn.com" },
+          outcome: { status: "ok", summary: "read cnn.com" },
+        },
+      },
+    ]);
+
+    expect(rendersOfMessages).toBe(0);
   });
 });

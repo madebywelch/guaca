@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::domain::approval::ApprovalState;
-use crate::domain::envelope::{Envelope, Participant};
+use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
@@ -80,6 +80,48 @@ pub enum UiEvent {
         message_id: MessageId,
         text: String,
     },
+    /// A tool call this turn has started, before anything is known about how
+    /// it went.
+    ///
+    /// Addressed to the placeholder for the same reason `ReasoningDelta` is,
+    /// and it buys the same thing: the webview files it under the agent that
+    /// opened the stream and drops the lot when the stream ends, so what a turn
+    /// was watched reaching for cannot outlive the turn. The record is the
+    /// message that follows, which carries every one of these as a
+    /// `Part::ToolCall`; this is only what that record looks like while it is
+    /// still being made.
+    ///
+    /// Emitted before the call, not after it. A command can sit for a minute
+    /// and a page load for several seconds, and the operator watching cannot
+    /// otherwise tell a turn waiting on a machine from one that has stopped.
+    ///
+    /// Nothing here is new to the webview. The name and the arguments are the
+    /// same bytes the transcript draws once the turn ends; they are the model's
+    /// own words, and a credential's value is in neither.
+    ToolStarted {
+        message_id: MessageId,
+        /// The provider's id for the call, which is what pairs this with the
+        /// finish below. Two identical calls in one turn are two calls.
+        call_id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// The same call, finished, as the record of it that the message will
+    /// carry.
+    ///
+    /// The whole `Part::ToolCall` rather than the outcome alone, and that is
+    /// what makes the chip drawn while a turn runs and the chip drawn
+    /// afterwards the same chip rather than two that agree today. A memory
+    /// rewrite carries what it overwrote and nothing outside the runtime could
+    /// supply it; the next thing a call has to say for itself will be the same,
+    /// and an event listing the fields it happened to need would have to be
+    /// remembered at that point.
+    ToolFinished {
+        message_id: MessageId,
+        call_id: String,
+        part: Part,
+    },
+
     /// The placeholder is replaced by the persisted message that follows.
     StreamEnded {
         message_id: MessageId,
@@ -226,7 +268,7 @@ impl EventSink for RecordingSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::envelope::{Intent, Part, Participant, Trust};
+    use crate::domain::envelope::{Intent, Participant, ToolOutcome, Trust};
 
     fn envelope(text: &str) -> Envelope {
         Envelope {
@@ -326,6 +368,44 @@ mod tests {
         .unwrap();
         assert!(json["channelId"].is_string());
         assert!(json["messageId"].is_string());
+    }
+
+    #[test]
+    fn a_live_tool_call_arrives_in_the_shape_the_chip_is_drawn_from() {
+        // The live chip and the recorded one are built by the same rules in
+        // `lib/trail.ts`, which reads a name, its arguments and an outcome. A
+        // key that arrived under another spelling would draw as an unknown tool.
+        let started = serde_json::to_value(UiEvent::ToolStarted {
+            message_id: MessageId::new(),
+            call_id: "call_1".into(),
+            name: "run_command".into(),
+            arguments: serde_json::json!({ "command": "ls" }),
+        })
+        .unwrap();
+        assert_eq!(started["type"], "toolStarted");
+        assert_eq!(started["callId"], "call_1");
+        assert_eq!(started["name"], "run_command");
+        assert_eq!(started["arguments"]["command"], "ls");
+        assert!(started["messageId"].is_string());
+        assert!(
+            started["channelId"].is_null(),
+            "a call is not filed anywhere, exactly like a thought"
+        );
+
+        let finished = serde_json::to_value(UiEvent::ToolFinished {
+            message_id: MessageId::new(),
+            call_id: "call_1".into(),
+            part: Part::tool_call(
+                "update_notes",
+                serde_json::json!({ "content": "now" }),
+                ToolOutcome::Failed { error: "no machine".into() },
+            ),
+        })
+        .unwrap();
+        assert_eq!(finished["type"], "toolFinished");
+        assert_eq!(finished["part"]["type"], "toolCall");
+        assert_eq!(finished["part"]["outcome"]["status"], "failed");
+        assert_eq!(finished["part"]["outcome"]["error"], "no machine");
     }
 
     #[test]
