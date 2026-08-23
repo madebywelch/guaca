@@ -151,16 +151,16 @@ export const api = {
     invoke<Plugin>("set_plugin_access", { id, access }),
 
   /**
-   * Switches one of a connected plugin's tools on or off for the whole crew.
+   * Chooses which of a crew's agents may call one of a plugin's tools.
    *
-   * One tool and the answer it should have, rather than the whole set the way
-   * `setPluginAccess` takes it. A tool is a switch and naming it cannot be
-   * ambiguous; sending the whole set from a panel that can only see today's
-   * tool list would drop a refusal filed against one the vendor has stopped
-   * publishing.
+   * One named tool and the whole answer for it, rather than every tool the way
+   * `setPluginAccess` takes every agent. Naming the tool is what keeps a panel
+   * that can only see today's list from dropping a narrowing filed against one
+   * the vendor has stopped publishing; inside the named tool the set of agents
+   * is replaced, for the reason it is there.
    */
-  setPluginTool: (id: PluginId, tool: string, allowed: boolean) =>
-    invoke<Plugin>("set_plugin_tool", { id, tool, allowed }),
+  setPluginTool: (id: PluginId, tool: string, access: PluginAccess) =>
+    invoke<Plugin>("set_plugin_tool", { id, tool, access }),
 
   disconnectPlugin: (id: PluginId) => invoke<void>("disconnect_plugin", { id }),
 

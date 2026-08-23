@@ -4088,29 +4088,49 @@ impl Runtime {
 
         // And the crew's plugins, under exactly the rule the credentials above
         // are left out by: a plugin this agent may call itself is not a reason
-        // to ask anybody. What is left is the one case narrowing a plugin
-        // creates — the crew can refund a payment and this agent cannot — and
-        // without it the honest answer to "refund this" becomes "we can't",
-        // from an agent sitting next to the one who can.
+        // to ask anybody. What is left is the case narrowing creates — the crew
+        // can refund a payment and this agent cannot — and without it the
+        // honest answer to "refund this" becomes "we can't", from an agent
+        // sitting next to the one who can.
+        //
+        // Asked at both levels, because narrowing happens at both. A plugin
+        // this agent is not on is named whole; a plugin it is on names the
+        // tools it is refused and the peer is not, because an agent that has
+        // Stripe and cannot refund is in exactly the position this exists for
+        // and the plugin-level answer says nothing about it.
         for plugin in self.inner.store.group_plugins(group).unwrap_or_default() {
-            if plugin.access.allows(me) {
-                continue;
-            }
-            // And not one the operator has switched off entirely. A plugin with
-            // nothing left on is a plugin its own crew cannot call, so naming
-            // the peer who holds it is the failure this loop exists to prevent
-            // rather than the one it prevents: work routed to an agent that
-            // will be refused in turn, having spent a turn finding out.
-            if plugin.tools.iter().all(|tool| !tool.allowed) {
-                continue;
-            }
+            let mine = plugin.access.allows(me);
             for card in &agents {
-                if card.id != me && card.group_id == group && plugin.access.allows(card.id) {
-                    reaches
-                        .entry(card.id)
-                        .or_default()
-                        .push(format!("the {} plugin", plugin.kind.label()));
+                if card.id == me || card.group_id != group || !plugin.access.allows(card.id) {
+                    continue;
                 }
+                // Only what this peer can actually call. A tool switched off
+                // for the crew, or narrowed away from this peer, is not a
+                // reason to route work here: that is work sent to an agent that
+                // will be refused in turn, having spent a turn finding out,
+                // which is the failure this loop exists to prevent rather than
+                // the one it prevents.
+                let theirs: Vec<&str> = plugin
+                    .tools
+                    .iter()
+                    .filter(|tool| tool.access.allows(card.id) && !tool.access.allows(me))
+                    .map(|tool| tool.name.as_str())
+                    .collect();
+                let entry = if mine {
+                    if theirs.is_empty() {
+                        continue;
+                    }
+                    format!("the {} plugin's {}", plugin.kind.label(), theirs.join(", "))
+                } else {
+                    // Not on the plugin at all, so every tool this peer holds
+                    // is one this agent lacks. A plugin where that is none is a
+                    // plugin its own crew cannot call.
+                    if !plugin.tools.iter().any(|tool| tool.access.allows(card.id)) {
+                        continue;
+                    }
+                    format!("the {} plugin", plugin.kind.label())
+                };
+                reaches.entry(card.id).or_default().push(entry);
             }
         }
 

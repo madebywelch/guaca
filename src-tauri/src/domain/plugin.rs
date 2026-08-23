@@ -242,32 +242,46 @@ pub struct PluginToolCard {
     /// slug it becomes the name a model calls.
     pub name: String,
     pub description: String,
-    /// Whether the crew may call it. True unless the operator switched it off,
-    /// which is the way round the store keeps it too: what is written down is
-    /// the refusals, so a tool a vendor ships next month arrives allowed.
-    pub allowed: bool,
+    /// Who may call this one, inside whoever the plugin itself reaches.
+    ///
+    /// The same two-state answer the plugin takes, one level down, and
+    /// [`PluginAccess::Everyone`] until somebody says otherwise: what is
+    /// written down is the narrowing, so a tool a vendor ships next month
+    /// arrives on for whoever the plugin is on for.
+    ///
+    /// Both are needed. The plugin's answer is "who may spend this sign-in",
+    /// which is about the account; this one is "who may do this particular
+    /// thing with it", which is about the capability. An agent has to pass both.
+    pub access: PluginAccess,
 }
 
-/// What one agent may call on one of its crew's plugins this turn, and what the
-/// operator has switched off.
+/// What one agent may call on one of its crew's plugins this turn, and what it
+/// cannot — in the two shapes that have different ways forward.
 ///
-/// Both halves, from one read, because both are used on the same turn and by
-/// different consumers: `offered` becomes the tool definitions the model is
-/// given, and `withheld` becomes the line in the prompt that says a capability
-/// exists and is off. An agent that is only shown `offered` reports "we cannot
-/// do refunds" when the true answer is "the operator switched refunds off, and
-/// can switch them back on".
+/// Three lists, from one read, because all three are used on the same turn and
+/// by different consumers. `offered` becomes the tool definitions the model is
+/// given. `withheld` and `elsewhere` become the lines in the prompt that say a
+/// capability exists and is not this agent's, and they are separate because
+/// the answers are: nobody has `withheld`, so it is the operator's to switch
+/// back on, and somebody has `elsewhere`, so it is a peer's to do. An agent
+/// shown only `offered` reports "we cannot do refunds" when the true answer is
+/// either "the operator switched refunds off" or "the agent next to you does
+/// refunds".
 #[derive(Debug, Clone, PartialEq)]
 pub struct PluginToolset {
     pub kind: PluginKind,
     /// Callable, in the server's own order.
     pub offered: Vec<PluginTool>,
+    /// Narrowed to nobody: off for everyone in the crew.
+    ///
     /// Names only. A description and a schema for something that cannot be
     /// called is context paid for on every turn to describe an absence.
     pub withheld: Vec<String>,
+    /// Narrowed to other agents. Names only, for the same reason.
+    pub elsewhere: Vec<String>,
 }
 
-/// Who in a crew may call one plugin's tools.
+/// Who in a crew may call something: one plugin, or one of its tools.
 ///
 /// A plugin is signed in once, for the group, and until this existed that
 /// sign-in was the whole decision: every agent in the crew was offered every
@@ -278,12 +292,22 @@ pub struct PluginToolset {
 /// second question, asked per plugin because that is the shape the answer has:
 /// most plugins are for everybody and one or two are for one agent.
 ///
+/// The same type answers the same question one level down, on
+/// [`PluginToolCard`]. A plugin is not one capability either: two agents share
+/// an inbox and want different halves of it, one reading and searching and the
+/// other sending. A single answer per plugin cannot say that, and neither can
+/// a single answer per tool for the whole crew — which is what this replaced.
+/// The two compose rather than overlap: the plugin's answer is who may spend
+/// the sign-in, the tool's is who may do that particular thing with it, and an
+/// agent has to pass both.
+///
 /// Two states rather than a list with a sentinel, and the empty list is why.
 /// `Everyone` is a decision about agents that do not exist yet — an agent hired
 /// tomorrow gets it — which no list of today's ids can express. And a list that
 /// meant "everyone" when it was empty would hand a plugin back to the whole
 /// crew at the moment the operator unticked the last agent, which is the exact
-/// opposite of what unticking means.
+/// opposite of what unticking means. On a tool the empty list has a name of its
+/// own: it is the switched-off tool the old shape stored as a refusal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum PluginAccess {
@@ -315,6 +339,16 @@ impl PluginAccess {
             PluginAccess::Everyone => true,
             PluginAccess::Chosen { agents } => agents.contains(&agent),
         }
+    }
+
+    /// Whether this allows nobody at all.
+    ///
+    /// The one state that is true of the whole crew rather than of one agent,
+    /// and the refusals turn on it: a tool nobody has is not a tool to hand to
+    /// a peer. `Everyone` is never this, even in a group with no agents in it,
+    /// because it is a standing answer rather than a set.
+    pub fn allows_nobody(&self) -> bool {
+        matches!(self, PluginAccess::Chosen { agents } if agents.is_empty())
     }
 
     pub fn as_str(&self) -> &'static str {
@@ -350,14 +384,13 @@ pub struct Plugin {
     /// an MCP server is under no obligation to name the account it authorised,
     /// and inventing a label would be worse than an empty one.
     pub account: String,
-    /// Every tool this server published, each with what the operator has
-    /// decided about it. The schemas are not here: they are bulk the webview
-    /// has no use for, and the runtime reads them from the store on the turn
-    /// that needs them.
+    /// Every tool this server published, each with who may call it. The schemas
+    /// are not here: they are bulk the webview has no use for, and the runtime
+    /// reads them from the store on the turn that needs them.
     ///
-    /// The whole list, including the switched-off ones. A panel that only drew
-    /// the allowed ones would be a panel with no way to switch anything back
-    /// on, and no way to see what the crew is not being offered.
+    /// The whole list, including the narrowed and the switched-off. A panel that
+    /// only drew the callable ones would be a panel with no way to switch
+    /// anything back on, and no way to see what the crew is not being offered.
     pub tools: Vec<PluginToolCard>,
     /// Which of the crew may call them. The sign-in behind this row is the
     /// group's either way: this decides who is allowed to spend it, not who
