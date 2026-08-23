@@ -8,6 +8,7 @@ import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupOrb } from "./GroupOrb";
+import { NewMenu } from "./NewMenu";
 import { TokenMeter } from "./TokenMeter";
 
 interface Props {
@@ -16,6 +17,9 @@ interface Props {
   onOpenCafeteria: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
+  /** The plus beside the wordmark. App-level, not any one row's. */
+  onNewAgent: () => void;
+  onNewGroup: () => void;
   /** Where the operator right-clicked, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
@@ -52,6 +56,8 @@ export function Sidebar({
   onOpenCafeteria,
   onOpenSettings,
   onOpenSearch,
+  onNewAgent,
+  onNewGroup,
   onOpenMenu,
 }: Props) {
   const agents = useLiveAgents();
@@ -382,8 +388,12 @@ export function Sidebar({
 
   return (
     <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
+      {/* The plus rides the drag region rather than sitting under it: a button
+          inside one is still a button, and this is the row an operator reads
+          first. */}
       <div className="rail__brand" data-tauri-drag-region>
         <span className="rail__wordmark">Guaca</span>
+        <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
       </div>
 
       {/* Looks like a field and behaves like a button, because the field it
@@ -551,9 +561,8 @@ export function Sidebar({
       </div>
 
       {/* Two rows, not four. Making somebody moved to the plus at the top of
-          the reading column, which is where every other "add one of these" in
-          this app now lives; what is left down here is the two places you go
-          rather than the two things you make. */}
+          this rail; what is left down here is the two places you go rather than
+          the two things you make. */}
       <div className="rail__foot">
         <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
           <span aria-hidden="true" className="rail__hash">
