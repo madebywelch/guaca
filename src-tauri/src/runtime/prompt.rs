@@ -1033,7 +1033,7 @@ mod tests {
             &[],
             &[],
             &[],
-            &[plugin(PluginKind::Cloudflare, &["workers_list"])],
+            &[plugin(PluginKind::Cloudflare, &["execute"])],
             "",
             &[],
             ReplyMode::ToOperator,

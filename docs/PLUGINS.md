@@ -95,25 +95,85 @@ possible, and it is the same mechanism that decides who is on the list at all.
 The device flow is not an option here anyway. None of the five advertises it,
 and the MCP authorisation specification mandates authorisation code with PKCE.
 
-## What a plugin asks for is the server's list, not Guaca's
+## What a plugin asks for is the resource's list, not Guaca's
 
-Connecting Cloudflare shows a consent screen with four permissions on it: user
-read, account read, Workers write, D1 write. That is not Guaca choosing a
-cautious subset. Cloudflare's Workers Bindings server hardcodes that scope set
-for every client that connects to it, and its authorisation-server metadata
-publishes no `scopes_supported` at all, so Guaca sends no `scope` parameter and
-has nothing to widen.
+Guaca never invents a scope. A scope it invented is a scope the server refuses
+in a browser window that cannot explain why, and the operator is left reading
+`invalid_scope` on a vendor's error page.
 
-Where a server does publish a list, Guaca asks for all of it minus `*`, because
-a scope it invented is a scope the server refuses in a browser window that
-cannot explain why, and a wildcard is not what an operator agreed to by
-connecting a database. `oauth::requested_scope` is the whole rule.
+Two documents publish a list, and they are not the same list.
 
-The way to reach more of a vendor's surface is therefore another entry on the
-list, not another parameter on the request. Cloudflare publishes fifteen MCP
-servers, one per product area; Workers Bindings is the one that makes things
-rather than reads about them, and offering all fifteen would put a hundred tools
-in front of a model that asked for "Cloudflare".
+| Document | RFC | What its `scopes_supported` means |
+|---|---|---|
+| Protected resource, at the MCP server | 9728 | What to ask for to reach *this resource* |
+| Authorisation server, at the issuer | 8414 | Everything the issuer can grant, for every resource behind it and every client registered by any means |
+
+The resource's is the one asked for. The server's is the fallback for a resource
+that says nothing, which is most of them.
+
+AgentMail is why, and it was found the hard way. Its MCP server names three
+scopes: `openid email profile`. The Clerk instance behind it lists seven, and
+four of those are ones a vendor grants to clients it created by hand, not to one
+that registered itself. Asking the resource's question of the authorisation
+server got every sign-in refused: *The OAuth 2.0 Client is not allowed to
+request scope 'public_metadata'*. Linear has the same shape and had not broken
+yet: its resource wants `read write` and its issuer also lists `openid email`.
+
+Two rules sit on top of that, and both only ever name a scope the server itself
+published:
+
+- **`*` is dropped wherever it appears.** Neon offers one. An operator
+  connecting a database has not agreed to hand over everything their account can
+  do, and the named scopes beside it add up to the part Guaca needs.
+- **`offline_access` is added when the authorisation server names it.** It is
+  not access to anything. It is the scope that decides whether a refresh token
+  comes back, and without one a plugin works until the access token expires and
+  then asks the operator to sign in again, every hour, for as long as they keep
+  it connected.
+
+`Discovered::requested_scope` is the whole rule, and the live half of
+`tests/plugins.rs` is what keeps it honest: it asserts that every scope this
+build would send is one the vendor publishes today. Offline tests cannot see a
+vendor narrowing what a registered client may ask for, which is exactly how
+AgentMail broke while all five discovered correctly.
+
+Where neither document publishes a list, Guaca sends no `scope` parameter at
+all, and the server applies its own default. Cloudflare is that case, and its
+consent screen is a permission picker that opens on **read only**. The operator
+widens it there, on the screen that says what each scope is, or leaves it and
+has a crew that can look at the account without changing it.
+
+The way to reach more of a vendor's surface is therefore the consent screen or
+another entry on this list, never another parameter on the request.
+
+## Cloudflare is the account, not a product area
+
+Cloudflare publishes two kinds of MCP server and Guaca dials the one that is not
+a product area.
+
+The fifteen `*.mcp.cloudflare.com` hosts are one product each: Workers bindings,
+DNS, Radar, observability, and so on. Curated, typed, and a fifteenth of the
+account apiece. Picking one is deciding on the operator's behalf which fifteenth
+their crew gets, with nothing on the tile saying which, and an agent that can
+create a Worker and cannot read a DNS record spends the turn discovering that.
+Offering several instead is a hundred tool definitions in front of a model that
+asked for "Cloudflare", paid for on every turn by every agent in the crew.
+
+`mcp.cloudflare.com` is the whole Cloudflare API — over 2,500 endpoints — behind
+`search` and `execute`, plus `docs`. The model writes JavaScript against the
+OpenAPI document and Cloudflare runs it in a sandboxed Worker, so the API
+surface stays on the server: about a thousand tokens of context rather than the
+million the same endpoints would cost as tool definitions. It is the only server
+on the list that works this way, and it is the reason Cloudflare can be one
+entry rather than fifteen.
+
+Migration 26 deletes the rows from before the move. Nothing on one survives it:
+the tokens were issued by the old host's issuer and the new one refuses them,
+and the stored tool list names tools the new server does not have — which is
+what the crew is offered on every turn until something re-reads it. Left in
+place, an agent calls `cloudflare__workers_list`, takes a 401 from a host it was
+never signed in to, and reports the operator's account as broken. Deleted, the
+tile says "Connect" and one consent screen fixes it.
 
 ## What crosses which boundary
 

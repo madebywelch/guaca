@@ -712,6 +712,28 @@ CREATE UNIQUE INDEX plugins_kind_unique ON plugins (group_id, kind);
 DELETE FROM plugins WHERE kind = 'clerk';
 "#,
     ),
+    (
+        26,
+        r#"
+-- Cloudflare moved from `bindings.mcp.cloudflare.com` to `mcp.cloudflare.com`:
+-- from one product area of fifteen to the whole API behind `search` and
+-- `execute`. `PluginKind::endpoint` is what the runtime dials, so an existing
+-- row is now a grant issued by one server being spent against another.
+--
+-- Nothing on the row survives the move. The access and refresh tokens were
+-- issued by the old issuer and the new one will refuse them; the stored tool
+-- list names tools the new server does not have, and those are what the crew
+-- is offered on every turn until something re-reads them. Left in place, an
+-- agent calls `cloudflare__workers_list`, gets a 401 from a host it was never
+-- signed in to, and reports it as the operator's account being broken.
+--
+-- Deleted rather than blanked, because an empty row still holds the group's
+-- slot in `plugins_kind_unique`, and the tile the operator needs to click says
+-- "Connect" only when there is no row at all. Reconnecting is one click and one
+-- consent screen, and it is the only way to get a grant for the new server.
+DELETE FROM plugins WHERE kind = 'cloudflare';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -857,6 +879,36 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(left, vec!["neon".to_string()]);
+    }
+
+    #[test]
+    fn a_plugin_that_changed_server_loses_the_grant_it_had_for_the_old_one() {
+        // Cloudflare's endpoint moved hosts, so the stored token was issued by
+        // an issuer the new server does not share and the stored tool list
+        // names tools it does not have. Both are read on every turn, and a row
+        // that survives is an agent calling a tool that 401s against a host
+        // nobody signed in to.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 26) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        let insert =
+            "INSERT INTO plugins (id,group_id,kind,account,tools,access_token,connected_at)
+                      VALUES (?1,?2,?3,'','[\"workers_list\"]','tok',0)";
+        conn.execute(insert, rusqlite::params!["p1", DEFAULT_GROUP_ID, "cloudflare"]).unwrap();
+        conn.execute(insert, rusqlite::params!["p2", DEFAULT_GROUP_ID, "linear"]).unwrap();
+
+        run(&mut conn).unwrap();
+
+        let left: Vec<String> = conn
+            .prepare("SELECT kind FROM plugins ORDER BY kind")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(left, vec!["linear".to_string()], "and only Cloudflare's");
     }
 
     #[test]

@@ -141,7 +141,9 @@ pub async fn authorize(
     now_ms: impl Fn() -> i64,
 ) -> Result<Grant, OauthError> {
     let http = http()?;
-    let Discovered { issuer, server } = discover(resource, challenge_header).await?;
+    let discovered = discover(resource, challenge_header).await?;
+    let scope = discovered.requested_scope();
+    let Discovered { issuer, server, .. } = discovered;
 
     let Some(registration_endpoint) = server.registration_endpoint.clone() else {
         return Err(OauthError::NoRegistration { issuer });
@@ -175,7 +177,7 @@ pub async fn authorize(
     // Asked for only when the server publishes what there is to ask for. A
     // scope Guaca invented is a scope the server refuses, and the refusal
     // arrives in the operator's browser rather than here.
-    if let Some(scope) = requested_scope(&server) {
+    if let Some(scope) = scope {
         url.push_str(&format!("&scope={}", encode(&scope)));
     }
 
@@ -223,6 +225,10 @@ pub async fn refresh(grant: &Grant, now_ms: impl Fn() -> i64) -> Result<Grant, O
 pub struct Discovered {
     pub issuer: String,
     pub server: ServerMetadata,
+    /// What the *resource* said it wants asked for, which is not the same list
+    /// as the authorisation server's and takes precedence over it. See
+    /// [`Discovered::requested_scope`].
+    pub resource_scopes: Vec<String>,
 }
 
 /// Steps 1 and 2 of the dance, on their own.
@@ -237,34 +243,42 @@ pub async fn discover(
     challenge_header: Option<&str>,
 ) -> Result<Discovered, OauthError> {
     let http = http()?;
-    let issuer = issuer_for(&http, resource, challenge_header).await?;
+    let Resource { issuer, scopes } = resource_for(&http, resource, challenge_header).await?;
     let server = server_metadata(&http, &issuer).await?;
-    Ok(Discovered { issuer, server })
+    Ok(Discovered { issuer, server, resource_scopes: scopes })
 }
 
-/// Who can issue a grant for this resource.
+/// RFC 9728 protected-resource metadata, as far as this build reads it.
+struct Resource {
+    /// Who can issue a grant for it.
+    issuer: String,
+    /// What it says to ask for. Empty when it does not say.
+    scopes: Vec<String>,
+}
+
+/// What the resource publishes about itself.
 ///
 /// The challenge on a 401 is consulted first because it is the answer the
 /// server itself just gave; the well-known paths are what to try when a server
 /// refuses without saying where to go, which is most of them.
-async fn issuer_for(
+async fn resource_for(
     http: &reqwest::Client,
     resource: &str,
     challenge: Option<&str>,
-) -> Result<String, OauthError> {
+) -> Result<Resource, OauthError> {
     let mut tried = Vec::new();
 
     if let Some(url) = challenge.and_then(resource_metadata_url) {
         tried.push(url.clone());
-        if let Some(issuer) = protected_resource(http, &url).await {
-            return Ok(issuer);
+        if let Some(found) = protected_resource(http, &url).await {
+            return Ok(found);
         }
     }
 
     for url in well_known(resource, "oauth-protected-resource") {
         tried.push(url.clone());
-        if let Some(issuer) = protected_resource(http, &url).await {
-            return Ok(issuer);
+        if let Some(found) = protected_resource(http, &url).await {
+            return Ok(found);
         }
     }
 
@@ -274,11 +288,13 @@ async fn issuer_for(
     })
 }
 
-async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<String> {
+async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<Resource> {
     #[derive(Deserialize)]
     struct Metadata {
         #[serde(default)]
         authorization_servers: Vec<String>,
+        #[serde(default)]
+        scopes_supported: Vec<String>,
     }
 
     let response = http.get(url).timeout(HTTP_TIMEOUT).send().await.ok()?;
@@ -286,7 +302,8 @@ async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<String>
         return None;
     }
     let metadata: Metadata = response.json().await.ok()?;
-    metadata.authorization_servers.into_iter().next()
+    let issuer = metadata.authorization_servers.into_iter().next()?;
+    Some(Resource { issuer, scopes: metadata.scopes_supported })
 }
 
 /// RFC 8414 authorisation-server metadata, as far as this build reads it.
@@ -373,16 +390,50 @@ fn resource_metadata_url(challenge: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// What to ask for, when the server publishes a list.
-///
-/// `*` is filtered out wherever it appears: an operator connecting a database
-/// plugin has not agreed to hand over everything their account can do, and a
-/// server that offers a wildcard also offers the named scopes that add up to
-/// the part Guaca needs.
-fn requested_scope(server: &ServerMetadata) -> Option<String> {
-    let wanted: Vec<&str> =
-        server.scopes_supported.iter().map(String::as_str).filter(|s| *s != "*").collect();
-    (!wanted.is_empty()).then(|| wanted.join(" "))
+impl Discovered {
+    /// What to ask for, when something publishes a list.
+    ///
+    /// Two documents publish one and they are not the same list. The resource's
+    /// (RFC 9728) is the scopes used to request access to *that resource*; the
+    /// authorisation server's (RFC 8414) is everything the issuer can grant,
+    /// across every resource behind it and for clients it created by hand as
+    /// well as ones that registered themselves. So the resource's is asked for
+    /// when there is one, and the server's is the fallback for the resource
+    /// that says nothing, which is most of them.
+    ///
+    /// AgentMail is why, and it was found by an operator rather than by a test.
+    /// Its MCP server names `openid email profile`; the Clerk instance behind
+    /// it also lists `public_metadata`, `private_metadata` and `user:org:read`,
+    /// and refuses a registered client that asks for them: `invalid_scope`, on
+    /// a vendor's error page, where nothing here can explain it.
+    ///
+    /// `offline_access` is the one addition, and only when the authorisation
+    /// server names it. It is not access to anything: it is the scope that
+    /// decides whether a refresh token comes back, and without one a plugin
+    /// works until the access token expires and then asks to be signed in
+    /// again, every hour, for as long as it stays connected.
+    ///
+    /// `*` is filtered out wherever it appears: an operator connecting a
+    /// database plugin has not agreed to hand over everything their account can
+    /// do, and a server that offers a wildcard also offers the named scopes
+    /// that add up to the part Guaca needs.
+    pub fn requested_scope(&self) -> Option<String> {
+        let published = if self.resource_scopes.is_empty() {
+            &self.server.scopes_supported
+        } else {
+            &self.resource_scopes
+        };
+
+        let mut wanted: Vec<&str> =
+            published.iter().map(String::as_str).filter(|s| *s != "*").collect();
+
+        let offline = "offline_access";
+        if !wanted.contains(&offline) && self.server.scopes_supported.iter().any(|s| s == offline) {
+            wanted.push(offline);
+        }
+
+        (!wanted.is_empty()).then(|| wanted.join(" "))
+    }
 }
 
 // ---- registration --------------------------------------------------------
@@ -793,32 +844,80 @@ mod tests {
         assert_eq!(resource_metadata_url("Bearer").as_deref(), None);
     }
 
-    #[test]
-    fn a_wildcard_scope_is_never_asked_for() {
-        // Neon offers `read`, `write` and `*`. Connecting a database plugin is
-        // not consent to everything the operator's account can do.
-        let server = ServerMetadata {
+    fn server_offering(scopes: &[&str]) -> ServerMetadata {
+        ServerMetadata {
             authorization_endpoint: "https://x.test/a".into(),
             token_endpoint: "https://x.test/t".into(),
             registration_endpoint: None,
-            scopes_supported: vec!["read".into(), "write".into(), "*".into()],
+            scopes_supported: scopes.iter().map(|s| (*s).to_string()).collect(),
             code_challenge_methods_supported: vec!["S256".into()],
-        };
-        assert_eq!(requested_scope(&server).as_deref(), Some("read write"));
+        }
+    }
+
+    fn scopes(resource: &[&str], server: &[&str]) -> Option<String> {
+        Discovered {
+            issuer: "https://x.test".into(),
+            server: server_offering(server),
+            resource_scopes: resource.iter().map(|s| (*s).to_string()).collect(),
+        }
+        .requested_scope()
+    }
+
+    #[test]
+    fn a_wildcard_scope_is_never_asked_for() {
+        // Neon offers `read`, `write` and `*`, and publishes no list of its
+        // own on the resource. Connecting a database plugin is not consent to
+        // everything the operator's account can do.
+        assert_eq!(scopes(&[], &["read", "write", "*"]).as_deref(), Some("read write"));
     }
 
     #[test]
     fn a_server_that_publishes_no_scopes_is_not_asked_for_one() {
         // Cloudflare's does not. An invented scope is refused in the browser,
         // where nothing can explain it.
-        let server = ServerMetadata {
-            authorization_endpoint: "https://x.test/a".into(),
-            token_endpoint: "https://x.test/t".into(),
-            registration_endpoint: None,
-            scopes_supported: Vec::new(),
-            code_challenge_methods_supported: vec!["S256".into()],
-        };
-        assert_eq!(requested_scope(&server), None);
+        assert_eq!(scopes(&[], &[]), None);
+    }
+
+    #[test]
+    fn the_resource_decides_what_is_asked_for_and_not_its_authorisation_server() {
+        // AgentMail, exactly as the two documents read today. Its MCP server
+        // wants three scopes; the Clerk instance behind it can issue seven and
+        // refuses a registered client that asks for the other four, with an
+        // `invalid_scope` the operator sees and cannot act on.
+        let asked = scopes(
+            &["openid", "email", "profile"],
+            &[
+                "openid",
+                "profile",
+                "email",
+                "public_metadata",
+                "private_metadata",
+                "offline_access",
+                "user:org:read",
+            ],
+        );
+        assert_eq!(asked.as_deref(), Some("openid email profile offline_access"));
+    }
+
+    #[test]
+    fn a_refresh_token_is_asked_for_whenever_the_server_can_issue_one() {
+        // `offline_access` is not access to anything: it is the difference
+        // between a plugin that renews itself and one that asks the operator to
+        // sign in again every hour. Added once, and never invented.
+        assert_eq!(
+            scopes(&["read"], &["read", "offline_access"]).as_deref(),
+            Some("read offline_access")
+        );
+        assert_eq!(
+            scopes(&["read", "offline_access"], &["read", "offline_access"]).as_deref(),
+            Some("read offline_access"),
+            "already asked for is not asked for twice"
+        );
+        assert_eq!(
+            scopes(&["read"], &["read", "write"]).as_deref(),
+            Some("read"),
+            "a server that cannot issue a refresh token is not asked for one"
+        );
     }
 
     #[test]

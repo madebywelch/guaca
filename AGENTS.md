@@ -196,12 +196,24 @@ the model takes a screenshot to see what `browse` did.
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
   pair thread or the activity board, and an effect cannot re-bind on that.
-- **What a plugin's sign-in asks for is the server's list, not Guaca's.**
-  Cloudflare's consent screen names four permissions because its Workers
-  Bindings server hardcodes that scope set and publishes no `scopes_supported`,
-  so Guaca sends no `scope` at all. Where a server does publish a list, Guaca
-  asks for all of it except `*`. Reaching more of a vendor is another entry on
-  the list, not another parameter: `docs/PLUGINS.md`.
+- **What a plugin's sign-in asks for is the resource's list, not its
+  authorisation server's.** They are two documents and two lists: RFC 9728 names
+  the scopes for *that resource*, RFC 8414 names everything the server can issue
+  behind it. AgentMail's MCP server wants three and the Clerk instance behind it
+  lists seven, four of which it refuses a registered client, as an
+  `invalid_scope` in the operator's browser. So the resource's list wins, the
+  server's is the fallback, `*` is dropped and `offline_access` is added when the
+  server names it: without a refresh token a plugin asks to be signed in again
+  every hour. Where neither publishes a list, Guaca sends no `scope` at all and
+  the server applies its own default, which is what Cloudflare's consent screen
+  is choosing between. `oauth::requested_scope`, then `docs/PLUGINS.md`.
+- **Cloudflare is `mcp.cloudflare.com`, not one of the fifteen
+  `*.mcp.cloudflare.com`.** Each subdomain is a single product area, so one of
+  them is a crew that can make a Worker and cannot read a DNS record, and
+  several of them is a hundred tool definitions on every turn. The apex host is
+  the whole API behind `search` and `execute`: the model writes JavaScript
+  against the OpenAPI document and Cloudflare runs it, so 2,500 endpoints cost
+  about a thousand tokens instead of a million.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
   crew, to re-learn something that changes when a vendor ships rather than when
