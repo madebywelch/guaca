@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { foldTrail, hasDetail, readSpent, type Step, tellsMore, trailStep } from "./trail";
+import {
+  foldTrail,
+  hasDetail,
+  readSpent,
+  type Step,
+  stepDiff,
+  tellsMore,
+  trailStep,
+} from "./trail";
 import type { Part, ToolOutcome } from "./types";
 
 type ToolCall = Extract<Part, { type: "toolCall" }>;
@@ -9,6 +17,11 @@ const ok = (summary: string): ToolOutcome => ({ status: "ok", summary });
 
 function call(name: string, args: unknown, outcome: ToolOutcome = ok("done")): ToolCall {
   return { type: "toolCall", name, arguments: args, outcome };
+}
+
+/** A memory rewrite, which is the only call that carries what it overwrote. */
+function rewrote(content: string, replaced: string): ToolCall {
+  return { ...call("update_notes", { content }, ok("Memory saved.")), replaced };
 }
 
 function steps(...calls: ToolCall[]): Step[] {
@@ -229,5 +242,49 @@ describe("whether a chip opens anything", () => {
     );
     expect(hasDetail(groups[0]!)).toBe(true);
     expect(groups[0]?.steps[0]?.target).toBe("Smith handles verification.");
+  });
+
+  it("opens a memory that was cleared, which has no content and still lost one", () => {
+    // Nothing in the arguments to draw, so the rule that reads them alone made
+    // this the one memory write the operator could not open: the one where the
+    // agent threw the whole page away.
+    const groups = foldTrail(steps(rewrote("", "Smith handles verification.")));
+    expect(groups[0]?.steps[0]?.target).toBeNull();
+    expect(hasDetail(groups[0]!)).toBe(true);
+  });
+});
+
+describe("what a rewrite changed", () => {
+  it("compares against the version the runtime says it replaced", () => {
+    const [step] = steps(rewrote("Smith verifies.\nJones signs off.", "Smith verifies."));
+    expect(stepDiff(step!)?.map((line) => `${line.kind}:${line.text}`)).toEqual([
+      "same:Smith verifies.",
+      "added:Jones signs off.",
+    ]);
+  });
+
+  it("reads an empty previous version as a first memory, not as a missing one", () => {
+    // The difference is a falsy string. Read as nothing to compare against, an
+    // agent's first memory draws as a page with no history rather than as a
+    // page that is all new.
+    const [step] = steps(rewrote("Smith verifies.", ""));
+    expect(step?.replaced).toBe("");
+    expect(stepDiff(step!)).toEqual([{ kind: "added", text: "Smith verifies." }]);
+  });
+
+  it("has nothing to compare where the runtime recorded nothing", () => {
+    // Every write already in a channel, and every other tool there is.
+    const [written] = steps(call("update_notes", { content: "Smith verifies." }));
+    expect(stepDiff(written!)).toBeNull();
+
+    const [ran] = steps(call("run_command", { command: "ls" }));
+    expect(stepDiff(ran!)).toBeNull();
+  });
+
+  it("has nothing to draw where a rewrite cleared a memory that was empty", () => {
+    // Both sides empty, so the diff is no lines at all and the panel it would
+    // open is a control that opens onto nothing.
+    const [step] = steps(rewrote("", ""));
+    expect(stepDiff(step!)).toBeNull();
   });
 });

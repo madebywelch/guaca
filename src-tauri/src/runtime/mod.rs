@@ -2317,11 +2317,11 @@ impl Runtime {
             Err(err) => {
                 return (
                     err.guidance(),
-                    Part::ToolCall {
-                        name: call.name.clone(),
+                    Part::tool_call(
+                        call.name.clone(),
                         arguments,
-                        outcome: ToolOutcome::Failed { error: err.to_string() },
-                    },
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
                     None,
                 );
             }
@@ -2334,11 +2334,11 @@ impl Runtime {
         if let Some(refusal) = self.not_given(card, &invocation) {
             return (
                 refusal.clone(),
-                Part::ToolCall {
-                    name: call.name.clone(),
+                Part::tool_call(
+                    call.name.clone(),
                     arguments,
-                    outcome: ToolOutcome::Refused { reason: refusal },
-                },
+                    ToolOutcome::Refused { reason: refusal },
+                ),
                 None,
             );
         }
@@ -2385,14 +2385,7 @@ impl Runtime {
                         roster.iter().map(|e| e.name.as_str()).collect::<Vec<_>>().join(", ")
                     )
                 };
-                (
-                    payload,
-                    Part::ToolCall {
-                        name: tools::DIRECTORY.to_string(),
-                        arguments,
-                        outcome: ToolOutcome::Ok { summary },
-                    },
-                )
+                (payload, Part::tool_call(tools::DIRECTORY, arguments, ToolOutcome::Ok { summary }))
             }
 
             ToolInvocation::UpdateNotes { content } => {
@@ -2412,20 +2405,24 @@ impl Runtime {
                         };
                         (
                             summary.clone(),
-                            Part::ToolCall {
-                                name: tools::UPDATE_NOTES.to_string(),
+                            // Carrying what it replaced, so the transcript can
+                            // show what changed rather than a page of memory
+                            // the operator has to read twice to compare.
+                            Part::tool_call_replacing(
+                                tools::UPDATE_NOTES,
                                 arguments,
-                                outcome: ToolOutcome::Ok { summary },
-                            },
+                                ToolOutcome::Ok { summary },
+                                stored.before,
+                            ),
                         )
                     }
                     Err(err) => (
                         format!("Error: your memory could not be saved ({err})."),
-                        Part::ToolCall {
-                            name: tools::UPDATE_NOTES.to_string(),
+                        Part::tool_call(
+                            tools::UPDATE_NOTES,
                             arguments,
-                            outcome: ToolOutcome::Failed { error: err.to_string() },
-                        },
+                            ToolOutcome::Failed { error: err.to_string() },
+                        ),
                     ),
                 }
             }
@@ -2456,10 +2453,7 @@ impl Runtime {
                         ToolOutcome::Failed { error: err.to_string() },
                     ),
                 };
-                (
-                    rendered,
-                    Part::ToolCall { name: tools::RUN_COMMAND.to_string(), arguments, outcome },
-                )
+                (rendered, Part::tool_call(tools::RUN_COMMAND, arguments, outcome))
             }
 
             ToolInvocation::Schedule { action } => {
@@ -2469,7 +2463,7 @@ impl Runtime {
                         (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
                     }
                 };
-                (rendered, Part::ToolCall { name: tools::SCHEDULE.to_string(), arguments, outcome })
+                (rendered, Part::tool_call(tools::SCHEDULE, arguments, outcome))
             }
 
             ToolInvocation::Browse { action, args } => {
@@ -2482,11 +2476,11 @@ impl Runtime {
                 if let Some(refusal) = self.may_act_on(card, run_id, &action, reading).await {
                     return (
                         refusal.clone(),
-                        Part::ToolCall {
-                            name: tools::BROWSE.to_string(),
+                        Part::tool_call(
+                            tools::BROWSE,
                             arguments,
-                            outcome: ToolOutcome::Refused { reason: refusal },
-                        },
+                            ToolOutcome::Refused { reason: refusal },
+                        ),
                         None,
                     );
                 }
@@ -2515,7 +2509,7 @@ impl Runtime {
                         (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
                     }
                 };
-                (rendered, Part::ToolCall { name: tools::BROWSE.to_string(), arguments, outcome })
+                (rendered, Part::tool_call(tools::BROWSE, arguments, outcome))
             }
 
             ToolInvocation::OpenOnDesktop { command } => {
@@ -2553,10 +2547,7 @@ impl Runtime {
                         ToolOutcome::Failed { error: err.to_string() },
                     ),
                 };
-                (
-                    rendered,
-                    Part::ToolCall { name: tools::OPEN_ON_DESKTOP.to_string(), arguments, outcome },
-                )
+                (rendered, Part::tool_call(tools::OPEN_ON_DESKTOP, arguments, outcome))
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
@@ -2616,10 +2607,7 @@ impl Runtime {
                 } else {
                     format!("{rendered}\n{}", missing.join("\n"))
                 };
-                (
-                    rendered,
-                    Part::ToolCall { name: tools::SEND_MESSAGE.to_string(), arguments, outcome },
-                )
+                (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
             ToolInvocation::AttachFile { files } => {
@@ -2673,10 +2661,7 @@ impl Runtime {
                     rendered.push_str(&missing.join("\n"));
                 }
 
-                (
-                    rendered,
-                    Part::ToolCall { name: tools::ATTACH_FILE.to_string(), arguments, outcome },
-                )
+                (rendered, Part::tool_call(tools::ATTACH_FILE, arguments, outcome))
             }
 
             ToolInvocation::Plugin { kind, tool, arguments: sent } => {
@@ -2709,7 +2694,7 @@ impl Runtime {
                         (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
                     }
                 };
-                (rendered, Part::ToolCall { name, arguments, outcome })
+                (rendered, Part::tool_call(name, arguments, outcome))
             }
         };
 
@@ -2916,11 +2901,11 @@ impl Runtime {
                  and that they can give you a computer or a browser from your panel, then carry \
                  on with the part you can do from here."
                     .to_string(),
-                Part::ToolCall {
-                    name: tools::REQUEST_PERMISSION.to_string(),
+                Part::tool_call(
+                    tools::REQUEST_PERMISSION,
                     arguments,
-                    outcome: ToolOutcome::Refused { reason },
-                },
+                    ToolOutcome::Refused { reason },
+                ),
             );
         }
 
@@ -2943,14 +2928,7 @@ impl Runtime {
             .await;
 
         let outcome = |status: ToolOutcome, text: String| {
-            (
-                text,
-                Part::ToolCall {
-                    name: tools::REQUEST_PERMISSION.to_string(),
-                    arguments: arguments.clone(),
-                    outcome: status,
-                },
-            )
+            (text, Part::tool_call(tools::REQUEST_PERMISSION, arguments.clone(), status))
         };
 
         match permission {
@@ -2995,11 +2973,7 @@ impl Runtime {
         let failed = |message: String, error: String, arguments: serde_json::Value| {
             (
                 message,
-                Part::ToolCall {
-                    name: tools::CREATE_AGENT.to_string(),
-                    arguments,
-                    outcome: ToolOutcome::Failed { error },
-                },
+                Part::tool_call(tools::CREATE_AGENT, arguments, ToolOutcome::Failed { error }),
             )
         };
 
@@ -3089,11 +3063,11 @@ impl Runtime {
                      do if it matters.",
                     clean.name
                 ),
-                Part::ToolCall {
-                    name: tools::CREATE_AGENT.to_string(),
+                Part::tool_call(
+                    tools::CREATE_AGENT,
                     arguments,
-                    outcome: ToolOutcome::Refused { reason: "the operator declined".to_string() },
-                },
+                    ToolOutcome::Refused { reason: "the operator declined".to_string() },
+                ),
             ),
             Permission::Unanswered => (
                 format!(
@@ -3103,13 +3077,11 @@ impl Runtime {
                      they are back.",
                     clean.name
                 ),
-                Part::ToolCall {
-                    name: tools::CREATE_AGENT.to_string(),
+                Part::tool_call(
+                    tools::CREATE_AGENT,
                     arguments,
-                    outcome: ToolOutcome::Refused {
-                        reason: "the operator did not answer".to_string(),
-                    },
-                },
+                    ToolOutcome::Refused { reason: "the operator did not answer".to_string() },
+                ),
             ),
             Permission::Failed(err) => failed(
                 format!(
@@ -3135,11 +3107,11 @@ impl Runtime {
             Err(err) => {
                 return (
                     format!("Error: {} could not be created ({err}).", clean.name),
-                    Part::ToolCall {
-                        name: tools::CREATE_AGENT.to_string(),
+                    Part::tool_call(
+                        tools::CREATE_AGENT,
                         arguments,
-                        outcome: ToolOutcome::Failed { error: err.to_string() },
-                    },
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
                 )
             }
         };
@@ -3177,11 +3149,11 @@ impl Runtime {
                  work is ready, send it.{bare}",
                 name = card.name
             ),
-            Part::ToolCall {
-                name: tools::CREATE_AGENT.to_string(),
+            Part::tool_call(
+                tools::CREATE_AGENT,
                 arguments,
-                outcome: ToolOutcome::Ok { summary: format!("created {}", card.name) },
-            },
+                ToolOutcome::Ok { summary: format!("created {}", card.name) },
+            ),
         )
     }
 
@@ -3245,11 +3217,7 @@ impl Runtime {
         let failed = |message: String, err: String, arguments: serde_json::Value| {
             (
                 message,
-                Part::ToolCall {
-                    name: tools::USE_SCREEN.to_string(),
-                    arguments,
-                    outcome: ToolOutcome::Failed { error: err },
-                },
+                Part::tool_call(tools::USE_SCREEN, arguments, ToolOutcome::Failed { error: err }),
                 None,
             )
         };
@@ -3350,11 +3318,7 @@ impl Runtime {
 
         (
             rendered,
-            Part::ToolCall {
-                name: tools::USE_SCREEN.to_string(),
-                arguments,
-                outcome: ToolOutcome::Ok { summary },
-            },
+            Part::tool_call(tools::USE_SCREEN, arguments, ToolOutcome::Ok { summary }),
             Some(screen.image),
         )
     }
