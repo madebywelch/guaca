@@ -474,6 +474,50 @@ preset prompt states a stopping condition. A prompt without one makes a crew
 that talks to itself, no automated suite can see it, and the evals are what
 catch it. Run `./scripts/evals.sh` after touching a preset.
 
+## The model field suggests three, and is still a text box
+
+An agent's model is any slug its endpoint accepts, and the endpoint is the
+operator's to choose. That is right, and it also means somebody who has just
+decided they want an agent that reads contracts is looking at a blank box with
+no way to find out what to put in it. Under the box are three models, and
+pressing one fills the box in. It is the same edit as typing: nothing is saved
+by it, and nothing about the field changed.
+
+Deriving what the agent is for is a keyword scan over the name, the skills and
+the instructions, in `src/lib/roles.ts`. Not a model call: it runs on every
+keystroke in three fields, it would cost money and a round trip to answer a
+question a keyword answers, and it would answer it differently on two openings
+of the same dialog. It is also the one place a wrong answer is invisible, since
+an operator cannot tell a considered "marketing" from a guessed one. Keywords
+are free, the same twice, and wrong in ways a person can see and ignore.
+
+Saying nothing is the common answer and not a failure. OpenRouter classifies
+traffic into twelve use cases and most agents are none of them: a Manager, a
+Router, an Inbox. There is a floor under the evidence and a tie is not a winner,
+because an agent described as equally legal and financial has no single best
+model, and a confident wrong suggestion is what teaches an operator to ignore
+the right ones. Sales is the one word bent to fit: OpenRouter ranks nothing for
+it, and an agent called Sales is the second thing anybody builds here, so sales
+vocabulary scores into marketing rather than into silence.
+
+Nothing is offered unless OpenRouter is what pays for that agent's turns,
+resolved crew over app the way the backend resolves it. A slug only means
+something at the endpoint it was ranked at, and `anthropic/claude-opus-5` put
+into a field pointed at `api.openai.com` is a refusal by name on the next turn,
+an hour after the button was pressed and with nothing connecting the two.
+
+The order is not the one OpenRouter returns by default, and that is the whole
+design. Its default is how many tokens it routed to each model for that kind of
+work, which is bulk traffic: the same cheap high-throughput model tops eleven of
+the twelve, so a picker built on it suggests one model for every agent while
+claiming a different reason each time. So the use case chooses the pool, the
+models people actually send that work to, and capability orders the pool. Every
+row carries its price, because capability ordering ignores price and the most
+capable model in a pool is regularly the dearest thing in it: a one-click swap
+that hid the number would be a one-click way to make every turn forty times
+dearer. `llm/catalogue.rs` has the rest, including why the twelve are checked
+before a request is spent rather than after.
+
 ## A duplicate copies the card and nothing an agent went and did
 
 Look, model, skills and instructions; not the sandbox, the memory, the schedule,

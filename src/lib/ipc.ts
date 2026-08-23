@@ -46,6 +46,7 @@ import type {
   PluginKind,
   PluginOffer,
   ProtectedAction,
+  RankedModel,
   Routine,
   RoutineDraft,
   RoutineId,
@@ -365,6 +366,16 @@ export const api = {
    * API key configured" for a key they can see, which reads as a bug.
    */
   testConnection: (patch?: SettingsPatch) => invoke<string>("test_connection", { patch }),
+
+  /**
+   * The models OpenRouter sees doing one kind of work, most capable first.
+   *
+   * The category is one of `ROLES` in `lib/roles.ts` and the backend refuses
+   * anything else, so this is a use case rather than a URL: the webview does not
+   * get to say where the request goes. Cached behind the command for hours, so
+   * calling it as an operator types costs one request per use case.
+   */
+  rankedModels: (category: string) => invoke<RankedModel[]>("ranked_models", { category }),
 
   subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
 

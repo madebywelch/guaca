@@ -15,6 +15,7 @@ use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
 use crate::files::FileStore;
+use crate::llm::catalogue::Catalogue;
 use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
@@ -368,7 +369,14 @@ pub fn run() {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| data_dir.clone());
 
-            app.manage(AppState { runtime, config_path, downloads, subscription, account });
+            app.manage(AppState {
+                runtime,
+                config_path,
+                downloads,
+                subscription,
+                account,
+                catalogue: Arc::new(Catalogue::new()),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -439,6 +447,7 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,
+            commands::ranked_models,
             commands::account_status,
             commands::sign_in_account,
             commands::account_connectors,

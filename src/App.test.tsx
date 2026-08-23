@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
 import type { AgentCard, Routine, Settings } from "./lib/types";
+import { aGroup } from "./test-fixtures";
 
 /**
  * Smoke test for the shell.
@@ -47,28 +47,10 @@ const getSettings = vi.fn<() => Promise<Settings>>(async () => ({
 vi.mock("./lib/ipc", () => ({
   api: {
     listAgents: () => listAgents(),
-    listGroups: async () => [
-      {
-        id: "00000000-0000-4000-8000-000000000001",
-        name: "Everyone",
-        agentCount: 3,
-        createdAt: 0,
-        baseUrl: null,
-        defaultModel: null,
-        provider: "compatible",
-        subscriptionModel: "gpt-5.6-luna",
-        subscriptionModels: ["gpt-5.6-luna", "gpt-5.4-mini"],
-        apiKeySet: false,
-        e2bKeySet: false,
-        e2bKeyHint: "",
-        computerIdleMinutes: 15,
-        kernelKeySet: false,
-        kernelKeyHint: "",
-        browserIdleMinutes: 60,
-        browserStealth: false,
-        apiKeyHint: "",
-      },
-    ],
+    // The shared fixture rather than a hand-built object: this one had drifted
+    // into a mixture of a group and the app's settings, with a group's own
+    // `inference` block missing entirely, and nothing typechecks a mock.
+    listGroups: async () => [aGroup({ agentCount: 3 })],
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
     approvalStates: async () => ({}),

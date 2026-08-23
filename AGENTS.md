@@ -18,6 +18,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/diff.ts         Two versions of a page, as the lines between them.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
+  lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
   lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
   lib/prefs.ts        What the operator sets and the runtime never reads.
@@ -41,6 +42,7 @@ src-tauri/src/
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
+    catalogue.rs      Which models OpenRouter sees doing which kind of work.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP. Three methods, one POST each.
@@ -105,6 +107,7 @@ repo: the frontend renders state and forwards intent.
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
+| What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalogue.rs`, whose twelve use cases have to agree |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.
@@ -371,6 +374,28 @@ the model takes a screenshot to see what `browse` did.
   `&` as a mnemonic marker and eats it, so an agent called `R&D` draws as `RD`.
   `menubar::escape_mnemonic` is applied on the way into an item and nowhere
   earlier, so the rows a test reads are the words a person would.
+- **A model suggestion is ranked by capability inside a use case, never by
+  OpenRouter's default order.** That order is tokens routed, which is bulk
+  traffic: the same cheap high-throughput model tops eleven of the twelve use
+  cases, so three suggestions built on it are the same three under every agent
+  with a different sentence above them each time. The category picks the pool
+  and `sort=intelligence-high-to-low` picks the order inside it. The price on
+  each row is not decoration either: capability ordering ignores price, so
+  without it the button is a one-click way to make every turn forty times
+  dearer.
+- **An unknown category is refused in `catalogue.rs`, not by OpenRouter.**
+  OpenRouter answers one with 200 and an empty list, so a slug it has renamed is
+  indistinguishable from a use case nobody sends work to, and the dialog would
+  draw nothing for exactly the agents it was built for. `ipc.contract.test.ts`
+  compares the twelve in `CATEGORIES` against the twelve in `ROLES`, and the
+  `#[ignore]`d test in `catalogue.rs` asks the live service whether it still
+  ranks all of them, which is the failure no offline suite can see.
+- **`roleFor` returning nothing is the common answer, and a tie returns
+  nothing too.** Most agents are a Manager or an Inbox and OpenRouter has no
+  category for either. A scorer that always names its best guess puts a legal
+  model under a scheduling agent, and one bad suggestion is what teaches an
+  operator to ignore the good ones. Sales is the single deliberate bend: nothing
+  ranks it, so its vocabulary scores into marketing.
 - **Closing the window hides it, and only while the tray exists.** Tauri exits
   when the last window closes, which for this app means a routine set for every
   morning stops firing the first time somebody tidies their screen. A hidden
@@ -476,4 +501,16 @@ build expects, which is the failure no offline test can see. It reaches the inte
 
 ```sh
 ./scripts/plugins.sh
+```
+
+The model suggestions beside an agent's model field have the same shape again,
+without a script because it is one test. It asks the live OpenRouter whether it
+still ranks models for all twelve of the use cases this build believes in, which
+is the one failure the offline suite cannot see: a category renamed there answers
+200 with an empty list. It reaches the internet, authorises nothing and spends
+nothing.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib \
+  llm::catalogue::tests::every_use_case -- --ignored --nocapture
 ```
