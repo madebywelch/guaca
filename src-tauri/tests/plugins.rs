@@ -39,6 +39,9 @@ use guac_lib::domain::plugin::{PluginAccess, PluginKind};
 use guac_lib::llm::tools::{self, ToolInvocation};
 use guac_lib::plugins;
 
+/// A tool narrowed to nobody: switched off for the whole crew.
+const NOBODY: PluginAccess = PluginAccess::Chosen { agents: Vec::new() };
+
 /// How the scripted server behaves. Every field is something a real one does.
 #[derive(Debug, Clone)]
 struct Rules {
@@ -445,7 +448,10 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
     assert!(!plugin.signed_in, "nothing was authorised, so nothing may claim to have been");
     let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
     assert_eq!(named, vec!["run_sql", "list_projects"]);
-    assert!(plugin.tools.iter().all(|tool| tool.allowed), "a plugin arrives with nothing off");
+    assert!(
+        plugin.tools.iter().all(|tool| tool.access == PluginAccess::Everyone),
+        "a plugin arrives with nothing narrowed"
+    );
     assert_eq!(server.registrations.load(Ordering::SeqCst), 0);
 }
 
@@ -1265,7 +1271,7 @@ async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_
     )
     .await
     .unwrap();
-    h.runtime.store().set_plugin_tool(plugin.id, "run_sql", false).unwrap();
+    h.runtime.store().set_plugin_tool(plugin.id, "run_sql", &NOBODY).unwrap();
 
     let run = h.runtime.send_from_human(h.id("Manager"), "Check the database.").unwrap();
     h.settle(run).await;
@@ -1345,6 +1351,149 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
 }
 
 #[tokio::test]
+async fn two_agents_on_one_plugin_are_offered_different_tools_and_told_whose_is_whose() {
+    // The whole point of the second axis, end to end. One sign-in, two agents,
+    // and the halves they were given: the definitions each is offered, the line
+    // each prompt carries about the other half, and the refusal the model gets
+    // if it names the tool anyway.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("Told the operator.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "neon__list_projects".into(),
+                arguments: serde_json::json!({}),
+            }
+        }
+    })
+    .await;
+
+    let h = harness::harness(
+        &model,
+        &["Reader", "Writer"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Reader")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        None,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    // Both are on the plugin. Only one is on each tool.
+    h.runtime
+        .store()
+        .set_plugin_tool(
+            plugin.id,
+            "run_sql",
+            &PluginAccess::Chosen { agents: vec![h.id("Writer")] },
+        )
+        .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_tool(
+            plugin.id,
+            "list_projects",
+            &PluginAccess::Chosen { agents: vec![h.id("Reader")] },
+        )
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Reader"), "What is in the database?").unwrap();
+    h.settle(run).await;
+
+    // Offered its own half and not the other's, and the call it made went out.
+    let offered: Vec<String> = model.transcript.lock()[0]["tools"]
+        .as_array()
+        .expect("a turn carries tool definitions")
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(offered.contains(&"neon__list_projects".to_string()), "offered {offered:?}");
+    assert!(!offered.contains(&"neon__run_sql".to_string()), "offered {offered:?}");
+    assert!(!server.called.lock().is_empty(), "the half it was given still reaches the vendor");
+
+    // And told whose the other half is, in the sentence that sends it to a
+    // peer rather than to the operator.
+    let prompt = harness::prompts_by_agent(&model).remove("Reader").expect("Reader had a turn");
+    assert!(prompt.contains("Someone else's on this plugin"), "{prompt}");
+    assert!(prompt.contains("run_sql"), "{prompt}");
+    assert!(!prompt.contains("Switched off by the operator"), "{prompt}");
+    // The roster names who, because a peer nobody can name is not a way
+    // forward. The plugin line alone cannot say this: Reader has Neon.
+    assert!(prompt.contains("the Neon plugin's run_sql"), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_tool_that_is_a_peer_s_is_refused_here_and_not_at_the_vendor() {
+    // A model names tools it was never offered, so the definitions are not the
+    // enforcement. The refusal has to be the one that sends the turn to a peer,
+    // because a peer does have it — which is the difference from a tool
+    // switched off for everybody.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("Handing that to the peer who has it.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "neon__run_sql".into(),
+                arguments: serde_json::json!({ "sql": "select 1" }),
+            }
+        }
+    })
+    .await;
+
+    let h = harness::harness(
+        &model,
+        &["Reader", "Writer"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Reader")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        None,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_tool(
+            plugin.id,
+            "run_sql",
+            &PluginAccess::Chosen { agents: vec![h.id("Writer")] },
+        )
+        .unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Reader"), "Run a query.").unwrap();
+    h.settle(run).await;
+
+    let results = harness::tool_results(&model);
+    assert!(
+        results.iter().any(|r| r.contains("is not") && r.contains("hand that part over")),
+        "got {results:?}"
+    );
+    // And it is not the sentence that tells an agent to stop asking, because
+    // there is somebody to ask.
+    assert!(!results.iter().any(|r| r.contains("Do not ask a peer")), "got {results:?}");
+    assert!(server.called.lock().is_empty(), "a tool that is a peer's must not reach the vendor");
+    assert_eq!(h.channel_texts("Reader").len(), 2, "the operator is answered either way");
+}
+
+#[tokio::test]
 async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
     // The roster's whole job is to stop work being routed to an agent that
     // cannot do it. A plugin narrowed to one agent and then switched off tool
@@ -1377,7 +1526,7 @@ async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
         .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![h.id("Revenue")] })
         .unwrap();
     for tool in ["run_sql", "list_projects"] {
-        h.runtime.store().set_plugin_tool(plugin.id, tool, false).unwrap();
+        h.runtime.store().set_plugin_tool(plugin.id, tool, &NOBODY).unwrap();
     }
 
     let run = h.runtime.send_from_human(h.id("Scribe"), "Anything to report?").unwrap();

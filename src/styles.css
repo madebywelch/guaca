@@ -3347,9 +3347,13 @@ button {
   gap: 0.1rem;
 }
 
+/* Wraps, because a narrowed tool grows a second line of names underneath it.
+   The name, the sentence and the two answers stay on the first line at every
+   width, and the crew drops below them rather than squeezing them. */
 .toolset__item {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
   padding: 0.3rem 0;
   border-top: 1px solid var(--edge);
@@ -3385,6 +3389,24 @@ button {
   overflow: hidden;
   font-size: 0.66rem;
   color: var(--muted);
+}
+
+/* Who ends up able to call a narrowed tool, once the plugin's answer and the
+   tool's are both applied. Drawn in the body colour rather than the muted one
+   the sentence above it uses: it is the consequence of a decision the operator
+   just made, and the vendor's blurb is background. */
+.toolset__who {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.64rem;
+  color: var(--text);
+}
+
+/* The names, on their own line under the row that narrowed the tool. A full
+   basis rather than a wrap that happens to fall there: a crew of two would
+   otherwise sit beside the answer buttons and read as a third answer. */
+.toolset__crew {
+  flex-basis: 100%;
 }
 
 /* The disclosure. A link's weight rather than a button's, because it reveals

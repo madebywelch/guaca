@@ -1113,11 +1113,11 @@ impl Store {
     pub fn group_plugins(&self, group: GroupId) -> Result<Vec<Plugin>, StoreError> {
         let conn = self.conn()?;
         let chosen = self.chosen_agents(&conn, group)?;
-        let denied = self.denied_tools(&conn, group)?;
+        let tools = self.tool_access(&conn, group)?;
         let mut stmt =
             conn.prepare(&format!("{PLUGIN_COLUMNS} WHERE group_id=?1 ORDER BY kind, rowid"))?;
         let rows =
-            stmt.query_map(params![group.to_string()], |row| row_to_plugin(row, &chosen, &denied))?;
+            stmt.query_map(params![group.to_string()], |row| row_to_plugin(row, &chosen, &tools))?;
         let mut out = Vec::new();
         for row in rows {
             // A row whose kind is not one this build knows is skipped rather
@@ -1167,59 +1167,95 @@ impl Store {
         Ok(out)
     }
 
-    /// The tools one group has switched off, by the plugin they belong to.
+    /// Who may call each narrowed tool, by the plugin and tool it belongs to.
     ///
-    /// Refusals rather than permissions, so a plugin with no rows here offers
-    /// everything it published, which is what every plugin connected before
-    /// this control existed does and what a tool a vendor ships next month
-    /// does. One query for the whole group, for the reason
+    /// The narrowings are what is stored, so a tool missing from this map is
+    /// one every agent the plugin reaches may call: that is what every plugin
+    /// connected before this control existed offers, and what a tool a vendor
+    /// ships next month offers. One query for the whole group, for the reason
     /// [`Store::chosen_agents`] is one: this is read to draw a panel and to
     /// build a turn, and neither wants five queries for five tiles.
-    fn denied_tools(
+    ///
+    /// Two statements rather than a join, because the empty set is meaningful
+    /// and a join cannot return one. A tool narrowed to nobody has a row in
+    /// `plugin_tool_access` and none in `plugin_tool_agents`, and an inner join
+    /// would drop it back to "everyone" — the one mistake this whole shape is
+    /// built to make impossible.
+    fn tool_access(
         &self,
         conn: &Conn,
         group: GroupId,
-    ) -> Result<HashMap<PluginId, HashSet<String>>, StoreError> {
+    ) -> Result<HashMap<(PluginId, String), PluginAccess>, StoreError> {
+        let mut named: HashMap<(PluginId, String), Vec<AgentId>> = HashMap::new();
         let mut stmt = conn.prepare(
-            "SELECT plugin_denied_tools.plugin_id, plugin_denied_tools.tool
-               FROM plugin_denied_tools
-               JOIN plugins ON plugins.id = plugin_denied_tools.plugin_id
+            "SELECT plugin_tool_agents.plugin_id, plugin_tool_agents.tool,
+                    plugin_tool_agents.agent_id
+               FROM plugin_tool_agents
+               JOIN plugins ON plugins.id = plugin_tool_agents.plugin_id
+              WHERE plugins.group_id = ?1
+              ORDER BY plugin_tool_agents.rowid",
+        )?;
+        let rows = stmt.query_map(params![group.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        for row in rows {
+            let (plugin, tool, agent) = row?;
+            // An id that will not parse names nothing, so it grants nothing.
+            // Dropping it is the fail-closed reading: the tool keeps its
+            // narrowing and loses one name, rather than the narrowing being
+            // lost with it.
+            let (Ok(plugin), Ok(agent)) = (plugin.parse::<PluginId>(), agent.parse::<AgentId>())
+            else {
+                continue;
+            };
+            named.entry((plugin, tool)).or_default().push(agent);
+        }
+
+        let mut stmt = conn.prepare(
+            "SELECT plugin_tool_access.plugin_id, plugin_tool_access.tool,
+                    plugin_tool_access.access
+               FROM plugin_tool_access
+               JOIN plugins ON plugins.id = plugin_tool_access.plugin_id
               WHERE plugins.group_id = ?1",
         )?;
         let rows = stmt.query_map(params![group.to_string()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
         })?;
 
-        let mut out: HashMap<PluginId, HashSet<String>> = HashMap::new();
+        let mut out: HashMap<(PluginId, String), PluginAccess> = HashMap::new();
         for row in rows {
-            let (plugin, tool) = row?;
+            let (plugin, tool, access) = row?;
             // An id that will not parse names no plugin this can be read
             // against: every reader of this map looks up a row whose own id
             // parsed, and a row whose id does not parse raises rather than
             // being offered. Dropping it here loses nothing.
             let Ok(plugin) = plugin.parse::<PluginId>() else { continue };
-            out.entry(plugin).or_default().insert(tool);
+            let key = (plugin, tool);
+            let agents = named.remove(&key).unwrap_or_default();
+            out.insert(key, PluginAccess::from_row(&access, agents));
         }
         Ok(out)
     }
 
     /// What one agent can call, with the schemas the model is shown, and what
-    /// the operator switched off.
+    /// it cannot, split by whose it is instead.
     ///
     /// Separate from `group_plugins` for the reason `connector_env` is separate
     /// from `group_connectors`: this is the bulk nothing but the turn needs,
     /// and it is read on the hot path rather than to draw a list.
     ///
-    /// Filtered by agent rather than by group, because what is offered to a
-    /// model has to be what that model may actually call. The prompt is built
-    /// from the same list on the same turn, so an agent is never told about a
-    /// plugin it would be refused.
+    /// Filtered by agent rather than by group, on both axes, because what is
+    /// offered to a model has to be what that model may actually call. The
+    /// prompt is built from the same list on the same turn, so an agent is
+    /// never told about a plugin or a tool it would be refused.
     ///
-    /// The switched-off ones come back beside them rather than being dropped
+    /// The ones it cannot call come back beside them rather than being dropped
     /// here, because the prompt names them: an agent that is simply not shown
-    /// `refund` answers "we cannot do refunds", when the true answer is that
-    /// the operator switched refunds off and can switch them back on. Nothing
-    /// about them reaches the tool definitions.
+    /// `refund` answers "we cannot do refunds", when the true answer is either
+    /// that the operator switched refunds off and can switch them back on, or
+    /// that the agent next to it does refunds. Which of those it is decides
+    /// which list it lands in. Nothing about either reaches the tool
+    /// definitions.
     ///
     /// The tool half of the rule is applied here, in Rust, and in SQL in
     /// [`Store::plugin_reach`]. Both compare the server's own unprefixed name
@@ -1233,7 +1269,7 @@ impl Store {
         agent: AgentId,
     ) -> Result<Vec<PluginToolset>, StoreError> {
         let conn = self.conn()?;
-        let denied = self.denied_tools(&conn, group)?;
+        let narrowed = self.tool_access(&conn, group)?;
         let mut stmt = conn.prepare(&format!(
             "SELECT id, kind, tools FROM plugins
               WHERE group_id=:group AND {PLUGIN_REACHED_BY_AGENT}
@@ -1253,19 +1289,32 @@ impl Store {
             let tools: Vec<PluginTool> = serde_json::from_str(&tools)
                 .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind:?}: {e}")))?;
             // Raised rather than skipped, so that a row whose id cannot be read
-            // fails the turn instead of quietly losing every refusal filed
+            // fails the turn instead of quietly losing every narrowing filed
             // against it. `group_plugins` reads the same id the same way.
             let id = id
                 .parse::<PluginId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
-            let off = denied.get(&id);
 
-            let mut set = PluginToolset { kind, offered: Vec::new(), withheld: Vec::new() };
+            let mut set = PluginToolset {
+                kind,
+                offered: Vec::new(),
+                withheld: Vec::new(),
+                elsewhere: Vec::new(),
+            };
             for tool in tools {
-                if off.is_some_and(|off| off.contains(&tool.name)) {
-                    set.withheld.push(tool.name);
-                } else {
-                    set.offered.push(tool);
+                match narrowed.get(&(id, tool.name.clone())) {
+                    Some(access) if !access.allows(agent) => {
+                        // Nobody's, or somebody else's. The two are different
+                        // sentences in the prompt and different refusals on the
+                        // call path, and this is the same order `plugin_reach`
+                        // asks in: what is true of everybody first.
+                        if access.allows_nobody() {
+                            set.withheld.push(tool.name);
+                        } else {
+                            set.elsewhere.push(tool.name);
+                        }
+                    }
+                    _ => set.offered.push(tool),
                 }
             }
             out.push(set);
@@ -1279,21 +1328,25 @@ impl Store {
     /// straight back to the server that issued it. Nothing here reaches a
     /// prompt, a transcript, an event or the webview.
     ///
-    /// Four answers rather than an `Option`, because three of them are refusals
+    /// Five answers rather than an `Option`, because four of them are refusals
     /// an agent reads mid-turn and they call for different things. "Nobody has
     /// connected this" is something to tell the operator about; "you are not
-    /// one of the agents it was connected for" is something to hand to a peer;
-    /// "this tool is switched off" is neither, because no peer has it either.
-    /// Collapsing any two would have an agent asking an operator to connect a
-    /// plugin they are looking at in the settings panel, or handing a peer work
-    /// nobody in the crew can do.
+    /// one of the agents it was connected for" and "this tool is not one of
+    /// yours" are things to hand to a peer; "this tool is switched off" is
+    /// neither, because no peer has it either. Collapsing any two would have an
+    /// agent asking an operator to connect a plugin they are looking at in the
+    /// settings panel, or handing a peer work nobody in the crew can do.
     ///
     /// The tool is asked about here and not only where the definitions are
-    /// built, because a model names tools it was never offered. Asked in that
-    /// order, too: a switched-off tool is switched off for the whole crew, so
-    /// an agent that is neither chosen nor allowed this tool is told the thing
-    /// that is true of everybody rather than sent to a peer who would be
-    /// refused in turn.
+    /// built, because a model names tools it was never offered.
+    ///
+    /// Asked most-general first, because more than one of these is true at
+    /// once and the widest true answer is the useful one. A tool narrowed to
+    /// nobody is off for the whole crew, so an agent that is also not on the
+    /// plugin is told that rather than sent to a peer who would be refused in
+    /// turn. A plugin this agent is not on is refused before one of its tools
+    /// is, because that answer covers every tool the plugin has rather than
+    /// this one.
     pub fn plugin_reach(
         &self,
         group: GroupId,
@@ -1304,7 +1357,8 @@ impl Store {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,
-                    token_endpoint,{PLUGIN_REACHED_BY_AGENT},{PLUGIN_TOOL_ALLOWED}
+                    token_endpoint,{PLUGIN_REACHED_BY_AGENT},
+                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE}
                FROM plugins WHERE group_id=:group AND kind=:kind",
         ))?;
         let row = stmt
@@ -1326,6 +1380,7 @@ impl Store {
                         row.get::<_, String>(6)?,
                         row.get::<_, i64>(7)? != 0,
                         row.get::<_, i64>(8)? != 0,
+                        row.get::<_, i64>(9)? != 0,
                     ))
                 },
             )
@@ -1340,16 +1395,20 @@ impl Store {
             client_secret,
             token_endpoint,
             reached,
-            allowed,
+            tool_mine,
+            tool_anyones,
         )) = row
         else {
             return Ok(PluginReach::NotConnected);
         };
-        if !allowed {
+        if !tool_anyones {
             return Ok(PluginReach::ToolDenied);
         }
         if !reached {
             return Ok(PluginReach::NotChosen);
+        }
+        if !tool_mine {
+            return Ok(PluginReach::ToolNotChosen);
         }
         let id = id
             .parse::<PluginId>()
@@ -1438,28 +1497,36 @@ impl Store {
             .ok_or(StoreError::PluginNotFound(id))
     }
 
-    /// Switches one of a connected plugin's tools on or off for the crew.
+    /// Chooses which of a crew's agents may call one of a plugin's tools.
     ///
-    /// One named tool and one answer, rather than the whole set the way
-    /// [`Store::set_plugin_access`] takes it, and the difference is what the
-    /// two are. Who may use a plugin is a set, and a caller that sent the part
-    /// of it it happened to know would narrow the plugin by forgetting
-    /// somebody. A tool is a switch: naming it and saying which way it goes
-    /// cannot be ambiguous, and a whole-set write from a panel that can only
-    /// see today's tool list would drop a refusal filed against a tool the
-    /// vendor has temporarily stopped publishing.
+    /// One named tool, and the whole answer for it. Naming the tool is what
+    /// keeps this from being the whole-set write [`Store::set_plugin_access`]
+    /// is: a panel that sent every tool it could see would drop a narrowing
+    /// filed against a tool the vendor has temporarily stopped publishing.
+    /// Inside the named tool the set is replaced rather than merged, for the
+    /// reason it is there — a caller sending the agents it happened to know
+    /// would narrow the tool by forgetting somebody, and the panel that sends
+    /// this renders what it last read.
+    ///
+    /// [`PluginAccess::Everyone`] deletes the rows rather than storing them.
+    /// The absence of a row is the permission, so a tool put back to everyone
+    /// has to look like a tool nobody ever touched: kept as a row it would be a
+    /// stored `everyone` that a later reader has to treat as equivalent to
+    /// absence, which is two ways to say one thing and one of them wrong.
     ///
     /// Refused for a tool this plugin does not publish. Storing one would be a
-    /// refusal that names nothing, in a table nothing can show the operator,
+    /// decision that names nothing, in a table nothing can show the operator,
     /// and it means the panel is looking at a list older than the server's.
     pub fn set_plugin_tool(
         &self,
         id: PluginId,
         tool: &str,
-        allowed: bool,
+        access: &PluginAccess,
     ) -> Result<Plugin, StoreError> {
-        let conn = self.conn()?;
-        let row: Option<(String, String)> = conn
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+
+        let row: Option<(String, String)> = tx
             .query_row(
                 "SELECT group_id, tools FROM plugins WHERE id=?1",
                 params![id.to_string()],
@@ -1474,17 +1541,56 @@ impl Store {
             return Err(StoreError::PluginToolNotFound(id, tool.to_string()));
         }
 
-        if allowed {
-            conn.execute(
-                "DELETE FROM plugin_denied_tools WHERE plugin_id=?1 AND tool=?2",
-                params![id.to_string(), tool],
-            )?;
-        } else {
-            conn.execute(
-                "INSERT OR IGNORE INTO plugin_denied_tools (plugin_id, tool) VALUES (?1, ?2)",
-                params![id.to_string(), tool],
-            )?;
+        if let PluginAccess::Chosen { agents } = access {
+            for agent in agents {
+                // Refused rather than filtered out, for the reason
+                // `set_plugin_access` refuses one: a row naming an agent from
+                // another crew grants nothing and draws a name in a settings
+                // panel that means nothing.
+                let known: Option<i64> = tx
+                    .query_row(
+                        "SELECT 1 FROM agents
+                          WHERE id=?1 AND group_id=?2 AND lifecycle<>'terminated'",
+                        params![agent.to_string(), group],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if known.is_none() {
+                    return Err(StoreError::AgentNotInGroup(*agent));
+                }
+            }
         }
+
+        tx.execute(
+            "DELETE FROM plugin_tool_agents WHERE plugin_id=?1 AND tool=?2",
+            params![id.to_string(), tool],
+        )?;
+        match access {
+            PluginAccess::Everyone => {
+                tx.execute(
+                    "DELETE FROM plugin_tool_access WHERE plugin_id=?1 AND tool=?2",
+                    params![id.to_string(), tool],
+                )?;
+            }
+            PluginAccess::Chosen { agents } => {
+                tx.execute(
+                    "INSERT INTO plugin_tool_access (plugin_id, tool, access) VALUES (?1, ?2, ?3)
+                     ON CONFLICT(plugin_id, tool) DO UPDATE SET access=excluded.access",
+                    params![id.to_string(), tool, access.as_str()],
+                )?;
+                for agent in agents {
+                    // A set, so a name sent twice is one row rather than a
+                    // conflict. Nothing about who may call this depends on how
+                    // many times the caller listed them.
+                    tx.execute(
+                        "INSERT OR IGNORE INTO plugin_tool_agents (plugin_id, tool, agent_id)
+                         VALUES (?1, ?2, ?3)",
+                        params![id.to_string(), tool, agent.to_string()],
+                    )?;
+                }
+            }
+        }
+        tx.commit()?;
 
         let group = group
             .parse::<GroupId>()
@@ -1495,15 +1601,27 @@ impl Store {
             .ok_or(StoreError::PluginNotFound(id))
     }
 
-    /// Drops one agent's place on every plugin that named it.
+    /// Drops one agent's place on every plugin and every tool that named it.
     ///
     /// Called when an agent is retired, for the reason its approvals are: a
     /// permission the operator gave to an agent that no longer exists is a row
     /// nothing can act on and a name in a settings panel that points at nobody.
+    ///
+    /// Both tables, and the tool one matters more than it looks: a tool left
+    /// naming a retired agent and nobody else is a tool the panel draws as
+    /// narrowed to somebody, that in fact nobody can call, and the refusal an
+    /// agent gets for it would send it to a peer that is gone.
     pub fn delete_agent_plugin_access(&self, agent: AgentId) -> Result<usize, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn
-            .execute("DELETE FROM plugin_agents WHERE agent_id=?1", params![agent.to_string()])?)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let mut removed =
+            tx.execute("DELETE FROM plugin_agents WHERE agent_id=?1", params![agent.to_string()])?;
+        removed += tx.execute(
+            "DELETE FROM plugin_tool_agents WHERE agent_id=?1",
+            params![agent.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(removed)
     }
 
     /// Records a connection, replacing whatever was there for that server.
@@ -1596,7 +1714,8 @@ impl Store {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
         tx.execute("DELETE FROM plugin_agents WHERE plugin_id=?1", params![id.to_string()])?;
-        tx.execute("DELETE FROM plugin_denied_tools WHERE plugin_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM plugin_tool_access WHERE plugin_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM plugin_tool_agents WHERE plugin_id=?1", params![id.to_string()])?;
         let removed = tx.execute("DELETE FROM plugins WHERE id=?1", params![id.to_string()])?;
         tx.commit()?;
         Ok(removed > 0)
@@ -1941,7 +2060,12 @@ impl Store {
             params![id.to_string()],
         )?;
         conn.execute(
-            "DELETE FROM plugin_denied_tools WHERE plugin_id IN
+            "DELETE FROM plugin_tool_access WHERE plugin_id IN
+                 (SELECT id FROM plugins WHERE group_id=?1)",
+            params![id.to_string()],
+        )?;
+        conn.execute(
+            "DELETE FROM plugin_tool_agents WHERE plugin_id IN
                  (SELECT id FROM plugins WHERE group_id=?1)",
             params![id.to_string()],
         )?;
@@ -2709,17 +2833,21 @@ fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
 
 /// What one agent gets when it names one of its crew's plugins.
 ///
-/// The two refusals are separate because they are read by a model mid-turn and
-/// they have different answers: one is the operator's to fix, the other is a
-/// peer's to do.
+/// The refusals are separate because they are read by a model mid-turn and they
+/// have different answers: one is the operator's to fix, two are a peer's to
+/// do, and one is nobody's.
 #[derive(Debug)]
 pub enum PluginReach {
     /// No row: this crew has not connected it, and no agent can.
     NotConnected,
     /// Connected, and this agent is not one of the ones it was connected for.
     NotChosen,
-    /// Connected, and the operator switched this tool off for the whole crew.
+    /// Connected, and the operator narrowed this tool to nobody. Off for the
+    /// whole crew, so there is no peer to ask.
     ToolDenied,
+    /// Connected and this agent's, but this tool was narrowed to other agents.
+    /// Somebody in the crew has it.
+    ToolNotChosen,
     /// The row, and the grant to spend against it. `None` for a server that
     /// authorised nobody because it asked for nothing.
     Granted { id: PluginId, grant: Option<crate::oauth::Grant> },
@@ -2745,30 +2873,56 @@ const PLUGIN_REACHED_BY_AGENT: &str = "(plugins.access = 'everyone'
                  WHERE plugin_agents.plugin_id = plugins.id
                    AND plugin_agents.agent_id = :agent))";
 
-/// Whether one named tool is one the operator left switched on.
+/// Whether this agent may call one named tool, given that it may call the
+/// plugin at all.
 ///
-/// The refusals are what is stored, so the absence of a row is a yes: a plugin
-/// nobody has narrowed offers everything it published, and so does a tool the
-/// vendor added after the operator last looked. The other way round, an
-/// allow-list, would switch off every tool a server started publishing between
-/// one connection and the next, with nothing on screen saying a decision had
-/// been taken.
-const PLUGIN_TOOL_ALLOWED: &str = "NOT EXISTS (SELECT 1 FROM plugin_denied_tools
-                 WHERE plugin_denied_tools.plugin_id = plugins.id
-                   AND plugin_denied_tools.tool = :tool)";
+/// The narrowings are what is stored, so a tool with no row is one every agent
+/// the plugin reaches may call: a plugin nobody has narrowed offers everything
+/// it published, and so does a tool the vendor added after the operator last
+/// looked. An allow-list over tools would switch off every tool a server
+/// started publishing between one connection and the next, with nothing on
+/// screen saying a decision had been taken.
+///
+/// Inside a narrowed tool it is the other way round, and deliberately: the
+/// named agents are stored and everybody else is refused, so an agent hired
+/// next week does not inherit the one capability the operator fenced off. The
+/// same comparison against the literal `everyone` makes it fail closed, for the
+/// reason [`PLUGIN_REACHED_BY_AGENT`] does.
+const PLUGIN_TOOL_REACHED_BY_AGENT: &str = "NOT EXISTS (SELECT 1 FROM plugin_tool_access
+                 WHERE plugin_tool_access.plugin_id = plugins.id
+                   AND plugin_tool_access.tool = :tool
+                   AND plugin_tool_access.access <> 'everyone'
+                   AND NOT EXISTS (SELECT 1 FROM plugin_tool_agents
+                                    WHERE plugin_tool_agents.plugin_id = plugins.id
+                                      AND plugin_tool_agents.tool = :tool
+                                      AND plugin_tool_agents.agent_id = :agent))";
+
+/// Whether anybody at all may call one named tool.
+///
+/// The same question with the agent taken out, and it is what separates the two
+/// tool refusals. A tool narrowed to nobody is off for the crew, and an agent
+/// told to ask a peer about one spends a turn proving that no peer has it.
+const PLUGIN_TOOL_REACHED_BY_ANYONE: &str = "NOT EXISTS (SELECT 1 FROM plugin_tool_access
+                 WHERE plugin_tool_access.plugin_id = plugins.id
+                   AND plugin_tool_access.tool = :tool
+                   AND plugin_tool_access.access <> 'everyone'
+                   AND NOT EXISTS (SELECT 1 FROM plugin_tool_agents
+                                    WHERE plugin_tool_agents.plugin_id = plugins.id
+                                      AND plugin_tool_agents.tool = :tool))";
 
 /// `None` for a row naming a plugin this build does not have, which is what a
 /// downgrade leaves behind. Corrupt rows still raise: a tool list that will not
 /// parse is a bug here, not a version skew.
 ///
-/// `chosen` is the row's named agents and `denied` is the tools switched off on
-/// it, both read separately because both are second tables. A plugin missing
-/// from the first map is one with nobody named; missing from the second is one
-/// with everything it published switched on, which is where every plugin starts.
+/// `chosen` is the row's named agents and `narrowed` is who may call each of
+/// its tools, both read separately because both are second tables. A plugin
+/// missing from the first map is one with nobody named; a tool missing from the
+/// second is one every agent the plugin reaches may call, which is where every
+/// tool starts.
 fn row_to_plugin(
     row: &Row<'_>,
     chosen: &HashMap<PluginId, Vec<AgentId>>,
-    denied: &HashMap<PluginId, HashSet<String>>,
+    narrowed: &HashMap<(PluginId, String), PluginAccess>,
 ) -> RowResult<Option<Plugin>> {
     let id_raw: String = row.get(0)?;
     let group_raw: String = row.get(1)?;
@@ -2795,7 +2949,10 @@ fn row_to_plugin(
             tools: tools
                 .into_iter()
                 .map(|tool| PluginToolCard {
-                    allowed: !denied.get(&id).is_some_and(|off| off.contains(&tool.name)),
+                    access: narrowed
+                        .get(&(id, tool.name.clone()))
+                        .cloned()
+                        .unwrap_or(PluginAccess::Everyone),
                     name: tool.name,
                     description: tool.description,
                 })
@@ -2940,6 +3097,11 @@ mod tests {
             description: String::new(),
             input_schema: serde_json::json!({ "type": "object" }),
         }
+    }
+
+    /// A tool narrowed to nobody: what the old two-way switch called off.
+    fn nobody() -> PluginAccess {
+        PluginAccess::Chosen { agents: Vec::new() }
     }
 
     fn draft(name: &str) -> CleanDraft {
@@ -5242,11 +5404,16 @@ mod tests {
             .unwrap();
 
         let drawn = f.store.group_plugins(group).unwrap().remove(0);
-        assert!(drawn.tools.iter().all(|tool| tool.allowed), "{:?}", drawn.tools);
+        assert!(
+            drawn.tools.iter().all(|tool| tool.access == PluginAccess::Everyone),
+            "{:?}",
+            drawn.tools
+        );
 
         let offered = f.store.plugin_tools(group, manager.id).unwrap().remove(0);
         assert_eq!(offered.offered.len(), 2);
         assert!(offered.withheld.is_empty());
+        assert!(offered.elsewhere.is_empty());
     }
 
     #[test]
@@ -5269,10 +5436,10 @@ mod tests {
             )
             .unwrap();
 
-        let saved = f.store.set_plugin_tool(plugin.id, "drop_project", false).unwrap();
+        let saved = f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap();
         assert_eq!(
-            saved.tools.iter().find(|tool| tool.name == "drop_project").map(|tool| tool.allowed),
-            Some(false),
+            saved.tools.iter().find(|tool| tool.name == "drop_project").map(|tool| &tool.access),
+            Some(&nobody()),
             "the panel draws what was stored"
         );
 
@@ -5314,7 +5481,7 @@ mod tests {
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
             .unwrap();
-        f.store.set_plugin_tool(plugin.id, "refund", false).unwrap();
+        f.store.set_plugin_tool(plugin.id, "refund", &nobody()).unwrap();
 
         assert!(matches!(
             f.store.plugin_reach(group, revenue.id, PluginKind::Stripe, "refund").unwrap(),
@@ -5331,6 +5498,212 @@ mod tests {
     }
 
     #[test]
+    fn two_agents_on_one_plugin_get_different_tools() {
+        // The thing a crew-wide switch could not say, and the reason this axis
+        // grew a list. One sign-in, one inbox: the agent that triages it reads
+        // and the agent that answers it sends, and neither is offered the
+        // other's half.
+        let f = fixture();
+        let group = default_group_id();
+        let triage = f.store.create_agent(&draft("Triage")).unwrap();
+        let reply = f.store.create_agent(&draft("Reply")).unwrap();
+        let plugin = f
+            .store
+            .save_plugin(
+                group,
+                PluginKind::Agentmail,
+                "",
+                &[tool("read_thread"), tool("send")],
+                None,
+            )
+            .unwrap();
+
+        f.store
+            .set_plugin_tool(
+                plugin.id,
+                "read_thread",
+                &PluginAccess::Chosen { agents: vec![triage.id] },
+            )
+            .unwrap();
+        f.store
+            .set_plugin_tool(plugin.id, "send", &PluginAccess::Chosen { agents: vec![reply.id] })
+            .unwrap();
+
+        // Told: one each, and the other named as somebody else's rather than
+        // as switched off. The two lists are what the prompt says differently.
+        let told = f.store.plugin_tools(group, triage.id).unwrap().remove(0);
+        assert_eq!(
+            told.offered.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            ["read_thread"]
+        );
+        assert_eq!(told.elsewhere, vec!["send".to_string()]);
+        assert!(told.withheld.is_empty(), "somebody has it, so nobody is the wrong answer");
+
+        // And got: the same answer, from the other query, and the refusal is
+        // the one that sends the turn to a peer.
+        assert!(matches!(
+            f.store.plugin_reach(group, triage.id, PluginKind::Agentmail, "send").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, reply.id, PluginKind::Agentmail, "send").unwrap(),
+            PluginReach::Granted { .. }
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, reply.id, PluginKind::Agentmail, "read_thread").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+    }
+
+    #[test]
+    fn a_tool_nobody_has_is_refused_before_one_somebody_else_has() {
+        // Both refusals send the turn somewhere, and only one of them is worth
+        // going. "Nobody has this" is true of the whole crew and stops the
+        // asking; "not yours" spends a peer's turn as well if it is wrong.
+        let f = fixture();
+        let group = default_group_id();
+        let one = f.store.create_agent(&draft("One")).unwrap();
+        let two = f.store.create_agent(&draft("Two")).unwrap();
+        let plugin = f
+            .store
+            .save_plugin(group, PluginKind::Stripe, "", &[tool("refund"), tool("charges")], None)
+            .unwrap();
+
+        f.store.set_plugin_tool(plugin.id, "refund", &nobody()).unwrap();
+        f.store
+            .set_plugin_tool(plugin.id, "charges", &PluginAccess::Chosen { agents: vec![two.id] })
+            .unwrap();
+
+        assert!(matches!(
+            f.store.plugin_reach(group, one.id, PluginKind::Stripe, "refund").unwrap(),
+            PluginReach::ToolDenied
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, one.id, PluginKind::Stripe, "charges").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+
+        // And the wider answer wins over the narrower one when both are true:
+        // an agent that is off the plugin entirely and asks for a tool nobody
+        // has is told the thing that is true of everybody.
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![two.id] })
+            .unwrap();
+        assert!(matches!(
+            f.store.plugin_reach(group, one.id, PluginKind::Stripe, "refund").unwrap(),
+            PluginReach::ToolDenied
+        ));
+        // Off the plugin covers every tool on it, so it is said before one of
+        // them is.
+        assert!(matches!(
+            f.store.plugin_reach(group, one.id, PluginKind::Stripe, "charges").unwrap(),
+            PluginReach::NotChosen
+        ));
+    }
+
+    #[test]
+    fn a_tool_narrowed_to_an_agent_the_plugin_does_not_reach_grants_nothing() {
+        // The two answers compose rather than override. An operator sets them
+        // in either order, so a name on the tool before the plugin is widened
+        // is a state to pass through, not one to refuse: it just does not grant
+        // anything on its own.
+        let f = fixture();
+        let group = default_group_id();
+        let inside = f.store.create_agent(&draft("Inside")).unwrap();
+        let outside = f.store.create_agent(&draft("Outside")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
+
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![inside.id] })
+            .unwrap();
+        f.store
+            .set_plugin_tool(
+                plugin.id,
+                "run_sql",
+                &PluginAccess::Chosen { agents: vec![outside.id] },
+            )
+            .unwrap();
+
+        assert!(matches!(
+            f.store.plugin_reach(group, outside.id, PluginKind::Neon, "run_sql").unwrap(),
+            PluginReach::NotChosen
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, inside.id, PluginKind::Neon, "run_sql").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+        assert!(f.store.plugin_tools(group, inside.id).unwrap()[0].offered.is_empty());
+    }
+
+    #[test]
+    fn a_tool_may_not_be_narrowed_to_an_agent_from_another_crew() {
+        // The boundary `set_plugin_access` draws, one level down. A name from
+        // another group grants nothing here either, because the turn asks by
+        // group as well, so storing one is a row that means nothing and a
+        // settings panel drawing a name that does nothing.
+        let f = fixture();
+        let elsewhere = f
+            .store
+            .create_group(&CleanGroup { name: "Elsewhere".into(), ..Default::default() })
+            .unwrap();
+        let stranger = f
+            .store
+            .create_agent(&CleanDraft { group_id: Some(elsewhere.id), ..draft("Stranger") })
+            .unwrap();
+        let plugin = f
+            .store
+            .save_plugin(default_group_id(), PluginKind::Neon, "", &[tool("run_sql")], None)
+            .unwrap();
+
+        let refused = f
+            .store
+            .set_plugin_tool(
+                plugin.id,
+                "run_sql",
+                &PluginAccess::Chosen { agents: vec![stranger.id] },
+            )
+            .unwrap_err();
+        assert!(matches!(refused, StoreError::AgentNotInGroup(id) if id == stranger.id));
+        // And nothing was written on the way to refusing: a narrowing that
+        // survived a rejected write is a tool switched off by an error.
+        let left: i64 = f
+            .store
+            .conn()
+            .unwrap()
+            .query_row("SELECT count(*) FROM plugin_tool_access", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn retiring_an_agent_takes_the_tools_it_was_named_on() {
+        // A tool naming a retired agent and nobody else draws as narrowed to
+        // somebody and is callable by nobody, and the refusal an agent gets for
+        // it points at a peer that is gone.
+        let f = fixture();
+        let group = default_group_id();
+        let gone = f.store.create_agent(&draft("Gone")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
+        f.store
+            .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![gone.id] })
+            .unwrap();
+
+        f.store.delete_agent_plugin_access(gone.id).unwrap();
+
+        let drawn = f.store.group_plugins(group).unwrap().remove(0);
+        assert_eq!(drawn.tools[0].access, nobody(), "the narrowing stays, the name does not");
+        let left: i64 = f
+            .store
+            .conn()
+            .unwrap()
+            .query_row("SELECT count(*) FROM plugin_tool_agents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
     fn switching_a_tool_back_on_leaves_nothing_behind_that_still_refuses_it() {
         // The stored state has to be what is true. A remembered refusal is a
         // decision the operator has already changed, waiting to come back the
@@ -5341,18 +5714,27 @@ mod tests {
         let plugin =
             f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
 
-        f.store.set_plugin_tool(plugin.id, "run_sql", false).unwrap();
-        let back = f.store.set_plugin_tool(plugin.id, "run_sql", true).unwrap();
-
-        assert!(back.tools[0].allowed);
-        assert!(f.store.plugin_tools(group, manager.id).unwrap()[0].withheld.is_empty());
-        let left: i64 = f
-            .store
-            .conn()
-            .unwrap()
-            .query_row("SELECT count(*) FROM plugin_denied_tools", [], |row| row.get(0))
+        f.store
+            .set_plugin_tool(
+                plugin.id,
+                "run_sql",
+                &PluginAccess::Chosen { agents: vec![manager.id] },
+            )
             .unwrap();
-        assert_eq!(left, 0);
+        let back = f.store.set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Everyone).unwrap();
+
+        assert_eq!(back.tools[0].access, PluginAccess::Everyone);
+        assert!(f.store.plugin_tools(group, manager.id).unwrap()[0].withheld.is_empty());
+        // Both tables, because everyone is stored as the absence of a row: a
+        // narrowing kept beside a stored `everyone` is two ways to say one
+        // thing, and the next reader picks one of them.
+        let conn = f.store.conn().unwrap();
+        for table in ["plugin_tool_access", "plugin_tool_agents"] {
+            let left: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(left, 0, "{table}");
+        }
     }
 
     #[test]
@@ -5366,7 +5748,7 @@ mod tests {
             .save_plugin(default_group_id(), PluginKind::Neon, "", &[tool("run_sql")], None)
             .unwrap();
 
-        let refused = f.store.set_plugin_tool(plugin.id, "drop_project", false).unwrap_err();
+        let refused = f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap_err();
         assert!(
             matches!(&refused, StoreError::PluginToolNotFound(id, name)
                 if *id == plugin.id && name == "drop_project"),
@@ -5386,7 +5768,7 @@ mod tests {
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let published = [tool("run_sql"), tool("drop_project")];
         let plugin = f.store.save_plugin(group, PluginKind::Neon, "", &published, None).unwrap();
-        f.store.set_plugin_tool(plugin.id, "drop_project", false).unwrap();
+        f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap();
 
         // And a tool the vendor started publishing since arrives switched on,
         // which is the half an allow-list could not express: nobody has made a
@@ -5403,8 +5785,12 @@ mod tests {
             )
             .unwrap();
 
-        let off: Vec<&str> =
-            again.tools.iter().filter(|t| !t.allowed).map(|t| t.name.as_str()).collect();
+        let off: Vec<&str> = again
+            .tools
+            .iter()
+            .filter(|t| t.access != PluginAccess::Everyone)
+            .map(|t| t.name.as_str())
+            .collect();
         assert_eq!(off, ["drop_project"]);
         assert_eq!(
             f.store.plugin_tools(group, manager.id).unwrap()[0].offered.len(),
@@ -5421,16 +5807,23 @@ mod tests {
         let group = default_group_id();
         let plugin =
             f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
-        f.store.set_plugin_tool(plugin.id, "run_sql", false).unwrap();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        f.store
+            .set_plugin_tool(
+                plugin.id,
+                "run_sql",
+                &PluginAccess::Chosen { agents: vec![manager.id] },
+            )
+            .unwrap();
 
         assert!(f.store.delete_plugin(plugin.id).unwrap());
-        let left: i64 = f
-            .store
-            .conn()
-            .unwrap()
-            .query_row("SELECT count(*) FROM plugin_denied_tools", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(left, 0);
+        let conn = f.store.conn().unwrap();
+        for table in ["plugin_tool_access", "plugin_tool_agents"] {
+            let left: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(left, 0, "{table}");
+        }
     }
 
     #[test]
@@ -5442,16 +5835,25 @@ mod tests {
             .unwrap();
         let plugin =
             f.store.save_plugin(group.id, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
-        f.store.set_plugin_tool(plugin.id, "run_sql", false).unwrap();
+        let hand = f
+            .store
+            .create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Hand") })
+            .unwrap();
+        f.store
+            .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![hand.id] })
+            .unwrap();
+        // A group is only deleted once it is empty, so the crew is gone by the
+        // time this runs. The rows naming them must not outlive either.
+        f.store.set_lifecycle(hand.id, Lifecycle::Terminated).unwrap();
 
         f.store.delete_group(group.id).unwrap();
-        let left: i64 = f
-            .store
-            .conn()
-            .unwrap()
-            .query_row("SELECT count(*) FROM plugin_denied_tools", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(left, 0);
+        let conn = f.store.conn().unwrap();
+        for table in ["plugin_tool_access", "plugin_tool_agents"] {
+            let left: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(left, 0, "{table}");
+        }
     }
 
     #[test]

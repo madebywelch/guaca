@@ -20,21 +20,32 @@ interface Props {
 }
 
 /**
- * The two answers to who may use a plugin.
+ * The two answers to who may use a plugin, and to who may call one of its tools.
  *
  * Two buttons rather than a list of agents with an "everyone" entry at the top:
  * everyone is a standing answer that covers whoever is hired next week, and a
  * tick beside today's names cannot say that.
+ *
+ * One list for both levels, because it is one question asked about two things.
+ * `short` is what a tool row draws and `label` is what the plugin row draws and
+ * what both announce: a tool list is forty rows deep and two buttons reading
+ * "Only chosen agents" on each of them crowds out the name the row is about,
+ * while a reader who cannot see the row needs the whole sentence either way.
  */
 const ACCESS_MODES = [
-  { value: "everyone", label: "Every agent" },
-  { value: "chosen", label: "Only chosen agents" },
+  { value: "everyone", label: "Every agent", short: "Everyone" },
+  { value: "chosen", label: "Only chosen agents", short: "Chosen" },
 ] as const;
 
 /** The chosen set with one agent added or taken out. */
 function toggled(access: PluginAccess, agent: AgentId): AgentId[] {
   const current = access.mode === "chosen" ? access.agents : [];
   return current.includes(agent) ? current.filter((id) => id !== agent) : [...current, agent];
+}
+
+/** Whether one answer covers one agent. The webview's copy of `PluginAccess::allows`. */
+function allows(access: PluginAccess, agent: AgentId): boolean {
+  return access.mode === "everyone" || access.agents.includes(agent);
 }
 
 /** Who a connected plugin is offered to, in the operator's words. */
@@ -49,17 +60,60 @@ function offeredTo(access: PluginAccess, crew: AgentCard[]): string {
  * How much of what a plugin publishes the crew may actually call.
  *
  * The count is of everything the server published, not of what is left on,
- * because that number is what the row below expands into. Every tool switched
- * off is said out loud for the same reason a plugin narrowed to nobody is: a
- * connected plugin the crew cannot call is indistinguishable from a working one
- * until something says so.
+ * because that number is what the row below expands into. The two kinds of
+ * narrowing are counted apart because they are different decisions: a tool
+ * given to some of the crew is working, and a tool given to nobody is one
+ * nothing in this group can call. Both are said out loud for the reason a
+ * plugin narrowed to nobody is: a connected plugin the crew cannot use is
+ * indistinguishable from a working one until something says so.
  */
 function offering(tools: PluginToolCard[]): string {
-  const off = tools.filter((tool) => !tool.allowed).length;
+  const narrowed = tools.filter((tool) => tool.access.mode === "chosen");
+  const off = narrowed.filter(
+    (tool) => tool.access.mode === "chosen" && tool.access.agents.length === 0,
+  ).length;
+  const some = narrowed.length - off;
   const count = `${tools.length} tool${tools.length === 1 ? "" : "s"}`;
-  if (off === 0) return count;
+  if (narrowed.length === 0) return count;
   if (off === tools.length) return `${count}, all switched off: none of them can be called`;
-  return `${count}, ${off} switched off`;
+  const said = [
+    some > 0 ? `${some} for chosen agents` : null,
+    off > 0 ? `${off} switched off` : null,
+  ].filter(Boolean);
+  return `${count}, ${said.join(" and ")}`;
+}
+
+/**
+ * Who can call one tool, once both answers are applied.
+ *
+ * The intersection, not the tool's own list, because the two questions compose:
+ * an agent has to be on the plugin to spend its sign-in and on the tool to do
+ * this particular thing with it. A row that read the tool's list alone would
+ * name an agent that would be refused, which is the one thing a permission
+ * panel must not do.
+ *
+ * A name ticked here that the plugin does not reach is kept rather than
+ * dropped, and said out loud instead. The two controls are set in either order,
+ * and silently discarding the ticks made before the plugin was widened would
+ * lose work the operator can see themselves doing.
+ */
+function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): string {
+  if (tool.access.mode === "everyone") return offeredTo(plugin.access, crew);
+  const named = crew.filter((agent) => allows(tool.access, agent.id));
+  const reach = named.filter((agent) => allows(plugin.access, agent.id));
+  if (reach.length === 0) {
+    return named.length === 0
+      ? "switched off: nobody in this group can call it"
+      : `nobody can call it: ${named.map((agent) => agent.name).join(", ")} ${
+          named.length === 1 ? "is" : "are"
+        } not on this plugin`;
+  }
+  const short = reach.map((agent) => agent.name).join(", ");
+  const lost = named.filter((agent) => !allows(plugin.access, agent.id));
+  if (lost.length === 0) return `called by ${short}`;
+  return `called by ${short}; ${lost.map((agent) => agent.name).join(", ")} ${
+    lost.length === 1 ? "is" : "are"
+  } not on this plugin`;
 }
 
 /**
@@ -71,12 +125,22 @@ function offering(tools: PluginToolCard[]): string {
  * with the group's own sign-in on it, so the agent never holds a token and has
  * nothing to leak.
  *
- * Signing in and handing it out are two decisions, and the second one is on
- * this row. Every agent is the default and the usual answer; the crew's Stripe
- * account is why it is not the only one. Each change is written the moment it
- * is made, like connecting and disconnecting above it: there is no Save on this
- * panel, so a draft nobody submitted would be a permission the operator thinks
- * they granted.
+ * Signing in, handing it out, and handing out one tool of it are three
+ * decisions, and the second and third are on this row. Every agent is the
+ * default and the usual answer for both; the crew's Stripe account is why the
+ * plugin has another, and `create_refund` sitting beside `list_charges` is why
+ * a tool does. The two compose, which is what lets one crew put the agent that
+ * triages an inbox beside the agent that answers it, on one sign-in, with
+ * different halves of it each.
+ *
+ * The third question is asked only where it was answered. A tool nobody has
+ * touched draws two buttons and no sentence: forty rows each repeating the
+ * default is the default said forty times, and it buries the one row that is
+ * not it.
+ *
+ * Each change is written the moment it is made, like connecting and
+ * disconnecting above it: there is no Save on this panel, so a draft nobody
+ * submitted would be a permission the operator thinks they granted.
  *
  * A short list, and that is the design rather than a starting point. The list
  * this replaced was twelve brands and a text box, which asked the operator for
@@ -266,15 +330,17 @@ export function PluginList({ groupId, crew }: Props) {
                 )}
 
                 {/* The second axis, and a different question from the first.
-                    Who may spend the sign-in is about the crew; which tools may
-                    be spent is about the server, and it is the same everywhere
-                    the plugin goes. A server does not publish one kind of
-                    thing: Stripe lists the call that reads an invoice beside
-                    the one that refunds it, and until this existed the only
-                    control over that was Disconnect. */}
+                    Who may spend the sign-in is about the account; which tools
+                    may be spent is about the capability. A server does not
+                    publish one kind of thing: Stripe lists the call that reads
+                    an invoice beside the one that refunds it, and AgentMail
+                    lists reading a thread beside sending as the operator. The
+                    two answers compose, which is what lets one crew put the
+                    agent that triages an inbox beside the agent that answers
+                    it, on one sign-in, with different halves of it each. */}
                 {held.tools.length > 0 && (
                   <>
-                    <span className="field__label">Which of its tools they can call</span>
+                    <span className="field__label">Which of its tools, and whose</span>
                     <button
                       type="button"
                       className="toolset__more"
@@ -305,42 +371,78 @@ export function PluginList({ groupId, crew }: Props) {
                           {tool.description && (
                             <span className="toolset__blurb">{tool.description}</span>
                           )}
+                          {/* Only for a tool somebody has decided about. Forty
+                              rows each saying "offered to every agent in this
+                              group" is the default repeated forty times, and it
+                              buries the two rows that are not the default. */}
+                          {tool.access.mode === "chosen" && (
+                            <span className="toolset__who">{callers(held, tool, crew)}</span>
+                          )}
                         </div>
                         <div className="choices">
-                          {/* Named for a reader who cannot see which row they
-                              are on. Forty buttons all called "Allow" is a list
-                              only usable with a mouse. */}
-                          <button
-                            type="button"
-                            className="choice choice--tight"
-                            aria-label={`Allow ${tool.name}`}
-                            aria-pressed={tool.allowed}
-                            disabled={busy !== null}
-                            onClick={() => {
-                              if (tool.allowed) return;
-                              void run(`${offer.kind}-${tool.name}`, () =>
-                                api.setPluginTool(held.id, tool.name, true),
-                              );
-                            }}
-                          >
-                            Allow
-                          </button>
-                          <button
-                            type="button"
-                            className="choice choice--tight"
-                            aria-label={`Deny ${tool.name}`}
-                            aria-pressed={!tool.allowed}
-                            disabled={busy !== null}
-                            onClick={() => {
-                              if (!tool.allowed) return;
-                              void run(`${offer.kind}-${tool.name}`, () =>
-                                api.setPluginTool(held.id, tool.name, false),
-                              );
-                            }}
-                          >
-                            Deny
-                          </button>
+                          {/* The same two answers the plugin above takes, and
+                              the same two buttons, because it is the same
+                              question about a smaller thing. "Only chosen" with
+                              nothing ticked is the tool switched off for the
+                              crew, which is still one click away and still what
+                              the line above says out loud. */}
+                          {ACCESS_MODES.map((mode) => (
+                            <button
+                              key={mode.value}
+                              type="button"
+                              className="choice choice--tight"
+                              // Named for a reader who cannot see which row they
+                              // are on. Forty buttons all called "Every agent"
+                              // is a list only usable with a mouse.
+                              aria-label={`${mode.label}: ${tool.name}`}
+                              aria-pressed={tool.access.mode === mode.value}
+                              disabled={busy !== null}
+                              onClick={() => {
+                                // Narrowing starts empty for the reason the
+                                // plugin's does: the button whose purpose is to
+                                // take something away must not be a click that
+                                // changes nothing.
+                                if (tool.access.mode === mode.value) return;
+                                void run(`${offer.kind}-${tool.name}`, () =>
+                                  api.setPluginTool(
+                                    held.id,
+                                    tool.name,
+                                    mode.value === "everyone"
+                                      ? { mode: "everyone" }
+                                      : { mode: "chosen", agents: [] },
+                                  ),
+                                );
+                              }}
+                            >
+                              {mode.short}
+                            </button>
+                          ))}
                         </div>
+
+                        {tool.access.mode === "chosen" && crew.length > 0 && (
+                          <div className="choices toolset__crew">
+                            {crew.map((agent) => (
+                              <button
+                                key={agent.id}
+                                type="button"
+                                className="choice choice--tight"
+                                aria-label={`${agent.name}: ${tool.name}`}
+                                aria-pressed={allows(tool.access, agent.id)}
+                                disabled={busy !== null}
+                                onClick={() =>
+                                  void run(`${offer.kind}-${tool.name}-${agent.id}`, () =>
+                                    api.setPluginTool(held.id, tool.name, {
+                                      mode: "chosen",
+                                      agents: toggled(tool.access, agent.id),
+                                    }),
+                                  )
+                                }
+                              >
+                                {agent.name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>

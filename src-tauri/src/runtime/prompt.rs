@@ -261,6 +261,20 @@ pub fn system_prompt(
                         set.withheld.join(", "),
                     ));
                 }
+                // A separate line from the one above it, because the way
+                // forward is a peer rather than the operator. Collapsing the
+                // two would have an agent reporting that the crew cannot send
+                // mail while sitting next to the agent that sends it, which is
+                // the failure the roster's `reaches` exists to prevent one
+                // level up.
+                if !set.elsewhere.is_empty() {
+                    out.push_str(&format!(
+                        "  Someone else's on this plugin, not yours: {}. Hand that part to the \
+                         peer your roster names for it rather than reporting it cannot be \
+                         done.\n",
+                        set.elsewhere.join(", "),
+                    ));
+                }
             }
             out.push_str(
                 "\nThese act on the operator's real account, not a copy of it: a database you \
@@ -1008,6 +1022,7 @@ mod tests {
                 })
                 .collect(),
             withheld: Vec::new(),
+            elsewhere: Vec::new(),
         }
     }
 
@@ -1067,6 +1082,40 @@ mod tests {
         // And it does not send the agent to a peer: a switched-off tool is off
         // for the whole crew, so asking around is a wasted turn.
         assert!(prompt.contains("nobody in the crew has it either"), "{prompt}");
+    }
+
+    #[test]
+    fn a_tool_that_is_a_peer_s_is_named_apart_from_one_nobody_has() {
+        // Two absences with two different ways forward, so two lines. An agent
+        // told "nobody has this" about a tool the agent beside it holds reports
+        // that the crew cannot do it, which is the failure the roster exists to
+        // prevent; an agent told "ask a peer" about a tool nobody has spends a
+        // turn proving it, and so does the peer.
+        let c = card("Reader");
+        let mut set = plugin(PluginKind::Agentmail, &["read_thread"]);
+        set.withheld = vec!["delete_inbox".to_string()];
+        set.elsewhere = vec!["send".to_string()];
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[],
+            &[set],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::none(),
+        );
+
+        assert!(prompt.contains("Switched off by the operator"), "{prompt}");
+        assert!(prompt.contains("delete_inbox"), "{prompt}");
+        assert!(prompt.contains("Someone else's on this plugin"), "{prompt}");
+        assert!(prompt.contains("send"), "{prompt}");
+        // The one that decides which way the agent goes: a peer for one, the
+        // operator for the other, and never the same sentence for both.
+        assert!(prompt.contains("nobody in the crew has it either"), "{prompt}");
+        assert!(prompt.contains("Hand that part to the peer"), "{prompt}");
     }
 
     #[test]

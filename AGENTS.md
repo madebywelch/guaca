@@ -97,7 +97,7 @@ repo: the frontend renders state and forwards intent.
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
-| Which of a plugin's tools a crew may call at all | *And which of its tools, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_denied_tools` |
+| Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
@@ -291,32 +291,54 @@ the model takes a screenshot to see what `browse` did.
   path, from the same SQL fragment, and its two refusals are different
   sentences: "nobody connected this" is the operator's to fix, "connected, but
   not for you" is a peer's to do.
-- **A plugin's switched-off tools are stored as refusals, not as an allow
-  list.** A plugin with no rows in `plugin_denied_tools` offers everything it
-  published, which is what every plugin connected before this control existed
-  does and what a tool the vendor ships next month does. An allow list would
-  switch that new tool off with nothing on screen saying a decision had been
-  taken about it, and it is the same reading `access` takes with `everyone`:
-  the default has to cover what nobody has seen yet. Reconnecting keeps the
-  refusals and switches the new tool on.
-- **A switched-off tool is refused before a not-chosen agent is.** Both can be
-  true of one call, and the tool-level answer is the one that is true of
-  everybody. `PluginError::NotChosen` sends an agent to a peer, which is right
-  for a narrowed plugin and a wasted turn for a tool nobody has, so
-  `plugin_reach` checks the tool first and `ToolDenied` says outright not to
-  ask around.
+- **A tool takes the same answer a plugin does, and the two compose.** Who may
+  spend the sign-in is about the account; who may call `gmail_send` is about the
+  capability, and an agent has to pass both. That is what lets one crew put the
+  agent that triages an inbox beside the agent that answers it, on one sign-in,
+  with different halves of it each. A single answer per plugin cannot say that,
+  and neither could the crew-wide tool switch this replaced.
+- **A tool nobody has narrowed is on, and inside a narrowed one only the named
+  agents are.** The two defaults point opposite ways on purpose. An unseen
+  *tool* is one the vendor shipped after the operator last looked, and an
+  allow-list over tools would switch it off with nothing on screen saying a
+  decision had been taken. An unseen *agent* is one hired next week, and it must
+  not inherit the capability the operator went out of their way to fence off.
+  `PLUGIN_TOOL_REACHED_BY_AGENT` is both rules at once.
+- **A tool switched off for the crew is `Chosen` with an empty list.** Not a
+  third state and not a second table: it is the same empty list `PluginAccess`
+  already argues for at the plugin level, and one click still gets there.
+  Migration 30 rewrites every `plugin_denied_tools` row as exactly that.
+- **The wider refusal is given before the narrower one.** More than one is true
+  at once. A tool narrowed to nobody is off for everybody, so `ToolDenied` is
+  said before `NotChosen`; being off a plugin covers every tool on it, so
+  `NotChosen` is said before `ToolNotChosen`. Two of the four send an agent to a
+  peer and two do not, and an agent told to ask around about a tool nobody has
+  spends a turn proving it, as does the peer.
 - **The tool half of that rule is Rust and the agent half is SQL, and that is
   not an oversight.** `PLUGIN_REACHED_BY_AGENT` is one fragment pasted into two
   queries; the tools cannot be, because the tool list is a JSON column and
   there is nothing for SQL to filter without taking it apart inside the
   database. `Store::plugin_tools` partitions it in Rust, `Store::plugin_reach`
-  asks in SQL, both compare the server's own unprefixed name, and a store test
-  drives one refusal through both.
-- **A tool an agent cannot call is named in its prompt anyway.** The name only:
-  no description, no schema, and never a definition. An agent that is simply
-  not shown `create_refund` answers "we cannot do refunds" to the one person
-  who could switch it back on, which is the same failure the roster's `reaches`
-  exists to prevent one level up.
+  asks in SQL, both compare the server's own unprefixed name, and store tests
+  drive both refusals through both.
+- **A name on a tool the plugin itself does not reach grants nothing, and is
+  kept anyway.** The two controls are set in either order, so ticking an agent
+  on a tool before widening the plugin to them is a state to pass through, not
+  one to refuse. `plugin_reach` takes the intersection and the panel says which
+  name is not counting yet: a permission panel naming an agent that would be
+  refused is the one thing it must not do.
+- **A tool an agent cannot call is named in its prompt anyway, under one of two
+  headings.** The name only: no description, no schema, and never a definition.
+  An agent that is simply not shown `create_refund` answers "we cannot do
+  refunds" to the one person who could switch it back on. Which heading decides
+  where the turn goes next, so `withheld` and `elsewhere` are two lists and two
+  sentences: nobody has the first, and a peer has the second.
+- **The roster names a peer per tool, not just per plugin.** An agent that has
+  Stripe and cannot refund is exactly the case `reaches` exists for, and the
+  plugin-level line is silent about it because this agent has Stripe. Only what
+  this agent lacks and that peer can actually call: naming a peer who would be
+  refused in turn is the failure the roster exists to prevent, not one to
+  commit.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
   crew, to re-learn something that changes when a vendor ships rather than when

@@ -2483,7 +2483,7 @@ mod tests {
     /// One connected plugin with every tool switched on, which is where every
     /// plugin starts.
     fn toolset(kind: PluginKind, offered: Vec<PluginTool>) -> PluginToolset {
-        PluginToolset { kind, offered, withheld: Vec::new() }
+        PluginToolset { kind, offered, withheld: Vec::new(), elsewhere: Vec::new() }
     }
 
     #[test]
@@ -2516,15 +2516,17 @@ mod tests {
     }
 
     #[test]
-    fn a_switched_off_tool_never_becomes_a_definition() {
+    fn a_tool_this_agent_cannot_call_never_becomes_a_definition() {
         // Not filtered out of the definitions later: it never becomes one. A
-        // model offered a tool the operator switched off calls it, is refused
-        // on the call path, and spends the rest of the turn rewording the
-        // arguments it was refused for.
+        // model offered a tool it cannot call calls it, is refused on the call
+        // path, and spends the rest of the turn rewording the arguments it was
+        // refused for. Both lists, because both are refused: one because
+        // nobody has it and one because a peer does.
         let offered = plugin_specs(&[PluginToolset {
             kind: PluginKind::Stripe,
             offered: vec![plugin_tool("list_charges")],
             withheld: vec!["create_refund".to_string()],
+            elsewhere: vec!["create_invoice".to_string()],
         }]);
         let names: Vec<&str> = offered.iter().map(|spec| spec.name.as_str()).collect();
         assert_eq!(names, vec!["stripe__list_charges"]);
