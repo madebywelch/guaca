@@ -459,6 +459,20 @@ the model takes a screenshot to see what `browse` did.
   dispatcher as well, and that is not a duplicate: it is what turns a model
   calling a tool it was never offered into a refusal it can act on rather than
   an error that reads like a broken machine.
+- **What an agent is *given* comes from the turn's card; what it *holds* comes
+  from the row.** `run_turn` reads one `AgentCard` and passes it through every
+  round, so a machine or a browser provisioned by the first tool call is on the
+  row and not on that snapshot. Read from the snapshot, the second call of a
+  turn provisions again: a duplicate sandbox that bills until the sweep finds
+  it, and a second browser Kernel refuses by name, which is a `browse` tool that
+  fails for the rest of the turn after the first page loads. `Runtime::held` is
+  the read, and the card stays the authority on `has_computer` and `has_browser`.
+- **A 409 from Kernel's create is an orphan to adopt, not a failure to
+  report.** The name is one per agent, so a conflict is this agent's own
+  browser, alive and unrecorded: a crash between creating one and writing it
+  down. It is found by its `guac-agent` tag rather than by the name the conflict
+  was about, and asked for by id, because a list row is not documented to carry
+  a socket and a session without one names a browser nothing can talk to.
 - **Taking a computer back leaves `sandbox_id` where it is.** The machine sleeps
   and its disk stays, because that disk is where the operator's sign-ins live.
   A revoke that destroyed it would make giving the computer back mean signing
@@ -657,6 +671,17 @@ build expects, which is the failure no offline test can see. It reaches the inte
 
 ```sh
 ./scripts/plugins.sh
+```
+
+A sixth, `tests/machines.rs`, is the same shape for the two providers: scripted
+control planes for Kernel and E2B, and the real `Runtime` provisioning against
+them. It is entirely offline and costs nothing. Nothing else in the build
+reaches a provider, so without it every suite passes with a turn renting a
+machine on every tool call. Run it after touching `ensure_computer`,
+`ensure_browser` or either client.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test machines
 ```
 
 The model suggestions beside an agent's model field have the same shape again,
