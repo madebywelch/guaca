@@ -119,6 +119,13 @@ impl Workspace {
     /// ran over the cap, cut at a line boundary with a marker. Silently storing
     /// a truncated file would let an agent believe it had recorded something it
     /// had not.
+    ///
+    /// It also returns what was there first. Replacing is the only write this
+    /// interface has, so the version it replaced exists nowhere else a moment
+    /// later, and this is the only place it can be read without a race: the
+    /// same memory is written from every thread an agent holds and edited by
+    /// the operator by hand, so anything that reads the file afterwards is
+    /// reading somebody else's write.
     pub fn write(&self, id: AgentId, name: &str, content: &str) -> Result<Stored, WorkspaceError> {
         fs::create_dir_all(&self.root)
             .map_err(|source| WorkspaceError::Io { path: self.root.clone(), source })?;
@@ -138,8 +145,11 @@ impl Workspace {
         };
 
         let target = self.preferred_path(id, name);
+        let current = self.existing_path(id);
+        let before =
+            current.as_ref().and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default();
         // Renaming is cosmetic: lookup is by id, so a failure here is harmless.
-        if let Some(current) = self.existing_path(id) {
+        if let Some(current) = current {
             if current != target {
                 let _ = fs::rename(&current, &target);
             }
@@ -148,7 +158,7 @@ impl Workspace {
         fs::write(&target, &body)
             .map_err(|source| WorkspaceError::Io { path: target.clone(), source })?;
 
-        Ok(Stored { characters: body.chars().count(), truncated, path: target })
+        Ok(Stored { before, characters: body.chars().count(), truncated, path: target })
     }
 
     /// Deletes an agent's notes. Called when the agent is deleted.
@@ -161,6 +171,8 @@ impl Workspace {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stored {
+    /// The version this write replaced, empty where there was none.
+    pub before: String,
     pub characters: usize,
     pub truncated: bool,
     pub path: PathBuf,
@@ -194,6 +206,33 @@ mod tests {
         ws.write(id, "Manager", "first belief").unwrap();
         ws.write(id, "Manager", "corrected belief").unwrap();
         assert_eq!(ws.read(id), "corrected belief");
+    }
+
+    #[test]
+    fn a_write_hands_back_the_version_it_replaced() {
+        // The transcript shows the operator what an agent changed about itself,
+        // and this is the only moment the version before it still exists.
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+
+        let first = ws.write(id, "Manager", "first belief").unwrap();
+        assert_eq!(first.before, "", "an agent's first memory replaced nothing");
+
+        let second = ws.write(id, "Manager", "corrected belief").unwrap();
+        assert_eq!(second.before, "first belief");
+    }
+
+    #[test]
+    fn the_replaced_version_survives_a_rename() {
+        // Lookup is by id, and so is this: an agent renamed between two writes
+        // must not read as one that has just written its memory for the first
+        // time.
+        let (ws, _dir) = workspace();
+        let id = AgentId::new();
+        ws.write(id, "Manager", "kept").unwrap();
+
+        let stored = ws.write(id, "Coordinator", "revised").unwrap();
+        assert_eq!(stored.before, "kept");
     }
 
     #[test]

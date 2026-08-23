@@ -20,6 +20,7 @@
  * name of a function in a file they do not have.
  */
 
+import { type DiffLine, lineDiff } from "./diff";
 import { asRecord, attachedNames, sendRecipients } from "./toolArgs";
 import type { Part, ToolOutcome } from "./types";
 
@@ -38,6 +39,17 @@ export interface Step {
    * makes a chip unclickable.
    */
   target: string | null;
+  /**
+   * The version this call overwrote, where it overwrote something whole.
+   *
+   * Only a memory rewrite has one, and only the runtime could have supplied it:
+   * one agent's memory is written from its wall and from every thread it holds,
+   * so a previous version read back out of the channel this call happens to sit
+   * in is wrong exactly when something interesting happened. Empty string where
+   * there was nothing to overwrite, which is a first memory and not a missing
+   * one; null where nothing was overwritten at all.
+   */
+  replaced: string | null;
   /**
    * The place this call happened, where it has one a group can be named after.
    * A browsing turn that stayed on one site is a turn that can say which site.
@@ -258,6 +270,10 @@ export function trailStep(part: ToolCall, key: string): Step {
     tool: part.name,
     title,
     target,
+    // Checked for the type rather than for truth: an empty previous version is
+    // an agent's first memory, and reading it as nothing to compare against
+    // draws that page as a document with no history instead of as all new.
+    replaced: typeof part.replaced === "string" ? part.replaced : null,
     where: where ?? null,
     said: rest,
     failed: part.outcome.status === "refused" || part.outcome.status === "failed",
@@ -384,12 +400,34 @@ export function saysMore(step: Step): boolean {
 }
 
 /**
+ * What the call changed about what it overwrote, where it overwrote something.
+ *
+ * A memory rewrite is the whole page every time, because replacing is the only
+ * write the tool has: that is right for the agent, which has to reconcile what
+ * it believed against what it just learned, and useless for the operator, who
+ * is handed two near-identical pages and left to compare them by eye.
+ *
+ * Null where there is nothing to compare, which includes a call that replaced
+ * nothing and the one degenerate case of clearing a memory that was already
+ * empty. An empty diff drawn as a panel is a control that opens onto nothing.
+ */
+export function stepDiff(step: Step): DiffLine[] | null {
+  if (step.replaced === null) return null;
+  const diff = lineDiff(step.replaced, step.target ?? "");
+  return diff.length > 0 ? diff : null;
+}
+
+/**
  * Whether a chip has anything behind it.
  *
  * A directory lookup is one call with nothing to show but the sentence already
  * on the chip, and a button that opens nothing is a button the operator learns
  * to distrust.
+ *
+ * A memory that was cleared has no content to show and is still worth opening:
+ * what was thrown away is the whole of what happened.
  */
 export function hasDetail(group: TrailGroup): boolean {
-  return group.steps.length > 1 || group.steps[0]!.target !== null;
+  const only = group.steps[0]!;
+  return group.steps.length > 1 || only.target !== null || stepDiff(only) !== null;
 }

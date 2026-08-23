@@ -56,7 +56,19 @@ export type Part =
   | { type: "text"; text: string }
   | { type: "json"; name: string; value: unknown }
   | { type: "notice"; kind: NoticeKind; text: string }
-  | { type: "toolCall"; name: string; arguments: unknown; outcome: ToolOutcome }
+  /**
+   * A call this agent made. `replaced` is what it overwrote, carried only by a
+   * memory rewrite and absent everywhere else, including on calls recorded
+   * before it existed. Empty means the call overwrote nothing, which is not the
+   * same as a call that overwrites nothing.
+   */
+  | {
+      type: "toolCall";
+      name: string;
+      arguments: unknown;
+      outcome: ToolOutcome;
+      replaced?: string;
+    }
   | ({ type: "file" } & Attachment)
   /**
    * A routine coming due, drawn as one line the operator can open rather than

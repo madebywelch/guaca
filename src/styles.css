@@ -2097,6 +2097,72 @@ button {
   overflow-wrap: anywhere;
 }
 
+/* Two versions of a small page, drawn as the lines between them. Same block as
+   the one above and the same reasons for it, with a gutter down the left for
+   what happened to each line.
+
+   Colour is the fast read and never the only one: the marker is a character in
+   the text, so the distinction survives a reader who cannot tell the two hues
+   apart and survives being copied out. The grounds are mixed rather than named
+   because they have to sit on paper and on ink at the same weight, and a pair
+   of literals chosen against white turns into two glowing bars on a dark page.
+   Unchanged lines are the memory itself and are left alone: tinting them too
+   would make a rewrite of one sentence look like a rewrite of the page. */
+.diff {
+  margin: 0.15rem 0 0;
+  padding: 0.35rem 0;
+  max-height: 16rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A row rather than a block, so a line too long for the column wraps under
+   itself and not under its own marker. A memory is prose in markdown and half
+   of it wraps; wrapped into the gutter, the markers stop being a column and the
+   diff stops being scannable, which is the only thing it had. */
+.diff__line {
+  display: flex;
+  padding-right: 0.5rem;
+}
+
+.diff__text {
+  min-width: 0;
+}
+
+.diff__line[data-kind="added"] {
+  background: color-mix(in oklab, var(--mint) 14%, transparent);
+  color: var(--text);
+}
+
+.diff__line[data-kind="removed"] {
+  background: color-mix(in oklab, var(--alarm) 13%, transparent);
+  color: var(--text);
+}
+
+/* Aligned down one column so the page reads as a page and the markers read as
+   a margin, which is the whole of what makes a diff scannable. */
+.diff__mark {
+  flex: none;
+  width: 1.5rem;
+  padding-left: 0.5rem;
+  color: var(--faint);
+}
+
+.diff__line[data-kind="added"] .diff__mark {
+  color: var(--mint);
+}
+
+.diff__line[data-kind="removed"] .diff__mark {
+  color: var(--alarm);
+}
+
 /* ==========================================================================
    Permission requests
 

@@ -72,7 +72,37 @@ worth reading and a byte count can be ignored in peace.
 
 **A chip that opens nothing is not a button.** A directory lookup is one call
 whose whole content is the sentence already on it. A control that does nothing
-is one the operator stops trusting the rest of.
+is one the operator stops trusting the rest of. A memory that was cleared is the
+one call with no content and something to say anyway: what was thrown away is
+the whole of what happened, so it opens on that.
+
+**A memory rewrite opens as a diff, because the call is always the whole page.**
+`update_notes` replaces the file rather than appending to it, which is the right
+interface for an agent — it has to reconcile what it believed against what it
+just learned — and the wrong one for whoever reads the result. Opening a rewrite
+used to show a page of markdown, and "what did it decide to remember this time"
+meant holding two near-identical pages in your head. So the call carries what it
+overwrote, and `lib/diff.ts` draws the lines between the two.
+
+That previous version is recorded by the runtime at the moment of the write and
+cannot be worked out later by anybody. The same memory is written from an
+agent's wall and from every thread it holds, and the operator can edit it by
+hand from the agent's panel, so a previous version recovered from the transcript
+this call happens to sit in is wrong exactly when something interesting
+happened. It is on the call rather than in its arguments because the arguments
+are the model's own JSON, verbatim, and a reader has to be able to tell what the
+model asked for from what the runtime found. Calls recorded before any of this
+have nothing to compare against and draw as they always did.
+
+Every unchanged line is kept, unlike a patch. A page is short enough to show
+whole, and an operator opening this has a second question the changed lines
+alone do not answer: not only what the agent changed its mind about, but what it
+now believes. The marker in the gutter is a character rather than only a colour,
+because red and green either side of a line are the one distinction a reader may
+not have, and because it is what makes a diff copied out of the window still
+read as one. How much moved is said in words, in the place the runtime's own
+summary would have gone — that summary is a character count printed directly
+above the characters it counts.
 
 Nobody is named on any of it. There is exactly one agent whose own work this can
 be, its portrait and name are at the top of the pane, and the rows this replaced

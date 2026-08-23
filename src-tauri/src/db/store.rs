@@ -4472,11 +4472,11 @@ mod tests {
             Part::text("hello"),
             Part::Json { name: "report".into(), value: serde_json::json!({"ok": true, "n": 3}) },
             Part::Notice { kind: NoticeKind::GuardStop, text: "hop limit".into() },
-            Part::ToolCall {
-                name: "send_message".into(),
-                arguments: serde_json::json!({"to": "Chef"}),
-                outcome: ToolOutcome::Refused { reason: "duplicate".into() },
-            },
+            Part::tool_call(
+                "send_message",
+                serde_json::json!({"to": "Chef"}),
+                ToolOutcome::Refused { reason: "duplicate".into() },
+            ),
         ];
         f.store.append(&e).unwrap();
 

@@ -998,18 +998,16 @@ mod tests {
                 Participant::Agent { id: agent },
                 Participant::Human,
                 vec![
-                    Part::ToolCall {
-                        name: "send_message".into(),
-                        arguments: serde_json::json!({}),
-                        outcome: ToolOutcome::Refused {
-                            reason: "Refused: hop limit reached.".into(),
-                        },
-                    },
-                    Part::ToolCall {
-                        name: "browse".into(),
-                        arguments: serde_json::json!({}),
-                        outcome: ToolOutcome::Failed { error: "the machine went away".into() },
-                    },
+                    Part::tool_call(
+                        "send_message",
+                        serde_json::json!({}),
+                        ToolOutcome::Refused { reason: "Refused: hop limit reached.".into() },
+                    ),
+                    Part::tool_call(
+                        "browse",
+                        serde_json::json!({}),
+                        ToolOutcome::Failed { error: "the machine went away".into() },
+                    ),
                 ],
             ),
         );

@@ -1,10 +1,12 @@
 import { useId, useState } from "react";
 
+import { type DiffLine, diffSummary } from "../lib/diff";
 import {
   foldTrail,
   hasDetail,
   type Step,
   saysMore,
+  stepDiff,
   type TrailGroup,
   tellsMore,
 } from "../lib/trail";
@@ -134,18 +136,29 @@ function TrailChip({
  * exactly as it was: this is a record of what happened, so it is never markdown
  * and never anything a model could format its way out of. Long ones scroll
  * rather than push the transcript sideways.
+ *
+ * A call that overwrote something is drawn against what it overwrote instead,
+ * however short it is: the whole reason to open a memory rewrite is to find out
+ * what the agent changed its mind about, and the content alone never says.
  */
 function StepRow({ step }: { step: Step }) {
+  const changed = stepDiff(step);
   // A url, a pair of coordinates or an element number is a few characters, and
   // a few characters in a block of their own is a grey rectangle drawn around
   // nothing. A command and a rewritten memory are the reason the block exists.
-  const inline = step.target !== null && step.target.length <= 48 && !step.target.includes("\n");
+  const inline =
+    !changed && step.target !== null && step.target.length <= 48 && !step.target.includes("\n");
 
   return (
     <li className="trail__step" data-failed={step.failed || undefined}>
       <div className="trail__step-head">
         <span className="trail__step-title">{step.title}</span>
         {inline && <span className="trail__inline">{step.target}</span>}
+        {/* In the place the runtime's own summary would have gone, and for a
+            memory rewrite that summary is a character count printed directly
+            above the characters. How much of the page moved is the thing the
+            operator came here to find out. */}
+        {changed && <span className="trail__said">{diffSummary(changed)}</span>}
         {step.said && tellsMore(step) && <span className="trail__said">{step.said}</span>}
         {step.spent.map((credential) => (
           <span className="trail__spent" key={credential}>
@@ -153,7 +166,35 @@ function StepRow({ step }: { step: Step }) {
           </span>
         ))}
       </div>
-      {step.target && !inline && <pre className="trail__target">{step.target}</pre>}
+      {changed && <DiffBlock lines={changed} />}
+      {!changed && step.target && !inline && <pre className="trail__target">{step.target}</pre>}
     </li>
+  );
+}
+
+/**
+ * Two versions of a page, drawn as the lines between them.
+ *
+ * Every line of both is here, unchanged ones included, so the panel answers
+ * what the agent now believes as well as what it just decided. A page is short
+ * enough to show whole; folding the parts that held still is a saving worth
+ * making in a repository and not in a paragraph.
+ *
+ * The marker is a character rather than only a colour, because red and green
+ * either side of a line are the one distinction a reader may not have, and
+ * because it is what makes a copied diff still read as one.
+ */
+function DiffBlock({ lines }: { lines: DiffLine[] }) {
+  const mark = { same: " ", added: "+", removed: "-" };
+  return (
+    <pre className="diff">
+      {lines.map((line, at) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: two identical lines in one document are ordinary, and the list is rebuilt whole rather than reordered
+        <span className="diff__line" data-kind={line.kind} key={at}>
+          <span className="diff__mark">{mark[line.kind]}</span>
+          <span className="diff__text">{line.text}</span>
+        </span>
+      ))}
+    </pre>
   );
 }

@@ -16,6 +16,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/diff.ts         Two versions of a page, as the lines between them.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/plugins.ts      A plugin's mark and colour. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
@@ -95,6 +96,7 @@ repo: the frontend renders state and forwards intent.
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
+| What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
@@ -195,6 +197,14 @@ the model takes a screenshot to see what `browse` did.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **What a memory rewrite replaced is absent, empty or a page, and the three
+  mean different things.** Absent is a call that replaced nothing, which is
+  every other tool and every write recorded before the field existed: there is
+  nothing to compare and the content is drawn as it always was. Empty is an
+  agent's first memory, which replaced nothing because there was nothing, and
+  draws as a page that is all new. A truthiness check collapses the first two
+  and loses the only write where the whole page is the news. `Part::ToolCall`
+  in `domain/envelope.rs`, then `trailStep`.
 - **`emit_reply` delivers a reply that carries a file and no text.** Handing over
   a document with nothing typed is normal, and judging the reply empty by its
   text alone drops the thing the turn was spent producing.
