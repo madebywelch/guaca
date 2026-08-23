@@ -1146,9 +1146,9 @@ impl Store {
             .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
 
         // An empty access token is a plugin that needed no sign-in, not a
-        // broken one. Clerk's server is public, and reporting it as a grant
-        // with nothing in it would send the operator to a browser to fix
-        // something that is working.
+        // broken one. A server that authorises everybody stores no grant, and
+        // reporting one with nothing in it would send the operator to a browser
+        // to fix something that is working, and put `Bearer ` on every call.
         let grant = (!access.is_empty()).then(|| crate::oauth::Grant {
             access_token: access,
             refresh_token: (!refresh.is_empty()).then_some(refresh),
@@ -4489,9 +4489,10 @@ mod tests {
 
     #[test]
     fn a_plugin_row_naming_something_this_build_has_never_heard_of_is_skipped() {
-        // What a downgrade leaves behind: a newer build connected a plugin this
-        // one has no enum variant for. Raising would cost every agent in the
-        // crew its turn, over a tool list one of them was not going to use.
+        // What a downgrade leaves behind, and what a withdrawn plugin leaves
+        // behind on a database migration 25 has not reached: a row naming a
+        // kind this build has no variant for. Raising would cost every agent in
+        // the crew its turn, over a tool list one of them was not going to use.
         let f = fixture();
         let group = default_group_id();
         f.store
@@ -4527,14 +4528,15 @@ mod tests {
 
     #[test]
     fn a_plugin_that_needed_no_sign_in_reports_no_grant_rather_than_an_empty_one() {
-        // Clerk's server authorises everybody. A blank access token read back
-        // as a grant would send the operator to a browser to fix something that
-        // is working, and would make every call carry `Bearer `.
+        // What `connect` writes for a server that asked for nothing. A blank
+        // access token read back as a grant would send the operator to a
+        // browser to fix something that is working, and would make every call
+        // carry `Bearer `. The kind is incidental: the column is what decides.
         let f = fixture();
         let group = default_group_id();
-        f.store.save_plugin(group, PluginKind::Clerk, "", &[], None).unwrap();
+        f.store.save_plugin(group, PluginKind::Neon, "", &[], None).unwrap();
 
-        let (_, grant) = f.store.plugin_grant(group, PluginKind::Clerk).unwrap().unwrap();
+        let (_, grant) = f.store.plugin_grant(group, PluginKind::Neon).unwrap().unwrap();
         assert!(grant.is_none());
         assert!(!f.store.group_plugins(group).unwrap()[0].signed_in);
     }

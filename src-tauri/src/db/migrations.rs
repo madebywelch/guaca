@@ -695,6 +695,23 @@ CREATE INDEX plugins_group ON plugins (group_id);
 CREATE UNIQUE INDEX plugins_kind_unique ON plugins (group_id, kind);
 "#,
     ),
+    (
+        25,
+        r#"
+-- Clerk was withdrawn from the plugin list. Its MCP server publishes two tools
+-- and both return SDK snippets, so it acted on nothing and nothing it returned
+-- was about the operator's account: it was documentation reached through a
+-- consent screen. `PluginKind::from_slug` no longer answers to `clerk`, so these
+-- rows are already invisible to every read; they are deleted rather than left
+-- because a row nothing can resolve still holds the group's slot in
+-- `plugins_kind_unique`, and a crew that reconnected a plugin under that name
+-- would fail on a conflict with a row the UI never showed them.
+--
+-- No grant is lost. Clerk's server authorised nobody, so the token columns on
+-- these rows are empty by construction.
+DELETE FROM plugins WHERE kind = 'clerk';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -809,6 +826,37 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tables, 2);
+    }
+
+    #[test]
+    fn a_withdrawn_plugin_takes_its_rows_and_leaves_the_others() {
+        // The slot in `plugins_kind_unique` is the point: a row nothing can
+        // resolve is invisible to every read but still owns (group, kind), so a
+        // crew reconnecting under that name would fail on a conflict with a row
+        // the UI never drew for them.
+        let mut conn = memory();
+        // Staged by hand rather than with `apply`, which takes the next
+        // migration off the list without looking at the target and would run
+        // the one being tested.
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 25) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        let insert = "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+                      VALUES (?1,?2,?3,'','[]',0)";
+        conn.execute(insert, rusqlite::params!["p1", DEFAULT_GROUP_ID, "clerk"]).unwrap();
+        conn.execute(insert, rusqlite::params!["p2", DEFAULT_GROUP_ID, "neon"]).unwrap();
+
+        run(&mut conn).unwrap();
+
+        let left: Vec<String> = conn
+            .prepare("SELECT kind FROM plugins ORDER BY kind")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(left, vec!["neon".to_string()]);
     }
 
     #[test]

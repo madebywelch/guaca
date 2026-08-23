@@ -31,11 +31,12 @@ const OFFERS: PluginOffer[] = [
     endpoint: "https://mcp.neon.tech/mcp",
   },
   {
-    kind: "clerk",
-    name: "Clerk",
-    blurb: "Authentication.",
-    docs: "https://github.com/clerk/cursor-plugin",
-    endpoint: "https://mcp.clerk.com/mcp",
+    kind: "stripe",
+    name: "Stripe",
+    blurb: "The live account.",
+    docs: "https://docs.stripe.com/mcp",
+    // Stripe's has no path, which is what the host line has to survive.
+    endpoint: "https://mcp.stripe.com",
   },
 ];
 
@@ -69,7 +70,7 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} />);
 
     expect(await screen.findByText("mcp.neon.tech")).toBeTruthy();
-    expect(screen.getByText("mcp.clerk.com")).toBeTruthy();
+    expect(screen.getByText("mcp.stripe.com")).toBeTruthy();
   });
 
   it("connects one, and says it is waiting on a person while it does", async () => {
@@ -108,9 +109,10 @@ describe("PluginList", () => {
   });
 
   it("says when a server asked for no sign-in, rather than claiming one", async () => {
-    // Clerk's is public. Reporting it as signed in would be a claim about the
-    // operator's account that is not true.
-    groupPlugins.mockResolvedValue([plugin({ kind: "clerk", signedIn: false, tools: ["docs"] })]);
+    // Every server on the list asks for one today. This is what the row says
+    // if one stops, because reporting it as signed in would be a claim about
+    // the operator's account that is not true.
+    groupPlugins.mockResolvedValue([plugin({ kind: "stripe", signedIn: false, tools: ["docs"] })]);
     render(<PluginList groupId={GROUP} />);
 
     expect(await screen.findByText(/asked for no sign-in/)).toBeTruthy();

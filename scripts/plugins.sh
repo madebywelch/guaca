@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The live plugin test: whether the three vendors still publish what this build
+# The live plugin test: whether the five vendors still publish what this build
 # expects to find.
 #
 # CI cannot answer this. Everything in the offline suite is a scripted server
@@ -20,7 +20,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 printf '\033[1m==> Live plugin test\033[0m\n'
-echo "Reads public metadata from Neon, Cloudflare and Clerk. No sign-in, no spend."
+echo "Reads public metadata from every server on the list. No sign-in, no spend."
 echo
 
 # The Tauri build macro reads dist/ at compile time.
