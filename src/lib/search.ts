@@ -335,7 +335,7 @@ function actionsFor(agents: AgentCard[], groups: Group[]): Omit<SearchResult, "s
       key: `action:group-settings:${group.id}`,
       kind: "actions",
       title: `${group.name} settings`,
-      detail: "Endpoint, model, plugins for the whole group",
+      detail: "Endpoint, model, limits, and who gets which plugin",
       meta: "Action",
       action: { do: "editGroup", groupId: group.id },
     });

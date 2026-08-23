@@ -734,6 +734,40 @@ DELETE FROM plugins WHERE kind = 'clerk';
 DELETE FROM plugins WHERE kind = 'cloudflare';
 "#,
     ),
+    (
+        27,
+        r#"
+-- Who in a crew may call a plugin, which until now was "all of them". A group
+-- signs in once and that was the whole decision, which only holds while a crew
+-- is uniform. A crew is not: agents run on different models at different
+-- competencies, and the one that files issues has no business holding the
+-- account that issues refunds.
+--
+-- 'everyone' is the default here and the default in `PluginAccess::from_row`,
+-- so every row that already exists keeps exactly the reach it had. Nothing an
+-- operator connected yesterday narrows because this migration ran.
+ALTER TABLE plugins ADD COLUMN access TEXT NOT NULL DEFAULT 'everyone';
+
+-- The named agents. Only ever populated while `access` is 'chosen': a write
+-- replaces the whole set, so flipping a plugin back to the whole crew leaves
+-- nothing behind claiming otherwise. Nothing here is a memory of a choice the
+-- operator has since changed.
+--
+-- No ON DELETE CASCADE. Foreign keys are off while migrations run, which is
+-- what SQLite's table-rebuild procedure wants, so a later migration deleting a
+-- plugin row would silently leave these behind; the deletes are written out at
+-- every call site instead, beside the ones that already remove a group's
+-- plugins and a retired agent's approvals.
+CREATE TABLE plugin_agents (
+    plugin_id TEXT NOT NULL REFERENCES plugins(id),
+    agent_id  TEXT NOT NULL REFERENCES agents(id),
+    PRIMARY KEY (plugin_id, agent_id)
+);
+
+-- Retiring an agent takes its permissions with it, and that read is by agent.
+CREATE INDEX plugin_agents_agent ON plugin_agents (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -909,6 +943,34 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert_eq!(left, vec!["linear".to_string()], "and only Cloudflare's");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_agents_could_be_chosen_stays_the_whole_crew_s() {
+        // The one thing this migration must not do. A crew whose Neon sign-in
+        // worked yesterday has to work today, without the operator opening a
+        // panel they have never seen to re-grant what they already had.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 27) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let access: String = conn
+            .query_row("SELECT access FROM plugins WHERE id='p1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(access, "everyone");
+        let named: i64 =
+            conn.query_row("SELECT count(*) FROM plugin_agents", [], |row| row.get(0)).unwrap();
+        assert_eq!(named, 0, "nobody was named, and nobody needs to be");
     }
 
     #[test]

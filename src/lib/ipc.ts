@@ -39,6 +39,7 @@ import type {
   GroupUsage,
   MessageId,
   Plugin,
+  PluginAccess,
   PluginId,
   PluginKind,
   PluginOffer,
@@ -118,6 +119,15 @@ export const api = {
    */
   connectPlugin: (groupId: GroupId, kind: PluginKind) =>
     invoke<Plugin>("connect_plugin", { groupId, kind }),
+
+  /**
+   * Narrows a plugin to named agents, or opens it back up to the crew.
+   *
+   * The whole answer every time. A merge would let this panel narrow a plugin
+   * by forgetting somebody it had not drawn yet.
+   */
+  setPluginAccess: (id: PluginId, access: PluginAccess) =>
+    invoke<Plugin>("set_plugin_access", { id, access }),
 
   disconnectPlugin: (id: PluginId) => invoke<void>("disconnect_plugin", { id }),
 

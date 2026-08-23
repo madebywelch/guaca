@@ -323,6 +323,15 @@ delete button a page apart. The state lives in the shell, so changing section
 cannot discard a half-typed endpoint. Plugins is disabled until the group
 exists, because a sign-in and a credential both have to belong to something.
 
+That section holds two decisions, not one. Connecting is the crew's sign-in;
+under each connected row is who in the crew may use it, which is every agent
+until an operator says otherwise. It is written the moment it is clicked, like
+the Connect and Disconnect buttons above it: a draft nobody submitted would be a
+permission the operator believes they granted. The reasoning is in
+`docs/PLUGINS.md`; what the panel owes the operator is the sentence saying who
+a plugin is currently offered to, including the honest one for a plugin narrowed
+to nobody, which is otherwise indistinguishable from a working row.
+
 Three rows say who pays, and the first is "follow the app settings", which is
 where every group starts. The second is the ChatGPT subscription, and the group
 editor cannot sign in: there is one sign-in on this machine, it is performed in

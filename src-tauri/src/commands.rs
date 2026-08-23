@@ -23,7 +23,7 @@ use crate::domain::ids::{
     AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
-use crate::domain::plugin::{self, Plugin, PluginKind, PluginOffer};
+use crate::domain::plugin::{self, Plugin, PluginAccess, PluginKind, PluginOffer};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -398,6 +398,24 @@ pub async fn connect_plugin(
     Ok(plugin)
 }
 
+/// Chooses which of a crew's agents may call one plugin.
+///
+/// The whole answer, every time: `everyone`, or the complete list of agents.
+/// A merge would let a panel narrow a plugin by forgetting somebody, and this
+/// one renders what it last read.
+#[tauri::command]
+pub fn set_plugin_access(
+    state: State<'_, AppState>,
+    id: PluginId,
+    access: PluginAccess,
+) -> Reply<Plugin> {
+    let plugin = state.runtime.store().set_plugin_access(id, &access)?;
+    // Changes what every agent in the crew is offered on its next turn, and
+    // what the roster says its peers can reach.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(plugin)
+}
+
 /// Forgets a plugin, and the grant with it.
 ///
 /// The grant is dropped locally rather than revoked at the vendor: not every
@@ -666,6 +684,10 @@ async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()
     // reuse the moment an agent is deleted, and whoever takes it next must not
     // inherit a standing grant given to somebody else.
     let _ = state.runtime.store().delete_agent_approvals(id);
+    // And its place on any plugin the operator narrowed to named agents, for
+    // the same reason: a row naming an agent that no longer exists grants
+    // nothing and draws as nobody in the panel that lists them.
+    let _ = state.runtime.store().delete_agent_plugin_access(id);
     Ok(())
 }
 

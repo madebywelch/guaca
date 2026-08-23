@@ -31,7 +31,8 @@ src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
     group.rs          A crew's wall, and the settings its agents run on.
-    plugin.rs         The servers a crew can sign in to, and what it got.
+    plugin.rs         The servers a crew can sign in to, what it got, and
+                      which of its agents may spend it.
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
@@ -88,6 +89,7 @@ repo: the frontend renders state and forwards intent.
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
+| Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
@@ -214,6 +216,16 @@ the model takes a screenshot to see what `browse` did.
   the whole API behind `search` and `execute`: the model writes JavaScript
   against the OpenAPI document and Cloudflare runs it, so 2,500 endpoints cost
   about a thousand tokens instead of a million.
+- **A plugin's sign-in belongs to the group, and who may spend it does not.**
+  `PluginAccess` is `Everyone` or a named list, and the empty list is why it is
+  not one list with a sentinel: everyone covers agents nobody has hired yet, and
+  a list that meant everyone when it was empty would hand a plugin back to the
+  crew at the moment the operator unticked the last name. Filtering the tool
+  definitions is not the enforcement either. A model names tools it was never
+  offered, so `Store::plugin_reach` asks the same question again on the call
+  path, from the same SQL fragment, and its two refusals are different
+  sentences: "nobody connected this" is the operator's to fix, "connected, but
+  not for you" is a peer's to do.
 - **A plugin's tool list is read once and kept.** `tools/list` on every turn is
   a network round trip in front of every model call, paid by every agent in the
   crew, to re-learn something that changes when a vendor ships rather than when

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{params, OptionalExtension, Row};
+use rusqlite::{named_params, params, OptionalExtension, Row};
 
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
@@ -21,7 +21,7 @@ use crate::domain::ids::{
     AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
-use crate::domain::plugin::{Plugin, PluginKind, PluginTool};
+use crate::domain::plugin::{Plugin, PluginAccess, PluginKind, PluginTool};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -57,6 +57,8 @@ pub enum StoreError {
     ConnectorNotFound(ConnectorId),
     #[error("no plugin with id {0}")]
     PluginNotFound(PluginId),
+    #[error("agent {0} is not in this group, so it cannot be given one of the group's plugins")]
+    AgentNotInGroup(AgentId),
     #[error("no permission request with id {0}")]
     ApprovalNotFound(ApprovalId),
     #[error("that request was already answered ({})", state.as_str())]
@@ -1065,9 +1067,10 @@ impl Store {
     /// is no command that returns one.
     pub fn group_plugins(&self, group: GroupId) -> Result<Vec<Plugin>, StoreError> {
         let conn = self.conn()?;
+        let chosen = self.chosen_agents(&conn, group)?;
         let mut stmt =
             conn.prepare(&format!("{PLUGIN_COLUMNS} WHERE group_id=?1 ORDER BY kind, rowid"))?;
-        let rows = stmt.query_map(params![group.to_string()], row_to_plugin)?;
+        let rows = stmt.query_map(params![group.to_string()], |row| row_to_plugin(row, &chosen))?;
         let mut out = Vec::new();
         for row in rows {
             // A row whose kind is not one this build knows is skipped rather
@@ -1081,21 +1084,67 @@ impl Store {
         Ok(out)
     }
 
-    /// What the crew can call, with the schemas the model is shown.
+    /// Every named agent in one group's plugins, by the plugin that named them.
+    ///
+    /// One query for the whole group rather than one per row: this is read to
+    /// draw a settings panel and to build a roster, and a query per plugin
+    /// would be five for a screen that shows five tiles.
+    fn chosen_agents(
+        &self,
+        conn: &Conn,
+        group: GroupId,
+    ) -> Result<HashMap<PluginId, Vec<AgentId>>, StoreError> {
+        let mut stmt = conn.prepare(
+            "SELECT plugin_agents.plugin_id, plugin_agents.agent_id
+               FROM plugin_agents
+               JOIN plugins ON plugins.id = plugin_agents.plugin_id
+              WHERE plugins.group_id = ?1
+              ORDER BY plugin_agents.rowid",
+        )?;
+        let rows = stmt.query_map(params![group.to_string()], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut out: HashMap<PluginId, Vec<AgentId>> = HashMap::new();
+        for row in rows {
+            let (plugin, agent) = row?;
+            let (Ok(plugin), Ok(agent)) = (plugin.parse::<PluginId>(), agent.parse::<AgentId>())
+            else {
+                // An id that will not parse names nothing, so it grants
+                // nothing. Dropping it is the fail-closed reading, and the
+                // alternative is a settings panel nobody can open.
+                continue;
+            };
+            out.entry(plugin).or_default().push(agent);
+        }
+        Ok(out)
+    }
+
+    /// What one agent can call, with the schemas the model is shown.
     ///
     /// Separate from `group_plugins` for the reason `connector_env` is separate
     /// from `group_connectors`: this is the bulk nothing but the turn needs,
     /// and it is read on the hot path rather than to draw a list.
+    ///
+    /// Filtered by agent rather than by group, because what is offered to a
+    /// model has to be what that model may actually call. The prompt is built
+    /// from the same list on the same turn, so an agent is never told about a
+    /// plugin it would be refused.
     pub fn plugin_tools(
         &self,
         group: GroupId,
+        agent: AgentId,
     ) -> Result<Vec<(PluginKind, Vec<PluginTool>)>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt =
-            conn.prepare("SELECT kind, tools FROM plugins WHERE group_id=?1 ORDER BY kind, rowid")?;
-        let rows = stmt.query_map(params![group.to_string()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT kind, tools FROM plugins
+              WHERE group_id=:group AND {PLUGIN_REACHED_BY_AGENT}
+              ORDER BY kind, rowid"
+        ))?;
+        let rows = stmt.query_map(
+            named_params! { ":group": group.to_string(), ":agent": agent.to_string() },
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?;
 
         let mut out = Vec::new();
         for row in rows {
@@ -1108,39 +1157,68 @@ impl Store {
         Ok(out)
     }
 
-    /// The grant one plugin holds, and the row it belongs to.
+    /// What one agent gets when it names one of its crew's plugins.
     ///
     /// The only path a stored token takes out of this table, and it leads
     /// straight back to the server that issued it. Nothing here reaches a
     /// prompt, a transcript, an event or the webview.
-    pub fn plugin_grant(
+    ///
+    /// Three answers rather than an `Option`, because two of them are refusals
+    /// an agent reads mid-turn and they call for opposite things. "Nobody has
+    /// connected this" is something to tell the operator about; "you are not
+    /// one of the agents it was connected for" is something to hand to a peer.
+    /// Collapsing them would have an agent asking an operator to connect a
+    /// plugin they are looking at in the settings panel, already connected.
+    pub fn plugin_reach(
         &self,
         group: GroupId,
+        agent: AgentId,
         kind: PluginKind,
-    ) -> Result<Option<(PluginId, Option<crate::oauth::Grant>)>, StoreError> {
+    ) -> Result<PluginReach, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,token_endpoint
-               FROM plugins WHERE group_id=?1 AND kind=?2",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,
+                    token_endpoint,{PLUGIN_REACHED_BY_AGENT}
+               FROM plugins WHERE group_id=:group AND kind=:kind",
+        ))?;
         let row = stmt
-            .query_row(params![group.to_string(), kind.slug()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                ))
-            })
+            .query_row(
+                named_params! {
+                    ":group": group.to_string(),
+                    ":kind": kind.slug(),
+                    ":agent": agent.to_string(),
+                },
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)? != 0,
+                    ))
+                },
+            )
             .optional()?;
 
-        let Some((id, access, refresh, expires_at, client_id, client_secret, token_endpoint)) = row
+        let Some((
+            id,
+            access,
+            refresh,
+            expires_at,
+            client_id,
+            client_secret,
+            token_endpoint,
+            reached,
+        )) = row
         else {
-            return Ok(None);
+            return Ok(PluginReach::NotConnected);
         };
+        if !reached {
+            return Ok(PluginReach::NotChosen);
+        }
         let id = id
             .parse::<PluginId>()
             .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id:?}: {e}")))?;
@@ -1157,7 +1235,86 @@ impl Store {
             client_secret: (!client_secret.is_empty()).then_some(client_secret),
             token_endpoint,
         });
-        Ok(Some((id, grant)))
+        Ok(PluginReach::Granted { id, grant })
+    }
+
+    /// Narrows a plugin to some of the crew, or opens it to all of it.
+    ///
+    /// The whole set is replaced, never merged. A caller that sent the agents
+    /// it knew about would narrow a plugin by forgetting one, and the panel
+    /// that sends this renders what it last read.
+    pub fn set_plugin_access(
+        &self,
+        id: PluginId,
+        access: &PluginAccess,
+    ) -> Result<Plugin, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+
+        let group: String = tx
+            .query_row("SELECT group_id FROM plugins WHERE id=?1", params![id.to_string()], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .ok_or(StoreError::PluginNotFound(id))?;
+
+        if let PluginAccess::Chosen { agents } = access {
+            for agent in agents {
+                // Refused rather than filtered out. An agent from another crew
+                // could never reach this plugin anyway, because the turn asks
+                // by group as well as by agent, so storing one would be a row
+                // that means nothing and a settings panel drawing a name that
+                // grants nothing.
+                let known: Option<i64> = tx
+                    .query_row(
+                        "SELECT 1 FROM agents
+                          WHERE id=?1 AND group_id=?2 AND lifecycle<>'terminated'",
+                        params![agent.to_string(), group],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if known.is_none() {
+                    return Err(StoreError::AgentNotInGroup(*agent));
+                }
+            }
+        }
+
+        tx.execute(
+            "UPDATE plugins SET access=?2 WHERE id=?1",
+            params![id.to_string(), access.as_str()],
+        )?;
+        tx.execute("DELETE FROM plugin_agents WHERE plugin_id=?1", params![id.to_string()])?;
+        if let PluginAccess::Chosen { agents } = access {
+            for agent in agents {
+                // A set, so a name sent twice is one row rather than a
+                // conflict. Nothing about who may call this depends on how
+                // many times the caller listed them.
+                tx.execute(
+                    "INSERT OR IGNORE INTO plugin_agents (plugin_id, agent_id) VALUES (?1, ?2)",
+                    params![id.to_string(), agent.to_string()],
+                )?;
+            }
+        }
+        tx.commit()?;
+
+        let group = group
+            .parse::<GroupId>()
+            .map_err(|e| StoreError::Corrupt(format!("bad group id {group:?}: {e}")))?;
+        self.group_plugins(group)?
+            .into_iter()
+            .find(|plugin| plugin.id == id)
+            .ok_or(StoreError::PluginNotFound(id))
+    }
+
+    /// Drops one agent's place on every plugin that named it.
+    ///
+    /// Called when an agent is retired, for the reason its approvals are: a
+    /// permission the operator gave to an agent that no longer exists is a row
+    /// nothing can act on and a name in a settings panel that points at nobody.
+    pub fn delete_agent_plugin_access(&self, agent: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn
+            .execute("DELETE FROM plugin_agents WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
     /// Records a connection, replacing whatever was there for that server.
@@ -1165,6 +1322,12 @@ impl Store {
     /// Replace rather than reject: connecting again is how an operator fixes a
     /// grant that was revoked at the vendor, and the unique index makes an
     /// insert the wrong shape for that.
+    ///
+    /// `access` is not in the update, and the row keeps its id, so who may call
+    /// the plugin survives the sign-in being redone. Renewing a grant is not a
+    /// decision about the crew, and a reconnection that quietly handed Stripe
+    /// back to everybody would undo one silently, at the moment the operator
+    /// was fixing something else.
     pub fn save_plugin(
         &self,
         group: GroupId,
@@ -1234,9 +1397,19 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets a plugin, its grant, and who was allowed to spend it.
+    ///
+    /// The named agents go first, and not only because the foreign key would
+    /// refuse otherwise: a row naming a plugin that is gone would be a standing
+    /// permission attached to nothing, waiting to attach itself to whatever
+    /// took the id next.
     pub fn delete_plugin(&self, id: PluginId) -> Result<bool, StoreError> {
-        let conn = self.conn()?;
-        Ok(conn.execute("DELETE FROM plugins WHERE id=?1", params![id.to_string()])? > 0)
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM plugin_agents WHERE plugin_id=?1", params![id.to_string()])?;
+        let removed = tx.execute("DELETE FROM plugins WHERE id=?1", params![id.to_string()])?;
+        tx.commit()?;
+        Ok(removed > 0)
     }
 
     // ---- sign-ins --------------------------------------------------------
@@ -1569,7 +1742,13 @@ impl Store {
         conn.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
         // And its plugins, for both of those reasons and one more: the row
         // holds a grant against the operator's own Neon or Cloudflare account,
-        // and a disbanded crew is not a reason to keep one.
+        // and a disbanded crew is not a reason to keep one. Whoever was named
+        // on one goes first, or the foreign key refuses the line below.
+        conn.execute(
+            "DELETE FROM plugin_agents WHERE plugin_id IN
+                 (SELECT id FROM plugins WHERE group_id=?1)",
+            params![id.to_string()],
+        )?;
         conn.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
         conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         Ok(())
@@ -2330,34 +2509,76 @@ fn row_to_connector(row: &Row<'_>) -> RowResult<Connector> {
     })())
 }
 
+/// What one agent gets when it names one of its crew's plugins.
+///
+/// The two refusals are separate because they are read by a model mid-turn and
+/// they have different answers: one is the operator's to fix, the other is a
+/// peer's to do.
+#[derive(Debug)]
+pub enum PluginReach {
+    /// No row: this crew has not connected it, and no agent can.
+    NotConnected,
+    /// Connected, and this agent is not one of the ones it was connected for.
+    NotChosen,
+    /// The row, and the grant to spend against it. `None` for a server that
+    /// authorised nobody because it asked for nothing.
+    Granted { id: PluginId, grant: Option<crate::oauth::Grant> },
+}
+
 const PLUGIN_COLUMNS: &str =
-    "SELECT id,group_id,kind,account,tools,access_token,connected_at FROM plugins";
+    "SELECT id,group_id,kind,account,tools,access_token,connected_at,access FROM plugins";
+
+/// The one rule that decides whether an agent is offered a plugin's tools and
+/// whether a call it makes may spend the grant.
+///
+/// Written once and pasted into both queries, because a turn where the two
+/// disagree is either a model calling something it was never told it had, or a
+/// model refused something it was told it had and told to try again. Named
+/// parameters rather than numbered so the fragment does not care where it lands
+/// in the statement around it.
+///
+/// The comparison is what makes it fail closed: only the literal `everyone`
+/// widens a plugin past its named agents, so a value written by a build this
+/// one has never met restricts rather than opens.
+const PLUGIN_REACHED_BY_AGENT: &str = "(plugins.access = 'everyone'
+     OR EXISTS (SELECT 1 FROM plugin_agents
+                 WHERE plugin_agents.plugin_id = plugins.id
+                   AND plugin_agents.agent_id = :agent))";
 
 /// `None` for a row naming a plugin this build does not have, which is what a
 /// downgrade leaves behind. Corrupt rows still raise: a tool list that will not
 /// parse is a bug here, not a version skew.
-fn row_to_plugin(row: &Row<'_>) -> RowResult<Option<Plugin>> {
+///
+/// `chosen` is the row's named agents, read separately because they are a
+/// second table. A plugin missing from that map is one with nobody named.
+fn row_to_plugin(
+    row: &Row<'_>,
+    chosen: &HashMap<PluginId, Vec<AgentId>>,
+) -> RowResult<Option<Plugin>> {
     let id_raw: String = row.get(0)?;
     let group_raw: String = row.get(1)?;
     let kind_raw: String = row.get(2)?;
     let tools_raw: String = row.get(4)?;
     let access: String = row.get(5)?;
+    let reach: String = row.get(7)?;
 
     Ok((|| {
         let Some(kind) = PluginKind::from_slug(&kind_raw) else { return Ok(None) };
         let tools: Vec<PluginTool> = serde_json::from_str(&tools_raw)
             .map_err(|e| StoreError::Corrupt(format!("bad tool list for {kind_raw:?}: {e}")))?;
+        let id = id_raw
+            .parse::<PluginId>()
+            .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id_raw:?}: {e}")))?;
 
         Ok(Some(Plugin {
-            id: id_raw
-                .parse::<PluginId>()
-                .map_err(|e| StoreError::Corrupt(format!("bad plugin id {id_raw:?}: {e}")))?,
+            id,
             group_id: group_raw
                 .parse::<GroupId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
             kind,
             account: row.get(3)?,
             tools: tools.into_iter().map(|tool| tool.name).collect(),
+            access: PluginAccess::from_row(&reach, chosen.get(&id).cloned().unwrap_or_default()),
             signed_in: !access.is_empty(),
             connected_at: row.get(6)?,
         }))
@@ -2487,6 +2708,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&dir.path().join("guac.db")).unwrap();
         Fixture { store, _dir: dir }
+    }
+
+    /// One tool on a connected plugin. What it does is never read here; what
+    /// matters is whether it is offered at all.
+    fn tool(name: &str) -> PluginTool {
+        PluginTool {
+            name: name.into(),
+            description: String::new(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        }
     }
 
     fn draft(name: &str) -> CleanDraft {
@@ -4505,8 +4736,9 @@ mod tests {
             )
             .unwrap();
 
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
         assert!(f.store.group_plugins(group).unwrap().is_empty());
-        assert!(f.store.plugin_tools(group).unwrap().is_empty());
+        assert!(f.store.plugin_tools(group, agent.id).unwrap().is_empty());
     }
 
     #[test]
@@ -4523,7 +4755,10 @@ mod tests {
 
         f.store.delete_group(group.id).unwrap();
         assert!(f.store.group_plugins(group.id).unwrap().is_empty());
-        assert!(f.store.plugin_grant(group.id, PluginKind::Neon).unwrap().is_none());
+        assert!(matches!(
+            f.store.plugin_reach(group.id, AgentId::new(), PluginKind::Neon).unwrap(),
+            PluginReach::NotConnected
+        ));
     }
 
     #[test]
@@ -4536,8 +4771,223 @@ mod tests {
         let group = default_group_id();
         f.store.save_plugin(group, PluginKind::Neon, "", &[], None).unwrap();
 
-        let (_, grant) = f.store.plugin_grant(group, PluginKind::Neon).unwrap().unwrap();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        let PluginReach::Granted { grant, .. } =
+            f.store.plugin_reach(group, agent.id, PluginKind::Neon).unwrap()
+        else {
+            panic!("a connected plugin is reachable by the crew it was connected for")
+        };
         assert!(grant.is_none());
         assert!(!f.store.group_plugins(group).unwrap()[0].signed_in);
+    }
+
+    #[test]
+    fn a_plugin_is_the_whole_crew_s_until_somebody_says_otherwise() {
+        // The default, and the reading every plugin connected before this
+        // existed keeps. An operator who has never opened this control has a
+        // crew that works exactly as it did.
+        let f = fixture();
+        let group = default_group_id();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
+
+        assert_eq!(f.store.group_plugins(group).unwrap()[0].access, PluginAccess::Everyone);
+        assert_eq!(f.store.plugin_tools(group, manager.id).unwrap().len(), 1);
+
+        // Including an agent hired after the plugin was connected, which is the
+        // half a list of ids could not express.
+        let hired = f.store.create_agent(&draft("Researcher")).unwrap();
+        assert_eq!(f.store.plugin_tools(group, hired.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_narrowed_plugin_is_offered_to_the_chosen_and_to_nobody_else() {
+        let f = fixture();
+        let group = default_group_id();
+        let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
+        let scribe = f.store.create_agent(&draft("Scribe")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Stripe, "", &[tool("refund")], None).unwrap();
+
+        let saved = f
+            .store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
+            .unwrap();
+        assert_eq!(saved.access, PluginAccess::Chosen { agents: vec![revenue.id] });
+
+        assert_eq!(f.store.plugin_tools(group, revenue.id).unwrap().len(), 1);
+        assert!(f.store.plugin_tools(group, scribe.id).unwrap().is_empty());
+
+        // And the tool list and the grant agree, because a model can name a
+        // tool it was never offered.
+        assert!(matches!(
+            f.store.plugin_reach(group, revenue.id, PluginKind::Stripe).unwrap(),
+            PluginReach::Granted { .. }
+        ));
+        assert!(matches!(
+            f.store.plugin_reach(group, scribe.id, PluginKind::Stripe).unwrap(),
+            PluginReach::NotChosen
+        ));
+    }
+
+    #[test]
+    fn a_plugin_narrowed_to_nobody_is_a_plugin_nobody_gets() {
+        // Reachable in the UI on the way to naming the first agent, so it has
+        // to mean what it says. An empty list read as "everyone" would hand the
+        // plugin back to the crew at the moment the last name was removed.
+        let f = fixture();
+        let group = default_group_id();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Stripe, "", &[tool("refund")], None).unwrap();
+
+        f.store.set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![] }).unwrap();
+
+        assert!(f.store.plugin_tools(group, manager.id).unwrap().is_empty());
+        assert!(matches!(
+            f.store.plugin_reach(group, manager.id, PluginKind::Stripe).unwrap(),
+            PluginReach::NotChosen
+        ));
+    }
+
+    #[test]
+    fn opening_a_plugin_back_up_leaves_nothing_behind_that_still_names_anybody() {
+        // The stored state has to be what is true. A remembered list would be a
+        // decision the operator has already changed, waiting to come back.
+        let f = fixture();
+        let group = default_group_id();
+        let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
+        let plugin = f.store.save_plugin(group, PluginKind::Stripe, "", &[], None).unwrap();
+
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
+            .unwrap();
+        let opened = f.store.set_plugin_access(plugin.id, &PluginAccess::Everyone).unwrap();
+
+        assert_eq!(opened.access, PluginAccess::Everyone);
+        let left: i64 = f
+            .store
+            .conn()
+            .unwrap()
+            .query_row("SELECT count(*) FROM plugin_agents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn an_agent_from_another_crew_cannot_be_named_on_a_plugin() {
+        // It could never reach it — the turn asks by group as well as by agent
+        // — so the row would grant nothing and draw as a name in a panel that
+        // means nothing.
+        let f = fixture();
+        let other = f
+            .store
+            .create_group(&CleanGroup { name: "Elsewhere".into(), ..Default::default() })
+            .unwrap();
+        let outsider = f
+            .store
+            .create_agent(&CleanDraft { group_id: Some(other.id), ..draft("Outsider") })
+            .unwrap();
+        let plugin =
+            f.store.save_plugin(default_group_id(), PluginKind::Stripe, "", &[], None).unwrap();
+
+        let refused = f
+            .store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![outsider.id] })
+            .unwrap_err();
+        assert!(matches!(refused, StoreError::AgentNotInGroup(id) if id == outsider.id));
+    }
+
+    #[test]
+    fn connecting_again_does_not_hand_a_narrowed_plugin_back_to_the_crew() {
+        // Reconnecting is how an operator fixes a grant revoked at the vendor.
+        // It is not a decision about who may use it, and one that quietly
+        // widened the plugin would undo the narrowing at the moment the
+        // operator was fixing something else.
+        let f = fixture();
+        let group = default_group_id();
+        let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
+        let scribe = f.store.create_agent(&draft("Scribe")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Stripe, "", &[tool("refund")], None).unwrap();
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
+            .unwrap();
+
+        let again =
+            f.store.save_plugin(group, PluginKind::Stripe, "", &[tool("refund")], None).unwrap();
+
+        assert_eq!(again.access, PluginAccess::Chosen { agents: vec![revenue.id] });
+        assert!(f.store.plugin_tools(group, scribe.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn retiring_an_agent_takes_its_place_on_a_plugin_with_it() {
+        let f = fixture();
+        let group = default_group_id();
+        let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
+        let plugin = f.store.save_plugin(group, PluginKind::Stripe, "", &[], None).unwrap();
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
+            .unwrap();
+
+        assert_eq!(f.store.delete_agent_plugin_access(revenue.id).unwrap(), 1);
+        assert_eq!(
+            f.store.group_plugins(group).unwrap()[0].access,
+            PluginAccess::Chosen { agents: vec![] },
+            "the plugin stays narrowed; it just names nobody"
+        );
+    }
+
+    #[test]
+    fn disconnecting_a_narrowed_plugin_leaves_no_permission_behind() {
+        // The foreign key would refuse the delete, and a row naming a plugin
+        // that is gone is a standing permission attached to nothing.
+        let f = fixture();
+        let group = default_group_id();
+        let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
+        let plugin = f.store.save_plugin(group, PluginKind::Stripe, "", &[], None).unwrap();
+        f.store
+            .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
+            .unwrap();
+
+        assert!(f.store.delete_plugin(plugin.id).unwrap());
+        let left: i64 = f
+            .store
+            .conn()
+            .unwrap()
+            .query_row("SELECT count(*) FROM plugin_agents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0);
+    }
+
+    #[test]
+    fn an_access_value_this_build_does_not_know_shuts_the_plugin_rather_than_opening_it() {
+        // What a downgrade leaves behind. A permission that cannot be read has
+        // to fail closed: the crew losing a plugin is visible and fixable, and
+        // a crew silently gaining one is neither.
+        let f = fixture();
+        let group = default_group_id();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let plugin =
+            f.store.save_plugin(group, PluginKind::Neon, "", &[tool("run_sql")], None).unwrap();
+        f.store
+            .conn()
+            .unwrap()
+            .execute(
+                "UPDATE plugins SET access='whoever' WHERE id=?1",
+                params![plugin.id.to_string()],
+            )
+            .unwrap();
+
+        assert!(f.store.plugin_tools(group, manager.id).unwrap().is_empty());
+        assert!(matches!(
+            f.store.plugin_reach(group, manager.id, PluginKind::Neon).unwrap(),
+            PluginReach::NotChosen
+        ));
+        assert_eq!(
+            f.store.group_plugins(group).unwrap()[0].access,
+            PluginAccess::Chosen { agents: vec![] }
+        );
     }
 }
