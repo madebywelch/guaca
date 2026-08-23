@@ -155,15 +155,15 @@ pub fn system_prompt(
         );
     } else {
         // The honest version of the paragraph above. An agent told it has a
-        // machine when the app has no provider configured spends a turn finding
-        // out, then tells the operator the machine is broken rather than absent.
+        // machine when it has not been given one spends a turn finding out,
+        // then tells the operator the machine is broken rather than absent.
         out.push_str("\n## What you can do yourself\n");
         out.push_str(
-            "You have no computer and no browser: neither is set up in this workspace, so you \
-             cannot run commands, look at a screen or open a web page. Work from what you know \
-             and from what is in the conversation. If a task needs the web or a shell, say so \
-             plainly and say that the operator can add a provider in settings, rather than \
-             guessing at an answer or reporting a failure.\n",
+            "You have no computer and no browser: you have not been given either, so you cannot \
+             run commands, look at a screen or open a web page. Work from what you know and from \
+             what is in the conversation. If a task needs the web or a shell, say so plainly and \
+             say that the operator can give you one, rather than guessing at an answer or \
+             reporting a failure.\n",
         );
     }
 
@@ -804,6 +804,8 @@ mod tests {
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
             browser_id: None,
+            has_computer: true,
+            has_browser: true,
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),

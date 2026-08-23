@@ -9,6 +9,26 @@ A *browser* is not a *computer*. `MACHINES.md` is the other one: a Linux
 machine with a shell, a desktop and a screen, worked by looking at pixels and
 aiming a pointer. Both may be configured, either may be, or neither.
 
+## A browser is given to one agent, and separately from the computer
+
+The same rule as the machine's, and the reason it is a second column rather
+than one switch over both: a crew where one agent reads the web and nobody else
+leaves the workspace is the ordinary shape, not a special case. A Kernel key
+says the workspace can hand a browser out; `agents.has_browser` says who was
+given one. `Surfaces::given_to` is where the two meet.
+
+*A computer is given to one agent, not to the workspace* in `MACHINES.md` has
+the argument in full. What is different here is what taking one back does: the
+browser is closed rather than slept, because closing is what writes the cookies
+back to the agent's profile. The profile outlives every browser made against it
+and is deleted with the agent, so a browser given back opens signed in to the
+same accounts. Nothing is lost by taking one back, which is why it does not ask
+twice.
+
+The gate is in `ensure_browser`, the only function that makes a browser, and a
+model that calls `browse` without one is refused by `Runtime::not_given` before
+anything is opened.
+
 ## Why they are two things
 
 They were one. Chrome's remote debugging port was opened on the E2B machine and

@@ -9,6 +9,8 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     groupId: "g1",
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     name,
     avatar: "avocado",
     color: "#c7d96b",

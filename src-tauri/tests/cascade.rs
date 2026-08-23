@@ -2149,7 +2149,10 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
     // declines; and an agent told about a session on another machine, so it
     // tries and hits a login wall.
     let stub = serve(|_| Script::Say("Noted.".into())).await;
-    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    // A crew with browsers, because a session is only worth naming to an agent
+    // that could go and use it: what an agent is told it can reach is filtered
+    // by the places it actually has.
+    let h = harness_with_browser(&stub, &["Manager", "Researcher"], GuardLimits::default());
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     h.runtime
@@ -2208,6 +2211,47 @@ async fn an_agent_is_told_what_its_browser_holds_and_what_its_peers_hold() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_account_on_a_place_that_was_taken_back_is_named_to_nobody() {
+    // A sign-in outlives the place it was found on, deliberately: the profile
+    // holding those cookies is kept when a browser is taken back, so the
+    // account is still there if it is given back. Naming it meanwhile is the
+    // overclaim that is worse than saying nothing — the agent decides it has
+    // access and hits a login wall, or a peer routes the work to it.
+    let stub = serve(|_| Script::Say("Noted.".into())).await;
+    let h = harness_with_browser(&stub, &["Manager", "Researcher"], GuardLimits::default());
+
+    h.runtime
+        .store()
+        .replace_signins(
+            h.id("Researcher"),
+            Surface::Browser,
+            &[signin_on(h.id("Researcher"), "LinkedIn")],
+        )
+        .unwrap();
+    h.runtime.store().set_has_browser(h.id("Researcher"), false).unwrap();
+
+    for agent in ["Manager", "Researcher"] {
+        let run = h.runtime.send_from_human(h.id(agent), "hello").unwrap();
+        h.settle(run).await;
+    }
+
+    let prompts = prompts_by_agent(&stub);
+    let researcher = prompts.get("Researcher").expect("Researcher ran");
+    let manager = prompts.get("Manager").expect("Manager ran");
+
+    assert!(
+        !researcher.contains("LinkedIn"),
+        "an agent must not be told it holds an account it can no longer reach: {researcher}"
+    );
+    assert!(
+        !manager.contains("signed in to LinkedIn"),
+        "and a peer must not be sent to it: {manager}"
+    );
+    // The row is still there for when the browser is given back.
+    assert_eq!(h.runtime.store().agent_signins(h.id("Researcher")).unwrap().len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_directory_says_which_peer_is_signed_in_to_what() {
     // The roster in the prompt is one path; `directory` is the other, and an
     // agent that calls it mid-turn to decide who to delegate to reads this one.
@@ -2220,7 +2264,7 @@ async fn the_directory_says_which_peer_is_signed_in_to_what() {
     })
     .await;
 
-    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    let h = harness_with_browser(&stub, &["Manager", "Researcher"], GuardLimits::default());
     h.runtime
         .store()
         .replace_signins(
@@ -2302,6 +2346,43 @@ async fn an_agent_cannot_add_a_colleague_without_the_operator_saying_so() {
     assert!(
         h.runtime.workspace().read(hired.id).contains("founder-led sales"),
         "an agent handed starting notes has to open with them, not find an empty file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_made_by_an_agent_is_given_neither_place_and_its_maker_is_told() {
+    // A crew that could staff itself with machines would route around the
+    // decision entirely: one agent with a computer makes three more and the
+    // operator finds out from the bill. And the maker has to hear it, or it
+    // hands the web to a peer that cannot reach it and reports the work as
+    // delegated.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Scout is set up.".into())
+        } else {
+            Script::Hire {
+                name: "Scout".into(),
+                instructions: "You look things up on the web.".into(),
+                notes: String::new(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness_with_computer(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Create a scout.").unwrap();
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Allow).unwrap();
+    h.settle(run).await;
+
+    let scout = h.agent_named("Scout").expect("the operator allowed it");
+    assert!(!scout.has_computer, "a machine is the operator's to hand out, not an agent's");
+    assert!(!scout.has_browser);
+
+    let told = tool_results(&stub).join("\n");
+    assert!(
+        told.contains("no computer and no browser"),
+        "the maker has to know what it just made cannot do: {told}"
     );
 }
 
@@ -2417,6 +2498,113 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_workspace() {
+    // One key, one workspace, two agents, and only one of them was given a
+    // machine. The key used to decide on its own, which meant an operator who
+    // wanted a crew where one agent runs commands and the rest only talk had no
+    // way to say so: every agent was offered `run_command` and the first one to
+    // think of it rented itself a sandbox.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I could not run that: I have no computer.".into())
+        } else if speaker(body) == "Talker" {
+            Script::Shell("uname -a".into())
+        } else {
+            Script::Say("Nothing needed doing.".into())
+        }
+    })
+    .await;
+
+    let h = harness_with_computer(&stub, &["Runner", "Talker"], GuardLimits::default());
+    // The harness gives the crew whatever the provider makes possible, so this
+    // is the operator's decision under test: Talker is not to have one.
+    h.runtime.store().set_has_computer(h.id("Talker"), false).unwrap();
+
+    let refused =
+        h.runtime.send_from_human(h.id("Talker"), "What kernel is that machine on?").unwrap();
+    h.settle(refused).await;
+    let allowed = h.runtime.send_from_human(h.id("Runner"), "Anything to do?").unwrap();
+    h.settle(allowed).await;
+
+    // Decided before the first token, which is the half that costs nothing: a
+    // tool offered for a place an agent does not have is a model call and a
+    // turn spent finding out.
+    let offered = tools_by_agent(&stub);
+    assert!(
+        offered["Runner"].contains(&"run_command".to_string()),
+        "the agent that was given a computer still has one: {offered:?}"
+    );
+    for tool in ["run_command", "open_on_desktop", "use_screen"] {
+        assert!(
+            !offered["Talker"].contains(&tool.to_string()),
+            "{tool} was offered to an agent with no computer: {offered:?}"
+        );
+    }
+
+    // And the half that is load-bearing: a model calling a name it was never
+    // offered is refused rather than served, or the tool list is decoration.
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("you have no computer"), "{told}");
+    assert!(
+        told.contains("nothing to retry"),
+        "a refusal that reads as a broken machine gets tried again: {told}"
+    );
+    assert!(
+        h.agent_named("Talker").unwrap().sandbox_id.is_none(),
+        "a refused call must not have rented a machine anyway"
+    );
+
+    // The operator hears about it in words, in the channel they asked in.
+    assert!(
+        h.channel_texts("Talker").iter().any(|t| t.contains("no computer")),
+        "and the turn still ends in an answer:\n{}",
+        h.transcript()
+    );
+    h.expect_normal(refused, "a refused tool call is an ordinary turn");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_browser_is_given_the_same_way_and_refused_the_same_way() {
+    // The other place, and a separate decision: a crew where one agent reads
+    // the web and nobody else leaves the workspace is the ordinary shape. The
+    // gate is the same three lines with one boolean changed, which is exactly
+    // the shape a copy-paste error hides in.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I could not open that: I have no browser.".into())
+        } else if speaker(body) == "Talker" {
+            Script::Open("https://example.com".into())
+        } else {
+            Script::Say("Nothing needed doing.".into())
+        }
+    })
+    .await;
+
+    let h = harness_with_browser(&stub, &["Reader", "Talker"], GuardLimits::default());
+    h.runtime.store().set_has_browser(h.id("Talker"), false).unwrap();
+
+    let refused = h.runtime.send_from_human(h.id("Talker"), "What is on example.com?").unwrap();
+    h.settle(refused).await;
+    let allowed = h.runtime.send_from_human(h.id("Reader"), "Anything to do?").unwrap();
+    h.settle(allowed).await;
+
+    let offered = tools_by_agent(&stub);
+    assert!(offered["Reader"].contains(&"browse".to_string()), "{offered:?}");
+    assert!(
+        !offered["Talker"].contains(&"browse".to_string()),
+        "browse was offered to an agent with no browser: {offered:?}"
+    );
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("you have no browser"), "{told}");
+    assert!(
+        h.agent_named("Talker").unwrap().browser_id.is_none(),
+        "a refused call must not have opened a browser anyway"
+    );
+    h.expect_normal(refused, "a refused browse is an ordinary turn");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_operator() {
     // The live failure. An agent worked out that it could not reach the
     // operator's calendar, and asked them for permission to have it. This
@@ -2452,7 +2640,7 @@ async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_oper
     let told = tool_results(&stub).join("\n");
     assert!(told.contains("missing is access, not permission"), "{told}");
     assert!(
-        told.contains("add a provider"),
+        told.contains("give you a computer or a browser"),
         "a refusal with no way forward gets reworded and retried: {told}"
     );
 

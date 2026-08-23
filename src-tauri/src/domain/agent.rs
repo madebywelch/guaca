@@ -97,6 +97,18 @@ pub struct AgentCard {
     /// a browser is replaced and a stale copy of either is a pane pointed at
     /// something that has gone.
     pub browser_id: Option<String>,
+    /// Whether the operator has given this agent a computer at all.
+    ///
+    /// Not the same question as `sandbox_id`, and the difference is the whole
+    /// point of the field. A machine is rented and reclaimed on the provider's
+    /// clock; being allowed one is a decision, and it has to outlive every
+    /// machine made under it. An agent with this false is offered no tool that
+    /// reaches a machine and cannot make one, whatever it decides it needs.
+    pub has_computer: bool,
+    /// The same decision about the browser, and separately, because they are
+    /// two places: a crew where one agent reads the web and nobody else leaves
+    /// the workspace is the ordinary shape, not a special case.
+    pub has_browser: bool,
     pub lifecycle: Lifecycle,
     /// Kept at the top of the rail. Where a row is drawn and nothing else: a
     /// pinned agent is addressed, paid for and messaged exactly as before, so
@@ -450,6 +462,8 @@ mod tests {
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
             browser_id: None,
+            has_computer: false,
+            has_browser: false,
             lifecycle: Lifecycle::Active,
             pinned: false,
             rail_order: 0,
