@@ -15,10 +15,16 @@ const MARGIN = 8;
  * you go. That put the rarest thing an operator does — making a crew — beside
  * the thing they do constantly, and it grew the footer by a row every time
  * something new became makeable. A plus is the one control that can absorb the
- * next one without the rail paying for it.
+ * next one without the rail paying for it, which is why it is a menu.
  *
- * It lives at the end of the channel header rather than in the rail because the
- * rail is a list of agents and this is not about any of them.
+ * It sits at the top of the rail, beside the wordmark. It spent a while at the
+ * end of the channel header instead, on the grounds that the rail is a list of
+ * agents and this is about none of them, and that turned out to be the wrong
+ * half of the argument: an agent is a row in the rail and a group is a heading
+ * in it, so the rail is exactly where somebody looks to add one. It was also
+ * the one place the plus could not be drawn when the workspace is empty, since
+ * there is no channel open to hang a header on, which is the state where making
+ * an agent is the only thing left to do.
  */
 export function NewMenu({ onNewAgent, onNewGroup }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -26,9 +32,10 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
   const [open, setOpen] = useState(false);
   const [at, setAt] = useState({ x: 0, y: 0 });
 
-  // Measured after it is in the tree, like every other menu here: the button
-  // sits at the right edge of a column whose width is the window's, so a menu
-  // laid out from the button's left would hang off the side of the app.
+  // Measured after it is in the tree, like every other menu here. It opens to
+  // the right because the button is near the left edge of the window: laid out
+  // from the button's right edge, a menu wider than the rail would be clamped
+  // to the window and end up beside the plus rather than under it.
   useLayoutEffect(() => {
     const button = buttonRef.current;
     const menu = menuRef.current;
@@ -36,9 +43,9 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
     const anchor = button.getBoundingClientRect();
     const { width, height } = menu.getBoundingClientRect();
     setAt({
-      // Right edges aligned, then pulled back inside the window if that is not
+      // Left edges aligned, then pulled back inside the window if that is not
       // where it fits.
-      x: Math.max(MARGIN, Math.min(anchor.right - width, window.innerWidth - width - MARGIN)),
+      x: Math.min(Math.max(MARGIN, anchor.left), window.innerWidth - width - MARGIN),
       y: Math.min(anchor.bottom + 4, window.innerHeight - height - MARGIN),
     });
   }, [open]);
@@ -84,7 +91,7 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
       <button
         type="button"
         ref={buttonRef}
-        className="pane__new"
+        className="rail__new"
         aria-label="Make something new"
         title="Make something new"
         aria-haspopup="menu"

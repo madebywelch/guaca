@@ -67,16 +67,24 @@ function draw(groups: Group[], agents: AgentCard[] = [], activity: Record<string
     selected: null,
     railGroup: null,
   });
-  return render(
-    <Sidebar
-      onEditAgent={vi.fn()}
-      onEditGroup={vi.fn()}
-      onOpenCafeteria={vi.fn()}
-      onOpenSettings={vi.fn()}
-      onOpenSearch={vi.fn()}
-      onOpenMenu={vi.fn()}
-    />,
-  );
+  const onNewAgent = vi.fn();
+  const onNewGroup = vi.fn();
+  return {
+    ...render(
+      <Sidebar
+        onEditAgent={vi.fn()}
+        onEditGroup={vi.fn()}
+        onOpenCafeteria={vi.fn()}
+        onOpenSettings={vi.fn()}
+        onOpenSearch={vi.fn()}
+        onNewAgent={onNewAgent}
+        onNewGroup={onNewGroup}
+        onOpenMenu={vi.fn()}
+      />,
+    ),
+    onNewAgent,
+    onNewGroup,
+  };
 }
 
 /** A row, by the name written in it. */
@@ -128,6 +136,29 @@ describe("group header", () => {
 
     expect(container.querySelector(".rail__group-head")?.textContent).toContain("everyone");
     expect(screen.queryByText(MODEL)).toBeNull();
+  });
+});
+
+describe("the plus", () => {
+  /**
+   * Two things the channel header it used to sit in could not give it. There it
+   * was drawn at the far right of the reading column beside the agent's own
+   * actions menu, which is not where anybody looks to add an agent; and on an
+   * empty workspace there is no channel open to draw a header at all.
+   */
+  it("is drawn with nothing in the workspace, which is when it is the only thing to do", () => {
+    draw([], []);
+
+    expect(screen.getByRole("button", { name: /make something new/i })).toBeTruthy();
+  });
+
+  it("makes a group from the rail, which is the list a group is a heading in", () => {
+    const { onNewGroup } = draw([group("everyone")], [agent("Manager")]);
+
+    fireEvent.click(screen.getByRole("button", { name: /make something new/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /new group/i }));
+
+    expect(onNewGroup).toHaveBeenCalledOnce();
   });
 });
 

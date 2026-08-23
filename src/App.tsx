@@ -201,6 +201,8 @@ export default function App() {
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenSearch={() => setSearching(true)}
+        onNewAgent={() => setEditing("new")}
+        onNewGroup={() => setEditingGroup("new")}
         onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
       />
 
@@ -256,8 +258,6 @@ export default function App() {
           <ChannelView
             channel={selected ?? ACTIVITY_CHANNEL}
             onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
-            onNewAgent={() => setEditing("new")}
-            onNewGroup={() => setEditingGroup("new")}
           />
         )}
       </main>

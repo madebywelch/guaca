@@ -107,14 +107,7 @@ function open(messages: Envelope[]) {
     lastActive: {},
     banner: null,
   });
-  return render(
-    <ChannelView
-      channel={MANAGER}
-      onOpenMenu={() => {}}
-      onNewAgent={() => {}}
-      onNewGroup={() => {}}
-    />,
-  );
+  return render(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
 }
 
 beforeEach(() => {
@@ -578,21 +571,9 @@ describe("a transcript scrolled up", () => {
     });
 
     const { container, rerender } = render(
-      <ChannelView
-        channel={ACTIVITY_CHANNEL}
-        onOpenMenu={() => {}}
-        onNewAgent={() => {}}
-        onNewGroup={() => {}}
-      />,
+      <ChannelView channel={ACTIVITY_CHANNEL} onOpenMenu={() => {}} />,
     );
-    rerender(
-      <ChannelView
-        channel={MANAGER}
-        onOpenMenu={() => {}}
-        onNewAgent={() => {}}
-        onNewGroup={() => {}}
-      />,
-    );
+    rerender(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
 
     const scroller = container.querySelector<HTMLElement>(".pane__scroll");
     if (!scroller) throw new Error("no transcript to scroll");

@@ -263,6 +263,37 @@ button {
   color: var(--rail-text);
 }
 
+/* The one plus in the app, at the top of the list it adds to. Drawn at the
+   rail's full text weight rather than the muted weight its other chrome uses:
+   the wordmark beside it is the only thing on this row, and a control that is
+   the only way to make an agent cannot be quieter than the furniture. */
+.rail__new {
+  margin-left: auto;
+  flex: none;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--rail-edge);
+  background: var(--rail-raised);
+  color: var(--rail-text);
+  font-size: 1.05rem;
+  line-height: 1;
+  border-radius: var(--radius-sm);
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.rail__new:hover,
+.rail__new:focus-visible,
+.rail__new[aria-expanded="true"] {
+  background: color-mix(in oklab, var(--flesh) 30%, var(--rail-raised));
+  border-color: color-mix(in oklab, var(--flesh) 45%, var(--rail-edge));
+}
+
 .rail__section {
   font-family: var(--font-mono);
   font-size: 0.64rem;
@@ -1138,39 +1169,6 @@ button {
 .pane__more:focus-visible {
   color: var(--text);
   background: var(--sunken);
-}
-
-/* The one plus in the app, at the end of the one bar that is always drawn.
-   It carries its own `margin-left: auto` because the activity header has
-   nothing else pushing to the right; on an agent's header the more button has
-   already done that, and a second auto margin there would split the free space
-   between the two and leave the dots floating in the middle of the bar. */
-.pane__new {
-  margin-left: auto;
-  flex: none;
-  border: 1px solid var(--edge);
-  background: var(--raised);
-  color: var(--muted);
-  font-size: 1rem;
-  line-height: 1;
-  padding: 0.24rem 0.5rem;
-  border-radius: var(--radius-sm);
-  transition:
-    color 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease;
-}
-
-.pane__more + .pane__new {
-  margin-left: 0;
-}
-
-.pane__new:hover,
-.pane__new:focus-visible,
-.pane__new[aria-expanded="true"] {
-  color: var(--text);
-  background: var(--sunken);
-  border-color: var(--flesh);
 }
 
 .pane__scroll {
