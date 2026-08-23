@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::envelope::Intent;
-use crate::domain::plugin::{PluginKind, PluginTool};
+use crate::domain::plugin::{PluginKind, PluginToolset};
 use crate::domain::routine::{Cadence, Trigger};
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
@@ -115,10 +115,14 @@ const MAX_TOOL_NAME: usize = 64;
 /// A tool whose prefixed name a provider would refuse is dropped rather than
 /// renamed. Renaming would need a mapping back at call time, and a mapping
 /// nothing can see is how a tool call lands on the wrong tool.
-pub fn plugin_specs(connected: &[(PluginKind, Vec<PluginTool>)]) -> Vec<ToolSpec> {
+/// The switched-off half of each set is not here and is not a filter applied
+/// later either: it never becomes a definition. A model offered a tool the
+/// operator switched off would call it, be refused, and spend the turn
+/// rewording the arguments.
+pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
     let mut out = Vec::new();
-    for (kind, tools) in connected {
-        for tool in tools {
+    for PluginToolset { kind, offered, .. } in connected {
+        for tool in offered {
             let name = format!("{}{PLUGIN_SEPARATOR}{}", kind.slug(), tool.name);
             if name.len() > MAX_TOOL_NAME
                 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
@@ -1454,6 +1458,7 @@ pub fn render_deliveries(results: &[Delivery]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::plugin::PluginTool;
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         ToolCall { id: "call_1".into(), name: name.into(), arguments: arguments.into() }
@@ -2475,9 +2480,15 @@ mod tests {
         }
     }
 
+    /// One connected plugin with every tool switched on, which is where every
+    /// plugin starts.
+    fn toolset(kind: PluginKind, offered: Vec<PluginTool>) -> PluginToolset {
+        PluginToolset { kind, offered, withheld: Vec::new() }
+    }
+
     #[test]
     fn a_plugin_tool_is_offered_under_its_plugin() {
-        let specs = plugin_specs(&[(PluginKind::Neon, vec![plugin_tool("run_sql")])]);
+        let specs = plugin_specs(&[toolset(PluginKind::Neon, vec![plugin_tool("run_sql")])]);
         assert_eq!(specs.len(), 1);
         assert_eq!(specs[0].name, "neon__run_sql");
         // The description says where the call reaches. A model reading twenty
@@ -2491,7 +2502,7 @@ mod tests {
         // Providers validate a function name against `[A-Za-z0-9_-]{1,64}`.
         // Renaming to fit would need a mapping back at call time, and a mapping
         // nothing can see is how a call lands on the wrong tool.
-        let offered = plugin_specs(&[(
+        let offered = plugin_specs(&[toolset(
             PluginKind::Neon,
             vec![
                 plugin_tool("run sql"),
@@ -2502,6 +2513,21 @@ mod tests {
         )]);
         let names: Vec<&str> = offered.iter().map(|spec| spec.name.as_str()).collect();
         assert_eq!(names, vec!["neon__fine"]);
+    }
+
+    #[test]
+    fn a_switched_off_tool_never_becomes_a_definition() {
+        // Not filtered out of the definitions later: it never becomes one. A
+        // model offered a tool the operator switched off calls it, is refused
+        // on the call path, and spends the rest of the turn rewording the
+        // arguments it was refused for.
+        let offered = plugin_specs(&[PluginToolset {
+            kind: PluginKind::Stripe,
+            offered: vec![plugin_tool("list_charges")],
+            withheld: vec!["create_refund".to_string()],
+        }]);
+        let names: Vec<&str> = offered.iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(names, vec!["stripe__list_charges"]);
     }
 
     #[test]

@@ -429,7 +429,9 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
     .expect("a public server connects");
 
     assert!(!plugin.signed_in, "nothing was authorised, so nothing may claim to have been");
-    assert_eq!(plugin.tools, vec!["run_sql".to_string(), "list_projects".to_string()]);
+    let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
+    assert_eq!(named, vec!["run_sql", "list_projects"]);
+    assert!(plugin.tools.iter().all(|tool| tool.allowed), "a plugin arrives with nothing off");
     assert_eq!(server.registrations.load(Ordering::SeqCst), 0);
 }
 
@@ -651,7 +653,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     // And the renewed grant is written back, or every later turn pays for the
     // same discovery.
     let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("the plugin is connected and this agent was not excluded from it")
     };
@@ -672,7 +674,7 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
     assert!(store.delete_plugin(plugin.id).unwrap());
     assert!(store.group_plugins(group).unwrap().is_empty());
     assert!(matches!(
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap(),
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap(),
         PluginReach::NotConnected
     ));
 }
@@ -695,7 +697,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
 
     assert_eq!(store.group_plugins(group).unwrap().len(), 1);
     let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon).unwrap()
+        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("connecting again leaves a plugin the crew can use")
     };
@@ -921,6 +923,75 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
 }
 
 #[tokio::test]
+async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_the_call() {
+    // The other axis, on the same three seams. Being chosen for a plugin is not
+    // being handed every tool on it: the operator decides that per tool, for
+    // the whole crew, and the agent has to be able to tell the difference
+    // between a capability that does not exist and one that is switched off.
+    // Named in the prompt, missing from the definitions, refused on the call.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+
+    let model = harness::serve(|body| {
+        if harness::has_tool_result(body) {
+            harness::Script::Say("Told the operator.".into())
+        } else {
+            harness::Script::Plugin {
+                name: "neon__run_sql".into(),
+                arguments: serde_json::json!({ "sql": "select 1" }),
+            }
+        }
+    })
+    .await;
+
+    let h =
+        harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime.store().set_plugin_tool(plugin.id, "run_sql", false).unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "Check the database.").unwrap();
+    h.settle(run).await;
+
+    // Not offered, and the plugin's other tool still is: switching one off is
+    // not disconnecting the plugin.
+    let offered: Vec<String> = model.transcript.lock()[0]["tools"]
+        .as_array()
+        .expect("a turn carries tool definitions")
+        .iter()
+        .map(|tool| tool["function"]["name"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert!(!offered.contains(&"neon__run_sql".to_string()), "offered {offered:?}");
+    assert!(offered.contains(&"neon__list_projects".to_string()), "offered {offered:?}");
+
+    // And said out loud, because the alternative is an agent answering "we
+    // cannot query the database" to the one person who can switch it back on.
+    let prompt = harness::prompts_by_agent(&model).remove("Manager").expect("Manager had a turn");
+    assert!(prompt.contains("Switched off by the operator"), "{prompt}");
+    assert!(prompt.contains("run_sql"), "{prompt}");
+
+    // The call it made anyway was refused here rather than at Neon, and the
+    // refusal does not send it round the crew: nobody has it.
+    let results = harness::tool_results(&model);
+    assert!(
+        results.iter().any(|r| r.contains("switched off") && r.contains("Do not ask a peer")),
+        "got {results:?}"
+    );
+    assert!(server.called.lock().is_empty(), "a switched-off tool must not reach the vendor");
+    assert_eq!(h.channel_texts("Manager").len(), 2, "the operator is answered either way");
+}
+
+#[tokio::test]
 async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
     // What narrowing costs if nothing replaces it: an agent that can only say
     // no, sitting beside the one that can say yes. The roster is where the crew
@@ -963,6 +1034,47 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
     h.settle(run).await;
     let revenue = harness::prompts_by_agent(&model).remove("Revenue").expect("Revenue had a turn");
     assert!(!revenue.contains("the Neon plugin"), "{revenue}");
+}
+
+#[tokio::test]
+async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
+    // The roster's whole job is to stop work being routed to an agent that
+    // cannot do it. A plugin narrowed to one agent and then switched off tool
+    // by tool is exactly that case from the other end: the peer holds it and
+    // can call none of it, so naming them costs two turns to find out.
+    let server = serve(Rules::default()).await;
+    let endpoint = format!("{}/mcp", server.base());
+    let model = harness::serve(|_| harness::Script::Say("Noted.".into())).await;
+
+    let h = harness::harness(
+        &model,
+        &["Revenue", "Scribe"],
+        guac_lib::runtime::guard::GuardLimits::default(),
+    );
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+
+    let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
+    let plugin = plugins::connect(
+        h.runtime.store(),
+        group,
+        PluginKind::Neon,
+        &endpoint,
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    h.runtime
+        .store()
+        .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![h.id("Revenue")] })
+        .unwrap();
+    for tool in ["run_sql", "list_projects"] {
+        h.runtime.store().set_plugin_tool(plugin.id, tool, false).unwrap();
+    }
+
+    let run = h.runtime.send_from_human(h.id("Scribe"), "Anything to report?").unwrap();
+    h.settle(run).await;
+    let scribe = harness::prompts_by_agent(&model).remove("Scribe").expect("Scribe had a turn");
+    assert!(!scribe.contains("the Neon plugin"), "{scribe}");
 }
 
 #[tokio::test]

@@ -10,6 +10,7 @@ import {
   type Plugin,
   type PluginAccess,
   type PluginOffer,
+  type PluginToolCard,
 } from "../lib/types";
 
 interface Props {
@@ -42,6 +43,23 @@ function offeredTo(access: PluginAccess, crew: AgentCard[]): string {
   const named = crew.filter((agent) => access.agents.includes(agent.id));
   if (named.length === 0) return "offered to nobody: tick an agent, or nothing here can be called";
   return `offered to ${named.map((agent) => agent.name).join(", ")}`;
+}
+
+/**
+ * How much of what a plugin publishes the crew may actually call.
+ *
+ * The count is of everything the server published, not of what is left on,
+ * because that number is what the row below expands into. Every tool switched
+ * off is said out loud for the same reason a plugin narrowed to nobody is: a
+ * connected plugin the crew cannot call is indistinguishable from a working one
+ * until something says so.
+ */
+function offering(tools: PluginToolCard[]): string {
+  const off = tools.filter((tool) => !tool.allowed).length;
+  const count = `${tools.length} tool${tools.length === 1 ? "" : "s"}`;
+  if (off === 0) return count;
+  if (off === tools.length) return `${count}, all switched off: none of them can be called`;
+  return `${count}, ${off} switched off`;
 }
 
 /**
@@ -80,6 +98,11 @@ export function PluginList({ groupId, crew }: Props) {
   const [connected, setConnected] = useState<Plugin[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Which plugins have their tool list open. Shut by default and not
+  // remembered anywhere: a crew with three plugins connected has sixty rows
+  // between the operator and the button they came here for, and the counts on
+  // the line above are what says whether opening one is worth it.
+  const [opened, setOpened] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -166,8 +189,8 @@ export function PluginList({ groupId, crew }: Props) {
             {held ? (
               <>
                 <p className="field__hint">
-                  {held.tools.length} tool{held.tools.length === 1 ? "" : "s"},{" "}
-                  {offeredTo(held.access, crew)}.{held.account && ` Signed in as ${held.account}.`}
+                  {offering(held.tools)}, {offeredTo(held.access, crew)}.
+                  {held.account && ` Signed in as ${held.account}.`}
                   {!held.signedIn &&
                     " This server asked for no sign-in, so nothing was authorised."}
                 </p>
@@ -240,6 +263,87 @@ export function PluginList({ groupId, crew }: Props) {
                       })
                     )}
                   </div>
+                )}
+
+                {/* The second axis, and a different question from the first.
+                    Who may spend the sign-in is about the crew; which tools may
+                    be spent is about the server, and it is the same everywhere
+                    the plugin goes. A server does not publish one kind of
+                    thing: Stripe lists the call that reads an invoice beside
+                    the one that refunds it, and until this existed the only
+                    control over that was Disconnect. */}
+                {held.tools.length > 0 && (
+                  <>
+                    <span className="field__label">Which of its tools they can call</span>
+                    <button
+                      type="button"
+                      className="toolset__more"
+                      aria-expanded={opened.includes(offer.kind)}
+                      onClick={() =>
+                        setOpened((open) =>
+                          open.includes(offer.kind)
+                            ? open.filter((kind) => kind !== offer.kind)
+                            : [...open, offer.kind],
+                        )
+                      }
+                    >
+                      {opened.includes(offer.kind) ? "Hide them" : `Show all ${held.tools.length}`}
+                    </button>
+                  </>
+                )}
+
+                {opened.includes(offer.kind) && (
+                  <ul className="toolset">
+                    {held.tools.map((tool) => (
+                      <li className="toolset__item" key={tool.name}>
+                        <div className="toolset__text">
+                          <code className="toolset__name">{tool.name}</code>
+                          {/* The vendor's own sentence, and the reason this is
+                              a list rather than a row of names: `execute` and
+                              `create_refund` are not decisions anybody can make
+                              off the name alone. */}
+                          {tool.description && (
+                            <span className="toolset__blurb">{tool.description}</span>
+                          )}
+                        </div>
+                        <div className="choices">
+                          {/* Named for a reader who cannot see which row they
+                              are on. Forty buttons all called "Allow" is a list
+                              only usable with a mouse. */}
+                          <button
+                            type="button"
+                            className="choice choice--tight"
+                            aria-label={`Allow ${tool.name}`}
+                            aria-pressed={tool.allowed}
+                            disabled={busy !== null}
+                            onClick={() => {
+                              if (tool.allowed) return;
+                              void run(`${offer.kind}-${tool.name}`, () =>
+                                api.setPluginTool(held.id, tool.name, true),
+                              );
+                            }}
+                          >
+                            Allow
+                          </button>
+                          <button
+                            type="button"
+                            className="choice choice--tight"
+                            aria-label={`Deny ${tool.name}`}
+                            aria-pressed={!tool.allowed}
+                            disabled={busy !== null}
+                            onClick={() => {
+                              if (!tool.allowed) return;
+                              void run(`${offer.kind}-${tool.name}`, () =>
+                                api.setPluginTool(held.id, tool.name, false),
+                              );
+                            }}
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
                 )}
               </>
             ) : (

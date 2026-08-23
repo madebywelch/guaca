@@ -262,6 +262,60 @@ the SQL and in `PluginAccess::from_row`. A permission that cannot be read has to
 fail closed: a crew losing a plugin is visible and one click to fix, and a crew
 silently gaining one is neither.
 
+## And which of its tools, which is a third decision
+
+Signing in covers a server. It does not cover a capability, because a server
+does not publish one kind of thing. Stripe lists the call that reads an invoice
+beside the one that refunds it; Neon lists `run_sql` beside the call that
+deletes a project; AgentMail lists reading a thread beside sending as the
+operator. Until this existed, the only control over the second half of each of
+those pairs was Disconnect, which also takes the first half away.
+
+So each connected plugin carries a decision per tool: on, or off for the whole
+crew. `plugins.tools` is still what the server published; `plugin_denied_tools`
+is the operator's exceptions to it.
+
+**The refusals are what is written down.** A plugin with no rows in that table
+offers everything it published, which is what every plugin connected before this
+existed does. It is the same reading `access` takes with `everyone`, and for the
+same reason: the default has to cover what nobody has seen yet. A vendor ships a
+tool between one connection and the next, and an allow-list would leave that
+tool switched off with nothing on screen saying a decision had been made about
+it. Connecting again keeps the refusals and switches the new tool on.
+
+**Reconnecting does not switch one back on.** `save_plugin` replaces the tool
+list and touches nothing in `plugin_denied_tools`, for the reason it leaves
+`access` alone: fixing a grant that the vendor revoked is not a decision about
+what the crew may do, and one that quietly handed `drop_project` back would undo
+the decision at the moment the operator was fixing something else.
+
+**Off is off for the crew, not for one agent.** The two questions compose: who
+may spend the sign-in, and what may be spent. Asking them per agent instead
+would be a matrix (five plugins, twenty tools, six agents), which is a control
+nobody can hold in their head and a permission nobody can audit. The two axes
+are enough to say the thing operators actually want to say, which is "the
+revenue agent gets Stripe, and nobody refunds anything".
+
+**A switched-off tool is refused before a not-chosen agent is.** Both can be
+true at once, and the tool-level answer is the one that is true of everybody.
+An agent told "ask a peer" about a tool nobody has spends a turn proving it, and
+a peer told the same thing spends another. `plugin_reach` therefore checks the
+tool first, and `PluginError::ToolDenied` says outright not to ask around.
+
+**The decision reaches the agent, in three places.** The tool never becomes a
+definition, so the model cannot call it by accident. The prompt names it under
+its plugin, the name alone with no description and no schema, because an agent
+that is simply not shown `create_refund` answers "we cannot do refunds" to the
+one person who could switch it back on. And the call path refuses it by name if
+the model emits it anyway, for the reason the tool list is never the
+enforcement: a model names tools it read somewhere.
+
+The rule is read twice, like the one above it, but not from one SQL fragment.
+The tool list is a JSON column, so `Store::plugin_tools` partitions it in Rust
+and `Store::plugin_reach` asks in SQL. Both compare the server's own unprefixed
+name to the same stored string, and a store test drives one refusal through both
+queries so that the two cannot drift.
+
 ## A tool name is `plugin__tool`
 
 Two underscores, because MCP servers use one inside tool names constantly and
@@ -310,8 +364,16 @@ a sign-in the operator has to redo, and the refusal says exactly that.
 operator's name outside the workspace, and a plugin call qualifies. It is not
 gated, because a prompt on every call would make plugins unusable, and the
 existing gate is aimed at the case where a page an agent has just read chose the
-button. The prompt carries the warning instead. This is the open question worth
-revisiting first.
+button. The prompt carries the warning instead.
+
+Switching a tool off is not that gate and does not replace it. It is decided
+once, in advance, by an operator who is looking at the whole tool list, and it
+never interrupts anybody: a tool is on or it is off, and nothing about the
+particular call changes the answer. An approval gate is the other shape, where
+the turn parks and the operator answers that one call, and it is still the open
+question worth revisiting first. What this does remove is the worst case that
+gate was being asked to cover, which is the one destructive tool on an otherwise
+useful server.
 
 **No per-agent sign-in.** An agent is chosen from the crew's one grant; it does
 not get its own. Two sign-ins to the same vendor for one group would be two sets
@@ -337,7 +399,8 @@ Three layers, and each catches something the others cannot.
 - **Scripted**, in `tests/plugins.rs`: the real `oauth`, `mcp`, `plugins` and
   store code against a server that publishes all four metadata documents and
   answers MCP as an event stream. Includes a full runtime turn, so the tool
-  definitions, the dispatch and the grant being spent are proved to meet.
+  definitions, the dispatch and the grant being spent are proved to meet, and
+  one turn per axis where a model calls something it was not offered.
 - **Live**, `./scripts/plugins.sh`: whether the five vendors still publish what
   this build expects. It runs `oauth::discover` — the same call a sign-in makes
   — rather than rebuilding the metadata URLs beside it, because a test with its

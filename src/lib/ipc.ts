@@ -149,6 +149,18 @@ export const api = {
   setPluginAccess: (id: PluginId, access: PluginAccess) =>
     invoke<Plugin>("set_plugin_access", { id, access }),
 
+  /**
+   * Switches one of a connected plugin's tools on or off for the whole crew.
+   *
+   * One tool and the answer it should have, rather than the whole set the way
+   * `setPluginAccess` takes it. A tool is a switch and naming it cannot be
+   * ambiguous; sending the whole set from a panel that can only see today's
+   * tool list would drop a refusal filed against one the vendor has stopped
+   * publishing.
+   */
+  setPluginTool: (id: PluginId, tool: string, allowed: boolean) =>
+    invoke<Plugin>("set_plugin_tool", { id, tool, allowed }),
+
   disconnectPlugin: (id: PluginId) => invoke<void>("disconnect_plugin", { id }),
 
   /** The last scan's result. Does not touch the machine, so it is free. */

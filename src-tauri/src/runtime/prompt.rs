@@ -13,7 +13,7 @@ use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
-use crate::domain::plugin::{PluginKind, PluginTool};
+use crate::domain::plugin::PluginToolset;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
@@ -58,7 +58,7 @@ pub fn system_prompt(
     // The servers this agent's crew has signed in to, and what each offers. A
     // third kind of reach, and the only one where the agent holds nothing: the
     // call is made by Guaca with the group's own grant on it.
-    plugins: &[(PluginKind, Vec<PluginTool>)],
+    plugins: &[PluginToolset],
     notes: &str,
     // What this agent already has standing, newest firing first. In the prompt
     // rather than behind a tool call: an agent asked to change something it
@@ -238,15 +238,29 @@ pub fn system_prompt(
                  operator's, held by Guaca: there is nothing for you to authenticate, no key to \
                  find, and no command to run.\n",
             );
-            for (kind, tools) in plugins {
+            for set in plugins {
                 out.push_str(&format!(
                     "- {} — {} tool{}, called as `{}{}…`\n",
-                    kind.label(),
-                    tools.len(),
-                    if tools.len() == 1 { "" } else { "s" },
-                    kind.slug(),
+                    set.kind.label(),
+                    set.offered.len(),
+                    if set.offered.len() == 1 { "" } else { "s" },
+                    set.kind.slug(),
                     crate::llm::tools::PLUGIN_SEPARATOR,
                 ));
+                // Named, not counted, and not left out. An agent that is simply
+                // not offered `refund` answers "we cannot do refunds", which is
+                // wrong twice: the crew can, and the one person who can switch
+                // it back on is the one being told it is impossible. Naming it
+                // turns a dead end into a sentence the operator can act on.
+                // Withheld tools do not appear in the tool list, so this is the
+                // only place the decision is visible at all.
+                if !set.withheld.is_empty() {
+                    out.push_str(&format!(
+                        "  Switched off by the operator, and not yours to turn back on: {}. Say \
+                         so if one is what the task needs; nobody in the crew has it either.\n",
+                        set.withheld.join(", "),
+                    ));
+                }
             }
             out.push_str(
                 "\nThese act on the operator's real account, not a copy of it: a database you \
@@ -657,7 +671,7 @@ pub fn build_messages(
     roster: &[DirectoryEntry],
     credentials: &[Connector],
     signins: &[Signin],
-    plugins: &[(PluginKind, Vec<PluginTool>)],
+    plugins: &[PluginToolset],
     names: &NameTable,
     notes: &str,
     routines: &[Routine],
@@ -794,6 +808,7 @@ mod tests {
     use crate::domain::envelope::Intent;
     use crate::domain::envelope::{Part, Trust};
     use crate::domain::ids::{GroupId, MessageId, RoutineId, RunId};
+    use crate::domain::plugin::{PluginKind, PluginTool};
     use crate::domain::routine::{Cadence, Trigger};
     use crate::domain::signin::Surface;
 
@@ -981,10 +996,10 @@ mod tests {
     }
 
     /// One connected plugin, as the store would hand it over.
-    fn plugin(kind: PluginKind, tools: &[&str]) -> (PluginKind, Vec<PluginTool>) {
-        (
+    fn plugin(kind: PluginKind, tools: &[&str]) -> PluginToolset {
+        PluginToolset {
             kind,
-            tools
+            offered: tools
                 .iter()
                 .map(|name| PluginTool {
                     name: name.to_string(),
@@ -992,7 +1007,8 @@ mod tests {
                     input_schema: serde_json::json!({ "type": "object" }),
                 })
                 .collect(),
-        )
+            withheld: Vec::new(),
+        }
     }
 
     #[test]
@@ -1021,6 +1037,36 @@ mod tests {
         );
         // And the warning that these are not a sandbox.
         assert!(prompt.contains("operator's real account"), "{prompt}");
+    }
+
+    #[test]
+    fn a_tool_the_operator_switched_off_is_named_rather_than_left_out() {
+        // The alternative is an agent that answers "we cannot do refunds" about
+        // a crew that can, to the one person who could switch it back on. It is
+        // named and nothing else about it is: no description, no schema, and no
+        // definition, so the model cannot call it and can say what is missing.
+        let c = card("Revenue");
+        let mut set = plugin(PluginKind::Stripe, &["list_charges"]);
+        set.withheld = vec!["create_refund".to_string()];
+        let prompt = system_prompt(
+            &c,
+            "",
+            &[],
+            &[],
+            &[],
+            &[set],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            Surfaces::none(),
+        );
+
+        assert!(prompt.contains("- Stripe — 1 tool, called as `stripe__…`"), "{prompt}");
+        assert!(prompt.contains("Switched off by the operator"), "{prompt}");
+        assert!(prompt.contains("create_refund"), "{prompt}");
+        // And it does not send the agent to a peer: a switched-off tool is off
+        // for the whole crew, so asking around is a wasted turn.
+        assert!(prompt.contains("nobody in the crew has it either"), "{prompt}");
     }
 
     #[test]

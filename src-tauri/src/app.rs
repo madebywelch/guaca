@@ -389,6 +389,7 @@ pub fn run() {
             commands::plugin_catalogue,
             commands::group_plugins,
             commands::set_plugin_access,
+            commands::set_plugin_tool,
             commands::connect_plugin,
             commands::disconnect_plugin,
             commands::scan_agent_signins,
