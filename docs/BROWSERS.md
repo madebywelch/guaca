@@ -148,6 +148,12 @@ is not the thing that action could spend: gating on it would stop and ask about
 an account the action cannot touch, which teaches an operator to click through
 the prompt without reading it.
 
+A yes is remembered against that site until the turn ends or the browser reads
+something off another one, so an agent working through an inbox is asked once
+rather than once per press. It is held on the turn's `Reading` and never
+written down: the next turn asks again, and so does the first press after the
+agent has been anywhere else.
+
 `ARCHITECTURE.md`, *A page that was read this turn cannot quietly press a
 button*, is the rest of it.
 

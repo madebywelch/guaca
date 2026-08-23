@@ -237,6 +237,12 @@ the model takes a screenshot to see what `browse` did.
   login. Do not loosen them without a fresh capture from a live machine.
 - **All three conditions in `needs_consent` are load-bearing.** Each one alone
   refuses honest work. Read the doc comment before narrowing or widening any.
+  The fourth clause is not one of them: a yes is remembered against that site
+  for the rest of the turn, because asking per press produced four dialogs in a
+  row for one account and a question in that shape is one an operator clicks
+  through. It is not a standing yes. It lives on the turn's `Reading`, reaches
+  no table, and `Reading::took_in` drops it the moment the turn takes in a page
+  from anywhere else.
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.

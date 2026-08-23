@@ -53,6 +53,34 @@ struct Reading {
     /// marks the turn without moving this: the browser is still wherever
     /// `browse` last left it.
     url: Option<String>,
+    /// The site the operator has already said this agent may act on, and only
+    /// for the rest of this turn. `None` until they say so, `None` again the
+    /// moment the turn takes in content from anywhere else, and `None` on the
+    /// next turn because this whole struct is built fresh for each one.
+    allowed: Option<String>,
+}
+
+impl Reading {
+    /// Records that the turn has taken content in, and moves the browser if
+    /// that content said where it came from.
+    ///
+    /// The one place a grant is taken back. What the operator allowed was an
+    /// agent working inside one site, and a page from anywhere else is the
+    /// thing they did not see: it re-arms the gate rather than inheriting the
+    /// yes. A screenshot carries no URL and so cannot show that the turn
+    /// stayed put, which counts as anywhere else.
+    fn took_in(&mut self, url: Option<String>) {
+        self.ingested = true;
+        let stayed = url.as_deref().is_some_and(|url| {
+            self.allowed.as_deref().is_some_and(|domain| signin::on_domain(url, domain))
+        });
+        if !stayed {
+            self.allowed = None;
+        }
+        if let Some(url) = url {
+            self.url = Some(url);
+        }
+    }
 }
 
 /// The session an action would spend, if it needs the operator's say-so first.
@@ -72,11 +100,20 @@ struct Reading {
 ///   That is what turns an action into the operator's rather than the agent's,
 ///   and it is exactly the condition that makes the payload worth writing:
 ///   the injection does not have to obtain access, it already has it.
+///
+/// Then one thing that is not a condition of the risk: a yes covers the site it
+/// was given for until the turn ends or the turn reads something off another
+/// site, so a crew working through an inbox is asked once rather than once per
+/// press. It is scoped to a `Reading` that is built fresh for every turn, so
+/// nothing here outlives the work the operator was watching.
 fn needs_consent<'a>(action: &str, reading: &Reading, held: &'a [Signin]) -> Option<&'a Signin> {
     if !matches!(action, "click" | "type") || !reading.ingested {
         return None;
     }
-    crate::domain::signin::session_for(held, reading.url.as_deref()?)
+    let session = signin::session_for(held, reading.url.as_deref()?)?;
+    // Already answered, for this site, in this turn. `Reading::took_in` is what
+    // keeps that narrow.
+    (reading.allowed.as_deref() != Some(session.domain.as_str())).then_some(session)
 }
 
 /// What a screenshot is introduced as, and what replaces one that has aged out.
@@ -280,7 +317,7 @@ use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::routine::{Routine, RunKind};
-use crate::domain::signin::{BrowserState, Signin, Surface};
+use crate::domain::signin::{self, BrowserState, Signin, Surface};
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
@@ -2293,7 +2330,7 @@ impl Runtime {
             // read through a different tool. It carries no URL, so the turn is
             // marked without moving where the browser is standing.
             if result.2.is_some() {
-                reading.ingested = true;
+                reading.took_in(None);
             }
             return result;
         }
@@ -2445,14 +2482,13 @@ impl Runtime {
                         // has read something. Both are set from what came back
                         // rather than from what was asked for, because a click
                         // that navigates lands somewhere the caller did not
-                        // name.
-                        reading.ingested = true;
-                        if let Some(url) = serde_json::from_str::<serde_json::Value>(&page)
-                            .ok()
-                            .and_then(|page| page["url"].as_str().map(str::to_string))
-                        {
-                            reading.url = Some(url);
-                        }
+                        // name, and a grant the operator gave for one site must
+                        // not follow the agent off it.
+                        reading.took_in(
+                            serde_json::from_str::<serde_json::Value>(&page)
+                                .ok()
+                                .and_then(|page| page["url"].as_str().map(str::to_string)),
+                        );
                         let summary = format!("{action} in the browser");
                         (render_page(&page), ToolOutcome::Ok { summary })
                     }
@@ -2694,14 +2730,23 @@ impl Runtime {
     ///   is what makes the action the operator's rather than the agent's, and
     ///   it is exactly the condition that makes the payload worth writing.
     ///
-    /// Deliberately not "always allow": `ActOnBehalf` has no standing yes, and
-    /// a page that could earn one once would earn it for every page after.
+    /// A yes is remembered against that site for the rest of the turn, because
+    /// the alternative is a dialog per press: four in a row for one Facebook
+    /// account was the live report, and by the fourth the operator is not
+    /// reading them. What the yes cannot do is widen. It is held on `Reading`,
+    /// which is built fresh for each turn and drops the grant the moment the
+    /// turn takes in a page from anywhere else, so the next turn asks again and
+    /// so does the first press after the agent has been somewhere new.
+    ///
+    /// Deliberately still not "always allow": `ActOnBehalf` has no standing yes,
+    /// nothing here reaches the `grants` table, and a page that could earn one
+    /// once would earn it for every page after.
     async fn may_act_on(
         &self,
         card: &AgentCard,
         run_id: RunId,
         action: &str,
-        reading: &Reading,
+        reading: &mut Reading,
     ) -> Option<String> {
         // The browser's own sessions, not the agent's whole list. The URL this
         // is decided from came from the browser, so a session the *computer*
@@ -2716,9 +2761,9 @@ impl Runtime {
             .into_iter()
             .filter(|signin| signin.surface == Surface::Browser)
             .collect();
-        let (url, service) = {
+        let (url, domain, service) = {
             let session = needs_consent(action, reading, &held)?;
-            (reading.url.clone().unwrap_or_default(), session.label())
+            (reading.url.clone().unwrap_or_default(), session.domain.clone(), session.label())
         };
 
         let permission = self
@@ -2749,12 +2794,25 @@ impl Runtime {
                             card.name
                         ),
                     },
+                    // What a yes buys, in full, because it is more than the
+                    // press being asked about and an operator cannot consent to
+                    // a scope nobody told them.
+                    DetailField {
+                        label: "What allowing covers".to_string(),
+                        value: format!(
+                            "Every press and typed line on {service} for the rest of this turn.                              It is not remembered afterwards, and it ends early if {} reads a                              page somewhere else.",
+                            card.name
+                        ),
+                    },
                 ],
             )
             .await;
 
         match permission {
-            Permission::Granted => None,
+            Permission::Granted => {
+                reading.allowed = Some(domain);
+                None
+            }
             Permission::Refused => Some(format!(
                 "Refused: the operator declined to let you act on {service} in their name. Do not \
                  try another way round it. Say what you would have done and carry on with \
@@ -4378,7 +4436,7 @@ mod tests {
     }
 
     fn having_read(url: &str) -> Reading {
-        Reading { ingested: true, url: Some(url.into()) }
+        Reading { ingested: true, url: Some(url.into()), allowed: None }
     }
 
     #[test]
@@ -4415,7 +4473,8 @@ mod tests {
         // from the operator's instruction rather than from a page. Asking here
         // would put a dialog in front of ordinary work.
         let held = [session("gmail.com")];
-        let untainted = Reading { ingested: false, url: Some("https://gmail.com/".into()) };
+        let untainted =
+            Reading { ingested: false, url: Some("https://gmail.com/".into()), allowed: None };
         assert!(needs_consent("click", &untainted, &held).is_none());
     }
 
@@ -4441,6 +4500,91 @@ mod tests {
         assert!(
             needs_consent("click", &having_read("https://gmail.com@evil.com/x"), &held).is_none()
         );
+    }
+
+    #[test]
+    fn one_yes_covers_the_site_it_was_given_for_until_the_turn_ends() {
+        // The live report: four dialogs in a row, one Facebook account, one
+        // piece of work. A question asked per press is a question an operator
+        // learns to click through, which is the failure mode this gate exists
+        // to avoid rather than one it may cause.
+        let held = [session("facebook.com")];
+        let mut reading = having_read("https://www.facebook.com/");
+        assert!(needs_consent("click", &reading, &held).is_some(), "the first press asks");
+
+        reading.allowed = Some("facebook.com".into());
+        assert!(needs_consent("click", &reading, &held).is_none());
+        assert!(needs_consent("type", &reading, &held).is_none());
+
+        // Including the rest of the site. A crew answering a page's messages
+        // walks from `www` to `business` without leaving the account the
+        // operator was asked about.
+        reading.took_in(Some("https://business.facebook.com/latest/inbox/all".into()));
+        assert!(needs_consent("click", &reading, &held).is_none());
+    }
+
+    #[test]
+    fn a_grant_covers_one_site_and_does_not_travel() {
+        // The yes named an account. Another account the same agent holds is a
+        // second thing to spend and a second question.
+        let held = [session("facebook.com"), session("gmail.com")];
+        let mut reading = having_read("https://www.facebook.com/");
+        reading.allowed = Some("facebook.com".into());
+        reading.took_in(Some("https://mail.gmail.com/u/0/#inbox".into()));
+        assert!(
+            needs_consent("click", &reading, &held).is_some(),
+            "a grant for one account cannot be spent on another"
+        );
+    }
+
+    #[test]
+    fn content_from_anywhere_else_takes_the_grant_back() {
+        // The whole reason the grant is safe to give. What the operator allowed
+        // was an agent working inside one site; a page from somewhere else is
+        // the injection they were never shown, so the next press asks again.
+        let held = [session("facebook.com")];
+        let mut reading = having_read("https://www.facebook.com/");
+        reading.allowed = Some("facebook.com".into());
+
+        reading.took_in(Some("https://attacker.example/post".into()));
+        assert_eq!(reading.allowed, None, "a page off the site re-arms the gate");
+
+        // And back on the site, the browser has moved but the yes has not
+        // followed it. Nothing restores a grant except the operator.
+        reading.took_in(Some("https://www.facebook.com/".into()));
+        assert!(needs_consent("click", &reading, &held).is_some());
+
+        // A screenshot cannot show that the turn stayed put, so it counts as
+        // somewhere else. It is untrusted content read through another tool.
+        reading.allowed = Some("facebook.com".into());
+        reading.took_in(None);
+        assert_eq!(reading.allowed, None);
+        assert_eq!(
+            reading.url.as_deref(),
+            Some("https://www.facebook.com/"),
+            "and a picture still does not move the browser"
+        );
+    }
+
+    #[test]
+    fn a_grant_is_not_a_lookalike_domains_way_in() {
+        // `on_domain` decides this the way a session is matched, and both
+        // tricks have to come back as somewhere else. A grant that inherited
+        // either would be worse than asking every time.
+        let held = [session("facebook.com")];
+        let mut reading = having_read("https://www.facebook.com/");
+
+        for elsewhere in ["https://notfacebook.com/x", "https://facebook.com@evil.com/x"] {
+            reading.allowed = Some("facebook.com".into());
+            reading.took_in(Some(elsewhere.into()));
+            assert_eq!(reading.allowed, None, "{elsewhere} is not the site that was allowed");
+        }
+
+        // And the check at the press is the same one: a grant recorded for the
+        // account cannot answer for a press on a page merely named after it.
+        reading.url = Some("https://notfacebook.com/x".into());
+        reading.allowed = Some("facebook.com".into());
+        assert!(needs_consent("click", &reading, &held).is_none(), "nobody is signed in there");
     }
 
     #[test]
@@ -4499,13 +4643,14 @@ mod tests {
         // that read the page, so the browser's last known position is what the
         // click is judged against.
         let held = [session("gmail.com")];
-        let looked = Reading { ingested: true, url: Some("https://mail.gmail.com/".into()) };
+        let looked =
+            Reading { ingested: true, url: Some("https://mail.gmail.com/".into()), allowed: None };
         assert!(needs_consent("click", &looked, &held).is_some());
 
         // With nowhere known to be, there is nothing to judge and nothing is
         // claimed. The turn is still marked, so the first `browse` that lands
         // somewhere signed in re-arms it.
-        let blind = Reading { ingested: true, url: None };
+        let blind = Reading { ingested: true, url: None, allowed: None };
         assert!(needs_consent("click", &blind, &held).is_none());
     }
 
