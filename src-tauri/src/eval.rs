@@ -482,11 +482,11 @@ mod tests {
         // was a channel with no words in it.
         let (a, b) = agents();
         let trail = Envelope {
-            parts: vec![Part::ToolCall {
-                name: "run_command".into(),
-                arguments: serde_json::Value::Null,
-                outcome: crate::domain::envelope::ToolOutcome::Ok { summary: "ran it".into() },
-            }],
+            parts: vec![Part::tool_call(
+                "run_command",
+                serde_json::Value::Null,
+                crate::domain::envelope::ToolOutcome::Ok { summary: "ran it".into() },
+            )],
             ..msg(Participant::Agent { id: b }, Participant::System, "", 2, false)
         };
         let run = [

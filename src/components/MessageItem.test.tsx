@@ -206,6 +206,71 @@ describe("an agent's own record of what it did", () => {
     expect(screen.getByText("Smith handles verification.")).toBeTruthy();
   });
 
+  it("opens a memory rewrite against the version it replaced", () => {
+    // The tool replaces the file, so every write arrives as the whole page and
+    // the content alone never says what the agent changed its mind about.
+    show(
+      record({
+        type: "toolCall",
+        name: "update_notes",
+        arguments: { content: "Smith handles verification.\nJones signs off." },
+        outcome: { status: "ok", summary: "Memory saved (44 characters)." },
+        replaced: "Smith handles verification.\nPatel signs off.",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updated its memory/ }));
+
+    const kind = (text: string) =>
+      screen.getByText(text).closest("[data-kind]")?.getAttribute("data-kind");
+    expect(kind("Smith handles verification.")).toBe("same");
+    expect(kind("Patel signs off.")).toBe("removed");
+    expect(kind("Jones signs off.")).toBe("added");
+    // Marked as well as coloured. Red and green either side of a line are the
+    // one distinction a reader may not have, and the marker is also what keeps
+    // a diff copied out of the window reading as one.
+    const marks = [...document.querySelectorAll(".diff__mark")].map((node) => node.textContent);
+    expect(marks).toEqual([" ", "-", "+"]);
+    // How much moved, in the place the runtime's character count would have
+    // gone. That count is printed directly above the characters it counts.
+    expect(screen.getByText("1 line added, 1 removed")).toBeTruthy();
+    expect(screen.queryByText(/44 characters/)).toBeNull();
+  });
+
+  it("opens a memory that was cleared, which has nothing to show but the loss", () => {
+    // No content, so nothing that reads the arguments finds anything to draw,
+    // and what was thrown away is the whole of what happened.
+    show(
+      record({
+        type: "toolCall",
+        name: "update_notes",
+        arguments: { content: "" },
+        outcome: { status: "ok", summary: "Memory cleared." },
+        replaced: "Smith handles verification.",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updated its memory/ }));
+    const line = screen.getByText("Smith handles verification.").closest("[data-kind]");
+    expect(line?.getAttribute("data-kind")).toBe("removed");
+  });
+
+  it("draws a memory recorded before any of this as what it wrote, and no diff", () => {
+    // Every write already in a channel has no previous version stored against
+    // it, and inventing one from whatever else is in the channel would be wrong
+    // exactly where it mattered: the same memory is written from every thread
+    // an agent holds.
+    show(
+      record({
+        type: "toolCall",
+        name: "update_notes",
+        arguments: { content: "Smith handles verification.\nJones signs off." },
+        outcome: { status: "ok", summary: "Memory saved (44 characters)." },
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Updated its memory/ }));
+    expect(document.querySelector(".diff")).toBeNull();
+    expect(screen.getByText(/Smith handles verification/)).toBeTruthy();
+  });
+
   it("names an unrecognised tool rather than guessing it was a send", () => {
     show(
       record({
