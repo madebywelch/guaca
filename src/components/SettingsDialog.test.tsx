@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Prefs } from "../lib/prefs";
 import type {
+  AccountConnectors,
+  AccountStatus,
   DeviceCode,
   GuardLimits,
   Settings,
@@ -14,7 +16,7 @@ import type { Section } from "./SettingsDialog";
 /**
  * The settings dialog, over a mocked runtime.
  *
- * Eight panes, and every field of every one of them held by the shell. That is
+ * Nine panes, and every field of every one of them held by the shell. That is
  * where the risk is, and none of it is visible in the markup: the patch the
  * Save button sends is assembled by omission, so a box left blank has to be
  * absent from that object rather than present and empty. An empty string sent
@@ -94,6 +96,41 @@ const signOutSubscription = vi.fn<() => Promise<Settings>>(async () =>
 );
 const openExternal = vi.fn<(url: string) => Promise<void>>(async () => {});
 
+/** No Guaca account, which is what an install that never signs in looks like. */
+function noAccount(over: Partial<AccountStatus> = {}): AccountStatus {
+  return { signedIn: false, email: "", origin: "https://guaca.bot", ...over };
+}
+
+function linked(over: Partial<AccountStatus> = {}): AccountStatus {
+  return {
+    signedIn: true,
+    email: "robert@example.com",
+    origin: "https://guaca.bot",
+    ...over,
+  };
+}
+
+function held(granted = true): AccountConnectors {
+  return {
+    email: "robert@example.com",
+    providers: [
+      {
+        id: "google",
+        label: "Google",
+        capabilities: [
+          { id: "gmail", label: "Gmail", granted },
+          { id: "drive", label: "Drive", granted: false },
+        ],
+      },
+    ],
+  };
+}
+
+const accountStatus = vi.fn<() => Promise<AccountStatus>>(async () => noAccount());
+const signInAccount = vi.fn<() => Promise<AccountStatus>>(async () => linked());
+const accountConnectors = vi.fn<() => Promise<AccountConnectors>>(async () => held());
+const signOutAccount = vi.fn<() => Promise<AccountStatus>>(async () => noAccount());
+
 vi.mock("../lib/ipc", () => ({
   api: {
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
@@ -102,6 +139,10 @@ vi.mock("../lib/ipc", () => ({
     beginSubscriptionSignin: () => beginSubscriptionSignin(),
     completeSubscriptionSignin: (code: DeviceCode) => completeSubscriptionSignin(code),
     signOutSubscription: () => signOutSubscription(),
+    accountStatus: () => accountStatus(),
+    signInAccount: () => signInAccount(),
+    accountConnectors: () => accountConnectors(),
+    signOutAccount: () => signOutAccount(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -208,6 +249,10 @@ beforeEach(() => {
   subscriptionStatus.mockResolvedValue(signedOut());
   completeSubscriptionSignin.mockResolvedValue(signedIn());
   signOutSubscription.mockResolvedValue(stored({ provider: "compatible" }));
+  accountStatus.mockResolvedValue(noAccount());
+  signInAccount.mockResolvedValue(linked());
+  accountConnectors.mockResolvedValue(held());
+  signOutAccount.mockResolvedValue(noAccount());
   // No Tauri host behind this webview, which is the state the About pane is
   // built to shrug off. The one test that wants a version asks for one.
   getVersion.mockRejectedValue(new Error("no host"));
@@ -885,6 +930,177 @@ describe("the ChatGPT subscription", () => {
     // Left on the subscription, every agent's next turn is the same refusal.
     expect(button("Sign in")).toBeTruthy();
     expect(row().textContent).not.toContain("In use");
+  });
+});
+
+/**
+ * The Guaca account.
+ *
+ * The thing worth testing here is that it is optional and behaves like it. An
+ * install that never opens this pane must never reach the service, a sign-in
+ * that fails must leave the pane signed out rather than half linked, and a
+ * service that no longer recognises a stored sign-in has to redraw as signed
+ * out rather than as an account with an empty list under it.
+ */
+describe("the Guaca account", () => {
+  function row(): HTMLElement {
+    const label = screen.getByText("Guaca account", { selector: ".preset__name" });
+    const found = label.closest(".preset");
+    if (!found) throw new Error("no account row");
+    return found as HTMLElement;
+  }
+
+  function button(name: string): HTMLButtonElement {
+    return screen.getByRole("button", { name }) as HTMLButtonElement;
+  }
+
+  it("asks the service nothing until the pane is opened", async () => {
+    open();
+    expect(accountStatus).not.toHaveBeenCalled();
+    expect(accountConnectors).not.toHaveBeenCalled();
+
+    pane("Account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalledTimes(1));
+  });
+
+  it("says it is optional, and what an account is for", async () => {
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    // The one claim that has to survive an edit: nothing here is required.
+    expect(screen.getByText(/Optional, and it stays that way/)).toBeTruthy();
+    expect(screen.getByText(/client secret would be inside a download/)).toBeTruthy();
+  });
+
+  it("offers a sign-in when there is none", async () => {
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    expect(row().textContent).toContain("Sign in to authorize");
+    expect(button("Sign in")).toBeTruthy();
+  });
+
+  it("says which account it linked, and offers the way out", async () => {
+    accountStatus.mockResolvedValue(linked());
+    open(stored(), DEFAULT_PREFS, "account");
+
+    await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
+    expect(button("Sign out")).toBeTruthy();
+    expect(button("Manage")).toBeTruthy();
+  });
+
+  it("says what is happening while the browser has it, and offers nothing to carry", async () => {
+    // Unlike the subscription there is no code: the answer comes back to a port
+    // this process already holds, so this state is a sentence, not a task.
+    let release: (status: AccountStatus) => void = () => {};
+    signInAccount.mockReturnValue(
+      new Promise<AccountStatus>((resolve) => {
+        release = resolve;
+      }),
+    );
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+    expect(screen.getByRole("status").textContent).toContain("Finish in the browser window");
+    expect(screen.getByRole("status").textContent).toContain("Only continue if you started this");
+
+    release(linked());
+    await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
+  });
+
+  it("keeps a sign-in in flight across a glance at another section", async () => {
+    // The shell holds it. A pane that held its own would discard a sign-in the
+    // operator is in the middle of.
+    signInAccount.mockReturnValue(new Promise<AccountStatus>(() => {}));
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    fireEvent.click(button("Sign in"));
+    await waitFor(() => expect(screen.getByRole("status")).toBeTruthy());
+
+    pane("Limits");
+    pane("Account");
+    expect(screen.getByRole("status").textContent).toContain("Finish in the browser window");
+  });
+
+  it("stays signed out when the sign-in fails, and says why", async () => {
+    signInAccount.mockRejectedValue({ kind: "account", message: "could not reach guaca.bot" });
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(accountStatus).toHaveBeenCalled());
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByText(/could not reach guaca\.bot/)).toBeTruthy());
+    expect(row().textContent).toContain("Sign in to authorize");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows what the account has authorized, and what it has not", async () => {
+    accountStatus.mockResolvedValue(linked());
+    open(stored(), DEFAULT_PREFS, "account");
+
+    await waitFor(() => expect(accountConnectors).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText("Gmail")).toBeTruthy());
+    // Drive is in the list and not granted, so it must not be named as one the
+    // agents can reach.
+    expect(screen.queryByText(/Drive/)).toBeNull();
+  });
+
+  it("says so rather than showing an empty list when nothing is authorized", async () => {
+    accountStatus.mockResolvedValue(linked());
+    accountConnectors.mockResolvedValue(held(false));
+    open(stored(), DEFAULT_PREFS, "account");
+
+    await waitFor(() => expect(screen.getByText("Nothing authorized yet.")).toBeTruthy());
+  });
+
+  it("redraws as signed out when the service no longer knows the sign-in", async () => {
+    // A stored token the service has revoked. Drawing an account with an empty
+    // list under it would tell the operator they are linked when they are not.
+    accountStatus.mockResolvedValue(linked());
+    accountConnectors.mockRejectedValue({ kind: "signedOut", message: "sign in again" });
+    open(stored(), DEFAULT_PREFS, "account");
+
+    await waitFor(() => expect(row().textContent).toContain("Sign in to authorize"));
+  });
+
+  it("forgets the sign-in and the list it came with", async () => {
+    accountStatus.mockResolvedValue(linked());
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(screen.getByText("Gmail")).toBeTruthy());
+
+    fireEvent.click(button("Sign out"));
+    await waitFor(() => expect(row().textContent).toContain("Sign in to authorize"));
+    // The list went with it. Leaving it on screen would be a list of what an
+    // account this machine no longer holds can reach.
+    expect(screen.queryByText("Gmail")).toBeNull();
+  });
+
+  it("opens the service's own page to change what is authorized", async () => {
+    // The consent screens are Google's and GitHub's, reached through guaca.bot.
+    // There is nothing to tick here and pretending otherwise would be a control
+    // that cannot work.
+    accountStatus.mockResolvedValue(linked());
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
+
+    fireEvent.click(button("Manage"));
+    expect(openExternal).toHaveBeenCalledWith("https://guaca.bot/app");
+  });
+
+  it("says out loud when this build signs in somewhere other than guaca.bot", async () => {
+    // Development, or a self-hosted service. The two hold different accounts
+    // and only one of them is the real one.
+    accountStatus.mockResolvedValue(linked({ origin: "http://localhost:8787" }));
+    open(stored(), DEFAULT_PREFS, "account");
+
+    await waitFor(() => expect(screen.getByText(/not guaca\.bot/)).toBeTruthy());
+    expect(screen.getByText("http://localhost:8787")).toBeTruthy();
+  });
+
+  it("does not say that on a build pointed at guaca.bot", async () => {
+    accountStatus.mockResolvedValue(linked());
+    open(stored(), DEFAULT_PREFS, "account");
+    await waitFor(() => expect(row().textContent).toContain("robert@example.com"));
+    expect(screen.queryByText(/not guaca\.bot/)).toBeNull();
   });
 });
 

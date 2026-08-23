@@ -4569,6 +4569,23 @@ button {
   max-width: 34rem;
 }
 
+/* What an account has authorized, which is read from the service and never
+   edited here. A list rather than the field rows above it, because none of it
+   is a control: the ticking happens on guaca.bot, where the consent screens
+   are. */
+.settings__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.settings__list .field__label,
+.settings__list .field__hint {
+  display: block;
+}
+
 .settings__foot {
   display: flex;
   align-items: center;

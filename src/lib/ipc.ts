@@ -16,6 +16,8 @@ import {
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import type {
+  AccountConnectors,
+  AccountStatus,
   Activity,
   AgentCard,
   AgentDraft,
@@ -381,6 +383,25 @@ export const api = {
 
   /** Forgets the sign-in, and moves the provider off it if it was in use. */
   signOutSubscription: () => invoke<Settings>("sign_out_subscription"),
+
+  accountStatus: () => invoke<AccountStatus>("account_status"),
+
+  /**
+   * The whole sign-in, in one call.
+   *
+   * One rather than the subscription's two, because there is no code for the
+   * operator to carry: a browser opens, they say yes, and the answer arrives on
+   * a port Rust is already listening on. Parks for up to five minutes, so the
+   * caller keeps its own "waiting" state; closing the dialog abandons it and
+   * leaves nothing behind.
+   */
+  signInAccount: () => invoke<AccountStatus>("sign_in_account"),
+
+  /** What the account holds, asked of the service rather than remembered. */
+  accountConnectors: () => invoke<AccountConnectors>("account_connectors"),
+
+  /** Forgets the sign-in on this machine. */
+  signOutAccount: () => invoke<AccountStatus>("sign_out_account"),
 };
 
 /**
