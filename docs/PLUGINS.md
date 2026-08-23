@@ -4,8 +4,11 @@ A plugin is a server a crew signs in to once. After that, the agents that crew
 chose are offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
-There are five: Neon, Cloudflare, Linear, Stripe and AgentMail. That is the
-whole list, and it is a decision rather than a starting position.
+There are six: Neon, Cloudflare, Linear, Stripe, AgentMail and Google. That is
+the whole list, and it is a decision rather than a starting position. Five of
+them are the vendor's own server, and every count of "the five" below means
+those; Google is the operator's own account, and *Google is a plugin whose
+sign-in is the account's* is why.
 
 ## Why these, and why the list is short
 
@@ -224,6 +227,25 @@ account rotates its own token, so a copy on the row would be a second thing to
 keep fresh, a second thing to be stale, and a renewal path racing the account's.
 `Runtime::account_token` reads a live one per call.
 
+**A crew chooses which identity it uses.** A person can authorize the same
+provider twice — a work Google and a personal one — and those are two grants at
+`guaca.bot` with two ids. `plugins.connection` holds the one this crew means,
+and it is part of the address: `/mcp/<id>` rather than `/mcp`. Two groups can
+therefore hold two Google accounts at once, which is the case the single-grant
+model could not express at all.
+
+Empty means unnamed, and that is not a missing value. It is the account's
+default, it is what every plugin connected before this column existed keeps
+sending, and bare `/mcp` still answers with every connection's tools. An upgrade
+that invented an id would silently repoint a working crew at a different
+mailbox.
+
+Changing it is `set_plugin_connection` rather than Disconnect and Connect,
+because those are different acts: reconnecting replaces the row and loses the
+per-tool switches the operator set. The tool list is re-read either way, because
+two identities do not publish the same tools — a grant that can read mail and
+not send it offers fewer.
+
 **What the tools are is decided at `guaca.bot`, not here.** The server offers a
 tool only when every scope it needs came back from Google, so a grant that can
 read mail and not send it offers `gmail_search` and not `gmail_send`. A crew
@@ -342,7 +364,7 @@ off. `PLUGIN_TOOL_REACHED_BY_AGENT` is both rules in one fragment.
 two-way switch, kept: one click still switches a tool off for the crew, and the
 panel still says so out loud. It is the same argument `PluginAccess` makes at
 the plugin level, where the empty list is where an operator stands for the
-second between narrowing something and ticking the first name. Migration 30
+second between narrowing something and ticking the first name. Migration 31
 rewrites every row of `plugin_denied_tools` as exactly that and drops the table.
 
 **Reconnecting does not widen one.** `save_plugin` replaces the tool list and

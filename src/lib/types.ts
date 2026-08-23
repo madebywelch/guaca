@@ -315,6 +315,8 @@ export interface Plugin {
   tools: PluginToolCard[];
   /** Which of the crew is offered them. `everyone` until somebody says else. */
   access: PluginAccess;
+  /** Which authorized identity at the Guaca account this crew uses, if any. */
+  connection: string;
   signedIn: boolean;
   connectedAt: number;
 }
@@ -576,9 +578,25 @@ export interface AccountProvider {
  * Read rather than kept. It changes when the operator authorizes something in
  * a browser rather than when this app does anything.
  */
+/**
+ * One identity the operator has authorized at a provider.
+ *
+ * A person can authorize the same provider twice — a work Google and a personal
+ * one — and each is its own grant. A group binds to one of these, which is what
+ * lets two crews use two mailboxes.
+ */
+export interface AccountConnection {
+  id: string;
+  provider: string;
+  /** The provider's own name for it, which is how two are told apart. */
+  label: string;
+  capabilities: string[];
+}
+
 export interface AccountConnectors {
   email: string;
   providers: AccountProvider[];
+  connections: AccountConnection[];
 }
 
 /** What the operator carries to a browser to finish signing in. */

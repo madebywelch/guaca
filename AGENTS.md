@@ -307,7 +307,7 @@ the model takes a screenshot to see what `browse` did.
 - **A tool switched off for the crew is `Chosen` with an empty list.** Not a
   third state and not a second table: it is the same empty list `PluginAccess`
   already argues for at the plugin level, and one click still gets there.
-  Migration 30 rewrites every `plugin_denied_tools` row as exactly that.
+  Migration 31 rewrites every `plugin_denied_tools` row as exactly that.
 - **The wider refusal is given before the narrower one.** More than one is true
   at once. A tool narrowed to nobody is off for everybody, so `ToolDenied` is
   said before `NotChosen`; being off a plugin covers every tool on it, so

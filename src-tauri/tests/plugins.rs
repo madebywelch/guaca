@@ -616,7 +616,7 @@ mod account_backed {
             group,
             PluginKind::Google,
             &format!("{}/mcp", server.base()),
-            Some(ACCOUNT),
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
         )
         .await
@@ -634,6 +634,63 @@ mod account_backed {
     }
 
     #[tokio::test]
+    async fn moving_a_crew_to_another_google_keeps_who_may_call_what() {
+        // The whole reason changing the identity is its own act rather than
+        // Disconnect and Connect. An operator moving a crew from the work
+        // mailbox to the personal one is not deciding anything about who may
+        // send mail, and a move that quietly handed `gmail_send` back to every
+        // agent would undo that decision at the moment they were doing
+        // something else.
+        //
+        // The row keeps its id and the tool list is re-read, so this is the
+        // seam where the two could disagree: the narrowings are filed against
+        // the plugin and the tool by name, and neither is what changed.
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "work" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+        // The scripted server publishes the same two tools for every kind, so
+        // these stand in for `gmail_search` and `gmail_send`.
+        store
+            .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![agent] })
+            .unwrap();
+        store.set_plugin_tool(plugin.id, "list_projects", &NOBODY).unwrap();
+
+        let moved = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "personal" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(moved.id, plugin.id, "the row moves rather than being replaced");
+        let mine = moved.tools.iter().find(|t| t.name == "run_sql").expect("still published");
+        assert_eq!(mine.access, PluginAccess::Chosen { agents: vec![agent] });
+        let off = moved.tools.iter().find(|t| t.name == "list_projects").expect("still published");
+        assert_eq!(off.access, NOBODY);
+        // And the call path agrees with the panel, which is the half that
+        // decides what an agent actually gets.
+        assert!(matches!(
+            store.plugin_reach(group, agent, PluginKind::Google, "list_projects").unwrap(),
+            PluginReach::ToolDenied
+        ));
+    }
+
+    #[tokio::test]
     async fn it_stores_no_grant_of_its_own() {
         // The account rotates its own token. A copy on this row would be a
         // second thing to keep fresh and a second thing to be stale, and the
@@ -642,9 +699,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         match store.plugin_reach(group, agent, PluginKind::Google, "gmail_search").unwrap() {
             guac_lib::db::store::PluginReach::Granted { grant, .. } => {
@@ -682,9 +746,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         let answer = plugins::call(
             &store,
@@ -693,7 +764,7 @@ mod account_backed {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(ACCOUNT),
+                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
@@ -713,9 +784,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| Ok(()))
-            .await
-            .unwrap();
+        plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         let failed = plugins::call(
             &store,
@@ -744,12 +822,16 @@ mod account_backed {
         let (_dir, store, group, agent) = workspace();
         let endpoint = format!("{}/mcp", server.base());
 
-        let plugin =
-            plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(ACCOUNT), |_| {
-                Ok(())
-            })
-            .await
-            .unwrap();
+        let plugin = plugins::connect(
+            &store,
+            group,
+            PluginKind::Google,
+            &endpoint,
+            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
 
         // Chosen, and this agent is not among them.
         store
@@ -766,7 +848,7 @@ mod account_backed {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(ACCOUNT),
+                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
             "run_sql",
             &serde_json::json!({}),
@@ -812,12 +894,16 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
 
     let (_dir, store, group, agent) = workspace();
 
-    let plugin =
-        plugins::connect(&store, group, PluginKind::Google, &endpoint, Some(&token), |_| {
-            panic!("an account-backed plugin must not open a browser")
-        })
-        .await
-        .expect("the account token should connect");
+    let plugin = plugins::connect(
+        &store,
+        group,
+        PluginKind::Google,
+        &endpoint,
+        Some(plugins::AccountUse { token: &token, connection: "" }),
+        |_| panic!("an account-backed plugin must not open a browser"),
+    )
+    .await
+    .expect("the account token should connect");
 
     // A grant with nothing authorised offers nothing, which is a real state and
     // not a failure: it means the operator has not authorised Google yet.
@@ -834,7 +920,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
                 agent,
                 kind: PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(&token),
+                account: Some(plugins::AccountUse { token: &token, connection: "" }),
             },
             tool,
             &serde_json::json!({}),

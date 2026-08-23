@@ -492,18 +492,35 @@ pub async fn connect_plugin(
     state: State<'_, AppState>,
     group_id: GroupId,
     kind: PluginKind,
+    // Which of the account's authorized identities this crew should use.
+    // Absent is the account's default, which is the right answer for an account
+    // with one Google and what every already-connected plugin keeps doing.
+    // Naming one is how two crews use two different mailboxes.
+    connection: Option<String>,
 ) -> Reply<Plugin> {
     // Read here rather than inside the flow, so a machine that is not signed in
     // is told so before a browser opens. An account-backed plugin has no
     // sign-in of its own: see `PluginKind::account_backed`.
-    let account = if kind.account_backed() { state.account.access().await.ok() } else { None };
+    let token = if kind.account_backed() { state.account.access().await.ok() } else { None };
+    let connection = connection.unwrap_or_default();
+    let account =
+        token.as_deref().map(|token| crate::plugins::AccountUse { token, connection: &connection });
+
+    // An account-backed plugin's server is the operator's own account, and
+    // which identity it means is part of the address. The other kinds ignore
+    // both and dial the vendor.
+    let endpoint = if kind.account_backed() {
+        crate::plugins::AccountUse::endpoint(state.account.origin(), &connection)
+    } else {
+        state.runtime.plugin_endpoint(kind).to_string()
+    };
 
     let plugin = crate::plugins::connect(
         state.runtime.store(),
         group_id,
         kind,
-        state.runtime.plugin_endpoint(kind),
-        account.as_deref(),
+        &endpoint,
+        account,
         move |url| {
             // The one line in this feature that knows the app is a Tauri app. The
             // flow itself takes a callback so that `oauth.rs` does not have to.
@@ -516,6 +533,32 @@ pub async fn connect_plugin(
     // on its next turn and what the roster says they can reach.
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(plugin)
+}
+
+/// Points a crew's plugin at a different authorized identity.
+///
+/// Kept apart from connecting, because it is not the same act: connecting reads
+/// the server's tool list and replaces the row, and this moves an existing row
+/// to another mailbox. Doing it through Connect would mean an operator who
+/// wanted the other Google lost the per-tool switches they had set on this one.
+///
+/// The tool list is re-read, because two identities do not offer the same
+/// tools: a grant that can read mail and not send it publishes fewer, and a row
+/// left holding the old list would offer a model a tool that is no longer there.
+#[tauri::command]
+pub async fn set_plugin_connection(
+    state: State<'_, AppState>,
+    group_id: GroupId,
+    kind: PluginKind,
+    connection: String,
+) -> Reply<Plugin> {
+    if !kind.account_backed() {
+        return Err(CommandError::new(
+            "validation",
+            format!("{} signs in per group and has no account identity to choose", kind.label()),
+        ));
+    }
+    connect_plugin(state, group_id, kind, Some(connection)).await
 }
 
 /// Chooses which of a crew's agents may call one plugin.

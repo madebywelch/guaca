@@ -98,11 +98,11 @@ pub async fn connect(
     // and there is no other seam wide enough to put one behind. Production
     // passes `kind.endpoint()` and nothing else ever should.
     endpoint: &str,
-    // The machine's Guaca account token, for a plugin whose credential is that
+    // The machine's Guaca account, for a plugin whose credential is that
     // account rather than a grant of its own. `None` for every other kind, and
     // for an account-backed one it is the caller saying the operator is signed
     // in: see [`PluginKind::account_backed`].
-    account: Option<&str>,
+    account: Option<AccountUse<'_>>,
     open: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<Plugin, PluginError> {
     // An account-backed plugin never runs the browser dance. Its server is the
@@ -110,11 +110,18 @@ pub async fn connect(
     // grant: the token rotates on the account's clock, so a copy here would be
     // a second thing to keep fresh and a second thing to be stale.
     if kind.account_backed() {
-        let token = account.ok_or(PluginError::NoAccount { label: kind.label() })?;
-        let session = mcp::open(endpoint, Some(token)).await?;
+        let used = account.ok_or(PluginError::NoAccount { label: kind.label() })?;
+        let session = mcp::open(endpoint, Some(used.token)).await?;
         let tools = read_tools(&session).await?;
         let account_label = account_label(&session, kind);
-        return Ok(store.save_plugin(group, kind, &account_label, &tools, None)?);
+        return Ok(store.save_plugin(
+            group,
+            kind,
+            &account_label,
+            &tools,
+            None,
+            used.connection,
+        )?);
     }
 
     let (session, grant) = match mcp::open(endpoint, None).await {
@@ -134,7 +141,9 @@ pub async fn connect(
     let tools = read_tools(&session).await?;
     let account_label = account_label(&session, kind);
 
-    Ok(store.save_plugin(group, kind, &account_label, &tools, grant.as_ref())?)
+    // Only an account-backed kind carries one; the others sign in per group and
+    // their grant already names the identity it was issued to.
+    Ok(store.save_plugin(group, kind, &account_label, &tools, grant.as_ref(), "")?)
 }
 
 async fn read_tools(session: &mcp::Session) -> Result<Vec<PluginTool>, PluginError> {
@@ -179,6 +188,37 @@ fn account_label(session: &mcp::Session, kind: PluginKind) -> String {
 /// server rejects it anyway: a token can be revoked at the vendor between one
 /// turn and the next, and a clock that is a little wrong makes "close to
 /// expiring" a guess rather than a fact.
+/// The machine's Guaca account, as a plugin credential.
+///
+/// The token and the identity travel together and mean nothing apart: the token
+/// says which account, and the connection says which of the identities that
+/// account has authorized. A caller holding one and guessing the other is the
+/// bug this type exists to prevent, which is a crew reaching the wrong mailbox.
+#[derive(Debug, Clone, Copy)]
+pub struct AccountUse<'a> {
+    pub token: &'a str,
+    /// Which authorized identity, or empty for the account's default. Empty is
+    /// what a plugin connected before connections existed keeps sending, and it
+    /// is right for an account with one identity, which is most of them.
+    pub connection: &'a str,
+}
+
+impl AccountUse<'_> {
+    /// Where this connection's server is, given the account's own origin.
+    ///
+    /// Unnamed stays on the bare path rather than inventing one, because that
+    /// is the address an already-connected plugin is dialling and an upgrade
+    /// must not quietly repoint a working crew.
+    pub fn endpoint(origin: &str, connection: &str) -> String {
+        let origin = origin.trim_end_matches('/');
+        if connection.is_empty() {
+            format!("{origin}/mcp")
+        } else {
+            format!("{origin}/mcp/{connection}")
+        }
+    }
+}
+
 /// Which plugin a call is for, and on whose behalf.
 ///
 /// Grouped rather than passed loose because the five travel together and mean
@@ -191,8 +231,8 @@ pub struct Target<'a> {
     pub kind: PluginKind,
     /// See `connect`: production passes `kind.endpoint()`.
     pub endpoint: &'a str,
-    /// See `connect`: the machine's account token, for an account-backed kind.
-    pub account: Option<&'a str>,
+    /// See `connect`: the machine's account, for an account-backed kind.
+    pub account: Option<AccountUse<'a>>,
 }
 
 pub async fn call(
@@ -222,8 +262,8 @@ pub async fn call(
     // account that has been signed out reads as no token at all, which says so
     // rather than failing on the wire.
     if kind.account_backed() {
-        let token = account.ok_or(PluginError::NoAccount { label: kind.label() })?;
-        let session = mcp::open(endpoint, Some(token)).await?;
+        let used = account.ok_or(PluginError::NoAccount { label: kind.label() })?;
+        let session = mcp::open(endpoint, Some(used.token)).await?;
         return Ok(mcp::call_tool(&session, tool, arguments).await?);
     }
 
@@ -275,6 +315,32 @@ async fn renew(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unnamed_connection_stays_on_the_bare_path() {
+        // The address an already-connected plugin is dialling. An upgrade that
+        // invented an id here would silently repoint a working crew at a
+        // different mailbox, which is the one failure this column exists to
+        // prevent rather than cause.
+        assert_eq!(AccountUse::endpoint("https://guaca.bot", ""), "https://guaca.bot/mcp");
+        assert_eq!(AccountUse::endpoint("https://guaca.bot/", ""), "https://guaca.bot/mcp");
+    }
+
+    #[test]
+    fn a_named_connection_is_part_of_the_address() {
+        // Which identity a crew uses is in the path, because that is how the
+        // server scopes a session and there is nowhere else in MCP to put it.
+        assert_eq!(
+            AccountUse::endpoint("https://guaca.bot", "acct_1"),
+            "https://guaca.bot/mcp/acct_1"
+        );
+        // Development points the account somewhere else, and the plugin has to
+        // follow it or a crew signs in to one origin and calls another.
+        assert_eq!(
+            AccountUse::endpoint("http://localhost:8787", "acct_1"),
+            "http://localhost:8787/mcp/acct_1"
+        );
+    }
 
     #[test]
     fn a_plugin_that_is_not_connected_says_who_can_connect_it() {
