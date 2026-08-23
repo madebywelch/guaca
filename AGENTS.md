@@ -112,6 +112,7 @@ repo: the frontend renders state and forwards intent.
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalogue.rs`, whose twelve use cases have to agree |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
+| What a real crew of eight does with one directive, and what is different when you ask twice | *A crew is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
 
 Unqualified section names are headings in `docs/ARCHITECTURE.md`.
 
@@ -532,7 +533,24 @@ failing the next. *Three test suites, asking different questions* in
 cargo test --manifest-path src-tauri/Cargo.toml --test trajectory
 ```
 
-A fourth, narrower one exists for the subscription. `tests/subscription.rs` runs
+None of the three can be pointed at a whole team, because a real model given a
+real instruction does something slightly different every time and one run of it
+proves nothing either way. `tests/crew.rs` is that question: eight roles, one
+directive to the Chief of Staff, run as many times as you ask for, and the
+answer is a recording rather than an assertion. Every run writes its events, its
+messages, a readable transcript and its numbers to `runs/<timestamp>/`, and the
+comparison beside them says what was different between runs that were given
+identical instructions. It asserts only what is not a matter of taste: every run
+settled, no run left the machinery in a state `trajectory.rs` calls broken, and
+somebody answered the operator. Run it after anything that changes how a crew
+divides work, and read the transcripts rather than the exit code.
+
+```sh
+./scripts/crew.sh                 # one run, a few cents
+GUACA_RUNS=5 ./scripts/crew.sh    # five, to see what varies
+```
+
+A narrower one exists for the subscription. `tests/subscription.rs` runs
 the real runtime against a scripted *Responses* server, which is a protocol the
 other three never touch, and it holds one `#[ignore]`d live test. Run that after
 changing `llm/codex.rs`, or when a sign-in that worked stops working: everything
@@ -556,7 +574,7 @@ machine instead. It authorizes nothing and stores nothing.
 cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 ```
 
-A fifth, `tests/plugins.rs`, does the same job for MCP: a scripted server that
+Another, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
 turn that calls a plugin tool end to end. Its live half runs `oauth::discover`
 against every vendor on the list and asks whether each still publishes what this

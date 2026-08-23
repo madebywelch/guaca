@@ -11,6 +11,10 @@
 //! replied" is exercised: tool-call assembly, the guard, channel routing, batch
 //! coalescing, and settle detection. The only thing swapped out is the model.
 
+/// The same runtime pointed at the operator's own endpoint rather than at the
+/// stub below. Nothing that uses it runs in CI.
+pub mod live;
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -715,6 +719,28 @@ impl Harness {
             .map(|e| e.plain_text())
             .filter(|t| !t.is_empty())
             .collect()
+    }
+
+    /// Every message filed in any of these agents' channels, in order, once
+    /// each.
+    ///
+    /// Not `feed`, which is built for the activity view and keeps only
+    /// agent-to-agent traffic: it cannot see what the operator was told, and it
+    /// cannot see the system channel, which is where refusals are recorded. A
+    /// reader blind to a refusal cannot tell a guard doing its job from a
+    /// message that silently went nowhere.
+    pub fn envelopes(&self, names: &[&str]) -> Vec<Envelope> {
+        let mut messages: Vec<Envelope> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            for envelope in self.runtime.store().channel_messages(self.id(name), 400).unwrap() {
+                if seen.insert(envelope.id) {
+                    messages.push(envelope);
+                }
+            }
+        }
+        messages.sort_by_key(|e| (e.created_at, e.id));
+        messages
     }
 
     /// Peer traffic only, which is what most of these tests reason about.
