@@ -4,11 +4,13 @@
 //! Everything below them is a plain Rust library with plain tests, which is why
 //! the cascade tests can drive the real runtime without a window.
 
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use tauri::http::{Request, Response};
 use tauri::{Emitter, Manager, UriSchemeContext};
 
+use crate::account::Account;
 use crate::commands::{self, AppState};
 use crate::config;
 use crate::db::Store;
@@ -202,6 +204,26 @@ fn hide_rather_than_quit(window: &tauri::Window, event: &tauri::WindowEvent) {
     tracing::info!("window closed; Guaca is still running in the menu bar");
 }
 
+/// The Guaca account store, pointed at the service this build ships with.
+///
+/// `GUACA_ACCOUNT_ORIGIN` moves it, and exists so the sign-in can be run end to
+/// end against a Worker on this machine. It is an environment variable rather
+/// than a setting on purpose, and `account.rs` says why: a sign-in service an
+/// operator can type into a box is a credential sent somewhere nobody chose.
+/// `Account` refuses anything that is neither HTTPS nor loopback, and an
+/// override is logged at startup so a machine left pointed at a development
+/// service is not a silent state.
+fn account_store(path: PathBuf) -> Account {
+    match std::env::var("GUACA_ACCOUNT_ORIGIN") {
+        Ok(origin) if !origin.trim().is_empty() => {
+            let origin = origin.trim().to_string();
+            tracing::warn!(%origin, "signing in to a Guaca account somewhere other than the default");
+            Account::open_at(path, origin)
+        }
+        _ => Account::open(path),
+    }
+}
+
 pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -256,6 +278,9 @@ pub fn run() {
             // `subscription.rs` says why: the two files have different writers
             // and one of them writes in the background.
             let subscription = Arc::new(Subscription::open(config_dir.join("subscription.json")));
+            // The Guaca account, in its own file for the same reason. Optional,
+            // and an install that never signs in never talks to the service.
+            let account = Arc::new(account_store(config_dir.join("account.json")));
             let menubar = Arc::new(OnceLock::new());
             let sink = Arc::new(TauriSink { app: app.handle().clone(), tray: menubar.clone() });
 
@@ -343,7 +368,7 @@ pub fn run() {
                 .or_else(|_| app.path().home_dir())
                 .unwrap_or_else(|_| data_dir.clone());
 
-            app.manage(AppState { runtime, config_path, downloads, subscription });
+            app.manage(AppState { runtime, config_path, downloads, subscription, account });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -414,6 +439,10 @@ pub fn run() {
             commands::get_settings,
             commands::update_settings,
             commands::test_connection,
+            commands::account_status,
+            commands::sign_in_account,
+            commands::account_connectors,
+            commands::sign_out_account,
             commands::subscription_status,
             commands::begin_subscription_signin,
             commands::complete_subscription_signin,

@@ -469,6 +469,43 @@ export interface SubscriptionStatus {
   includesCodex: boolean;
 }
 
+/**
+ * Whether a Guaca account is signed in, and which service it is.
+ *
+ * No token, for the same reason as above. The origin is on it because in
+ * development it is not `guaca.bot`, and an operator who cannot see which
+ * service they linked to cannot tell the two apart.
+ */
+export interface AccountStatus {
+  signedIn: boolean;
+  email: string;
+  origin: string;
+}
+
+/** One thing an authorized provider can do, as the service describes it. */
+export interface AccountCapability {
+  id: string;
+  label: string;
+  granted: boolean;
+}
+
+export interface AccountProvider {
+  id: string;
+  label: string;
+  capabilities: AccountCapability[];
+}
+
+/**
+ * What the account holds, as the service reports it.
+ *
+ * Read rather than kept. It changes when the operator authorizes something in
+ * a browser rather than when this app does anything.
+ */
+export interface AccountConnectors {
+  email: string;
+  providers: AccountProvider[];
+}
+
 /** What the operator carries to a browser to finish signing in. */
 export interface DeviceCode {
   verificationUrl: string;

@@ -41,6 +41,7 @@ src-tauri/src/
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
+  account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP. Three methods, one POST each.
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
@@ -91,6 +92,7 @@ repo: the frontend renders state and forwards intent.
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
+| The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
@@ -99,7 +101,7 @@ repo: the frontend renders state and forwards intent.
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
 | Deleting a group, deleting an agent, what goes with either | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `retire_agent` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, what may interrupt the operator | *Settings is eight places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 
@@ -127,6 +129,18 @@ choose, and no price on the answer. The two meet in exactly one function,
 `LlmClient::stream_chat`, and `llm/codex.rs` translates. Anything above that line
 sees one shape of request. Keep it that way: a provider branch in the runtime, the
 prompt or the guard is the wrong half of the repo.
+
+**An account is optional and nothing depends on it.** `guaca.bot` holds one
+thing Guaca cannot: an OAuth client, for the services that will only issue
+programmatic access to a registered application. `Account` is a field on
+`AppState` that no turn, prompt, tool or guard reads, and both of its reads
+happen when the Settings pane is opened rather than at startup, so an install
+that never opens that pane never contacts the service. Signing in is
+authorization code with PKCE on a loopback port bound before the redirect is
+named, which is `oauth.rs`'s argument pointed at one known server; the device
+grant that was there first is gone rather than kept beside it, because two doors
+to one account means the weaker one decides what the account is worth.
+`docs/ACCOUNT.md`.
 
 **A Claude subscription cannot pay for a turn, and this is not an oversight.**
 Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
@@ -429,6 +443,19 @@ failure worth catching is that belief going stale.
 
 ```sh
 ./scripts/subscription.sh    # a real call against your own ChatGPT plan
+```
+
+`tests/account.rs` is the same shape again for the guaca.bot sign-in: a scripted
+authorization server, and the real `Account` driven through discovery, the
+loopback listener, the PKCE exchange and the first call the token is spent on.
+Its stub checks that the verifier presented at the token endpoint actually
+hashes to the challenge that was sent, because a sign-in that stops proving that
+still works. Its `#[ignore]`d half asks whether the live service still publishes
+what this build reads, and `GUACA_ACCOUNT_ORIGIN` points it at a Worker on this
+machine instead. It authorizes nothing and stores nothing.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 ```
 
 A fifth, `tests/plugins.rs`, does the same job for MCP: a scripted server that

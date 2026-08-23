@@ -473,7 +473,7 @@ back to the message being opened, bounded at a thousand; past that the operator
 lands in the right channel at its newest end. Anything that jumps to a message
 goes through `openMessage` rather than `select`.
 
-## Settings is eight places, because it stopped being one subject
+## Settings is nine places, because it stopped being one subject
 
 An endpoint, a set of limits, a machine's credentials, how large the window
 draws and what is allowed to interrupt you are five different questions, and one
@@ -481,11 +481,23 @@ scroll made the operator read all five to change one. So it is a nav and a pane,
 on the Cafeteria's shape: a panel that owns its own height, a head and a foot
 pinned to it, one scrolling half.
 
-Two of those eight are defaults rather than orders. Whatever Provider and Limits
+Two of those nine are defaults rather than orders. Whatever Provider and Limits
 say is what a group falls back to, and a group that answers for itself is not
 affected by either. What stays app-wide is what is genuinely one of: the
 operator's name, the machine and browser accounts, and everything about how the
 app looks and when it may interrupt.
+
+One of them is optional in a way none of the others are. Account is the only
+pane that talks to a service Guaca's author runs, and an install that never
+opens it never sends that service a request: both of its reads happen when the
+pane is opened rather than at startup. That is the shape the feature has to keep.
+Most people will never sign in, everything else in the app works identically
+either way, and the pane says so in its first sentence rather than leaving an
+operator to work out whether they are missing something. What signing in buys is
+one thing that genuinely cannot be done from here: an OAuth client for a service
+that will only issue programmatic access to a registered application. A client
+secret shipped inside an open-source download is not a secret, so the client has
+to live somewhere else or not exist. `docs/ACCOUNT.md` is the long version.
 
 Every value lives in the shell rather than in the pane that draws it, and that is
 not tidiness. The shell is unmounted when the dialog closes, so a pane holding

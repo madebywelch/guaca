@@ -323,7 +323,7 @@ pub struct ServerMetadata {
     pub code_challenge_methods_supported: Vec<String>,
 }
 
-async fn server_metadata(
+pub(crate) async fn server_metadata(
     http: &reqwest::Client,
     issuer: &str,
 ) -> Result<ServerMetadata, OauthError> {
@@ -371,7 +371,7 @@ fn well_known(url: &str, name: &str) -> Vec<String> {
 
 /// `https://host:port` and the path after it, without pulling in a URL crate
 /// for two `find` calls.
-fn split_origin(url: &str) -> Option<(String, String)> {
+pub(crate) fn split_origin(url: &str) -> Option<(String, String)> {
     let (scheme, rest) = url.split_once("://")?;
     match rest.find('/') {
         Some(at) => Some((format!("{scheme}://{}", &rest[..at]), rest[at..].to_string())),
@@ -502,7 +502,10 @@ async fn register(
 /// waiting: a browser asks for `/favicon.ico` while it is showing the page, and
 /// taking the first connection as the answer would abandon the sign-in the
 /// moment the operator's browser was being thorough.
-async fn wait_for_redirect(listener: TcpListener, state: &str) -> Result<String, OauthError> {
+pub(crate) async fn wait_for_redirect(
+    listener: TcpListener,
+    state: &str,
+) -> Result<String, OauthError> {
     let deadline = tokio::time::sleep(WAIT_FOR_OPERATOR);
     tokio::pin!(deadline);
 
@@ -583,12 +586,12 @@ fn parse_query(query: &str) -> Vec<(String, String)> {
 // ---- the exchange --------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-struct Issued {
-    access_token: String,
+pub(crate) struct Issued {
+    pub access_token: String,
     #[serde(default)]
-    refresh_token: Option<String>,
+    pub refresh_token: Option<String>,
     #[serde(default)]
-    expires_in: Option<i64>,
+    pub expires_in: Option<i64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -632,7 +635,7 @@ async fn exchange(
     })
 }
 
-async fn post_token(
+pub(crate) async fn post_token(
     http: &reqwest::Client,
     endpoint: &str,
     form: &[(String, String)],
@@ -661,7 +664,7 @@ async fn post_token(
 
 // ---- the small things ----------------------------------------------------
 
-fn http() -> Result<reqwest::Client, OauthError> {
+pub(crate) fn http() -> Result<reqwest::Client, OauthError> {
     reqwest::Client::builder().build().map_err(|source| OauthError::Transport {
         what: "to build a client",
         url: String::new(),
@@ -674,14 +677,14 @@ fn http() -> Result<reqwest::Client, OauthError> {
 /// Two v4 UUIDs rather than a random-number crate: both are drawn from the
 /// operating system's generator, and this is the only place in the app that
 /// needs unguessable bytes that are not already an id.
-fn secret() -> String {
+pub(crate) fn secret() -> String {
     let mut bytes = [0u8; 32];
     bytes[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
     bytes[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
     base64url(&bytes)
 }
 
-fn pkce_challenge(verifier: &str) -> String {
+pub(crate) fn pkce_challenge(verifier: &str) -> String {
     base64url(&Sha256::digest(verifier.as_bytes()))
 }
 
@@ -710,7 +713,7 @@ fn base64url(raw: &[u8]) -> String {
 }
 
 /// Percent-encoding for a query parameter: everything but the unreserved set.
-fn encode(raw: &str) -> String {
+pub(crate) fn encode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for byte in raw.as_bytes() {
         match byte {

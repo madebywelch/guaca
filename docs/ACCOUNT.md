@@ -1,0 +1,173 @@
+# The account
+
+Guaca runs on your machine, with your keys, and an account changes none of that.
+This file is about the one thing it does change, why that thing cannot be done
+locally, and what had to be true before it was worth building at all.
+
+## Nobody has to sign in
+
+The app is fully usable with no account, and the code is arranged so that stays
+true rather than so it reads well in a README:
+
+- `Account` is a field on `AppState` that nothing else in the app depends on.
+  No turn, no prompt, no tool, no guard reads it. Deleting the module would
+  remove one Settings pane and break nothing else.
+- Both reads happen when the Account pane is opened, not at startup. An install
+  that never opens that pane never sends `guaca.bot` a request, ever.
+- The pane's first sentence says it is optional. That is not marketing copy; it
+  is the answer to the question an operator is actually asking when they find a
+  sign-in inside a local app.
+
+If a change makes any of those three false, it is a change to what Guaca is, and
+it needs arguing on those terms rather than landing as a refactor.
+
+## What an account is for
+
+One thing: a hosted OAuth client.
+
+Guaca's answer to reaching an operator's accounts is normally to sign a browser
+in on the agent's own computer. Where that works it is the better answer — the
+app never handles a password, there is no token to keep, and logging out ends it
+(`docs/MACHINES.md`). It stops working at exactly one place, which is a service
+that will only issue programmatic access to a registered OAuth application.
+Gmail is the example everybody hits.
+
+Guaca cannot be that application. Its client secret would ship inside a download
+anybody can read, which is not a secret, and no amount of local cleverness
+changes that. A hosted origin can be, and `guaca.bot` is: it holds the client,
+holds the refresh token, and hands a paired machine a short-lived access token.
+The refresh token never reaches this machine, which is the whole reason storing
+it there beats storing it here.
+
+Everything else that has ever been proposed for an account — agents that run in
+the cloud, managed provider keys — is a separate argument that has not been had.
+Nothing in this file or in `account.rs` assumes them.
+
+## Signing in is authorization code with PKCE, on a loopback port
+
+This is the third OAuth flow in the app and the second of its kind:
+
+| | Flow | Why |
+|---|---|---|
+| `subscription.rs` | Device code | OpenAI operates the client; the device flow is what they publish |
+| `oauth.rs` | Code + PKCE, loopback | MCP mandates it, and vendors issue a client on the spot |
+| `account.rs` | Code + PKCE, loopback | RFC 8252, and the asset is somebody's mail |
+
+`subscription.rs` argues against a loopback redirect: a fixed port may already
+belong to something else, and a URL scheme is claimed by whichever build
+registered last. Both objections are about a port or a scheme **chosen in
+advance**. `oauth.rs` answers them by binding `127.0.0.1:0` *before* naming the
+redirect, so the port is one the operating system has already handed out and
+nothing can take it in between. This module is that answer pointed at one known
+server.
+
+### Why not the device grant, given one was already built
+
+`guaca.bot` shipped an RFC 8628 device grant before the app half existed, and it
+was removed rather than kept beside this one.
+
+A device code is a bearer secret carried by a human. RFC 8628 §5.4 names what
+follows: nothing binds the code to the machine that asked for it, so anyone who
+can talk an operator into approving a code walks away with a token that mints
+Gmail access tokens on that operator's account. "Your Guaca needs re-pairing,
+enter this code" is the whole attack, and it works over a chat message.
+
+That is the correct trade for a television. It is not the correct trade for an
+application that has a browser on the same machine, which is the case RFC 8252
+is written about. A loopback redirect cannot be phished across machines: the
+code is delivered to `127.0.0.1` on the machine that started the flow, and it is
+worth nothing without a verifier that never left the process.
+
+Both were not kept, because two doors to one account means the weaker one
+decides what the account is worth. `migrations/0001_oauth_provider.sql` on the
+service drops the device table.
+
+### The dance
+
+1. `GET https://guaca.bot/.well-known/oauth-authorization-server` (RFC 8414).
+2. Bind `127.0.0.1:0`. Only now is the redirect URI known.
+3. Open the operator's browser at the authorization endpoint, with a PKCE
+   challenge and a state.
+4. Catch the redirect on that port. Check the state before writing a success
+   page, so a mismatch is never told it worked.
+5. `POST` the code and the verifier to the token endpoint.
+6. Spend the token once, on `/api/connectors`, before anything is written.
+
+Steps 3 to 5 are `oauth.rs`'s own helpers, reused rather than reimplemented.
+Step 6 is this module's, and it is the difference between a sign-in that reports
+success and one that works: it is also where the account's email comes from, so
+there is no second call to make.
+
+**The client is fixed and public.** `guaca-desktop`, seeded by the service's
+migration, `token_endpoint_auth_method: "none"`, no secret. `oauth.rs` registers
+a client dynamically because MCP vendors require it; here that would mean an
+open registration endpoint on a database whose job is holding other people's
+refresh tokens, and a consent screen naming an application a stranger asserted.
+The fixed client is the smaller surface and the more honest screen.
+
+**The redirect URI is registered with no port.** RFC 8252 §7.3 has the
+authorization server compare a loopback redirect on scheme, host, path and query
+while ignoring the port. That is what makes "bind first, then ask" possible at
+all, and it is the one thing the service must not stop honouring.
+
+## Where the service is
+
+`DEFAULT_ORIGIN`, a constant. `GUACA_ACCOUNT_ORIGIN` moves it and exists so the
+flow can be run end to end against a Worker on this machine.
+
+It is an environment variable rather than a setting, and `subscription.rs` gives
+the reason: a sign-in service an operator can type into a box is a credential
+sent somewhere nobody chose. Three things guard it anyway, because an
+environment variable is still an input:
+
+- **HTTPS, or loopback.** Anything else is refused before a request is made. The
+  failure this prevents is a credential on a plaintext connection across a
+  network; loopback is exempt because it does not cross one.
+- **Discovered endpoints must be on the origin that published them.** A metadata
+  document is the one place discovery could move a credential to a third party,
+  and the check costs one string comparison.
+- **An override is logged at startup, and shown in the pane.** A machine left
+  pointed at a development service is not a silent state, and the two hold
+  different accounts.
+
+## What is stored
+
+Its own file, `account.json`, 0600, temp-then-rename.
+
+Not `config.json`, for the reason `subscription.rs` gives: the token set rotates
+on refresh, which is Guaca writing in the background, while `config.json` is
+rewritten wholesale whenever the operator presses Save. Two writers on one file
+lose a refreshed token to a stale in-memory copy, and the symptom is a sign-in
+that works until an unrelated setting changes.
+
+Plaintext, with the same caveat and more force. This credential is not Guaca's
+to lose: it stands for an account that can mint access tokens for the operator's
+mail. The honest fix is the OS keychain, and it is the first thing to reach for
+if this file grows a second reader.
+
+`Status` is what crosses IPC, and it has no token and no field one could arrive
+in. A test asserts its exact serialization, because a field added there is a
+token one serialization away from the webview.
+
+## What the account holds is read, never kept
+
+`/api/connectors` is asked every time the pane needs it. The answer changes when
+the operator authorizes something in a browser, not when this app does anything,
+and a cached copy would be a list of capabilities an agent is told it has and
+does not.
+
+The service is also the only thing that can change that list, because the
+consent screens are Google's and GitHub's. The pane has a link and no controls,
+which is the truthful shape: a tick box here would be a control that cannot
+work.
+
+## What is not built yet
+
+`POST /api/connectors/:provider/token` exists on the service and nothing in the
+app calls it. That is the step where an authorized connector becomes something
+an agent can use, and it is a change to prompts, tool definitions and the trust
+boundary rather than to this module. When it lands, the rule from
+`docs/MACHINES.md` applies unchanged and is the hard part: **a secret never
+reaches a model.** A provider access token fetched here must reach the process
+making the call and nothing else — not a prompt, not a transcript, not an event,
+not the webview.
