@@ -28,6 +28,7 @@ import {
   type SubscriptionStatus,
 } from "../lib/types";
 import { CredentialList } from "./CredentialList";
+import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -36,7 +37,7 @@ interface Props {
   onClose: () => void;
 }
 
-const SECTIONS = ["general", "provider", "limits", "accounts"] as const;
+const SECTIONS = ["general", "provider", "limits", "plugins"] as const;
 
 type Section = (typeof SECTIONS)[number];
 
@@ -44,7 +45,7 @@ const SECTION_LABELS: Record<Section, string> = {
   general: "General",
   provider: "Provider",
   limits: "Limits",
-  accounts: "Accounts",
+  plugins: "Plugins",
 };
 
 /** What a group says when it has no opinion about who pays. */
@@ -298,8 +299,9 @@ export function GroupEditor({ group, onClose }: Props) {
                 role="tab"
                 className="settings__tab"
                 aria-selected={section === key}
-                // A group that does not exist yet has nothing to hold accounts.
-                disabled={key === "accounts" && !group}
+                // A group that does not exist yet has nothing to connect a
+                // plugin to, and nowhere to put a credential.
+                disabled={key === "plugins" && !group}
                 onClick={() => setSection(key)}
               >
                 {SECTION_LABELS[key]}
@@ -531,15 +533,17 @@ export function GroupEditor({ group, onClose }: Props) {
               </>
             )}
 
-            {/* Credentials belong to the crew, not to any one agent: every
-                machine in this group is handed them. */}
-            {section === "accounts" && group && (
+            {/* What a crew can reach belongs to the crew, not to any one agent
+                in it: a plugin's sign-in and a machine's credentials are both
+                handed to everybody here. */}
+            {section === "plugins" && group && (
               <>
-                <h3 className="settings__title">Accounts</h3>
+                <h3 className="settings__title">Plugins</h3>
                 <p className="settings__lede">
-                  Credentials every machine in this group is given. An agent uses one without ever
-                  reading it.
+                  Sign in once, on behalf of this group. Every agent in it can then call that
+                  service's tools, and none of them ever holds the sign-in.
                 </p>
+                <PluginList groupId={group.id} />
                 <CredentialList groupId={group.id} />
               </>
             )}

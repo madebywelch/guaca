@@ -11,9 +11,7 @@ import { GroupOrb } from "./GroupOrb";
 import { TokenMeter } from "./TokenMeter";
 
 interface Props {
-  onNewAgent: () => void;
   onEditAgent: (agent: AgentCard) => void;
-  onNewGroup: () => void;
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
   onOpenSettings: () => void;
@@ -49,9 +47,7 @@ interface Drag {
 }
 
 export function Sidebar({
-  onNewAgent,
   onEditAgent,
-  onNewGroup,
   onEditGroup,
   onOpenCafeteria,
   onOpenSettings,
@@ -554,26 +550,16 @@ export function Sidebar({
         </div>
       </div>
 
+      {/* Two rows, not four. Making somebody moved to the plus at the top of
+          the reading column, which is where every other "add one of these" in
+          this app now lives; what is left down here is the two places you go
+          rather than the two things you make. */}
       <div className="rail__foot">
-        {/* Above "New agent" because it is the faster of the two ways to add
-            somebody, and the one an operator reaches for more than once. */}
         <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
           <span aria-hidden="true" className="rail__hash">
             ☰
           </span>
           Cafeteria
-        </button>
-        <button type="button" className="btn btn--rail" onClick={onNewAgent}>
-          <span aria-hidden="true" className="rail__hash">
-            +
-          </span>
-          New agent
-        </button>
-        <button type="button" className="btn btn--rail" onClick={onNewGroup}>
-          <span aria-hidden="true" className="rail__hash">
-            +
-          </span>
-          New group
         </button>
         <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
           <span aria-hidden="true" className="rail__hash">

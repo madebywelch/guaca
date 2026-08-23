@@ -16,6 +16,7 @@ import {
 import { ActivityFlow } from "./ActivityFlow";
 import { Composer } from "./Composer";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
+import { NewMenu } from "./NewMenu";
 import { PairThread } from "./PairThread";
 import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 
@@ -23,12 +24,15 @@ interface Props {
   channel: ChannelKey;
   /** Where the operator asked for an agent's actions, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
+  /** The plus at the end of the header. App-level, not this channel's. */
+  onNewAgent: () => void;
+  onNewGroup: () => void;
 }
 
 /** How long a message arrived at from search stays marked. */
 const FLASH_MS = 1800;
 
-export function ChannelView({ channel, onOpenMenu }: Props) {
+export function ChannelView({ channel, onOpenMenu, onNewAgent, onNewGroup }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
@@ -150,6 +154,9 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
         ) : (
           <h1 className="pane__title">Channel unavailable</h1>
         )}
+        {/* Last, and after the conditional, so it is the same control in the
+            same place whichever of the three the header is drawing. */}
+        <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
       </header>
 
       {isActivity ? (

@@ -320,8 +320,8 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Accounts is disabled until the group
-exists, because a credential has to belong to something.
+cannot discard a half-typed endpoint. Plugins is disabled until the group
+exists, because a sign-in and a credential both have to belong to something.
 
 Three rows say who pays, and the first is "follow the app settings", which is
 where every group starts. The second is the ChatGPT subscription, and the group
@@ -369,6 +369,25 @@ first is not a state anything on screen can say by itself.
 An agent is drawn once, wherever it is drawn: two rows for one agent would be two
 nodes in the sidebar's `rowRefs`, and the wire would have to pick one to throw a
 message at.
+
+## Making something is one plus, and it is not in the rail
+
+The rail's footer used to carry four rows: the cafeteria, a new agent, a new
+group, and settings. Two of those are places you go and two are things you make,
+and the two kinds sat together because the footer was where there was room. It
+also grew by a row every time something new became makeable, which is a footer
+that gets worse as the app gets better.
+
+Now there is one plus, at the end of the channel header, and it lists what can
+be made. The rail keeps the two places. The plus is at the top of the reading
+column rather than in the rail because the rail is a list of agents and this is
+not about any of them, and because the header is the one bar that is drawn
+whichever channel is open.
+
+It is the shared menu, so it closes on Escape, on a click that lands away from
+it, and on anything that moves the button underneath it. The listeners are bound
+by name rather than as inline arrows, which is not a style point: `removeEventListener`
+matches by reference, so two arrows leave a listener behind on every open.
 
 ## The cafeteria is a copy machine, not a registry
 

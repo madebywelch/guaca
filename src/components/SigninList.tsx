@@ -78,7 +78,7 @@ export function SigninList({ agent }: Props) {
   if (signins === null) return <p className="field__hint">Loading sessions…</p>;
 
   return (
-    <div className="connectors">
+    <div className="access">
       <div className="routines__head">
         <span className="field__label">Signed in</span>
         <button
@@ -106,11 +106,11 @@ export function SigninList({ agent }: Props) {
       )}
 
       {signins.map((signin) => (
-        <div className="connector" key={`${signin.surface}:${signin.domain}`}>
-          <div className="connector__row">
-            <strong className="connector__service">{signin.service}</strong>
+        <div className="access__item" key={`${signin.surface}:${signin.domain}`}>
+          <div className="access__row">
+            <strong className="access__name">{signin.service}</strong>
             <span
-              className="connector__account"
+              className="access__account"
               title={
                 signin.surface === "browser"
                   ? "In this agent's browser, which is what `browse` uses."
@@ -121,13 +121,13 @@ export function SigninList({ agent }: Props) {
             </span>
             {!signin.recognised && (
               <span
-                className="connector__account"
+                className="access__account"
                 title="Matched by a session cookie on a site this browser has visited, rather than by a known signature."
               >
                 looks signed in
               </span>
             )}
-            <span className="connector__when">seen {relativeTime(signin.lastSeenAt, now)} ago</span>
+            <span className="access__when">seen {relativeTime(signin.lastSeenAt, now)} ago</span>
           </div>
         </div>
       ))}

@@ -67,6 +67,7 @@ declare_id!(ApprovalId, "approval");
 declare_id!(ConnectorId, "connector");
 declare_id!(GroupId, "group");
 declare_id!(MessageId, "msg");
+declare_id!(PluginId, "plugin");
 declare_id!(RoutineId, "routine");
 declare_id!(RunId, "run");
 

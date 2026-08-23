@@ -34,6 +34,11 @@ function connector(over: Partial<Connector> = {}): Connector {
   };
 }
 
+/** Opens the form, which is behind a button now that there are no tiles. */
+async function openForm() {
+  fireEvent.click(await screen.findByText("Add a credential"));
+}
+
 describe("CredentialList", () => {
   beforeEach(() => {
     groupConnectors.mockReset();
@@ -42,142 +47,87 @@ describe("CredentialList", () => {
     groupConnectors.mockResolvedValue([]);
   });
 
-  it("asks for a service and a token, and nothing else", async () => {
-    // Adding one used to be five empty boxes. Four of them were questions the
-    // operator had to invent an answer for; only the token is something they
-    // actually hold.
+  it("offers no brands, only the escape hatch", async () => {
+    // The twelve-tile grid is gone: what a crew reaches is a plugin, and this
+    // is what is left for a service that has none. A tile here would be an
+    // offer Guaca cannot keep, since it knows nothing about the service beyond
+    // the variable name it suggested.
+    render(<CredentialList groupId={GROUP} />);
+
+    expect(await screen.findByText("Add a credential")).toBeTruthy();
+    expect(screen.queryByText("GitHub")).toBeNull();
+    expect(screen.queryByText("Something else")).toBeNull();
+  });
+
+  it("asks what it is for, the variable, and the token", async () => {
     createConnector.mockResolvedValue(connector());
     const { container } = render(<CredentialList groupId={GROUP} />);
+    await openForm();
 
-    fireEvent.click(await screen.findByText("GitHub"));
-
-    // Exactly one field, and it is the token.
     const inputs = [...container.querySelectorAll("input")];
-    expect(inputs.length).toBe(1);
-    expect(inputs[0]?.getAttribute("placeholder")).toBe("GitHub token");
-    expect(inputs[0]?.getAttribute("type")).toBe("password");
+    expect(inputs.length).toBe(3);
 
-    fireEvent.change(screen.getByPlaceholderText("GitHub token"), {
-      target: { value: "ghp_x" },
-    });
-    fireEvent.click(screen.getByText("Add"));
-
-    await waitFor(() => expect(createConnector).toHaveBeenCalled());
-    // The variable a GitHub token belongs in is not a preference.
-    expect(createConnector.mock.calls[0]?.[0]).toMatchObject({
-      groupId: GROUP,
-      service: "GitHub",
-      envVar: "GITHUB_TOKEN",
-      secret: "ghp_x",
-    });
-  });
-
-  it("says where to get the token for the service that was picked", async () => {
-    render(<CredentialList groupId={GROUP} />);
-    fireEvent.click(await screen.findByText("Cloudflare"));
-    expect(screen.getByText(/dash\.cloudflare\.com/)).toBeTruthy();
-  });
-
-  it("does not offer a service the group already holds", async () => {
-    groupConnectors.mockResolvedValue([connector()]);
-    render(<CredentialList groupId={GROUP} />);
-
-    // The one in the list is the credential itself, not an offer to add it.
-    await screen.findByText("$GITHUB_TOKEN");
-    expect(screen.getAllByText("GitHub").length).toBe(1);
-  });
-
-  it("still takes a service nobody listed", async () => {
-    createConnector.mockResolvedValue(connector());
-    render(<CredentialList groupId={GROUP} />);
-
-    fireEvent.click(await screen.findByText("Something else"));
     fireEvent.change(screen.getByPlaceholderText("what it is for"), {
-      target: { value: "Internal" },
+      target: { value: "Fly" },
     });
     fireEvent.change(screen.getByPlaceholderText("MY_API_KEY"), {
-      target: { value: "INTERNAL_TOKEN" },
+      target: { value: "FLY_API_TOKEN" },
     });
-    fireEvent.change(screen.getByPlaceholderText("Internal token"), {
-      target: { value: "tok" },
-    });
+    fireEvent.change(screen.getByPlaceholderText("Fly token"), { target: { value: "fo_live" } });
     fireEvent.click(screen.getByText("Add"));
 
     await waitFor(() => expect(createConnector).toHaveBeenCalled());
     expect(createConnector.mock.calls[0]?.[0]).toMatchObject({
-      service: "Internal",
-      envVar: "INTERNAL_TOKEN",
-      secret: "tok",
+      groupId: GROUP,
+      service: "Fly",
+      envVar: "FLY_API_TOKEN",
+      secret: "fo_live",
     });
   });
 
-  it("will not send a credential without its value", async () => {
+  it("will not add one without all three", async () => {
     render(<CredentialList groupId={GROUP} />);
-    fireEvent.click(await screen.findByText("GitHub"));
+    await openForm();
 
-    // There is no edit path, so an empty one could never be completed.
-    expect((screen.getByText("Add") as HTMLButtonElement).disabled).toBe(true);
-    fireEvent.change(screen.getByPlaceholderText("GitHub token"), { target: { value: "x" } });
-    expect((screen.getByText("Add") as HTMLButtonElement).disabled).toBe(false);
+    const add = () => screen.getByText("Add") as HTMLButtonElement;
+    expect(add().disabled).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("what it is for"), { target: { value: "Fly" } });
+    expect(add().disabled).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("MY_API_KEY"), {
+      target: { value: "FLY_API_TOKEN" },
+    });
+    // Still not: a variable stored empty reads to the agent as a revoked token
+    // rather than as unfinished setup.
+    expect(add().disabled).toBe(true);
+
+    fireEvent.change(screen.getByPlaceholderText("Fly token"), { target: { value: "x" } });
+    expect(add().disabled).toBe(false);
   });
 
-  it("never renders a value, only that one is set", async () => {
+  it("shows what is held without ever showing a value", async () => {
     groupConnectors.mockResolvedValue([connector()]);
-    const { container } = render(<CredentialList groupId={GROUP} />);
+    render(<CredentialList groupId={GROUP} />);
 
-    expect(await screen.findByText("...ter2")).toBeTruthy();
-    expect(container.textContent).not.toContain("ghp_");
+    expect(await screen.findByText("GitHub")).toBeTruthy();
+    expect(screen.getByText("$GITHUB_TOKEN")).toBeTruthy();
+    expect(screen.getByText("...ter2")).toBeTruthy();
   });
 
-  it("shows a credential nobody finished setting up as broken", async () => {
+  it("says when a credential has no value, because it will hand over an empty variable", async () => {
     groupConnectors.mockResolvedValue([connector({ secretSet: false, secretHint: "" })]);
     render(<CredentialList groupId={GROUP} />);
+
     expect(await screen.findByText("no value set")).toBeTruthy();
   });
 
-  it("points at signing in on a computer for anything with a login page", async () => {
+  it("forgets one", async () => {
+    groupConnectors.mockResolvedValue([connector()]);
+    deleteConnector.mockResolvedValue(undefined);
     render(<CredentialList groupId={GROUP} />);
-    expect(await screen.findByText(/sign in on an agent's computer/)).toBeTruthy();
-  });
 
-  it("gives every service its own colour, so the grid can be scanned", async () => {
-    // The name says which one it is; the colour is what the eye uses to find
-    // it. A grid of identical buttons has neither.
-    const { container } = render(<CredentialList groupId={GROUP} />);
-    await screen.findByText("GitHub");
-
-    // The "Something else" tile is deliberately unbranded, so it has no colour.
-    const marks = [...container.querySelectorAll(".service .mark:not(.mark--other)")];
-    expect(marks.length).toBeGreaterThan(8);
-
-    const colours = new Set(
-      marks.map((mark) => (mark as HTMLElement).style.getPropertyValue("--mark")),
-    );
-    expect(colours.size).toBeGreaterThan(6);
-    expect(colours.has("")).toBe(false);
-  });
-
-  it("draws the real brand mark where there is one, and an initial where there is not", async () => {
-    // A logo approximated by eye is a wrong logo, so the ones that exist are
-    // real path data and the ones that do not degrade to a letter rather than
-    // to something invented.
-    const { container } = render(<CredentialList groupId={GROUP} />);
-    await screen.findByText("GitHub");
-
-    const github = container.querySelector(".service .mark svg path");
-    expect(github?.getAttribute("d")?.length).toBeGreaterThan(200);
-
-    // OpenAI has no published icon in the set, so it keeps its initial.
-    const openai = [...container.querySelectorAll(".service")].find((tile) =>
-      tile.textContent?.includes("OpenAI"),
-    );
-    expect(openai?.querySelector("svg")).toBeNull();
-    expect(openai?.querySelector(".mark")?.textContent).toBe("O");
-  });
-
-  it("no longer offers Anthropic, which is what the app talks to, not a tool", async () => {
-    render(<CredentialList groupId={GROUP} />);
-    await screen.findByText("GitHub");
-    expect(screen.queryByText("Anthropic")).toBeNull();
+    fireEvent.click(await screen.findByText("Forget"));
+    await waitFor(() => expect(deleteConnector).toHaveBeenCalledWith("c1"));
   });
 });

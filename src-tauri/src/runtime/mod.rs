@@ -278,11 +278,13 @@ use crate::domain::envelope::{
 };
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
 use crate::domain::now_ms;
+use crate::domain::plugin::PluginKind;
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{BrowserState, Signin, Surface};
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
+use crate::plugins;
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
@@ -414,6 +416,10 @@ struct Inner {
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
+    /// Where each plugin's MCP server is, when it is not where it usually is.
+    ///
+    /// Empty in the app, and written at most once. See `Runtime::plugins_at`.
+    plugin_endpoints: std::sync::OnceLock<HashMap<PluginKind, String>>,
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
@@ -470,10 +476,36 @@ impl Runtime {
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
+                plugin_endpoints: std::sync::OnceLock::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 events,
             }),
         }
+    }
+
+    /// Points plugin calls somewhere other than the vendors' own servers.
+    ///
+    /// The one seam wide enough to put a scripted MCP server behind. Everything
+    /// about a plugin that could be wrong — the sign-in, the grant in the store,
+    /// the tool list on the turn, the dispatch, the refresh — is the same code
+    /// either way, and a suite that could not move the address would have to
+    /// test those halves separately and hope they met in the middle.
+    ///
+    /// Settable once and never mutated afterwards, which is what keeps this from
+    /// being a knob: there is no operator-facing reason to change where a plugin
+    /// lives, and a mistyped one is a crew's sign-in sent somewhere nobody chose.
+    pub fn plugins_at(&self, endpoints: HashMap<PluginKind, String>) {
+        let _ = self.inner.plugin_endpoints.set(endpoints);
+    }
+
+    /// Where one plugin's server is for this runtime.
+    pub fn plugin_endpoint(&self, kind: PluginKind) -> &str {
+        self.inner
+            .plugin_endpoints
+            .get()
+            .and_then(|moved| moved.get(&kind))
+            .map(String::as_str)
+            .unwrap_or_else(|| kind.endpoint())
     }
 
     /// The loopback port the computer viewer is listening on, once it is up.
@@ -1646,6 +1678,14 @@ impl Runtime {
         }
 
         let (credentials, signins) = self.reach_of(&card);
+        // What the crew has signed in to, read once for the same two uses as
+        // everything above: it is named in the prompt and offered as tools, and
+        // a turn where those two disagree is a model calling something it was
+        // never told it had, or being told about something it cannot call.
+        let plugins = self.inner.store.plugin_tools(card.group_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this group's plugins for its turn");
+            Vec::new()
+        });
         // What this agent actually has, decided once and used twice: the prompt
         // describes exactly these, and the tool list offers exactly these. The
         // two disagreeing is the failure this replaced, where every agent was
@@ -1658,6 +1698,7 @@ impl Runtime {
             &roster,
             &credentials,
             &signins,
+            &plugins,
             &names,
             &notes,
             &routines,
@@ -1741,7 +1782,13 @@ impl Runtime {
             let request = ChatRequest {
                 model: model.clone(),
                 messages: messages.clone(),
-                tools: tools::specs(surfaces),
+                // The crew's plugins after the app's own tools, in that order,
+                // so a provider that truncates a long list keeps the ones every
+                // agent needs to answer at all.
+                tools: tools::specs(surfaces)
+                    .into_iter()
+                    .chain(tools::plugin_specs(&plugins))
+                    .collect(),
                 temperature: None,
             };
 
@@ -2575,6 +2622,38 @@ impl Runtime {
                     rendered,
                     Part::ToolCall { name: tools::ATTACH_FILE.to_string(), arguments, outcome },
                 )
+            }
+
+            ToolInvocation::Plugin { kind, tool, arguments: sent } => {
+                // The call goes out of Guaca, not off the agent's machine, and
+                // the grant it carries is never in this function. The name is
+                // written back prefixed so the transcript says which plugin the
+                // work went to; `run_sql` on its own is not a chip anybody can
+                // read a week later.
+                let name = format!("{}{}{tool}", kind.slug(), tools::PLUGIN_SEPARATOR);
+                let called = plugins::call(
+                    self.store(),
+                    card.group_id,
+                    kind,
+                    self.plugin_endpoint(kind),
+                    &tool,
+                    &sent,
+                )
+                .await;
+                let (rendered, outcome) = match called {
+                    Ok(answer) => {
+                        let summary = format!("{} · {tool}", kind.label());
+                        (answer, ToolOutcome::Ok { summary })
+                    }
+                    // Handed to the model rather than raised, like every other
+                    // tool that reaches outside this process. A plugin that is
+                    // not connected is something the agent has to tell the
+                    // operator about, not a dead turn.
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::ToolCall { name, arguments, outcome })
             }
         };
 

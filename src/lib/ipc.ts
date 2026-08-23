@@ -38,6 +38,10 @@ import type {
   GroupReset,
   GroupUsage,
   MessageId,
+  Plugin,
+  PluginId,
+  PluginKind,
+  PluginOffer,
   ProtectedAction,
   Routine,
   RoutineDraft,
@@ -100,6 +104,22 @@ export const api = {
   createConnector: (draft: ConnectorDraft) => invoke<Connector>("create_connector", { draft }),
 
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  /** The plugins on offer. Static, and the same for every group. */
+  pluginCatalogue: () => invoke<PluginOffer[]>("plugin_catalogue"),
+
+  /** What one crew has connected. Never carries a grant. */
+  groupPlugins: (groupId: GroupId) => invoke<Plugin[]>("group_plugins", { groupId }),
+
+  /**
+   * Signs the crew in, opening the operator's browser when the server asks for
+   * one. Resolves only once they have finished there, which can be minutes, so
+   * whatever calls this has to show that it is waiting on a person.
+   */
+  connectPlugin: (groupId: GroupId, kind: PluginKind) =>
+    invoke<Plugin>("connect_plugin", { groupId, kind }),
+
+  disconnectPlugin: (id: PluginId) => invoke<void>("disconnect_plugin", { id }),
 
   /** The last scan's result. Does not touch the machine, so it is free. */
   agentSignins: (id: AgentId) => invoke<Signin[]>("agent_signins", { id }),
