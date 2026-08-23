@@ -61,15 +61,15 @@ export function GrantList({ agent }: Props) {
   if (grants.length === 0) return null;
 
   return (
-    <div className="connectors">
+    <div className="access">
       <div className="routines__head">
         <span className="field__label">Standing permission</span>
       </div>
 
       {grants.map((action) => (
-        <div className="connector" key={action}>
-          <div className="connector__row">
-            <strong className="connector__service">{PHRASE[action]}</strong>
+        <div className="access__item" key={action}>
+          <div className="access__row">
+            <strong className="access__name">{PHRASE[action]}</strong>
             <button
               type="button"
               className="btn btn--ghost btn--small"

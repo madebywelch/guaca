@@ -19,8 +19,11 @@ use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
-use crate::domain::ids::{AgentId, ApprovalId, ConnectorId, GroupId, MessageId, RoutineId, RunId};
+use crate::domain::ids::{
+    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
+};
 use crate::domain::now_ms;
+use crate::domain::plugin::{self, Plugin, PluginKind, PluginOffer};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -115,6 +118,19 @@ impl From<crate::domain::group::GroupError> for CommandError {
 impl From<crate::domain::connector::ConnectorError> for CommandError {
     fn from(err: crate::domain::connector::ConnectorError) -> Self {
         CommandError::new("validation", err.to_string())
+    }
+}
+
+impl From<crate::plugins::PluginError> for CommandError {
+    fn from(err: crate::plugins::PluginError) -> Self {
+        // Its own kind, because the UI can offer the one thing that fixes it:
+        // open the browser again. Everything else here is a failure to report.
+        match err {
+            crate::plugins::PluginError::Signin(_) => {
+                CommandError::new("pluginSignin", err.to_string())
+            }
+            other => CommandError::new("plugin", other.to_string()),
+        }
     }
 }
 
@@ -330,6 +346,67 @@ pub fn create_connector(state: State<'_, AppState>, draft: ConnectorDraft) -> Re
 #[tauri::command]
 pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()> {
     state.runtime.store().delete_connector(id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+// ---- plugins -------------------------------------------------------------
+
+/// The servers Guaca knows how to sign in to. Static, and the same for every
+/// group: what differs is which of them a crew has connected.
+#[tauri::command]
+pub fn plugin_catalogue() -> Reply<Vec<PluginOffer>> {
+    Ok(plugin::catalogue())
+}
+
+/// What one crew has connected, and what each of those can do. No grant is on
+/// this type and there is no command that returns one.
+#[tauri::command]
+pub fn group_plugins(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Plugin>> {
+    Ok(state.runtime.store().group_plugins(group_id)?)
+}
+
+/// Signs a group in to a plugin's server, opening the operator's browser if the
+/// server asks for one.
+///
+/// Runs the whole flow inside one command, so the webview has no half-finished
+/// sign-in to hold or to clean up. It can take minutes: the operator has to
+/// authorise in a browser, and the command is what is waiting for them. Five
+/// minutes and it gives up, which is also when the loopback socket closes.
+#[tauri::command]
+pub async fn connect_plugin(
+    state: State<'_, AppState>,
+    group_id: GroupId,
+    kind: PluginKind,
+) -> Reply<Plugin> {
+    let plugin = crate::plugins::connect(
+        state.runtime.store(),
+        group_id,
+        kind,
+        kind.endpoint(),
+        move |url| {
+            // The one line in this feature that knows the app is a Tauri app. The
+            // flow itself takes a callback so that `oauth.rs` does not have to.
+            tauri_plugin_opener::open_url(url, None::<&str>).map_err(|err| err.to_string())
+        },
+    )
+    .await?;
+
+    // The crew's tools changed, which changes what every agent in it is offered
+    // on its next turn and what the roster says they can reach.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(plugin)
+}
+
+/// Forgets a plugin, and the grant with it.
+///
+/// The grant is dropped locally rather than revoked at the vendor: not every
+/// authorisation server publishes a revocation endpoint, and an operator who
+/// wants the authorisation itself withdrawn has to do that where they granted
+/// it. Said in the UI rather than assumed.
+#[tauri::command]
+pub fn disconnect_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<()> {
+    state.runtime.store().delete_plugin(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

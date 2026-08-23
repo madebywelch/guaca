@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::envelope::Intent;
+use crate::domain::plugin::{PluginKind, PluginTool};
 use crate::domain::routine::{Cadence, Trigger};
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
@@ -65,6 +66,60 @@ impl Surfaces {
 /// spent on. Offered anyway it becomes how an agent asks for access it does not
 /// have, which is a question no button can answer: one asked the operator to
 /// approve reading a calendar the workspace had no account for.
+/// What separates a plugin from its tool in a name a model calls.
+///
+/// Two underscores rather than one, because MCP servers use one inside tool
+/// names constantly. `/` and `.` would read better and are both refused by
+/// providers, which validate a function name against `[A-Za-z0-9_-]{1,64}`.
+pub const PLUGIN_SEPARATOR: &str = "__";
+
+/// The longest name a provider will accept for a function.
+const MAX_TOOL_NAME: usize = 64;
+
+/// One group's plugin tools, as definitions the model is offered.
+///
+/// Kept out of [`specs`] rather than passed into it, because these are not a
+/// filter over a fixed list: they are whatever three servers said they could do
+/// on the day they were connected, and they change without this build changing.
+///
+/// A tool whose prefixed name a provider would refuse is dropped rather than
+/// renamed. Renaming would need a mapping back at call time, and a mapping
+/// nothing can see is how a tool call lands on the wrong tool.
+pub fn plugin_specs(connected: &[(PluginKind, Vec<PluginTool>)]) -> Vec<ToolSpec> {
+    let mut out = Vec::new();
+    for (kind, tools) in connected {
+        for tool in tools {
+            let name = format!("{}{PLUGIN_SEPARATOR}{}", kind.slug(), tool.name);
+            if name.len() > MAX_TOOL_NAME
+                || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                tracing::warn!(
+                    plugin = kind.slug(),
+                    tool = tool.name,
+                    "skipping a plugin tool whose name a provider would refuse"
+                );
+                continue;
+            }
+            out.push(ToolSpec {
+                name,
+                // Prefixed with where it comes from. A model reading twenty
+                // tool descriptions has no other signal that `run_sql` reaches
+                // the operator's real database rather than a local one.
+                description: if tool.description.trim().is_empty() {
+                    format!("From the {} plugin.", kind.label())
+                } else {
+                    format!("{} plugin. {}", kind.label(), tool.description.trim())
+                },
+                // Passed through untouched. It is the server's schema, the
+                // server validates against it, and anything Guaca did to it
+                // here would be a second opinion the server never sees.
+                parameters: tool.input_schema.clone(),
+            });
+        }
+    }
+    out
+}
+
 pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
     all_specs()
         .into_iter()
@@ -595,6 +650,18 @@ pub enum ToolInvocation {
     },
     CreateAgent {
         draft: NewAgent,
+    },
+    /// A tool belonging to one of the group's connected plugins.
+    ///
+    /// Unlike every other variant, what this can be is not known at compile
+    /// time: the server said, when the plugin was connected. Parsing only
+    /// splits the name, so an agent that calls a plugin its crew has not
+    /// connected is refused by the runtime with a reason rather than here with
+    /// "unknown tool", which is a different and less useful thing to be told.
+    Plugin {
+        kind: PluginKind,
+        tool: String,
+        arguments: serde_json::Value,
     },
 }
 
@@ -1236,8 +1303,29 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
             }
             Ok(ToolInvocation::AttachFile { files })
         }
-        other => Err(ToolParseError::UnknownTool { name: other.to_string() }),
+        other => match split_plugin_tool(other) {
+            Some((kind, tool)) => {
+                let arguments = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                    name: other.to_string(),
+                    detail: e.to_string(),
+                })?;
+                Ok(ToolInvocation::Plugin { kind, tool, arguments })
+            }
+            None => Err(ToolParseError::UnknownTool { name: other.to_string() }),
+        },
     }
+}
+
+/// Splits `neon__run_sql` into the plugin and the tool it belongs to.
+///
+/// The separator is two underscores because MCP servers use one inside tool
+/// names constantly and none of the three uses two. Split on the first
+/// occurrence, not the last: a server with `run__sql` would otherwise have its
+/// own name torn in half.
+fn split_plugin_tool(name: &str) -> Option<(PluginKind, String)> {
+    let (prefix, tool) = name.split_once(PLUGIN_SEPARATOR)?;
+    let kind = PluginKind::from_slug(prefix)?;
+    (!tool.is_empty()).then(|| (kind, tool.to_string()))
 }
 
 /// Coerces the several shapes models actually emit into a list of strings.
@@ -2347,5 +2435,83 @@ mod tests {
         let offered: Vec<String> =
             specs(Surfaces::none()).into_iter().map(|spec| spec.name).collect();
         assert!(offered.contains(&ATTACH_FILE.to_string()), "{offered:?}");
+    }
+
+    fn plugin_tool(name: &str) -> PluginTool {
+        PluginTool {
+            name: name.to_string(),
+            description: "Runs it.".to_string(),
+            input_schema: serde_json::json!({ "type": "object" }),
+        }
+    }
+
+    #[test]
+    fn a_plugin_tool_is_offered_under_its_plugin() {
+        let specs = plugin_specs(&[(PluginKind::Neon, vec![plugin_tool("run_sql")])]);
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].name, "neon__run_sql");
+        // The description says where the call reaches. A model reading twenty
+        // of these has no other signal that `run_sql` is somebody's real
+        // database rather than a scratch one.
+        assert!(specs[0].description.starts_with("Neon plugin."), "{}", specs[0].description);
+    }
+
+    #[test]
+    fn a_plugin_tool_a_provider_would_refuse_is_dropped_rather_than_renamed() {
+        // Providers validate a function name against `[A-Za-z0-9_-]{1,64}`.
+        // Renaming to fit would need a mapping back at call time, and a mapping
+        // nothing can see is how a call lands on the wrong tool.
+        let offered = plugin_specs(&[(
+            PluginKind::Neon,
+            vec![
+                plugin_tool("run sql"),
+                plugin_tool("run/sql"),
+                plugin_tool(&"x".repeat(64)),
+                plugin_tool("fine"),
+            ],
+        )]);
+        let names: Vec<&str> = offered.iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(names, vec!["neon__fine"]);
+    }
+
+    #[test]
+    fn a_plugin_tool_name_comes_back_apart_the_way_it_went_together() {
+        let parsed = parse(&call("neon__run_sql", r#"{"sql":"select 1"}"#)).unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Plugin {
+                kind: PluginKind::Neon,
+                tool: "run_sql".to_string(),
+                arguments: serde_json::json!({ "sql": "select 1" }),
+            }
+        );
+    }
+
+    #[test]
+    fn a_tool_name_containing_the_separator_keeps_its_own_name_whole() {
+        // Split on the first separator, not the last. A server with `run__sql`
+        // would otherwise have its own name torn in half and the call would go
+        // out as `sql`.
+        let parsed = parse(&call("neon__run__sql", "{}")).unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Plugin {
+                kind: PluginKind::Neon,
+                tool: "run__sql".to_string(),
+                arguments: serde_json::json!({}),
+            }
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_plugin_is_still_an_unknown_tool() {
+        // The prefix has to be one of the three. Anything else is a model
+        // inventing a tool, and it has to be told so rather than dispatched.
+        for name in ["github__issues", "__run_sql", "neon__", "run_sql"] {
+            assert!(
+                matches!(parse(&call(name, "{}")), Err(ToolParseError::UnknownTool { .. })),
+                "{name} must not parse as a plugin call"
+            );
+        }
     }
 }
