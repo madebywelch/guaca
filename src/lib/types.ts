@@ -258,6 +258,11 @@ export interface PluginOffer {
   docs: string;
   /** Where the sign-in and every later call goes, shown before it is clicked. */
   endpoint: string;
+  /**
+   * Whether this one's credential is the operator's Guaca account, and so
+   * whether there is an identity to choose before connecting.
+   */
+  accountBacked: boolean;
 }
 
 /**

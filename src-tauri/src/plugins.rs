@@ -113,15 +113,13 @@ pub async fn connect(
         let used = account.ok_or(PluginError::NoAccount { label: kind.label() })?;
         let session = mcp::open(endpoint, Some(used.token)).await?;
         let tools = read_tools(&session).await?;
-        let account_label = account_label(&session, kind);
-        return Ok(store.save_plugin(
-            group,
-            kind,
-            &account_label,
-            &tools,
-            None,
-            used.connection,
-        )?);
+        // No account label. An MCP server's own name is not an account, and for
+        // this one it is "Guaca Connectors", which on a card reading "Signed in
+        // as ..." looks exactly like an answer to whose mailbox this is and is
+        // not. Which identity this row uses is `connection`, and the operator's
+        // own name for it lives at the account, where it can change without
+        // this row going stale.
+        return Ok(store.save_plugin(group, kind, "", &tools, None, used.connection)?);
     }
 
     let (session, grant) = match mcp::open(endpoint, None).await {

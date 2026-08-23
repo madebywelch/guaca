@@ -60,6 +60,7 @@ const OFFERS: PluginOffer[] = [
     blurb: "Postgres databases.",
     docs: "https://neon.com/docs/ai/neon-mcp-server",
     endpoint: "https://mcp.neon.tech/mcp",
+    accountBacked: false,
   },
   {
     kind: "stripe",
@@ -68,6 +69,7 @@ const OFFERS: PluginOffer[] = [
     docs: "https://docs.stripe.com/mcp",
     // Stripe's has no path, which is what the host line has to survive.
     endpoint: "https://mcp.stripe.com",
+    accountBacked: false,
   },
 ];
 
@@ -473,6 +475,7 @@ describe("choosing which account a crew uses", () => {
     blurb: "Your Gmail, Calendar and Drive.",
     docs: "https://guaca.bot/app",
     endpoint: "https://guaca.bot/mcp",
+    accountBacked: true,
   };
 
   const two: AccountConnectors = {
@@ -490,14 +493,53 @@ describe("choosing which account a crew uses", () => {
     pluginCatalogue.mockResolvedValue([GOOGLE_OFFER]);
   });
 
-  it("offers no picker when there is only one account to pick", async () => {
-    // A select with a single option is a control that cannot do anything.
+  it("says which account it acts as, without an inert picker, when there is one", async () => {
+    // A select with a single option cannot do anything, but a crew acting as
+    // somebody's mail must never leave them guessing whose.
     accountConnectors.mockResolvedValue(one);
     groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
-    await waitFor(() => expect(screen.getByText("Google")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(/Acting as work@example.com/)).toBeTruthy());
     expect(screen.queryByLabelText(/^Account/)).toBeNull();
+  });
+
+  it("offers the picker before connecting, not only after", async () => {
+    // The whole complaint: Connect took the first account silently, so a crew
+    // could end up on the wrong mailbox with nothing on screen saying so.
+    accountConnectors.mockResolvedValue(two);
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    const picker = (await screen.findByLabelText(/^Account/)) as HTMLSelectElement;
+    expect([...picker.options].map((option) => option.value)).toEqual(["acct_work", "acct_home"]);
+  });
+
+  it("connects against the identity picked before the click", async () => {
+    accountConnectors.mockResolvedValue(two);
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.change(await screen.findByLabelText(/^Account/), {
+      target: { value: "acct_home" },
+    });
+    // Nothing is written until Connect: there is no row to write to yet.
+    expect(setPluginConnection).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("Connect"));
+    await waitFor(() => expect(connectPlugin).toHaveBeenCalledWith(GROUP, "google", "acct_home"));
+  });
+
+  it("says so when the account has authorized nothing at that provider", async () => {
+    // A hidden picker is indistinguishable from a broken feature.
+    accountConnectors.mockResolvedValue({ ...two, connections: [] });
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(
+      await screen.findByText(/No Google account is authorized on your Guaca account yet/),
+    ).toBeTruthy();
+    expect(screen.getByText("Authorize a Google account")).toBeTruthy();
   });
 
   it("offers a picker showing every authorized identity", async () => {

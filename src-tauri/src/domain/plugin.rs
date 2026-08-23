@@ -198,6 +198,14 @@ pub struct PluginOffer {
     /// The host the sign-in and every later call goes to, so an operator can
     /// see where their account is being handed to before they click.
     pub endpoint: &'static str,
+    /// Whether this one's credential is the operator's Guaca account, and
+    /// therefore whether there is an identity to choose before connecting.
+    ///
+    /// Reported rather than inferred from the kind in the webview, for the
+    /// reason the rest of this struct is: the runtime is what decides, and a
+    /// second copy of that decision in the front end is a second place for it
+    /// to be wrong.
+    pub account_backed: bool,
 }
 
 pub fn catalogue() -> Vec<PluginOffer> {
@@ -209,6 +217,7 @@ pub fn catalogue() -> Vec<PluginOffer> {
             blurb: kind.blurb(),
             docs: kind.docs(),
             endpoint: kind.endpoint(),
+            account_backed: kind.account_backed(),
         })
         .collect()
 }

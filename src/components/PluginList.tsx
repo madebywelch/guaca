@@ -173,6 +173,10 @@ export function PluginList({ groupId, crew }: Props) {
   // which is why a failure here is swallowed rather than surfaced: it means
   // there is nothing to choose between, not that the panel is broken.
   const [connections, setConnections] = useState<AccountConnection[]>([]);
+  // Which identity the operator picked for a plugin that is not connected yet,
+  // keyed by kind. Only ever holds a pre-connect choice: once connected, the
+  // stored row is what the picker reads, because that is what a turn will use.
+  const [picked, setPicked] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
@@ -225,6 +229,11 @@ export function PluginList({ groupId, crew }: Props) {
         const chosen = held?.access.mode === "chosen" ? held.access.agents : [];
         // Two Google accounts are two grants, and a crew uses one of them.
         const mine = connections.filter((connection) => connection.provider === offer.kind);
+        // What this row is bound to, or about to be. A connected plugin reads
+        // its stored row, because that is what a turn actually uses; one that
+        // is not connected reads whatever the operator picked, defaulting to
+        // the first.
+        const using = held ? held.connection || mine[0]?.id : (picked[offer.kind] ?? mine[0]?.id);
 
         return (
           <div className="access__item" key={offer.kind}>
@@ -260,11 +269,11 @@ export function PluginList({ groupId, crew }: Props) {
                   disabled={busy !== null}
                   onClick={() =>
                     void run(offer.kind, () =>
-                      // The first identity when there is one, so the common
-                      // case is still one click. With none, this connects
-                      // against the account's default and the refusal from Rust
-                      // is what says an account is needed.
-                      api.connectPlugin(groupId, offer.kind, mine[0]?.id),
+                      // What the picker above says, which defaults to the first
+                      // identity. With none, this connects against the account's
+                      // default and the refusal from Rust is what says an
+                      // account is needed.
+                      api.connectPlugin(groupId, offer.kind, using),
                     )
                   }
                 >
@@ -273,44 +282,84 @@ export function PluginList({ groupId, crew }: Props) {
               )}
             </div>
 
+            {/* Which of the account's identities this row uses.
+                Shown whether or not the plugin is connected, because choosing
+                is part of connecting: taking the first silently is how a crew
+                ends up on the wrong mailbox with nothing on screen saying so.
+                Only for a plugin whose credential is the account; the others
+                sign in per group and their grant names its own identity. */}
+            {offer.accountBacked &&
+              (mine.length === 0 ? (
+                <div className="access__empty">
+                  <p className="field__hint">
+                    No {offer.name} account is authorized on your Guaca account yet. Authorize one,
+                    then connect it here.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--small"
+                    onClick={() => void openExternal("https://guaca.bot/app")}
+                  >
+                    Authorize a {offer.name} account
+                  </button>
+                </div>
+              ) : mine.length === 1 ? (
+                // One authorized account is not a decision, so this says which
+                // it is rather than offering a control that cannot do anything.
+                // It is still said out loud: a crew acting as somebody's mail
+                // should never leave you guessing whose.
+                <p className="field__hint">
+                  Acting as{" "}
+                  {mine.find((connection) => connection.id === using)?.label ?? mine[0]?.label}.
+                </p>
+              ) : (
+                <label className="field">
+                  <span className="field__label">Account</span>
+                  <select
+                    className="input"
+                    value={using ?? ""}
+                    disabled={busy !== null}
+                    onChange={(event) => {
+                      const chosen = event.target.value;
+                      if (!held) {
+                        // Nothing to write yet: remembered until Connect.
+                        setPicked((was) => ({ ...was, [offer.kind]: chosen }));
+                        return;
+                      }
+                      // Connected, so this moves the crew. Its own command
+                      // rather than a reconnect, which would replace the row
+                      // and lose the per-tool switches.
+                      void run(offer.kind, () =>
+                        api.setPluginConnection(groupId, offer.kind, chosen),
+                      );
+                    }}
+                  >
+                    {mine.map((connection) => (
+                      <option key={connection.id} value={connection.id}>
+                        {connection.label}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="field__hint">
+                    Which {offer.name} account this crew acts as.{" "}
+                    {held
+                      ? "Its tools are re-read when you change it, because two accounts do not always authorize the same things."
+                      : "Pick before connecting; you can change it afterwards."}
+                  </span>
+                </label>
+              ))}
+
             {held ? (
               <>
                 <p className="field__hint">
                   {offering(held.tools)}, {offeredTo(held.access, crew)}.
+                  {/* Blank for an account-backed plugin: whose account it is
+                      is the Account line above, and a server's own name is not
+                      an account. */}
                   {held.account && ` Signed in as ${held.account}.`}
                   {!held.signedIn &&
                     " This server asked for no sign-in, so nothing was authorised."}
                 </p>
-
-                {/* Which of the account's identities this crew uses.
-                    Shown only when there is a choice to make: one authorized
-                    Google is not a decision, and a select with a single option
-                    is a control that cannot do anything. */}
-                {mine.length > 1 && (
-                  <label className="field">
-                    <span className="field__label">Account</span>
-                    <select
-                      className="input"
-                      value={held.connection || mine[0]?.id || ""}
-                      disabled={busy !== null}
-                      onChange={(event) =>
-                        void run(offer.kind, () =>
-                          api.setPluginConnection(groupId, offer.kind, event.target.value),
-                        )
-                      }
-                    >
-                      {mine.map((connection) => (
-                        <option key={connection.id} value={connection.id}>
-                          {connection.label}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="field__hint">
-                      Which {offer.name} account this crew acts as. Its tools are re-read when you
-                      change it, because two accounts do not always authorize the same things.
-                    </span>
-                  </label>
-                )}
 
                 {/* Two buttons rather than a list with an "all" entry at the
                     top: every agent is a standing answer that covers whoever
