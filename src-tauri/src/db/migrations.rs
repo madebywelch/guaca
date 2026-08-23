@@ -845,6 +845,63 @@ CREATE TABLE plugin_denied_tools (
 ALTER TABLE plugins ADD COLUMN connection TEXT NOT NULL DEFAULT '';
 "#,
     ),
+    (
+        31,
+        r#"
+-- A tool was on or off for the whole crew, and that is one answer short. Two
+-- agents share a plugin and want different halves of it: the one that triages
+-- the inbox reads and searches, and the one that answers it sends. Under the
+-- old shape the operator could give both of them everything, or take sending
+-- away from both, and there was nothing in between.
+--
+-- So a tool takes the same two-state answer a plugin already takes, one level
+-- down. 'everyone' is every agent the plugin itself reaches; 'chosen' is the
+-- named ones and nobody else, and the empty list is a real state — it is what
+-- the old table said, and it is where an operator stands for the second
+-- between narrowing a tool and ticking the first name.
+--
+-- The absence of a row is still the permission. A tool nobody has touched is
+-- on for whoever the plugin is on for, which is what every plugin connected
+-- before either control existed does and what a tool the vendor ships next
+-- month does. An allow-list over tools would switch that new tool off with
+-- nothing on screen saying a decision had been taken; an allow-list over
+-- *agents within a narrowed tool* is the opposite case and the right way
+-- round, because an agent hired next week must not inherit the one capability
+-- the operator went out of their way to fence off.
+CREATE TABLE plugin_tool_access (
+    plugin_id TEXT NOT NULL REFERENCES plugins(id),
+    tool      TEXT NOT NULL,
+    -- 'everyone' or 'chosen'. Compared, never parsed: see ACCESS_EVERYONE.
+    access    TEXT NOT NULL,
+    PRIMARY KEY (plugin_id, tool)
+);
+
+-- The named agents, per tool. Only ever populated while that tool's `access`
+-- is 'chosen', because a write replaces the whole set.
+--
+-- No ON DELETE CASCADE, for the reason `plugin_agents` has none: foreign keys
+-- are off while migrations run, so the deletes are written out at every call
+-- site instead.
+CREATE TABLE plugin_tool_agents (
+    plugin_id TEXT NOT NULL REFERENCES plugins(id),
+    tool      TEXT NOT NULL,
+    agent_id  TEXT NOT NULL REFERENCES agents(id),
+    PRIMARY KEY (plugin_id, tool, agent_id)
+);
+
+-- Retiring an agent takes its permissions with it, and that read is by agent.
+CREATE INDEX plugin_tool_agents_agent ON plugin_tool_agents (agent_id);
+
+-- Every refusal the old table held becomes a tool narrowed to nobody, which is
+-- the same decision written in the new shape: switched off for the crew, and
+-- one tick away from being switched on for one agent. Nothing an operator
+-- decided yesterday changes because this migration ran.
+INSERT INTO plugin_tool_access (plugin_id, tool, access)
+     SELECT plugin_id, tool, 'chosen' FROM plugin_denied_tools;
+
+DROP TABLE plugin_denied_tools;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1071,9 +1128,49 @@ mod tests {
         run(&mut conn).unwrap();
 
         let off: i64 = conn
-            .query_row("SELECT count(*) FROM plugin_denied_tools", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM plugin_tool_access", [], |row| row.get(0))
             .unwrap();
         assert_eq!(off, 0, "a migration that switched anything off would break a working crew");
+    }
+
+    #[test]
+    fn a_tool_switched_off_before_agents_could_be_named_stays_off_for_all_of_them() {
+        // The other direction, and the one that would be silent. A refusal in
+        // the old table is a tool the operator switched off for the crew, which
+        // in the new shape is a tool narrowed to nobody. Dropped, or read as
+        // 'everyone', the migration hands `drop_project` back to every agent in
+        // the crew at the moment the file is opened by a newer build.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 31) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plugin_denied_tools (plugin_id,tool) VALUES ('p1','drop_project')",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let access: String = conn
+            .query_row(
+                "SELECT access FROM plugin_tool_access WHERE plugin_id='p1' AND tool='drop_project'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(access, "chosen", "a refusal is a tool narrowed to nobody");
+        let named: i64 = conn
+            .query_row("SELECT count(*) FROM plugin_tool_agents", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(named, 0, "nobody is nobody: a name here would hand the tool to somebody");
     }
 
     #[test]

@@ -67,6 +67,13 @@ pub enum PluginError {
     )]
     ToolDenied { label: &'static str, tool: String },
     #[error(
+        "{label} is yours, but its `{tool}` is not: the operator chose which agents may call that \
+         one. A peer has it — your roster says who — so hand that part over. Use another of \
+         {label}'s tools if one will do, or ask the operator to add you to `{tool}` in the \
+         group's Plugins settings. Nothing you can do from here will add you."
+    )]
+    ToolNotChosen { label: &'static str, tool: String },
+    #[error(
         "{label}'s sign-in is no longer accepted, and renewing it did not work. Ask the operator \
          to connect it again in the group's Plugins settings."
     )]
@@ -241,6 +248,9 @@ pub async fn call(
         PluginReach::NotChosen => return Err(PluginError::NotChosen { label: kind.label() }),
         PluginReach::ToolDenied => {
             return Err(PluginError::ToolDenied { label: kind.label(), tool: tool.to_string() })
+        }
+        PluginReach::ToolNotChosen => {
+            return Err(PluginError::ToolNotChosen { label: kind.label(), tool: tool.to_string() })
         }
     };
 

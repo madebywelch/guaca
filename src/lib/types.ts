@@ -272,19 +272,27 @@ export interface PluginOffer {
 export type PluginAccess = { mode: "everyone" } | { mode: "chosen"; agents: AgentId[] };
 
 /**
- * One of a connected plugin's tools, and what the operator decided about it.
+ * One of a connected plugin's tools, and who may call it.
  *
  * The description and not the schema: an operator deciding whether the crew may
  * call `delete_customer` needs the sentence the vendor wrote about it and has
- * no use for the shape of its arguments. `allowed` is true unless it was
- * switched off, which is the way round the store keeps it too, so a tool a
- * vendor ships next month arrives switched on rather than invisible.
+ * no use for the shape of its arguments.
+ *
+ * `access` is the same answer the plugin itself takes, one level down, and it
+ * is `everyone` until somebody says otherwise — what the store writes down is
+ * the narrowing, so a tool a vendor ships next month arrives on rather than
+ * invisible. `chosen` with no agents is a tool switched off for the crew, which
+ * is the only state the old two-way switch could express.
+ *
+ * The two compose rather than overlap. The plugin's answer is who may spend the
+ * sign-in; this one is who may do that particular thing with it. Two agents on
+ * one inbox where one reads and the other sends needs both.
  */
 export interface PluginToolCard {
   /** The server's own name for it. Prefixed with the plugin, a model calls it. */
   name: string;
   description: string;
-  allowed: boolean;
+  access: PluginAccess;
 }
 
 /**

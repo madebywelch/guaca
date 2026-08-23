@@ -17,7 +17,7 @@ const connectPlugin =
   vi.fn<(groupId: string, kind: string, connection?: string) => Promise<Plugin>>();
 const disconnectPlugin = vi.fn();
 const setPluginAccess = vi.fn<(id: string, access: PluginAccess) => Promise<Plugin>>();
-const setPluginTool = vi.fn<(id: string, tool: string, allowed: boolean) => Promise<Plugin>>();
+const setPluginTool = vi.fn<(id: string, tool: string, access: PluginAccess) => Promise<Plugin>>();
 const openExternal = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
@@ -31,7 +31,8 @@ vi.mock("../lib/ipc", () => ({
       setPluginConnection(groupId, kind, connection),
     disconnectPlugin: (id: string) => disconnectPlugin(id),
     setPluginAccess: (id: string, access: PluginAccess) => setPluginAccess(id, access),
-    setPluginTool: (id: string, tool: string, allowed: boolean) => setPluginTool(id, tool, allowed),
+    setPluginTool: (id: string, tool: string, access: PluginAccess) =>
+      setPluginTool(id, tool, access),
   },
   openExternal: (url: string) => openExternal(url),
 }));
@@ -70,10 +71,13 @@ const OFFERS: PluginOffer[] = [
   },
 ];
 
-/** One tool as the server published it, switched on unless said otherwise. */
-function tool(name: string, allowed = true): PluginToolCard {
-  return { name, description: `Runs ${name}.`, allowed };
+/** One tool as the server published it, for whoever the plugin is for. */
+function tool(name: string, access: PluginAccess = { mode: "everyone" }): PluginToolCard {
+  return { name, description: `Runs ${name}.`, access };
 }
+
+/** The one state the old two-way switch could express: off for the crew. */
+const NOBODY: PluginAccess = { mode: "chosen", agents: [] };
 
 function plugin(over: Partial<Plugin> = {}): Plugin {
   return {
@@ -281,42 +285,138 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText("Show all 2")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Deny run_sql" })).toBe(null);
+    expect(screen.queryByRole("button", { name: "Only chosen agents: run_sql" })).toBe(null);
 
     fireEvent.click(screen.getByText("Show all 2"));
     expect(screen.getByText("run_sql")).toBeTruthy();
     // The vendor's own sentence, because `execute` and `create_refund` are not
     // decisions anybody can make off the name alone.
     expect(screen.getByText("Runs run_sql.")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Allow run_sql" }).getAttribute("aria-pressed")).toBe(
-      "true",
-    );
+    expect(
+      screen.getByRole("button", { name: "Every agent: run_sql" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("says nothing per tool while a tool is the default", async () => {
+    // Forty rows each repeating "offered to every agent in this group" is the
+    // default said forty times, and it buries the one row that is not it.
+    groupPlugins.mockResolvedValue([plugin()]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 2"));
+    expect(screen.queryByRole("button", { name: "Revenue: run_sql" })).toBe(null);
   });
 
   it("switches one tool off, and back on again", async () => {
-    const off = plugin({ tools: [tool("run_sql", false), tool("create_branch")] });
+    // Narrowing to nobody is what off is now, and it is still one click. The
+    // agents underneath are what the same click opens up.
+    const off = plugin({ tools: [tool("run_sql", NOBODY), tool("create_branch")] });
     groupPlugins.mockResolvedValueOnce([plugin()]);
     groupPlugins.mockResolvedValue([off]);
     setPluginTool.mockResolvedValue(off);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
     fireEvent.click(await screen.findByText("Show all 2"));
-    fireEvent.click(screen.getByRole("button", { name: "Deny run_sql" }));
+    fireEvent.click(screen.getByRole("button", { name: "Only chosen agents: run_sql" }));
 
     // The tool by name and the answer it should have, never a toggle: two
     // panels open on one group cannot swap a decision between them.
-    await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", false));
+    await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", NOBODY));
     // And the row draws what came back, not what was clicked.
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Deny run_sql" }).getAttribute("aria-pressed"),
+        screen
+          .getByRole("button", { name: "Only chosen agents: run_sql" })
+          .getAttribute("aria-pressed"),
       ).toBe("true"),
     );
     expect(screen.getByText(/1 switched off/)).toBeTruthy();
+    expect(screen.getByText(/nobody in this group can call it/)).toBeTruthy();
 
     setPluginTool.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Allow run_sql" }));
-    await waitFor(() => expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", true));
+    fireEvent.click(screen.getByRole("button", { name: "Every agent: run_sql" }));
+    await waitFor(() =>
+      expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", { mode: "everyone" }),
+    );
+  });
+
+  it("gives two agents on one plugin different tools", async () => {
+    // The thing the crew-wide switch could not say. One sign-in, one inbox,
+    // and the agent that triages it reads while the agent that answers it
+    // sends.
+    const split = plugin({
+      tools: [
+        tool("run_sql", { mode: "chosen", agents: ["a1"] }),
+        tool("create_branch", { mode: "chosen", agents: ["a2"] }),
+      ],
+    });
+    groupPlugins.mockResolvedValue([split]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 2"));
+
+    expect(screen.getByText("called by Revenue")).toBeTruthy();
+    expect(screen.getByText("called by Scribe")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Revenue: run_sql" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen.getByRole("button", { name: "Scribe: run_sql" }).getAttribute("aria-pressed"),
+    ).toBe("false");
+    expect(screen.getByText(/2 for chosen agents/)).toBeTruthy();
+  });
+
+  it("adds an agent to a narrowed tool, and takes one back out", async () => {
+    const both = plugin({
+      tools: [tool("run_sql", { mode: "chosen", agents: ["a1", "a2"] }), tool("create_branch")],
+    });
+    groupPlugins.mockResolvedValueOnce([plugin({ tools: [tool("run_sql", NOBODY)] })]);
+    groupPlugins.mockResolvedValue([both]);
+    setPluginTool.mockResolvedValue(both);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 1"));
+    fireEvent.click(screen.getByRole("button", { name: "Revenue: run_sql" }));
+    await waitFor(() =>
+      expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", {
+        mode: "chosen",
+        agents: ["a1"],
+      }),
+    );
+
+    // And the whole set every time, never a difference, for the reason the
+    // plugin above it sends the whole set: a merge on the far side would make
+    // unticking impossible to express.
+    setPluginTool.mockClear();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Scribe: run_sql" }).getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Revenue: run_sql" }));
+    await waitFor(() =>
+      expect(setPluginTool).toHaveBeenCalledWith("p1", "run_sql", {
+        mode: "chosen",
+        agents: ["a2"],
+      }),
+    );
+  });
+
+  it("says when a tool names an agent the plugin itself does not reach", async () => {
+    // The two controls are set in either order, so this is a state an operator
+    // passes through rather than a mistake. Drawing the tool as Scribe's when
+    // Scribe cannot spend the sign-in would name an agent that gets refused,
+    // which is the one thing a permission panel must not do.
+    groupPlugins.mockResolvedValue([
+      plugin({
+        access: { mode: "chosen", agents: ["a1"] },
+        tools: [tool("run_sql", { mode: "chosen", agents: ["a2"] })],
+      }),
+    ]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Show all 1"));
+    expect(screen.getByText(/nobody can call it: Scribe is not on this plugin/)).toBeTruthy();
   });
 
   it("says when a connected plugin has nothing left switched on", async () => {
@@ -324,7 +424,7 @@ describe("PluginList", () => {
     // plugin that is signed in and can call nothing looks identical to a
     // working one until something says so.
     groupPlugins.mockResolvedValue([
-      plugin({ tools: [tool("run_sql", false), tool("create_branch", false)] }),
+      plugin({ tools: [tool("run_sql", NOBODY), tool("create_branch", NOBODY)] }),
     ]);
     render(<PluginList groupId={GROUP} crew={CREW} />);
 
