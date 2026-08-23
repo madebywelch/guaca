@@ -1,12 +1,20 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Plugin, PluginAccess, PluginOffer, PluginToolCard } from "../lib/types";
+import type {
+  AccountConnectors,
+  AgentCard,
+  Plugin,
+  PluginAccess,
+  PluginOffer,
+  PluginToolCard,
+} from "../lib/types";
 import { PluginList } from "./PluginList";
 
 const pluginCatalogue = vi.fn<() => Promise<PluginOffer[]>>();
 const groupPlugins = vi.fn<() => Promise<Plugin[]>>();
-const connectPlugin = vi.fn<(groupId: string, kind: string) => Promise<Plugin>>();
+const connectPlugin =
+  vi.fn<(groupId: string, kind: string, connection?: string) => Promise<Plugin>>();
 const disconnectPlugin = vi.fn();
 const setPluginAccess = vi.fn<(id: string, access: PluginAccess) => Promise<Plugin>>();
 const setPluginTool = vi.fn<(id: string, tool: string, allowed: boolean) => Promise<Plugin>>();
@@ -16,13 +24,31 @@ vi.mock("../lib/ipc", () => ({
   api: {
     pluginCatalogue: () => pluginCatalogue(),
     groupPlugins: () => groupPlugins(),
-    connectPlugin: (groupId: string, kind: string) => connectPlugin(groupId, kind),
+    accountConnectors: () => accountConnectors(),
+    connectPlugin: (groupId: string, kind: string, connection?: string) =>
+      connectPlugin(groupId, kind, connection),
+    setPluginConnection: (groupId: string, kind: string, connection: string) =>
+      setPluginConnection(groupId, kind, connection),
     disconnectPlugin: (id: string) => disconnectPlugin(id),
     setPluginAccess: (id: string, access: PluginAccess) => setPluginAccess(id, access),
     setPluginTool: (id: string, tool: string, allowed: boolean) => setPluginTool(id, tool, allowed),
   },
   openExternal: (url: string) => openExternal(url),
 }));
+
+/**
+ * The account's authorized identities.
+ *
+ * Rejecting by default, which is what an install with no Guaca account does.
+ * The panel has to draw anyway: the account is optional and a plugin list that
+ * waited on it would be blank for everybody who never signed in.
+ */
+const accountConnectors = vi.fn<() => Promise<AccountConnectors>>(async () => {
+  throw new Error("not signed in");
+});
+const setPluginConnection = vi.fn<
+  (groupId: string, kind: string, connection: string) => Promise<Plugin>
+>(async () => plugin());
 
 const GROUP = "00000000-0000-4000-8000-000000000001";
 
@@ -57,6 +83,7 @@ function plugin(over: Partial<Plugin> = {}): Plugin {
     account: "",
     tools: [tool("run_sql"), tool("create_branch")],
     access: { mode: "everyone" },
+    connection: "",
     signedIn: true,
     connectedAt: 0,
     ...over,
@@ -124,7 +151,9 @@ describe("PluginList", () => {
     render(<PluginList groupId={GROUP} crew={CREW} />);
     fireEvent.click((await screen.findAllByText("Connect"))[0]!);
 
-    await waitFor(() => expect(connectPlugin).toHaveBeenCalledWith(GROUP, "neon"));
+    // No identity named: Neon signs in per group, and an account with none
+    // connects against the account's default.
+    await waitFor(() => expect(connectPlugin).toHaveBeenCalledWith(GROUP, "neon", undefined));
     expect(screen.getByText("Waiting for your browser…")).toBeTruthy();
 
     groupPlugins.mockResolvedValue([plugin()]);
@@ -327,5 +356,96 @@ describe("PluginList", () => {
     fireEvent.click((await screen.findAllByText("Connect"))[0]!);
     expect(await screen.findByText(/access_denied/)).toBeTruthy();
     expect(screen.getAllByText("Connect").length).toBe(2);
+  });
+});
+
+/**
+ * Two Google accounts on one Guaca account.
+ *
+ * The case this whole column exists for: a work Google and a personal one are
+ * two grants, and two crews have to be able to use one each. Before this, both
+ * reached whichever the service returned first.
+ */
+describe("choosing which account a crew uses", () => {
+  const GOOGLE_OFFER: PluginOffer = {
+    kind: "google",
+    name: "Google",
+    blurb: "Your Gmail, Calendar and Drive.",
+    docs: "https://guaca.bot/app",
+    endpoint: "https://guaca.bot/mcp",
+  };
+
+  const two: AccountConnectors = {
+    email: "robert@example.com",
+    providers: [],
+    connections: [
+      { id: "acct_work", provider: "google", label: "work@example.com", capabilities: ["gmail"] },
+      { id: "acct_home", provider: "google", label: "home@example.com", capabilities: ["drive"] },
+    ],
+  };
+
+  const one: AccountConnectors = { ...two, connections: [two.connections[0]!] };
+
+  beforeEach(() => {
+    pluginCatalogue.mockResolvedValue([GOOGLE_OFFER]);
+  });
+
+  it("offers no picker when there is only one account to pick", async () => {
+    // A select with a single option is a control that cannot do anything.
+    accountConnectors.mockResolvedValue(one);
+    groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    await waitFor(() => expect(screen.getByText("Google")).toBeTruthy());
+    expect(screen.queryByLabelText(/^Account/)).toBeNull();
+  });
+
+  it("offers a picker showing every authorized identity", async () => {
+    accountConnectors.mockResolvedValue(two);
+    groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    const picker = (await screen.findByLabelText(/^Account/)) as HTMLSelectElement;
+    expect([...picker.options].map((option) => option.textContent)).toEqual([
+      "work@example.com",
+      "home@example.com",
+    ]);
+    expect(picker.value).toBe("acct_work");
+  });
+
+  it("moves the crew to the other account without disconnecting", async () => {
+    // Reconnecting would replace the row and lose the per-tool switches the
+    // operator set, which is why this is its own command.
+    accountConnectors.mockResolvedValue(two);
+    groupPlugins.mockResolvedValue([plugin({ kind: "google", connection: "acct_work" })]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    const picker = await screen.findByLabelText(/^Account/);
+    fireEvent.change(picker, { target: { value: "acct_home" } });
+
+    await waitFor(() =>
+      expect(setPluginConnection).toHaveBeenCalledWith(GROUP, "google", "acct_home"),
+    );
+    expect(disconnectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("connects a fresh crew against the first identity", async () => {
+    accountConnectors.mockResolvedValue(two);
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Connect"));
+    await waitFor(() => expect(connectPlugin).toHaveBeenCalledWith(GROUP, "google", "acct_work"));
+  });
+
+  it("draws the plugin list even when the account cannot be reached", async () => {
+    // The account is optional. A panel that waited on guaca.bot would be blank
+    // for everybody who never signed in.
+    accountConnectors.mockRejectedValue(new Error("not signed in"));
+    groupPlugins.mockResolvedValue([]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText("Google")).toBeTruthy();
+    expect(screen.queryByLabelText(/^Account/)).toBeNull();
   });
 });

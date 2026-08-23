@@ -822,6 +822,29 @@ CREATE TABLE plugin_denied_tools (
 );
 "#,
     ),
+    (
+        30,
+        r#"
+-- Which authorized identity a plugin uses, for the one kind whose sign-in is
+-- the operator's Guaca account rather than its own.
+--
+-- A person can authorize the same provider twice: a work Google and a personal
+-- one are two grants at guaca.bot, with two ids, and revoking one says nothing
+-- about the other. Until now a group had no way to say which it meant, so both
+-- of an operator's crews reached whichever row came back first and the second
+-- account was unreachable.
+--
+-- Empty means unnamed, which is the account's default connection and is what
+-- every plugin connected before this column existed keeps doing. That matters:
+-- an upgrade must not silently repoint a working crew at a different mailbox.
+-- The endpoint is derived from it, so a value here is the difference between
+-- `/mcp` and `/mcp/<id>`.
+--
+-- Only meaningful for an account-backed kind. The other five sign in per group
+-- and their grant already names the identity it was issued to.
+ALTER TABLE plugins ADD COLUMN connection TEXT NOT NULL DEFAULT '';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

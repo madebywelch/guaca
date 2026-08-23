@@ -228,11 +228,32 @@ pub struct Provider {
 /// when the operator authorizes something in a browser rather than when this
 /// app does anything, and a stale local copy would be a list of capabilities an
 /// agent is told it has and does not.
+/// One identity the operator has authorized at a provider.
+///
+/// A person can authorize the same provider twice — a work Google and a
+/// personal one — and each is a separate grant with its own id. A group binds
+/// to one of these, which is what lets two crews use two mailboxes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountConnection {
+    pub id: String,
+    pub provider: String,
+    /// The provider's own name for it, which is how an operator tells two
+    /// apart. An email where the provider says, its subject where it does not.
+    pub label: String,
+    pub capabilities: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Connectors {
     pub email: String,
     pub providers: Vec<Provider>,
+    /// Every authorized identity, newest last. Empty on a service that has none
+    /// and on one too old to report them, which reads the same to a caller:
+    /// there is nothing to choose between.
+    #[serde(default)]
+    pub connections: Vec<AccountConnection>,
 }
 
 /// A signed-in Guaca account, and the file it lives in.
@@ -514,6 +535,8 @@ impl Account {
         struct Body {
             user: User,
             providers: Vec<Provider>,
+            #[serde(default)]
+            connections: Vec<AccountConnection>,
         }
         #[derive(Deserialize)]
         struct User {
@@ -542,7 +565,11 @@ impl Account {
             origin: self.origin.clone(),
             detail: format!("its answer did not parse: {err}"),
         })?;
-        Ok(Connectors { email: parsed.user.email, providers: parsed.providers })
+        Ok(Connectors {
+            email: parsed.user.email,
+            providers: parsed.providers,
+            connections: parsed.connections,
+        })
     }
 
     fn store(&self, stored: Stored) -> Result<Status, AccountError> {

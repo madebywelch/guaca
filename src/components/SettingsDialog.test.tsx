@@ -113,6 +113,9 @@ function linked(over: Partial<AccountStatus> = {}): AccountStatus {
 function held(granted = true): AccountConnectors {
   return {
     email: "robert@example.com",
+    connections: [
+      { id: "acct_1", provider: "google", label: "robert@example.com", capabilities: ["gmail"] },
+    ],
     providers: [
       {
         id: "google",

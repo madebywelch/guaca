@@ -138,8 +138,8 @@ export const api = {
    * one. Resolves only once they have finished there, which can be minutes, so
    * whatever calls this has to show that it is waiting on a person.
    */
-  connectPlugin: (groupId: GroupId, kind: PluginKind) =>
-    invoke<Plugin>("connect_plugin", { groupId, kind }),
+  connectPlugin: (groupId: GroupId, kind: PluginKind, connection?: string) =>
+    invoke<Plugin>("connect_plugin", { groupId, kind, connection: connection ?? null }),
 
   /**
    * Narrows a plugin to named agents, or opens it back up to the crew.
@@ -425,6 +425,16 @@ export const api = {
 
   /** Forgets the sign-in on this machine. */
   signOutAccount: () => invoke<AccountStatus>("sign_out_account"),
+
+  /**
+   * Points a crew's plugin at a different authorized identity.
+   *
+   * Separate from connecting because it is a different act: this moves an
+   * existing row to another mailbox and keeps the per-tool switches, where
+   * reconnecting would replace the row and lose them.
+   */
+  setPluginConnection: (groupId: GroupId, kind: PluginKind, connection: string) =>
+    invoke<Plugin>("set_plugin_connection", { groupId, kind, connection }),
 };
 
 /**
