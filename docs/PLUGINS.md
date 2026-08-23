@@ -4,8 +4,11 @@ A plugin is a server a crew signs in to once. After that, the agents that crew
 chose are offered that server's tools on every turn, and none of them ever holds
 the sign-in.
 
-There are five: Neon, Cloudflare, Linear, Stripe and AgentMail. That is the
-whole list, and it is a decision rather than a starting position.
+There are six: Neon, Cloudflare, Linear, Stripe, AgentMail and Google. That is
+the whole list, and it is a decision rather than a starting position. Five of
+them are the vendor's own server, and every count of "the five" below means
+those; Google is the operator's own account, and *Google is a plugin whose
+sign-in is the account's* is why.
 
 ## Why these, and why the list is short
 
