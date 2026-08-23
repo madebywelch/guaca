@@ -743,6 +743,91 @@ async fn a_model_that_thinks_out_loud_is_watched_without_being_recorded() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_says_what_it_reached_for_before_it_knows_how_it_went() {
+    // The wait this exists for: a turn can spend ten minutes working through
+    // tool results and publish nothing about any of them until it ends. The
+    // operator watching had a pulsing avatar and a line of prose the model
+    // wrote about itself, which is what a turn says it is doing rather than
+    // what it did.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Two of us.".into())
+        } else {
+            Script::Directory
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "who else is here?").unwrap();
+    h.settle(run).await;
+
+    let events = h.sink.snapshot();
+    let stream_id = events
+        .iter()
+        .find_map(|e| match e {
+            UiEvent::StreamStarted { message_id, .. } => Some(*message_id),
+            _ => None,
+        })
+        .expect("a stream should have started");
+
+    // Reported before the call is made, which is the half that matters: a
+    // command can sit for a minute, and a call only reported once it comes back
+    // is silence for exactly as long as the wait it was meant to explain.
+    let started = events
+        .iter()
+        .position(|e| {
+            matches!(e, UiEvent::ToolStarted { message_id, name, .. }
+                if *message_id == stream_id && name == "directory")
+        })
+        .expect("the call should have been reported as it was made");
+    let finished = events
+        .iter()
+        .position(
+            |e| matches!(e, UiEvent::ToolFinished { message_id, .. } if *message_id == stream_id),
+        )
+        .expect("and again when it came back");
+    assert!(started < finished, "the call was reported finished before it was reported started");
+
+    let (
+        UiEvent::ToolStarted { call_id: opened, .. },
+        UiEvent::ToolFinished { call_id: closed, part: watched, .. },
+    ) = (&events[started], &events[finished])
+    else {
+        unreachable!("both were matched above")
+    };
+    // Paired by the provider's own id. Two identical calls in one turn are two
+    // calls, and an outcome filed against the wrong one is a chip that says a
+    // call succeeded when its twin is the one that did.
+    assert_eq!(opened, closed);
+
+    // And what the operator watched land is what the transcript holds: the same
+    // part, not a second reading of it. One function draws the chip from this
+    // value at both ends, so they cannot disagree about a call, and whatever a
+    // call has to say for itself next reaches both of them or neither.
+    let recorded: Vec<_> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 200)
+        .unwrap()
+        .iter()
+        .flat_map(|e| e.parts.clone())
+        .filter(|part| matches!(part, Part::ToolCall { name, .. } if name == "directory"))
+        .collect();
+    assert_eq!(
+        recorded.as_slice(),
+        std::slice::from_ref(watched),
+        "the record must agree with what was drawn"
+    );
+
+    // One call, one record. What was watched happening is the same work as what
+    // the transcript keeps, not a second entry beside it.
+    assert_eq!(
+        events.iter().filter(|e| matches!(e, UiEvent::ToolFinished { .. })).count(),
+        recorded.len()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_thought_is_coalesced_on_the_same_clock_as_the_text() {
     // Reasoning is produced as fast as text and costs the same IPC hop and
     // render. A thinking model streaming its working one token at a time is

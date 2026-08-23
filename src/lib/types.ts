@@ -90,6 +90,13 @@ export type Part =
       detail: DetailField[];
     };
 
+/**
+ * The one part with two lives: drawn as a chip while the turn is making the
+ * call, and again out of the message that records it. Named because the live
+ * half is carried whole by `toolFinished`, so both are built from one value.
+ */
+export type ToolCallPart = Extract<Part, { type: "toolCall" }>;
+
 export type ApprovalId = string;
 
 /** Something an agent may not do without being told it can. */
@@ -546,6 +553,27 @@ export type UiEvent =
    * is read from the stream it names, and it goes when that stream ends.
    */
   | { type: "reasoningDelta"; messageId: MessageId; text: string }
+  /**
+   * A tool call the turn has started, and then what came of it.
+   *
+   * Addressed to the placeholder for the same reason a thought is, and dropped
+   * with it: the record of what a turn did is the message that lands at the end
+   * of it, and these are only what that record looks like while it is still
+   * being made. `callId` is the provider's own, which is what pairs the two.
+   *
+   * The finish carries the whole part rather than the outcome, so the chip
+   * drawn while the turn runs and the chip drawn afterwards are one value read
+   * once: a memory rewrite carries what it overwrote, and nothing outside the
+   * runtime could supply it.
+   */
+  | {
+      type: "toolStarted";
+      messageId: MessageId;
+      callId: string;
+      name: string;
+      arguments: unknown;
+    }
+  | { type: "toolFinished"; messageId: MessageId; callId: string; part: ToolCallPart }
   | { type: "streamEnded"; messageId: MessageId; channelId: AgentId }
   | { type: "activityChanged"; agentId: AgentId; activity: Activity }
   | { type: "channelsCleared"; agents: AgentId[] }

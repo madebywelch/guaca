@@ -2386,18 +2386,76 @@ button {
 }
 
 /* ==========================================================================
-   Still working
+   The turn that is still going
 
    Above the box you would type into, because that is where an operator waits.
-   The name is revealed on hover: whose channel this is has been established
-   several times over by the time you reach the bottom of it, so the resting
-   state is one moving character.
+   Three layers, and the operator asked to see at most one of them: the working
+   the model has published, the calls this turn has already made, and the line
+   saying what it is doing now.
 
-   A thought is not. When the model publishes what it is working through, that
-   line is the reason to look here at all, so it is shown without being asked
-   for. One line, clipped at the pane: it is replaced several times a second
-   and wrapping it would push the composer around the screen.
+   Only the line is always there. The name on it is revealed on hover, because
+   whose channel this is has been established several times over by the time
+   you reach the bottom of it, so the resting state is one moving character.
+
+   A thought is not, and neither is a call that has not come back. Both are the
+   reason to look here at all, so both are shown without being asked for. One
+   line, clipped at the pane: it is replaced several times a second and
+   wrapping it would push the composer around the screen.
    ========================================================================== */
+
+.turn {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: none;
+}
+
+/* The same chips the transcript will draw, indented to the line below rather
+   than to a message body: there is no gutter down here for them to line up
+   under. Capped and scrolled, because opening one must not push the
+   conversation off the top of the pane. */
+.turn__trail {
+  max-height: 12rem;
+  overflow-y: auto;
+  flex: none;
+}
+
+.turn__trail .trail__chips {
+  padding-left: 2.3rem;
+}
+
+/* The model's working, in full, when it has been asked for. Bounded so the
+   transcript keeps most of the pane: this is a thing to glance into, and the
+   answer it is on the way to is what the operator is actually waiting for. */
+.thought {
+  max-height: 13rem;
+  overflow-y: auto;
+  flex: none;
+  margin: 0 1.15rem 0.4rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+/* As the model wrote it. Wrapped rather than scrolled sideways, and not
+   monospace: this is prose, and setting it as machine text would say it is a
+   record of something that happened rather than one long thought. */
+.thought__text {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.thought__empty {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--faint);
+}
 
 .working {
   display: flex;
@@ -2412,22 +2470,48 @@ button {
 }
 
 .working__label {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   font-size: 0.8rem;
   color: var(--muted);
   opacity: 0;
   transform: translateX(-0.3rem);
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
+/* Reached for, so it can be clicked. Hidden it must not be: a control at
+   opacity zero that still swallows the pointer is a dead patch of the window
+   nobody can account for. */
 .working:hover .working__label,
 .working[data-thinking] .working__label {
   opacity: 1;
   transform: none;
+  pointer-events: auto;
+}
+
+/* The label is a button wherever there is working to open, and nothing about
+   it says so until it is reached for. It is a line of chrome that happens to
+   be clickable; drawn as a button it would be a second control competing with
+   the one beside it that costs money to ignore. */
+.working__label--open {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.working__label--open:hover .working__topic,
+.working__label--open:hover .working__thought {
+  color: var(--text);
 }
 
 /* Always visible, unlike the label beside it. A control that appears on hover
@@ -2444,6 +2528,50 @@ button {
 .working[data-thinking] .working__label {
   font-style: italic;
   opacity: 0.75;
+}
+
+/* The model's own section heading. It changes every half minute rather than
+   every frame, which is what makes it the part of the line worth setting in a
+   colour that asks to be read. */
+.working__topic {
+  flex: none;
+  color: var(--text);
+}
+
+/* The sentence under it, which is the part that moves. Clipped rather than
+   wrapped: a thought long enough to take two lines would push the composer
+   around the screen every time the model finished one. */
+.working__thought {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Only where there is a heading to be divided from. The two are one line of
+   the same prose, and without a mark between them a heading reads as the first
+   few words of the sentence after it. */
+.working__topic + .working__thought::before {
+  content: "· ";
+  color: var(--faint);
+}
+
+/* What the turn is waiting on. Upright where a thought is italic, because this
+   is the one thing on the line that is not the model talking about itself: it
+   is the runtime saying which machine has not answered yet. */
+.working__now {
+  flex: none;
+  font-style: normal;
+  color: var(--text);
+}
+
+/* How long it has been waiting. Machine text, because it is a number that
+   changes every second and a proportional font makes it jitter as it does. */
+.working__for {
+  flex: none;
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.68rem;
+  color: var(--faint);
 }
 
 /* The pulse is what carries "still going" when the label is hidden. It rides

@@ -109,6 +109,30 @@ be, its portrait and name are at the top of the pane, and the rows this replaced
 put that name in front of every line. Same argument as *A channel names nobody*
 above, applied to the last place it had not reached.
 
+**The same chips are drawn while the turn is still making them**, above the
+composer rather than in the transcript, from `trail` in the store rather than
+from a message. Same rules, same file, same fold, and the same value: the
+runtime reports a finished call as the whole part the message will carry, so a
+memory rewrite opens as the diff above while the turn is still running and not
+only once it has ended. A ten-minute turn is otherwise ten minutes of a
+pulsing avatar and a line of prose, and the transcript cannot help, because the
+record it draws this from does not exist until the turn ends. It goes when the
+turn does. *A turn's own work is watched while it happens* in
+`docs/ARCHITECTURE.md` is why it is safe for it to be there at all.
+
+**A call that has not come back is not a chip.** It has no outcome to draw one
+from, and it is what the line below the chips is for: `Running a command · 1m
+14s`, in the present tense, because a command still running is not a command
+that ran. That line is the one place `describe`'s vocabulary is not reused, and
+`callInFlight` is deliberately coarser than it. What is worth knowing while a
+call is in flight is which machine has not answered yet.
+
+It has to have been in flight for a second first. A `directory` lookup answers
+in milliseconds, and a line that flashed its name for each of them would put
+back the flicker the sentence rule in `lib/reasoning.ts` takes out. What the
+line is for is the wait an operator notices, so a call has to become one before
+it earns the line.
+
 ## A transcript is a log, and says one thing out loud
 
 Waiting for a reply is the shape of using this app, and a reader who cannot see

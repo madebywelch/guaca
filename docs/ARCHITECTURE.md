@@ -385,11 +385,11 @@ is what the operator's "Try again" sends again, as a new run at the original hop
 
 ## A thought is shown and never kept
 
-A turn can spend a minute working through tool results before it writes a word.
-For that minute the operator had a pulsing avatar and the sentence "Manager is
-working", which says a turn is alive and nothing about what it is doing. Where
-the provider publishes the model's own working, that is what the line above the
-composer now shows: the line it is on, replaced as it writes.
+A turn can spend ten minutes working through tool results before it writes a
+word. For that time the operator had a pulsing avatar and the sentence "Manager
+is working", which says a turn is alive and nothing about what it is doing.
+Where the provider publishes the model's own working, that is what the line
+above the composer shows.
 
 Three things keep it from becoming a fourth kind of message.
 
@@ -423,9 +423,62 @@ Three things keep it from becoming a fourth kind of message.
   with that subscription any higher, a single token re-rendered every message in
   the transcript. `ChannelView.perf.test.tsx` counts both.
 
-Only the newest line is kept, because there is nowhere to scroll back to. Models
-that publish nothing (Anthropic's, over OpenRouter, unless thinking is asked for)
-leave the line exactly as it was.
+**The whole turn is held, and one line of it is drawn.** Those are separate
+decisions and the line used to be both. Holding 240 characters made the tail the
+only thing there was, which is fine for a wait of thirty seconds and no use at
+all for one of ten minutes: the question stops being "is it alive" and becomes
+"is it doing something sensible", and that cannot be answered a sentence at a
+time. So the slice holds the turn, the line opens into it, and none of that
+touches the three rules above: the same slice, dropped by the same event, and
+nothing about it reaches a channel, a prompt or a hash.
+
+**And the line drawn is not the tail.** A tail replaced every sixteen
+milliseconds is a flicker that says a turn is alive, which is what the pulse
+already said. `lib/reasoning.ts` draws two things instead, both the model's own:
+the section heading it is working under, which changes every half minute, and
+the last sentence it *finished*, which is the newest thing anybody can actually
+read. Waiting for the full stop costs a second or two of staleness and is the
+difference between a line and a blur. Models that publish nothing (Anthropic's,
+over OpenRouter, unless thinking is asked for) leave it exactly as it was.
+
+## A turn's own work is watched while it happens, on the same terms
+
+Reasoning is what a model says it is doing. A tool call is what it did, and for
+most of a long turn it is the only thing happening at all: the round limit is
+24, a browsing turn spends most of it, and none of it reached the operator until
+the turn ended and the whole record landed at once. Ten minutes of a browsing
+turn and ten minutes of a hung one looked identical, and the line of prose above
+the composer was frozen mid-thought in both.
+
+So `execute_tool` reports each call twice, on exactly the terms a thought is
+reported on.
+
+- **`ToolStarted` goes out before the call, not after it.** That ordering is the
+  whole feature. A `run_command` can sit for a minute and a page load for
+  several seconds, and a call only reported once it comes back is silence for
+  precisely as long as the wait it was meant to explain. It is also why the
+  working line prefers it over the thinking: while a machine is being waited on
+  the model is not thinking, and its last thought is stale.
+- **`ToolFinished` carries the whole `Part::ToolCall`**, not the outcome, so
+  what the operator watches accumulate during the turn is the same chip, drawn
+  by the same function in `lib/trail.ts` over the same value, that the
+  transcript holds afterwards. The outcome alone was tried and is the shape of
+  simplification that reads as tidier and is a divergence waiting to happen: a
+  memory rewrite carries what it overwrote, nothing outside the runtime can
+  supply it, and a live chip assembled from the fields somebody thought to list
+  had quietly stopped drawing the diff the recorded one drew. Whatever a call
+  has to say for itself next reaches both ends or neither.
+- **Both are addressed to the placeholder**, so the live record is filed under
+  the agent that opened the stream and dropped when it ends. A retry that
+  reopens under a new id therefore starts the live trail again, exactly as it
+  discards the half-formed thought, and for the plainer reason that this is
+  where a turn begins. What was actually done is not lost by that: it is in the
+  message that lands at the end of the turn, which is the record. This is only
+  what that record looks like before it exists.
+
+Nothing new reaches the webview. A call's name and arguments are the model's own
+words and are the same bytes the transcript draws a minute later; a credential's
+value is in neither, for the reason it is in nothing (`docs/MACHINES.md`).
 
 ## Trust is a property of the envelope, and it is restated in words
 
