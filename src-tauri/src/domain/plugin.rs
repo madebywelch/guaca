@@ -106,14 +106,18 @@ impl PluginKind {
     /// `format!("{host}/mcp")` would be a resource the server does not
     /// recognise, and the refusal arrives in the operator's browser.
     ///
-    /// Cloudflare publishes fifteen of these, one per product area. Workers
-    /// bindings is the one that makes things rather than reads about them, and
-    /// offering all fifteen would put a hundred tools in front of a model that
-    /// asked for "Cloudflare".
+    /// Cloudflare publishes two kinds of server, and this is the account-wide
+    /// one. The fifteen `*.mcp.cloudflare.com` hosts are one product area each,
+    /// so picking one is picking which fifteenth of the operator's account the
+    /// crew gets, and picking several is a hundred tool definitions in front of
+    /// a model that asked for "Cloudflare". `mcp.cloudflare.com` is the whole
+    /// API behind `search` and `execute`: the model writes JavaScript against
+    /// the OpenAPI document, Cloudflare runs it, and 2,500 endpoints cost about
+    /// a thousand tokens of context instead of a million.
     pub const fn endpoint(self) -> &'static str {
         match self {
             PluginKind::Neon => "https://mcp.neon.tech/mcp",
-            PluginKind::Cloudflare => "https://bindings.mcp.cloudflare.com/mcp",
+            PluginKind::Cloudflare => "https://mcp.cloudflare.com/mcp",
             PluginKind::Linear => "https://mcp.linear.app/mcp",
             PluginKind::Stripe => "https://mcp.stripe.com",
             PluginKind::Agentmail => "https://mcp.agentmail.to/mcp",
@@ -124,7 +128,7 @@ impl PluginKind {
     pub const fn blurb(self) -> &'static str {
         match self {
             PluginKind::Neon => "Postgres databases: branch one, run SQL, migrate it.",
-            PluginKind::Cloudflare => "Workers and their bindings: KV, R2, D1, Hyperdrive.",
+            PluginKind::Cloudflare => "The whole API: Workers, DNS, R2, D1, Zero Trust.",
             PluginKind::Linear => "Issues and projects: find them, file them, move them on.",
             PluginKind::Stripe => "The live account: payments, customers, invoices, refunds.",
             PluginKind::Agentmail => "Inboxes an agent owns: read a thread, send, reply, forward.",
@@ -135,7 +139,9 @@ impl PluginKind {
     pub const fn docs(self) -> &'static str {
         match self {
             PluginKind::Neon => "https://neon.com/docs/ai/neon-mcp-server",
-            PluginKind::Cloudflare => "https://github.com/cloudflare/mcp-server-cloudflare",
+            PluginKind::Cloudflare => {
+                "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/"
+            }
             PluginKind::Linear => "https://linear.app/docs/mcp",
             PluginKind::Stripe => "https://docs.stripe.com/mcp",
             PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
@@ -261,6 +267,20 @@ mod tests {
             assert!(kind.endpoint().starts_with("https://"), "{}", kind.label());
             assert!(kind.docs().starts_with("https://"), "{}", kind.label());
         }
+    }
+
+    #[test]
+    fn cloudflare_is_the_account_wide_server_and_not_one_product_area() {
+        // A `*.mcp.cloudflare.com` host is one product area of fifteen, so an
+        // operator who connected "Cloudflare" would get a crew that can make a
+        // Worker and cannot see a DNS record, with nothing on the tile saying
+        // so. The apex host is the whole API behind `search` and `execute`.
+        let endpoint = PluginKind::Cloudflare.endpoint();
+        assert_eq!(endpoint, "https://mcp.cloudflare.com/mcp");
+        assert!(
+            !endpoint.contains(".mcp.cloudflare.com"),
+            "a subdomain here is one product area, not the account: {endpoint}"
+        );
     }
 
     #[test]
