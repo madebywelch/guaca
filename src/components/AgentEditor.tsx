@@ -9,9 +9,11 @@ import {
   suggestCharacter,
 } from "../avatars/catalog";
 import { api } from "../lib/ipc";
+import { onOpenRouter } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
 import { GrantList } from "./GrantList";
+import { ModelSuggestions } from "./ModelSuggestions";
 import { SigninList } from "./SigninList";
 
 interface Props {
@@ -84,16 +86,23 @@ export function AgentEditor({ agent, onClose }: Props) {
 
   const patch = (fields: Partial<AgentDraft>) => setDraft((current) => ({ ...current, ...fields }));
 
+  // The field is one string and a card holds a list, so the split is what both
+  // saving and the model suggestions read the skills through.
+  const skills = skillText
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  // Which crew's settings decide how this agent's turns are paid for. The
+  // select below defaults to the first group, so an agent that has not been
+  // given one yet is already in it. Named for the crew rather than the group
+  // because the character picker below binds `group` to something else.
+  const crew = groups.find((entry) => entry.id === draft.groupId) ?? groups[0];
+
   const save = async () => {
     setBusy(true);
     setError(null);
-    const payload: AgentDraft = {
-      ...draft,
-      skills: skillText
-        .split(",")
-        .map((s) => s.trim())
-        .filter(Boolean),
-    };
+    const payload: AgentDraft = { ...draft, skills };
     try {
       if (agent) {
         await api.updateAgent(agent.id, payload);
@@ -246,6 +255,15 @@ export function AgentEditor({ agent, onClose }: Props) {
             Any model slug your endpoint accepts. Agents can each use a different one.
           </span>
         </label>
+
+        <ModelSuggestions
+          name={draft.name}
+          skills={skills}
+          instructions={draft.systemPrompt}
+          model={draft.model}
+          active={onOpenRouter(crew, settings)}
+          onChoose={(model) => patch({ model })}
+        />
 
         <label className="field">
           <span className="field__label">Skills</span>

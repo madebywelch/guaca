@@ -457,6 +457,27 @@ export interface GuardLimits {
  */
 export type Provider = "compatible" | "chatgpt";
 
+/**
+ * One model OpenRouter ranks for a kind of work, as a suggestion beside a model
+ * field.
+ *
+ * Ranked by capability inside the pool of models that use case actually gets
+ * sent, which is not the order the endpoint returns by default: `catalogue.rs`
+ * has the argument. The price is here because that ranking ignores it, and the
+ * most capable model in a pool is regularly the dearest thing in it.
+ */
+export interface RankedModel {
+  /** The slug, which is what the model field holds. */
+  id: string;
+  /** How the vendor writes it for a person. */
+  name: string;
+  contextLength: number;
+  /** Dollars per million prompt tokens. `null` when none was quoted, which is
+   *  not the same as free. */
+  promptPerMillion: number | null;
+  completionPerMillion: number | null;
+}
+
 export interface Settings {
   /** What agents call you. Empty means they say "the operator". */
   operatorName: string;

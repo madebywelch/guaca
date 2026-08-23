@@ -31,6 +31,7 @@ use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::kernel::{Browser, KernelClient, KernelError};
+use crate::llm::catalogue::{Catalogue, CatalogueError, RankedModel};
 use crate::runtime::events::{Activity, UiEvent};
 use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
@@ -49,6 +50,10 @@ pub struct AppState {
     /// The Guaca account, which is optional and which nothing else in the app
     /// depends on. An install that never signs in never reaches the service.
     pub account: Arc<Account>,
+    /// OpenRouter's ranked model list, read while an agent's dialog is open and
+    /// at no other time. No turn, prompt, tool or guard reads it, and an install
+    /// that never opens that dialog never asks for it.
+    pub catalogue: Arc<Catalogue>,
 }
 
 /// A structured error the UI can render as more than a toast.
@@ -187,6 +192,21 @@ impl From<SigninError> for CommandError {
             // in time. Nothing is wrong and nothing needs fixing.
             SigninError::TimedOut => CommandError::new("signinExpired", err.to_string()),
             other => CommandError::new("signin", other.to_string()),
+        }
+    }
+}
+
+impl From<CatalogueError> for CommandError {
+    fn from(err: CatalogueError) -> Self {
+        match err {
+            // Its own kind because it is this app's defect, not OpenRouter's:
+            // the webview asked for a use case the vendor does not rank, so the
+            // two lists have drifted. Nothing an operator can do about it, and
+            // nothing an operator should be shown a network failure for.
+            CatalogueError::Unsupported { .. } | CatalogueError::Withdrawn(_) => {
+                CommandError::new("useCase", err.to_string())
+            }
+            other => CommandError::new("catalogue", other.to_string()),
         }
     }
 }
@@ -1618,6 +1638,23 @@ pub async fn test_connection(
         .probe(&config)
         .await
         .map_err(|err| CommandError::new("inference", err.to_string()))
+}
+
+/// The models OpenRouter sees doing one kind of work, most capable first.
+///
+/// The one command that reads a catalogue rather than this install's own state,
+/// and it is still not the frontend performing network access: the host is a
+/// constant here and the use case is checked against a published set before a
+/// request is spent, so the webview names a use case rather than a URL.
+///
+/// Offered beside an agent's model field, so it is asked for while a dialog is
+/// open and at no other time. Nothing is blocked on it and no turn reads it.
+#[tauri::command]
+pub async fn ranked_models(
+    state: State<'_, AppState>,
+    category: String,
+) -> Reply<Vec<RankedModel>> {
+    Ok(state.catalogue.ranked(&category).await?)
 }
 
 #[cfg(test)]
