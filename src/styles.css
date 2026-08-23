@@ -4854,6 +4854,17 @@ button {
    edited here. A list rather than the field rows above it, because none of it
    is a control: the ticking happens on guaca.bot, where the consent screens
    are. */
+/* The state where a crew has a plugin available and the account behind it has
+   nothing authorized. Said out loud rather than left as a hidden picker: an
+   empty control that quietly does not appear is indistinguishable from a
+   feature that is broken. */
+.access__empty {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  margin-top: 0.6rem;
+}
+
 .settings__list {
   list-style: none;
   margin: 0;
