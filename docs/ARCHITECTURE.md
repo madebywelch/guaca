@@ -475,6 +475,18 @@ reported on.
   where a turn begins. What was actually done is not lost by that: it is in the
   message that lands at the end of the turn, which is the record. This is only
   what that record looks like before it exists.
+- **The text is addressed to the same placeholder, and is joined across rounds
+  the way the message will be.** A model that narrates its work says a sentence
+  before each tool call, and the message that lands puts a blank line between
+  those sentences. The bubble being watched has to put one there too, or every
+  round after the first begins in the middle of the sentence the last one ended
+  with: `…who is here.Two of us.` One constant, `ROUND_BREAK`, is what both the
+  accumulator and the pen write, and the pen writes it in front of the round's
+  first token rather than at the head of the call, so a round that turns out to
+  be tool calls and nothing said leaves no blank line behind it. Which side of
+  the break the round is on comes from what has been *drawn*, not from what has
+  been collected: a retry throws the bubble away and keeps the accumulator, so
+  the two disagree exactly once per recovered turn.
 
 Nothing new reaches the webview. A call's name and arguments are the model's own
 words and are the same bytes the transcript draws a minute later; a credential's
