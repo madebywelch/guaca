@@ -549,6 +549,30 @@ the answer is read back from the `approvals` row. There is no "always allow",
 for the reason `ActOnBehalf` never had one. A standing yes here would be granted
 once, on one page, and would cover every page after it.
 
+**A yes covers the site, for the turn.** The first version asked per press, and
+what that produced in practice was four identical dialogs in a row for one
+Facebook account inside one piece of work. That is not a stricter gate, it is a
+gate the operator has learned to click through, which costs the one thing the
+whole mechanism is buying: a person actually reading the question. So the answer
+is remembered against the *session it was given for*, on the `Reading` that
+already tracks what the turn has taken in.
+
+Two things keep that narrow, and they are the reason it is not a standing yes in
+disguise. `Reading` is built fresh for every turn, so the grant cannot outlive
+the work the operator was watching and nothing about it reaches the `grants`
+table. And `Reading::took_in` drops it the moment the turn takes in a page from
+anywhere else, because what the operator allowed was an agent working inside one
+site: content from off that site is the injection they were never shown, so the
+next press asks again. A screenshot carries no URL, cannot show that the turn
+stayed put, and counts as somewhere else. The same-site walk that this is for,
+`www.facebook.com` to `business.facebook.com`, is one question rather than none,
+and it is decided by `signin::on_domain`, which is `session_for` asked about a
+single domain so that the two cannot disagree about a lookalike.
+
+What the operator is told has to match: the request carries a *What allowing
+covers* field naming the service and the two ways the grant ends, because a
+scope nobody was shown is not a scope anybody consented to.
+
 The rule is a pure function and the asking is not, so the rule can be read and
 tested on its own. Two of its tests exist only to fail a careless version:
 `notgmail.com` must not match a `gmail.com` session, and

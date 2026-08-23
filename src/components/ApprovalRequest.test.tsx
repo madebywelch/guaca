@@ -153,7 +153,7 @@ describe("a request for permission", () => {
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Always allow" })).toBeNull();
-    expect(screen.getByText("This answer covers this one action only.")).toBeTruthy();
+    expect(screen.getByText("Nothing here is remembered after this turn.")).toBeTruthy();
     // And the waiting line says what has not happened, which is not a creation.
     expect(screen.getByText(/Nothing has been sent yet/)).toBeTruthy();
   });

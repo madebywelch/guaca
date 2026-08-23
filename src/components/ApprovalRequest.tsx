@@ -133,11 +133,17 @@ export function ApprovalRequest({ part, agent }: Props) {
           </button>
           {/* The scope of the middle button, said in full. "Always" reads as a
               setting for the workspace, and it is not: it is one agent being
-              let off one question. */}
+              let off one question.
+
+              Nothing to say about scope for the other action, because the
+              runtime says it: a yes to acting in the operator's name can cover
+              the rest of a turn on one site, and only the request knows which
+              site that is. What is true of every one of them is that it is
+              gone by the next turn. */}
           {part.action === "createAgent" ? (
             <span className="ask__scope">Always allow is for {asker} only.</span>
           ) : (
-            <span className="ask__scope">This answer covers this one action only.</span>
+            <span className="ask__scope">Nothing here is remembered after this turn.</span>
           )}
         </div>
       )}

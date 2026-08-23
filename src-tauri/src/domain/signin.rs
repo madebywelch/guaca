@@ -232,6 +232,16 @@ pub fn session_for<'a>(signins: &'a [Signin], url: &str) -> Option<&'a Signin> {
     signins.iter().find(|signin| under(&host, &signin.domain))
 }
 
+/// Whether a URL is on `domain`, decided exactly as a session is.
+///
+/// The same question as `session_for` asked about one domain instead of a list,
+/// and here rather than at the call site because the parsing above is the part
+/// that has to see through `evil.com` wearing another site's name. A second
+/// copy of it somewhere else is a second copy that can rot.
+pub fn on_domain(url: &str, domain: &str) -> bool {
+    host_in(url).is_some_and(|host| under(&host, domain))
+}
+
 /// Reads a browser's cookie jar and says what it is signed in to.
 ///
 /// `now` is passed rather than read so the result is a pure function of its
@@ -566,5 +576,17 @@ mod tests {
             "a suffix match without the dot would cover every lookalike domain"
         );
         assert!(session_for(&held, "https://example.org/").is_none());
+    }
+
+    #[test]
+    fn asking_about_one_domain_sees_through_the_same_two_tricks() {
+        // `on_domain` is what a turn's consent grant is checked against, so a
+        // version that answered these differently from `session_for` would let
+        // a page the operator never saw inherit the yes they gave for another.
+        assert!(on_domain("https://business.facebook.com/latest/inbox", "facebook.com"));
+        assert!(on_domain("https://facebook.com/", "facebook.com"));
+        assert!(!on_domain("https://notfacebook.com/", "facebook.com"));
+        assert!(!on_domain("https://facebook.com@evil.com/x", "facebook.com"));
+        assert!(!on_domain("not a url", "facebook.com"));
     }
 }

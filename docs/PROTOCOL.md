@@ -198,7 +198,10 @@ attack either, and gating navigation would mean approving a click in order to
 reach the click being approved. What is left is the case this paper and
 BrowseSafe agree is worth paying for: the payload does not need to obtain
 access, it already has the operator's, and the next press is the operator's to
-allow.
+allow. Once, per site, per turn: a question asked again for every press on the
+same account is one an operator stops reading, and a defence nobody reads is
+wording again. The grant lives on the turn and dies with it, and any page from
+off that site takes it back.
 
 The rule is a pure function, separate from the asking, because a security rule
 nobody can read in one sitting is a rule nobody can check. Its tests carry the
