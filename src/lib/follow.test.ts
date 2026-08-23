@@ -29,6 +29,7 @@ import { useFollowBottom } from "./follow";
 function box(content: number, view: number, late = false) {
   const el = document.createElement("div");
   let height = content;
+  let viewport = view;
   let top = 0;
   let writes = 0;
   let owed = 0;
@@ -37,13 +38,13 @@ function box(content: number, view: number, late = false) {
     else el.dispatchEvent(new Event("scroll"));
   };
   Object.defineProperty(el, "scrollHeight", { configurable: true, get: () => height });
-  Object.defineProperty(el, "clientHeight", { configurable: true, get: () => view });
+  Object.defineProperty(el, "clientHeight", { configurable: true, get: () => viewport });
   Object.defineProperty(el, "scrollTop", {
     configurable: true,
     get: () => top,
     set: (next: number) => {
       writes += 1;
-      const landed = Math.max(0, Math.min(next, height - view));
+      const landed = Math.max(0, Math.min(next, height - viewport));
       if (landed === top) return;
       top = landed;
       announce();
@@ -63,10 +64,29 @@ function box(content: number, view: number, late = false) {
       height -= by;
       // The browser clamps an offset that no longer exists, and that is a
       // scroll event nobody asked for.
-      if (top > height - view) {
-        top = Math.max(0, height - view);
+      if (top > height - viewport) {
+        top = Math.max(0, height - viewport);
         announce();
       }
+    },
+    /**
+     * The box itself getting smaller, which is what everything under a
+     * transcript does to it: the composer growing a line, a trail of chips
+     * landing, the working panel opening, the window being dragged shorter.
+     * Nothing scrolls, so nothing is announced, and the end of the
+     * conversation is simply somewhere else now.
+     */
+    narrow: (by: number) => {
+      viewport -= by;
+      resized(el);
+    },
+    widen: (by: number) => {
+      viewport += by;
+      if (top > height - viewport) {
+        top = Math.max(0, height - viewport);
+        announce();
+      }
+      resized(el);
     },
     /** What the browser gets round to telling us, whenever it does. */
     deliver: () => {
@@ -74,7 +94,7 @@ function box(content: number, view: number, late = false) {
     },
     top: () => top,
     /** How far the newest line sits below the bottom edge. */
-    behind: () => height - top - view,
+    behind: () => height - top - viewport,
     /** How many times anything has moved the box. */
     writes: () => writes,
   };
@@ -89,6 +109,36 @@ function flushFrames() {
   for (const run of due) run(0);
 }
 
+/**
+ * Who is watching which box for a change of size.
+ *
+ * The stub in `test-setup` reports nothing, which is right for a component that
+ * only has to mount. This one is driven: `narrow` and `widen` are the box
+ * changing size, and the browser telling whoever asked is the point.
+ */
+const watchers = new Map<Element, Set<ResizeObserverCallback>>();
+
+function resized(el: Element) {
+  for (const notify of watchers.get(el) ?? []) {
+    notify([{ target: el } as ResizeObserverEntry], null as unknown as ResizeObserver);
+  }
+}
+
+class WatchedResizeObserver {
+  constructor(private readonly notify: ResizeObserverCallback) {}
+  observe(target: Element) {
+    const held = watchers.get(target) ?? new Set();
+    held.add(this.notify);
+    watchers.set(target, held);
+  }
+  unobserve(target: Element) {
+    watchers.get(target)?.delete(this.notify);
+  }
+  disconnect() {
+    for (const held of watchers.values()) held.delete(this.notify);
+  }
+}
+
 function attach(content = 1000, view = 200, late = false) {
   const { result } = renderHook(() => useFollowBottom());
   const scroller = box(content, view, late);
@@ -98,11 +148,14 @@ function attach(content = 1000, view = 200, late = false) {
 
 beforeEach(() => {
   frames = [];
+  watchers.clear();
   vi.spyOn(window, "requestAnimationFrame").mockImplementation((run) => frames.push(run));
+  vi.stubGlobal("ResizeObserver", WatchedResizeObserver);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("following the newest line", () => {
@@ -206,6 +259,69 @@ describe("following the newest line", () => {
     view.grow(400);
     view.hook.follow();
     expect(view.behind()).toBe(0);
+  });
+
+  it("holds the end when the box shrinks under a follower", () => {
+    // Everything below a transcript takes its height from the transcript: the
+    // composer growing a line as a message is typed, a turn's chips landing,
+    // the working panel opening, the window dragged shorter. Nothing scrolls
+    // and no content arrives, so neither of the other two routes here fires,
+    // and the newest line goes quietly under the fold and stays there until
+    // the next token happens to land.
+    const view = attach();
+    view.hook.pin();
+    expect(view.behind()).toBe(0);
+
+    view.narrow(160);
+    expect(view.behind()).toBe(0);
+  });
+
+  it("holds the end when the box grows back", () => {
+    // Sending is the round trip: the composer grew while the message was
+    // typed, and collapses to one line the moment it goes. The browser clamps
+    // the offset on the way back, which leaves the operator at the end, and
+    // this has to agree rather than call it somebody moving the box.
+    const view = attach();
+    view.hook.pin();
+    view.narrow(160);
+    expect(view.behind()).toBe(0);
+
+    view.widen(160);
+    expect(view.behind()).toBe(0);
+
+    view.grow(400);
+    view.hook.follow();
+    expect(view.behind()).toBe(0);
+  });
+
+  it("leaves a reader alone when the box shrinks under them", () => {
+    // The same event, and the reason it cannot simply write the end: somebody
+    // who scrolled up and then typed a long message is still reading.
+    const view = attach();
+    view.hook.pin();
+    view.scroll(-400);
+
+    view.narrow(160);
+    expect(view.top()).toBe(400);
+  });
+
+  it("does not move a reader who scrolled up after touching the end", () => {
+    // Down to the newest line, then straight back up to keep reading. The
+    // return is what puts this hook back in charge, and until it writes an
+    // offset of its own there is nothing for the next scroll to be measured
+    // against: every one of them read as its own, and the next message threw
+    // the operator back to the floor.
+    const view = attach();
+    view.hook.pin();
+    view.scroll(-400);
+    view.scroll(400);
+    view.scroll(-300);
+
+    view.grow(400);
+    view.hook.follow();
+    flushFrames();
+
+    expect(view.top()).toBe(500);
   });
 
   it("goes back to the end when the operator asks for it", () => {
