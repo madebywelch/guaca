@@ -30,6 +30,12 @@ interface Props {
  * There is deliberately no terminal here. A shell is how the agent works, not
  * how an operator watches it, and a second way in only invited the two to
  * disagree about what was on the machine.
+ *
+ * It is also where an agent is given a computer and where it is taken back
+ * again. That belongs beside the screen rather than in the profile dialog: the
+ * decision is about a live, costed thing the operator can watch, and the
+ * answer to "should this one have a machine" is usually being read off the
+ * picture above the button.
  */
 export function ComputerScreen({ agent }: Props) {
   const settings = useStore((s) => s.settings);
@@ -71,6 +77,11 @@ export function ComputerScreen({ agent }: Props) {
   // Nothing at all until there is a key. Offering to give an agent a computer
   // that cannot be made is worse than not mentioning computers.
   const configured = settings?.e2bKeySet === true;
+  // Whether this agent is one of the agents allowed a machine. Read from the
+  // card rather than from whether a sandbox came back: a machine is reclaimed
+  // on the provider's clock, and an agent whose machine went to sleep has not
+  // had anything taken away from it.
+  const given = agent.hasComputer;
 
   const look = useCallback(async () => {
     const asked = agent.id;
@@ -99,16 +110,17 @@ export function ComputerScreen({ agent }: Props) {
     setBusy(false);
     setError(null);
     setConfirming(null);
-    if (configured) void look();
-  }, [agent.id, look, configured]);
+    if (configured && given) void look();
+    else setChecked(true);
+  }, [agent.id, look, configured, given]);
 
   // Sandboxes expire on their own, so a panel left open goes stale: it kept
   // showing a desktop that had been reclaimed, and clicking it did nothing.
   useEffect(() => {
-    if (!configured) return;
+    if (!configured || !given) return;
     const timer = setInterval(() => void look(), 15000);
     return () => clearInterval(timer);
-  }, [configured, look]);
+  }, [configured, given, look]);
 
   // Escape shrinks it again. On the window rather than on the frame, because
   // the desktop swallows key presses the moment it has focus, and the operator
@@ -157,6 +169,28 @@ export function ComputerScreen({ agent }: Props) {
     });
   }, [full]);
 
+  /**
+   * Giving a computer, and taking it back.
+   *
+   * Neither answers with a machine, because neither is about one: what changes
+   * is the card, and the roster refresh that follows flips `given` and sends
+   * the effect above to look again. Held apart from `act` for that reason
+   * rather than for tidiness — a shared helper would have to invent a
+   * `Computer` to return.
+   */
+  const decide = async (run: () => Promise<unknown>) => {
+    const asked = agent.id;
+    setBusy(true);
+    setError(null);
+    try {
+      await run();
+    } catch (caught) {
+      if (showing.current === asked) setError(errorMessage(caught));
+    } finally {
+      if (showing.current === asked) setBusy(false);
+    }
+  };
+
   const act = async (run: () => Promise<Computer | null>) => {
     const asked = agent.id;
     setBusy(true);
@@ -175,8 +209,8 @@ export function ComputerScreen({ agent }: Props) {
 
   if (!configured || !checked) return null;
 
-  const running = computer?.state === "running";
-  const asleep = computer?.state === "asleep";
+  const running = given && computer?.state === "running";
+  const asleep = given && computer?.state === "asleep";
   const live = running && computer?.vncUrl;
 
   // Announced as a dialog only while it covers the window; the rest of the
@@ -257,6 +291,15 @@ export function ComputerScreen({ agent }: Props) {
                   type="button"
                   className="btn btn--small btn--ghost"
                   disabled={busy}
+                  onClick={() => void decide(() => api.takeAgentComputer(agent.id))}
+                  title="Take it back. The machine sleeps, and its disk is kept."
+                >
+                  Take it back
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--small btn--ghost"
+                  disabled={busy}
                   onClick={() => setConfirming("destroy")}
                 >
                   Destroy
@@ -306,22 +349,51 @@ export function ComputerScreen({ agent }: Props) {
               {error ??
                 (busy
                   ? "Working on it. This takes a few seconds."
-                  : asleep
-                    ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed into
-                       anything it was signed into. It sleeps again after
-                       ${settings?.computerIdleMinutes ?? 15} idle minutes.`
-                    : running
-                      ? "Running, but the desktop is not up yet."
-                      : "No computer yet. Agents get one the first time they use it.")}
+                  : !given
+                    ? `${agent.name} has no computer, so it cannot run a command, open anything on
+                       a screen or look at one. Give it one and it starts a machine the first time
+                       it needs one.`
+                    : asleep
+                      ? `Asleep. Its disk is kept, so it wakes up where it left off, still signed
+                         into anything it was signed into. It sleeps again after
+                         ${settings?.computerIdleMinutes ?? 15} idle minutes.`
+                      : running
+                        ? "Running, but the desktop is not up yet."
+                        : `${agent.name} has a computer and no machine yet. It starts one the
+                           first time it needs one; start it now to sign it in to something.`)}
             </p>
-            <button
-              type="button"
-              className="btn btn--small btn--primary"
-              disabled={busy}
-              onClick={() => void act(() => api.startAgentComputer(agent.id))}
-            >
-              {busy ? "Working…" : asleep ? "Wake" : running ? "Start the desktop" : "Give one"}
-            </button>
+            <div className="screen__offer">
+              {given ? (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--primary"
+                    disabled={busy}
+                    onClick={() => void act(() => api.startAgentComputer(agent.id))}
+                  >
+                    {busy ? "Working…" : asleep ? "Wake" : "Start the desktop"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn--small btn--ghost"
+                    disabled={busy}
+                    onClick={() => void decide(() => api.takeAgentComputer(agent.id))}
+                    title="Take it back. Any machine sleeps, and its disk is kept."
+                  >
+                    Take it back
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn--small btn--primary"
+                  disabled={busy}
+                  onClick={() => void decide(() => api.giveAgentComputer(agent.id))}
+                >
+                  {busy ? "Working…" : "Give one"}
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

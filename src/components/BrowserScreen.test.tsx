@@ -7,21 +7,27 @@ import { BrowserScreen } from "./BrowserScreen";
 
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const stopAgentBrowser = vi.fn<(id: string) => Promise<void>>();
+const giveAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
+const takeAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     agentBrowser: (id: string) => agentBrowser(id),
+    giveAgentBrowser: (id: string) => giveAgentBrowser(id),
+    takeAgentBrowser: (id: string) => takeAgentBrowser(id),
     startAgentBrowser: vi.fn(),
     stopAgentBrowser: (id: string) => stopAgentBrowser(id),
   },
 }));
 
-function card(id: string, name: string): AgentCard {
+function card(id: string, name: string, given = true): AgentCard {
   return {
     id,
     groupId: "00000000-0000-4000-8000-000000000001",
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: given,
     name,
     avatar: "plain",
     color: "#c7d96b",
@@ -77,6 +83,10 @@ describe("BrowserScreen", () => {
   beforeEach(() => {
     agentBrowser.mockReset();
     stopAgentBrowser.mockReset();
+    giveAgentBrowser.mockReset();
+    giveAgentBrowser.mockResolvedValue(undefined);
+    takeAgentBrowser.mockReset();
+    takeAgentBrowser.mockResolvedValue(undefined);
     configure(true);
   });
 
@@ -119,6 +129,38 @@ describe("BrowserScreen", () => {
 
     expect(await screen.findByText(/sign this agent in/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Open one" })).toBeTruthy();
+  });
+
+  it("offers a browser to an agent that has not been given one, and asks nobody", async () => {
+    // A browser is a separate decision from a computer, and this panel is
+    // where it is made. Nothing is asked of the provider for an agent that may
+    // not have one: the answer could not change what is drawn.
+    render(<BrowserScreen agent={card("a", "Cook", false)} />);
+
+    await waitFor(() => expect(screen.getByText(/Cook has no browser/)).toBeTruthy());
+    expect(agentBrowser).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Give one" }));
+    await waitFor(() => expect(giveAgentBrowser).toHaveBeenCalledWith("a"));
+  });
+
+  it("takes it back from the empty pane as well as from the bar", async () => {
+    agentBrowser.mockResolvedValue(null);
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open one" })).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Take it back" }));
+    await waitFor(() => expect(takeAgentBrowser).toHaveBeenCalledWith("a"));
+  });
+
+  it("keeps the live view off the panel of an agent whose browser was taken back", async () => {
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    const view = render(<BrowserScreen agent={card("a", "Cook")} />);
+    await waitFor(() => expect(screen.getByTitle("Cook's browser")).toBeTruthy());
+
+    view.rerender(<BrowserScreen agent={card("a", "Cook", false)} />);
+    await waitFor(() => expect(screen.queryByTitle("Cook's browser")).toBeNull());
+    expect(screen.getByText(/Cook has no browser/)).toBeTruthy();
   });
 
   it("keeps a click out of the browser until the operator asks for it", async () => {

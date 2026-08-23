@@ -499,10 +499,14 @@ the operator for permission to have some. The mechanism did exactly what it is
 for; the question was one no button could answer. Missing and withheld are
 different states, and only the second is a decision: a yes cannot sign an agent
 in, add a credential or produce a tool the workspace does not have. So `specs`
-withholds `request_permission` unless a computer or a browser is configured,
-because nothing else an agent can call leaves the workspace and there would be
-nothing for a grant to be spent on. `ask_to_act` refuses the same case again,
-before a row is written, for the model that calls a tool it was not offered. And
+withholds `request_permission` from an agent that has neither a computer nor a
+browser, because nothing else an agent can call leaves the workspace and there
+would be nothing for a grant to be spent on. Configured is not the same question
+as given, and the one that decides here is given: an agent in a workspace with
+both providers set up and neither place handed to it is exactly as unable to act
+outside as one in a workspace with no key at all. `ask_to_act` refuses the same
+case again, before a row is written, for the model that calls a tool it was not
+offered. And
 where the tool does exist the prompt says what a yes does not buy, because a
 machine is not an account: an agent with a computer and no Google session is
 still short of access rather than of permission. What the operator gets instead

@@ -63,6 +63,8 @@ function agent(id: string, name: string): AgentCard {
     updatedAt: 0,
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     version: 1,
   };
 }

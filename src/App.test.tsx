@@ -102,6 +102,8 @@ function agent(name: string, railOrder = 0): AgentCard {
     groupId: "00000000-0000-4000-8000-000000000001",
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     name,
     avatar: "avocado",
     color: "#c7d96b",

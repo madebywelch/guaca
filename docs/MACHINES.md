@@ -15,6 +15,45 @@ one agent while a credential is scoped to the group, and why an observed
 capability that overclaims is worse than none, are in `PROTOCOL.md`,
 *Connectors*. What follows is what will bite you in the code.
 
+## A computer is given to one agent, not to the workspace
+
+An E2B key used to be the whole decision. Set it, and every agent in the
+workspace was offered `run_command`, `open_on_desktop` and `use_screen`, and the
+first one to think of it rented itself a machine mid-turn. An operator who
+wanted one agent that runs commands and three that only talk had no way to say
+so, and no way to learn that a fourth machine existed except from the bill.
+
+So the key says what the workspace *can* hand out, and `agents.has_computer`
+says who was handed one. Both have to be true: `Surfaces::given_to` is the rule
+and `Runtime::surfaces_for` is where a turn asks it, and the answer decides the
+tool list and the paragraph in the prompt together, so a turn is never told
+about a place it cannot reach.
+
+Three things about that column are worth knowing before you change it.
+
+- **It is not `sandbox_id`.** A machine is rented, slept and reclaimed on the
+  provider's clock; being allowed one is a decision, and it has to outlive every
+  machine made under it. Deciding from possession instead would take the tools
+  away from a working agent the moment its machine went to sleep.
+- **Giving one costs nothing.** No sandbox is made when the operator presses the
+  button; the machine is still made the first time the agent needs one, which is
+  what makes giving a computer to five agents free. `start_agent_computer` is a
+  separate press, and it exists because signing a machine in is something only a
+  person can do.
+- **Taking it back leaves the disk.** The machine sleeps and its `sandbox_id`
+  stays on the row, because that disk is where the operator's sign-ins live.
+  Giving the computer back has to find those sessions rather than a stranger.
+  Destroying is its own button and says what it does.
+
+The gate is in `ensure_computer`, which is the only function that makes a
+machine, and that placement is the point: the tool list is not the only route
+in. A file arriving for an agent is written onto its machine, and a document too
+large to read inline is written there too, so a gate at the call sites would
+rent a machine for an agent the operator deliberately did not give one. A model
+that calls `run_command` anyway meets `Runtime::not_given` first and is refused
+in words rather than told its computer is unavailable: an agent told a machine
+failed tries again, and an agent told it has none says so to the operator.
+
 ## A computer is looked at, never asked
 
 There used to be a second way to use the web on one of these machines. Chrome
@@ -139,6 +178,14 @@ asking the operator to keep a list. `sessions.py` reads Chrome's own cookie and
 history files off the disk, which works with the browser closed and cannot leak
 a value: the `value` and `encrypted_value` columns are never selected, so no
 token is read at all rather than being read and dropped.
+
+An account on a place an agent no longer has is named to nobody. The rows stay:
+the disk and the browser profile are kept when a computer or a browser is taken
+back, so the account is there again if it is given back. What stops is the
+claim, in the agent's own prompt and on the roster its peers read, because a
+capability that overclaims is how a crew routes work to an agent that will hit a
+login wall. `Runtime::reach_of` and `roster_excluding` both filter by
+`Surfaces::has`.
 
 The whole set for one *surface* is replaced on every scan. Scoped to the
 surface, because a computer and a browser are scanned independently: a replace

@@ -69,6 +69,8 @@ function member(id: string, name: string): AgentCard {
     skills: [],
     sandboxId: null,
     browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
     lifecycle: "active",
     pinned: false,
     railOrder: 0,

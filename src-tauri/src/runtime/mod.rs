@@ -1728,8 +1728,9 @@ impl Runtime {
         // What this agent actually has, decided once and used twice: the prompt
         // describes exactly these, and the tool list offers exactly these. The
         // two disagreeing is the failure this replaced, where every agent was
-        // told it had a machine whether or not a provider was configured.
-        let surfaces = self.surfaces();
+        // told it had a machine whether or not a provider was configured and
+        // whether or not the operator had given it one.
+        let surfaces = self.surfaces_for(&card);
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -2326,6 +2327,22 @@ impl Runtime {
             }
         };
 
+        // Before anything is done with it. `specs` does not offer a tool that
+        // reaches a place this agent was not given, and this is the same rule
+        // where a model that called it anyway meets it, exactly as
+        // `ask_to_act` does one layer up.
+        if let Some(refusal) = self.not_given(card, &invocation) {
+            return (
+                refusal.clone(),
+                Part::ToolCall {
+                    name: call.name.clone(),
+                    arguments,
+                    outcome: ToolOutcome::Refused { reason: refusal },
+                },
+                None,
+            );
+        }
+
         if let ToolInvocation::UseScreen { action } = invocation {
             let result = self.use_screen(card, action, arguments).await;
             // A picture of a page is the same untrusted content as its text,
@@ -2833,13 +2850,48 @@ impl Runtime {
         }
     }
 
+    /// A tool aimed at a place this agent has not been given.
+    ///
+    /// A refusal rather than an error, and the difference is what the model
+    /// does next. "Your computer is not available" reads as a machine that
+    /// failed, which is a thing worth trying again in a minute; this says the
+    /// access was never there, that only the operator can change it, and what
+    /// to do with the rest of the turn.
+    fn not_given(&self, card: &AgentCard, invocation: &ToolInvocation) -> Option<String> {
+        let surfaces = self.surfaces_for(card);
+        match invocation {
+            ToolInvocation::RunCommand { .. }
+            | ToolInvocation::OpenOnDesktop { .. }
+            | ToolInvocation::UseScreen { .. }
+                if !surfaces.computer =>
+            {
+                Some(
+                    "Refused: you have no computer, so nothing ran and no machine was started. \
+                     Nothing is broken and there is nothing to retry: you have not been given \
+                     one, and only the operator can give you one. Do the parts of this you can \
+                     do from here, and say plainly in your reply what needed a computer."
+                        .to_string(),
+                )
+            }
+            ToolInvocation::Browse { .. } if !surfaces.browser => Some(
+                "Refused: you have no browser, so nothing was opened and no page was read. \
+                 Nothing is broken and there is nothing to retry: you have not been given one, \
+                 and only the operator can give you one. Answer from what you know and from this \
+                 conversation, and say plainly in your reply what needed the web."
+                    .to_string(),
+            ),
+            _ => None,
+        }
+    }
+
     /// Acting outside the workspace, if the operator says so.
     ///
-    /// Refused before they are asked when the workspace has no computer and no
-    /// browser. `specs` does not offer the tool in that case, and this is the
-    /// same rule where a model that called it anyway meets it: nothing such an
-    /// agent can call leaves the workspace, so a yes would authorise an action
-    /// it has no way to carry out. What it is short of is access, and pressing
+    /// Refused before they are asked when this agent has neither a computer nor
+    /// a browser, whether because no provider is configured or because it was
+    /// given neither. `specs` does not offer the tool in that case, and this is
+    /// the same rule where a model that called it anyway meets it: nothing such
+    /// an agent can call leaves the workspace, so a yes would authorise an
+    /// action it has no way to carry out. What it is short of is access, and pressing
     /// Allow cannot hand it any. The live failure was an agent asked for
     /// something needing a calendar nobody here holds an account for: it worked
     /// out that it had no access, then asked to be given some, and the operator
@@ -2853,16 +2905,16 @@ impl Runtime {
         because: String,
         arguments: serde_json::Value,
     ) -> (String, Part) {
-        let surfaces = self.surfaces();
+        let surfaces = self.surfaces_for(card);
         if !surfaces.computer && !surfaces.browser {
             let reason = "nothing this agent can do reaches outside the workspace".to_string();
             return (
-                "Refused, and the operator was not asked: this workspace has no computer and no \
-                 browser, so nothing you can call reaches outside it and there is no action here \
+                "Refused, and the operator was not asked: you have no computer and no browser, so \
+                 nothing you can call reaches outside this workspace and there is no action here \
                  for them to authorise. What you are missing is access, not permission, and no \
                  answer of theirs would give you any. Say in your reply what you could not reach \
-                 and that they can add a provider in settings, then carry on with the part you \
-                 can do from here."
+                 and that they can give you a computer or a browser from your panel, then carry \
+                 on with the part you can do from here."
                     .to_string(),
                 Part::ToolCall {
                     name: tools::REQUEST_PERMISSION.to_string(),
@@ -3103,11 +3155,26 @@ impl Runtime {
         self.start_agent(card.id);
         self.inner.events.emit(UiEvent::AgentsChanged);
 
+        // Said here or not at all. A new agent is given nothing, and an agent
+        // that delegated the web to one it just made would report the work as
+        // handed over and never hear back: the peer has no way to do it and
+        // only the operator can change that.
+        let bare = {
+            let configured = self.configured();
+            if configured.computer || configured.browser {
+                " It has no computer and no browser, whatever you gave it to do, until the \
+                 operator gives it one. Do not send it work that needs either without saying so \
+                 to the operator."
+            } else {
+                ""
+            }
+        };
+
         (
             format!(
                 "Created {name}. It is in the workspace now and every agent here can reach it by \
                  name. It is idle and will stay idle until something arrives for it, so if the \
-                 work is ready, send it.",
+                 work is ready, send it.{bare}",
                 name = card.name
             ),
             Part::ToolCall {
@@ -3470,14 +3537,25 @@ impl Runtime {
     ///
     /// The single place a sandbox is provisioned, so the agent's tool, the
     /// operator's terminal and the desktop button cannot disagree about which
-    /// machine an agent has. Lazy on purpose: there is nothing to switch on,
-    /// and an agent that never runs a command never costs a sandbox.
+    /// machine an agent has. Lazy on purpose: an agent given a computer still
+    /// costs nothing until it needs one.
+    ///
+    /// Being the single place is also what makes the gate below worth having
+    /// here rather than at each call site. A turn is not offered a tool that
+    /// reaches a machine it was not given, but tools are not the only route to
+    /// this function: a file arriving for an agent is placed on its machine,
+    /// and a document too large to read inline is placed there too. Every one
+    /// of those would otherwise rent a machine for an agent the operator
+    /// deliberately did not give one.
     pub async fn ensure_computer(
         &self,
         card: &AgentCard,
     ) -> Result<(crate::e2b::E2bClient, crate::e2b::Sandbox), crate::e2b::E2bError> {
         use crate::e2b::{E2bClient, E2bError, Sandbox, SandboxState};
 
+        if !card.has_computer {
+            return Err(E2bError::NotGiven);
+        }
         let config = self.config();
         // The one place a sandbox is provisioned is the one place that knows
         // which agent it is for, so it is where the group's credentials are
@@ -3551,20 +3629,30 @@ impl Runtime {
         Ok((client, fresh))
     }
 
-    /// Which of the two places agents in this workspace have.
+    /// Which of the two places this workspace could hand out at all.
     ///
-    /// Read from whether a provider is configured rather than from whether this
-    /// agent has been given one yet, because provisioning is lazy: an agent with
-    /// no sandbox recorded still has a computer, it just has not needed one. A
-    /// key that is set and wrong is a computer that fails when used, which is a
-    /// different thing from one that was never offered and is reported
-    /// differently.
-    pub fn surfaces(&self) -> tools::Surfaces {
+    /// A provider question, not an agent one: a key that is set and wrong is a
+    /// computer that fails when it is used, which is a different thing from one
+    /// that was never configured and is reported differently. Nothing decides
+    /// what a turn is offered from this on its own; [`Runtime::surfaces_for`]
+    /// is that, and it starts here.
+    pub fn configured(&self) -> tools::Surfaces {
         let config = self.config();
         tools::Surfaces {
             computer: !config.e2b.api_key.trim().is_empty(),
             browser: !config.kernel.api_key.trim().is_empty(),
         }
+    }
+
+    /// Which of the two places one agent actually has: what this workspace can
+    /// hand out, narrowed to what this agent was given.
+    ///
+    /// The operator hands a computer and a browser out one agent at a time, and
+    /// an agent that has not been given one is not offered the tools that reach
+    /// it and cannot make one. `Surfaces::given_to` is the rule; this is the
+    /// call that reads the workspace's half of it.
+    pub fn surfaces_for(&self, card: &AgentCard) -> tools::Surfaces {
+        self.configured().given_to(card)
     }
 
     /// The agent's browser, made or replaced if there is not a live one.
@@ -3587,6 +3675,11 @@ impl Runtime {
     {
         use crate::kernel::{KernelClient, KernelError};
 
+        // The same gate `ensure_computer` carries, in the same place and for
+        // the same reason: this is the only function that makes a browser.
+        if !card.has_browser {
+            return Err(KernelError::NotGiven);
+        }
         let config = self.config();
         let client = KernelClient::new(&config.kernel.api_key).ok_or(KernelError::NoKey)?;
         let idle = config.kernel.idle_minutes.max(1) * 60;
@@ -3917,9 +4010,25 @@ impl Runtime {
         // machine. Group-wide credentials are left out on purpose: this agent
         // holds those itself, and listing them against every peer would read as
         // a reason to delegate work it can already do.
+        //
+        // Each one is named only where that peer still has the place it was
+        // found on. A sign-in outlives the place: the disk and the browser
+        // profile holding those cookies are kept when a computer or a browser
+        // is taken back, deliberately, so the account is there again if it is
+        // given back. Naming it meanwhile is how a crew routes work to an agent
+        // that cannot do it, which is the exact failure `reaches` exists to
+        // prevent. `configured` is read once for the whole roster, because the
+        // workspace's half of that answer is the same for every peer.
+        let configured = self.configured();
         let mut reaches: HashMap<AgentId, Vec<String>> = HashMap::new();
         for signin in self.inner.store.group_signins(group).unwrap_or_default() {
-            reaches.entry(signin.agent_id).or_default().push(signin.label());
+            let holds = agents
+                .iter()
+                .find(|c| c.id == signin.agent_id)
+                .is_some_and(|c| configured.given_to(c).has(signin.surface));
+            if holds {
+                reaches.entry(signin.agent_id).or_default().push(signin.label());
+            }
         }
 
         // And the crew's plugins, under exactly the rule the credentials above
@@ -3959,10 +4068,20 @@ impl Runtime {
     /// the operator pasted, so every machine in the group gets it. A sign-in is
     /// cookies on one disk and nobody typed it at all, so it is read back from
     /// the machine that holds it and belongs to that agent alone.
+    /// Sign-ins are filtered by the places this agent still has, for the reason
+    /// `roster_excluding` gives: an account it cannot reach is an overclaim,
+    /// and this is the paragraph an agent reads before deciding it has access.
     fn reach_of(&self, card: &AgentCard) -> (Vec<Connector>, Vec<Signin>) {
+        let surfaces = self.surfaces_for(card);
         (
             self.inner.store.group_connectors(card.group_id).unwrap_or_default(),
-            self.inner.store.agent_signins(card.id).unwrap_or_default(),
+            self.inner
+                .store
+                .agent_signins(card.id)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|signin| surfaces.has(signin.surface))
+                .collect(),
         )
     }
 
@@ -4414,6 +4533,8 @@ mod tests {
             sandbox_id: Some(sandbox.into()),
             sandbox_envd_token: None,
             sandbox_traffic_token: None,
+            has_computer: true,
+            has_browser: false,
             browser_id: None,
             lifecycle,
             pinned: false,

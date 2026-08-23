@@ -3518,6 +3518,15 @@ button {
   padding: 0.8rem;
 }
 
+/* The offer under that note: one button, or two when the agent already has the
+   place and can have it taken back. A row rather than the column above, which
+   would stack them and read as two separate offers. */
+.screen__offer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
 /* Transparent on purpose. The picture underneath is the whole point; this only
    exists so a click lands here instead of in the agent's desktop. */
 .screen__veil {
