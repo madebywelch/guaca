@@ -272,6 +272,47 @@ export interface ConnectorDraft {
   secret: string;
 }
 
+export type RepositoryId = string;
+
+/**
+ * A directory on this machine that a crew may write code in, and who in it may.
+ *
+ * There is no engineer flag beside this and there is not meant to be. An agent
+ * that has no repository is offered nothing that reaches a working tree, so a
+ * second mark saying the same thing would be a second place for the answer to
+ * be wrong. Designating an engineer is hiring one and giving it one of these.
+ */
+export interface Repository {
+  id: RepositoryId;
+  groupId: GroupId;
+  /** What the operator calls it. Defaults to the directory's own name. */
+  name: string;
+  /** Absolute, canonical, and the root of a git work tree. */
+  path: string;
+  /** One line the agents that have it read on every turn. */
+  note: string;
+  /**
+   * The agents that may work in it, by name and only by name. An empty list is
+   * a repository nobody has been given, which is a legitimate state and is
+   * drawn as one: there is no value here that means everybody.
+   */
+  reach: AgentId[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * `path` is checked against git before anything is stored, so what comes back
+ * is the canonical path git agreed to and not always the one that was typed.
+ * A blank `name` takes the directory's own.
+ */
+export interface RepositoryDraft {
+  groupId: GroupId;
+  name: string;
+  path: string;
+  note: string;
+}
+
 export type PluginId = string;
 
 /** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */

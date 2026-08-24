@@ -16,6 +16,7 @@ pub mod menubar;
 pub mod oauth;
 pub mod plugins;
 pub mod proxy;
+pub mod repo;
 pub mod runtime;
 pub mod subscription;
 pub mod trajectory;

@@ -986,6 +986,45 @@ ALTER TABLE routine_runs_new RENAME TO routine_runs;
 CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
 "#,
     ),
+    (
+        35,
+        r#"
+-- A directory on this machine that a crew may write code in. Scoped to the
+-- group like everything else an agent can see, and holding no secret: a path is
+-- not a credential, which is why it is a plain column and not the shape
+-- `connectors` uses.
+--
+-- `path` is stored canonical and without a trailing separator, so the index
+-- below can hold. Two spellings of one directory would be two repositories over
+-- one tree, each with its own reach, and the operator would fix one and wonder
+-- why nothing changed.
+CREATE TABLE repositories (
+    id         TEXT    PRIMARY KEY,
+    group_id   TEXT    NOT NULL REFERENCES groups(id),
+    name       TEXT    NOT NULL,
+    path       TEXT    NOT NULL,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX repositories_group_path ON repositories (group_id, path);
+
+-- Which agents may work in one. Named, always: there is no row shape here that
+-- means everybody, because an agent hired next week must not inherit a working
+-- tree the operator handed to somebody in particular. `domain/repository.rs`
+-- argues it against the plugin tables next door, which do have an everybody and
+-- have a different reason to.
+CREATE TABLE repository_access (
+    repository_id TEXT NOT NULL REFERENCES repositories(id),
+    agent_id      TEXT NOT NULL REFERENCES agents(id),
+    PRIMARY KEY (repository_id, agent_id)
+);
+
+-- Retiring an agent takes its repositories with it, and that read is by agent.
+CREATE INDEX repository_access_agent ON repository_access (agent_id);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

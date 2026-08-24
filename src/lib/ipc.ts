@@ -47,6 +47,9 @@ import type {
   PluginOffer,
   ProtectedAction,
   RankedModel,
+  Repository,
+  RepositoryDraft,
+  RepositoryId,
   Routine,
   RoutineDraft,
   RoutineId,
@@ -126,6 +129,39 @@ export const api = {
   createConnector: (draft: ConnectorDraft) => invoke<Connector>("create_connector", { draft }),
 
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
+
+  /**
+   * The directories a crew has linked, and who in it may work in each.
+   *
+   * No disk is touched: a repository moved or deleted since it was linked still
+   * comes back, because this panel is where the operator fixes that.
+   */
+  groupRepositories: (groupId: GroupId) => invoke<Repository[]>("group_repositories", { groupId }),
+
+  /**
+   * Links a directory, after checking with git that it is the root of a work
+   * tree. Nobody is given it here: that is `setRepositoryAccess`.
+   */
+  createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
+
+  /**
+   * Renames one, or rewrites the line its agents read. The path is not among
+   * them: a different directory is a different repository, because reach was
+   * granted for that one.
+   */
+  updateRepository: (id: RepositoryId, name: string, note: string) =>
+    invoke<Repository>("update_repository", { id, name, note }),
+
+  /** Unlinks it. Nothing on disk is touched. */
+  deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
+
+  /**
+   * Gives one agent a repository, or takes it back. One agent per call, so a
+   * panel that is a tick behind cannot revoke somebody while granting somebody
+   * else.
+   */
+  setRepositoryAccess: (id: RepositoryId, agentId: AgentId, allowed: boolean) =>
+    invoke<Repository>("set_repository_access", { id, agentId, allowed }),
 
   /** The plugins on offer. Static, and the same for every group. */
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
