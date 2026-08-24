@@ -979,6 +979,51 @@ button {
   border-left: 1px solid color-mix(in oklab, var(--rail-wire) 90%, transparent);
 }
 
+/* What the repository is doing. A second line under the name rather than more
+   on it: the name is what the row is about and it must not be squeezed by a
+   branch called `madebywelch/agent-coding-with-pi`. */
+.rail__repo-state {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0 1rem 0.2rem 1.6rem;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--rail-muted);
+  min-width: 0;
+}
+
+/* The one part that gives up space, because it is the one part with no bound:
+   a branch name is whatever somebody typed, and the counts beside it are two
+   or three characters each. */
+.rail__repo-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--rail-text) 78%, transparent);
+}
+
+/* A detached HEAD is a state to get out of rather than a place to work from,
+   so it does not get to look like a branch name. */
+.rail__repo-branch[data-detached="true"] {
+  font-style: italic;
+  color: var(--rail-muted);
+}
+
+.rail__repo-dirty {
+  flex: none;
+  color: color-mix(in oklab, var(--flesh) 82%, var(--rail-text));
+}
+
+.rail__repo-prs {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .rail__repo-empty {
   margin: 0;
   padding: 0.1rem 1rem 0.3rem 1.6rem;

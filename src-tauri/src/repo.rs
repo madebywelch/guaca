@@ -113,6 +113,145 @@ fn display(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+/// What a repository is doing right now, as the rail draws it.
+///
+/// Read rather than remembered. Nothing here is stored: the answer changes when
+/// the operator commits, pulls or opens a pull request, and none of those go
+/// through Guaca. A cached copy would be wrong exactly when somebody looked.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoStatus {
+    /// The branch name, or `HEAD` detached at a commit.
+    pub branch: String,
+    /// Whether the work tree is at a commit rather than on a branch. Drawn
+    /// differently because it is a state somebody has to get out of, not a
+    /// place to work from.
+    pub detached: bool,
+    /// Paths that differ from HEAD: modified, staged, untracked, unmerged.
+    /// One number rather than four, because the rail has room for one and the
+    /// question it answers is "is there uncommitted work here".
+    pub dirty: u32,
+    /// Commits on this branch the upstream does not have, and the reverse.
+    /// Both zero when there is no upstream, which is not the same as being in
+    /// sync and is why `upstream` is separate.
+    pub ahead: u32,
+    pub behind: u32,
+    pub upstream: bool,
+    /// Open pull requests, when `gh` is installed and signed in.
+    ///
+    /// `None` is not zero and must never be drawn as one. It means the question
+    /// could not be asked: no `gh`, not authenticated, no remote, or the
+    /// network is down. Zero means somebody asked and there are none.
+    pub pull_requests: Option<u32>,
+}
+
+/// Everything the rail says about one repository, in two calls.
+///
+/// The git half is local and costs nothing. The `gh` half is a network round
+/// trip, and it is allowed to fail without taking the rest with it: a
+/// repository with no remote is still a repository somebody is working in, and
+/// reporting the branch as unknown because GitHub was unreachable would be the
+/// tail wagging the dog.
+pub async fn status(path: &str) -> Option<RepoStatus> {
+    let (git, prs) = tokio::join!(work_tree_status(path), open_pull_requests(path));
+    let mut status = git?;
+    status.pull_requests = prs;
+    Some(status)
+}
+
+async fn work_tree_status(path: &str) -> Option<RepoStatus> {
+    // One invocation for the branch, the tracking counts and the changed
+    // paths. `--porcelain=v2` is the only status format documented as stable
+    // for machines; v1 has to be parsed by column position and says nothing
+    // about how far ahead the branch is.
+    let out = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain=v2", "--branch"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut status = RepoStatus {
+        branch: "HEAD".to_string(),
+        detached: false,
+        dirty: 0,
+        ahead: 0,
+        behind: 0,
+        upstream: false,
+        pull_requests: None,
+    };
+
+    for line in text.lines() {
+        let Some(header) = line.strip_prefix("# ") else {
+            // Everything that is not a header is a path that differs from
+            // HEAD: `1` and `2` are tracked changes, `u` unmerged, `?`
+            // untracked, `!` ignored and only ever present when asked for.
+            if line.starts_with(['1', '2', 'u', '?']) {
+                status.dirty += 1;
+            }
+            continue;
+        };
+        if let Some(head) = header.strip_prefix("branch.head ") {
+            // Git spells a detached HEAD as the literal `(detached)` here, so
+            // the parenthesis is the signal rather than a missing value.
+            status.detached = head == "(detached)";
+            if !status.detached {
+                status.branch = head.to_string();
+            }
+        } else if header.starts_with("branch.upstream ") {
+            status.upstream = true;
+        } else if let Some(ab) = header.strip_prefix("branch.ab ") {
+            // `+2 -1`. Absent entirely when there is no upstream, which is why
+            // zero and zero cannot be read as "in sync" on its own.
+            for part in ab.split_whitespace() {
+                let (sign, count) = part.split_at(1);
+                let Ok(count) = count.parse::<u32>() else { continue };
+                match sign {
+                    "+" => status.ahead = count,
+                    "-" => status.behind = count,
+                    _ => {}
+                }
+            }
+        } else if header.starts_with("branch.oid ") && status.branch == "HEAD" {
+            // Only reached on a detached HEAD, where the short sha is the only
+            // name the state has.
+            if let Some(sha) = header.split_whitespace().nth(1) {
+                status.branch = sha.chars().take(7).collect();
+            }
+        }
+    }
+
+    Some(status)
+}
+
+/// How many pull requests are open, asked of `gh`.
+///
+/// Every failure is the same answer, and it is `None` rather than zero: `gh`
+/// not installed, not signed in, no remote, a repository GitHub has never heard
+/// of, and a network that is down all mean the question could not be asked.
+/// Drawn as zero, each of them would say there is nothing waiting for review,
+/// which is a claim this app has no basis for.
+async fn open_pull_requests(path: &str) -> Option<u32> {
+    let out = tokio::process::Command::new("gh")
+        .current_dir(path)
+        .args(["pr", "list", "--state", "open", "--limit", "100", "--json", "number"])
+        .output()
+        .await
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // The count rather than `gh`'s own `--jq`, which needs its embedded jq and
+    // fails differently when the expression is wrong than when the query is.
+    let rows: Vec<serde_json::Value> = serde_json::from_slice(&out.stdout).ok()?;
+    Some(rows.len() as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;

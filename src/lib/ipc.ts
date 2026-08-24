@@ -47,6 +47,7 @@ import type {
   PluginOffer,
   ProtectedAction,
   RankedModel,
+  RepoStatus,
   Repository,
   RepositoryDraft,
   RepositoryId,
@@ -141,6 +142,16 @@ export const api = {
    * crews and their contents from one roster.
    */
   listRepositories: () => invoke<Repository[]>("list_repositories"),
+
+  /**
+   * What every linked repository is doing, by id. One call for the whole rail.
+   *
+   * A repository that could not be read is absent rather than present and
+   * empty: the directory may have been moved since it was linked, and a row
+   * saying "main, clean" about a path that is gone is worse than one saying
+   * nothing.
+   */
+  repositoryStatuses: () => invoke<Record<RepositoryId, RepoStatus>>("repository_statuses"),
 
   groupRepositories: (groupId: GroupId) => invoke<Repository[]>("group_repositories", { groupId }),
 

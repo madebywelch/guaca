@@ -424,6 +424,7 @@ pub fn run() {
             commands::delete_connector,
             commands::group_repositories,
             commands::list_repositories,
+            commands::repository_statuses,
             commands::create_repository,
             commands::update_repository,
             commands::delete_repository,

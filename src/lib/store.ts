@@ -28,7 +28,9 @@ import type {
   GroupUsage,
   MessageId,
   Participant,
+  RepoStatus,
   Repository,
+  RepositoryId,
   RoutineId,
   RunId,
   Settings,
@@ -80,6 +82,15 @@ interface State {
    * one refresh keeps them consistent.
    */
   repositories: Repository[];
+  /**
+   * What each linked repository is doing, by id.
+   *
+   * Separate from the repositories themselves because it has a different
+   * lifetime: the row changes when the operator links or renames one, and this
+   * changes when they commit, in a terminal Guaca never sees. Absent for a
+   * repository whose directory could not be read.
+   */
+  repoStatus: Record<RepositoryId, RepoStatus>;
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -210,6 +221,14 @@ interface State {
 
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
+  /**
+   * Asks git, and `gh`, what the linked repositories are doing.
+   *
+   * Polled rather than pushed. Nothing that changes a branch or opens a pull
+   * request goes through Guaca, so there is no event to listen for and the
+   * only honest options are asking again or being wrong.
+   */
+  refreshRepoStatuses: () => Promise<void>;
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
@@ -353,6 +372,7 @@ export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
   repositories: [],
+  repoStatus: {},
   activity: {},
   lastActive: {},
   settings: null,
@@ -415,6 +435,16 @@ export const useStore = create<State>((set, get) => ({
     const current = get().selected;
     if (!current && live.length > 0) {
       await get().select(live[0]!.id);
+    }
+  },
+
+  async refreshRepoStatuses() {
+    try {
+      set({ repoStatus: await api.repositoryStatuses() });
+    } catch {
+      // Left as it was rather than cleared. A failed poll is usually a
+      // directory that is momentarily busy, and blanking every branch name for
+      // one bad read makes the rail flicker on a timer.
     }
   },
 

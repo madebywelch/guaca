@@ -513,6 +513,28 @@ pub fn group_repositories(state: State<'_, AppState>, group_id: GroupId) -> Repl
     Ok(state.runtime.store().group_repositories(group_id)?)
 }
 
+/// What every linked repository is doing right now, by id.
+///
+/// One call for the rail rather than one per row, and every repository is asked
+/// concurrently: the git half is local and instant, the `gh` half is a network
+/// round trip, and asked in series a crew with four codebases would spend more
+/// than a second before the first branch name appeared.
+///
+/// A repository that cannot be read is absent from the map rather than present
+/// and empty. The directory may have been moved or unmounted since it was
+/// linked, and a row saying `main, clean` about a path that is no longer there
+/// is worse than a row saying nothing.
+#[tauri::command]
+pub async fn repository_statuses(
+    state: State<'_, AppState>,
+) -> Reply<std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>> {
+    let repositories = state.runtime.store().repositories()?;
+    let asked = repositories.into_iter().map(|repository| async move {
+        crate::repo::status(&repository.path).await.map(|status| (repository.id, status))
+    });
+    Ok(futures_util::future::join_all(asked).await.into_iter().flatten().collect())
+}
+
 /// Every repository in the workspace, with who may work in each.
 ///
 /// One read for the whole rail. The crews column and the rail inside a crew are

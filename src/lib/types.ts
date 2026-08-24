@@ -299,6 +299,35 @@ export interface Repository {
 }
 
 /**
+ * What a repository is doing right now.
+ *
+ * Read, never stored. Every one of these changes when the operator commits,
+ * pulls or opens a pull request, and none of those go through Guaca, so a
+ * cached copy would be wrong exactly when somebody looked at it.
+ */
+export interface RepoStatus {
+  /** The branch, or a short sha when HEAD is detached. */
+  branch: string;
+  /** At a commit rather than on a branch: a state to get out of, not one to
+   *  work from, so it is drawn differently. */
+  detached: boolean;
+  /** Paths differing from HEAD: modified, staged, untracked, unmerged. */
+  dirty: number;
+  ahead: number;
+  behind: number;
+  /** Whether the branch tracks anything. Without it `ahead` and `behind` are
+   *  both zero, which is not the same as being in sync. */
+  upstream: boolean;
+  /**
+   * Open pull requests, when `gh` is installed and signed in.
+   *
+   * `null` is not zero and must never be drawn as one. It means the question
+   * could not be asked. Zero means somebody asked and there are none.
+   */
+  pullRequests: number | null;
+}
+
+/**
  * `path` is checked against git before anything is stored, so what comes back
  * is the canonical path git agreed to and not always the one that was typed.
  * A blank `name` takes the directory's own.

@@ -1,13 +1,16 @@
 import type { ReactNode } from "react";
 
 import type { DropTarget } from "../lib/rail";
-import type { AgentCard, Repository } from "../lib/types";
+import type { AgentCard, RepoStatus, Repository } from "../lib/types";
 
 interface Props {
   /** This crew's repositories, already filtered. */
   repositories: Repository[];
   /** This crew's agents, in rail order. */
   crew: AgentCard[];
+  /** What each one is doing, by id. Absent while it is being read for the
+   *  first time, and for a directory that could not be read at all. */
+  status: Record<string, RepoStatus>;
   /** Draws one agent as the rail draws every other row. */
   row: (agent: AgentCard) => ReactNode;
   isOver: (target: DropTarget) => boolean;
@@ -51,6 +54,7 @@ interface Props {
 export function RailRepositories({
   repositories,
   crew,
+  status,
   row,
   isOver,
   onDragOver,
@@ -80,6 +84,8 @@ export function RailRepositories({
               <span className="rail__repo-count">{inside.length || ""}</span>
             </div>
 
+            <RepoState status={status[repository.id]} />
+
             {inside.length > 0 ? (
               <div className="rail__repo-crew">{inside.map(row)}</div>
             ) : (
@@ -94,5 +100,59 @@ export function RailRepositories({
         );
       })}
     </div>
+  );
+}
+
+/**
+ * What one repository is doing, in a line narrow enough for the rail.
+ *
+ * Nothing is drawn until the first read comes back. A row that said `main,
+ * clean` before anything had been asked would be a claim about a directory
+ * nobody had looked at, and the operator has no way to tell that apart from an
+ * answer.
+ *
+ * The pieces are absent rather than zeroed, and each absence means something
+ * different. No `dirty` is a clean tree. No arrows is a branch level with its
+ * upstream, or one with no upstream at all, which is why the arrows are drawn
+ * off `upstream` and not off the counts. No pull request count is `gh` not
+ * installed, not signed in, or a repository GitHub has never heard of: drawn as
+ * `0 PR` each of those would say there is nothing waiting for review, which is
+ * a claim this app has no basis for.
+ */
+function RepoState({ status }: { status: RepoStatus | undefined }) {
+  if (!status) return null;
+
+  return (
+    <p className="rail__repo-state">
+      <span
+        className="rail__repo-branch"
+        data-detached={status.detached ? "true" : undefined}
+        title={status.detached ? "detached HEAD" : `on ${status.branch}`}
+      >
+        {status.branch}
+      </span>
+
+      {status.dirty > 0 && (
+        <span className="rail__repo-dirty" title={`${status.dirty} uncommitted`}>
+          {status.dirty}&#8202;&#9679;
+        </span>
+      )}
+
+      {status.upstream && status.ahead > 0 && (
+        <span title={`${status.ahead} to push`}>&#8593;{status.ahead}</span>
+      )}
+      {status.upstream && status.behind > 0 && (
+        <span title={`${status.behind} to pull`}>&#8595;{status.behind}</span>
+      )}
+
+      {status.pullRequests !== null && status.pullRequests > 0 && (
+        <span
+          className="rail__repo-prs"
+          title={`${status.pullRequests} open pull request${status.pullRequests === 1 ? "" : "s"}`}
+        >
+          {status.pullRequests} PR
+        </span>
+      )}
+    </p>
   );
 }

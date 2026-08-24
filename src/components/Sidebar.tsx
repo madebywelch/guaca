@@ -64,6 +64,8 @@ export function Sidebar({
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
   const repositories = useStore((s) => s.repositories);
+  const repoStatus = useStore((s) => s.repoStatus);
+  const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
@@ -166,6 +168,23 @@ export function Sidebar({
   }, [agents, activity, lastActive, dragging, railGroup]);
 
   /** Moves the thing in hand to where the pointer is, without a render. */
+  // Asked on a timer, because nothing that changes a branch or opens a pull
+  // request goes through Guaca: there is no event to listen for, and the only
+  // honest options are asking again or being wrong. Thirty seconds is the
+  // slowest interval at which "I just committed" still reads as immediate, and
+  // it is the git half that runs at this rate; the `gh` half rides along
+  // because two calls on two timers is two things to keep in step.
+  //
+  // Only while there is something to ask about. A workspace with no
+  // repositories linked runs no processes at all.
+  const watching = repositories.length > 0;
+  useEffect(() => {
+    if (!watching) return;
+    void refreshRepoStatuses();
+    const timer = setInterval(() => void refreshRepoStatuses(), 30_000);
+    return () => clearInterval(timer);
+  }, [watching, refreshRepoStatuses]);
+
   const place = useCallback(() => {
     const node = heldRef.current;
     if (!node) return;
@@ -492,6 +511,7 @@ export function Sidebar({
                     agents.filter((a) => a.groupId === focused.id),
                     shape,
                   )}
+                  status={repoStatus}
                   row={row}
                   isOver={isOver}
                   onDragOver={hover}
@@ -546,6 +566,7 @@ export function Sidebar({
                       <RailRepositories
                         repositories={repositories.filter((r) => r.groupId === group.id)}
                         crew={here}
+                        status={repoStatus}
                         row={row}
                         isOver={isOver}
                         onDragOver={hover}

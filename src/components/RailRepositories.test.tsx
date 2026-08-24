@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Repository } from "../lib/types";
+import type { AgentCard, RepoStatus, Repository } from "../lib/types";
 import { RailRepositories } from "./RailRepositories";
 
 const GROUP = "00000000-0000-4000-8000-000000000001";
@@ -46,12 +46,31 @@ function repository(over: Partial<Repository> = {}): Repository {
 /** The rail's own row, standing in for it. */
 const row = (agent: AgentCard) => <div key={agent.id}>{agent.name}</div>;
 
-function draw(repositories: Repository[], crew: AgentCard[], dragging = false) {
+function state(over: Partial<RepoStatus> = {}): RepoStatus {
+  return {
+    branch: "main",
+    detached: false,
+    dirty: 0,
+    ahead: 0,
+    behind: 0,
+    upstream: true,
+    pullRequests: null,
+    ...over,
+  };
+}
+
+function draw(
+  repositories: Repository[],
+  crew: AgentCard[],
+  dragging = false,
+  status: Record<string, RepoStatus> = {},
+) {
   const onDragOver = vi.fn();
   const rendered = render(
     <RailRepositories
       repositories={repositories}
       crew={crew}
+      status={status}
       row={row}
       isOver={() => false}
       onDragOver={onDragOver}
@@ -123,5 +142,55 @@ describe("RailRepositories", () => {
     expect(screen.getByText("guaca").closest(".rail__repo-head")?.getAttribute("title")).toBe(
       "/Users/you/dev/guaca",
     );
+  });
+
+  it("says nothing about a repository it has not read yet", () => {
+    // A row saying "main, clean" before anything had been asked is a claim
+    // about a directory nobody looked at, and it reads exactly like an answer.
+    const { container } = draw([repository()], [member("a1", "Ada")]);
+    expect(container.querySelector(".rail__repo-state")).toBeNull();
+  });
+
+  it("draws the branch, what is uncommitted, and what is unpushed", () => {
+    draw([repository()], [member("a1", "Ada")], false, {
+      r1: state({ branch: "madebywelch/pi", dirty: 3, ahead: 2 }),
+    });
+    expect(screen.getByText("madebywelch/pi")).toBeTruthy();
+    expect(screen.getByTitle("3 uncommitted")).toBeTruthy();
+    expect(screen.getByTitle("2 to push")).toBeTruthy();
+  });
+
+  it("draws no arrows for a branch that tracks nothing", () => {
+    // Without an upstream both counts are zero, which is not the same as being
+    // in sync, so the arrows come off `upstream` rather than off the counts.
+    draw([repository()], [member("a1", "Ada")], false, {
+      r1: state({ upstream: false, ahead: 0, behind: 0 }),
+    });
+    expect(screen.queryByTitle(/to push/)).toBeNull();
+    expect(screen.queryByTitle(/to pull/)).toBeNull();
+  });
+
+  it("says nothing about pull requests when gh could not be asked", () => {
+    // null is not zero. gh missing, signed out, or a repository GitHub has
+    // never heard of would all read as "nothing waiting for review".
+    draw([repository()], [member("a1", "Ada")], false, {
+      r1: state({ pullRequests: null }),
+    });
+    expect(screen.queryByText(/PR/)).toBeNull();
+  });
+
+  it("draws the count when there are open pull requests", () => {
+    draw([repository()], [member("a1", "Ada")], false, {
+      r1: state({ pullRequests: 4 }),
+    });
+    expect(screen.getByText("4 PR")).toBeTruthy();
+    expect(screen.getByTitle("4 open pull requests")).toBeTruthy();
+  });
+
+  it("marks a detached head as the state it is", () => {
+    draw([repository()], [member("a1", "Ada")], false, {
+      r1: state({ branch: "a1b2c3d", detached: true }),
+    });
+    expect(screen.getByTitle("detached HEAD")).toBeTruthy();
   });
 });
