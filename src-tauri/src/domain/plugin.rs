@@ -142,6 +142,213 @@ pub enum CustomError {
 /// type and short enough to leave a real tool name room on the other side.
 pub const MAX_CUSTOM_NAME: usize = 32;
 
+/// Headers the operator wrote, sent on every request to their own server.
+///
+/// The third thing a server somebody runs can want, after an address and a
+/// token, and the one the catalog never needs: an `X-API-Key` because that is
+/// where its framework looks, a pair of `Cf-Access-Client-*` because it sits
+/// behind Cloudflare Access, a tenant id because one deployment serves several.
+/// None of those is a sign-in and none of them is discoverable, so there is
+/// nowhere for them to come from but the person who deployed the thing.
+///
+/// They are a property of *reaching* the server rather than of who the crew is,
+/// which is why they are not a [`crate::plugins::Credential`] and compose with
+/// every one of them. A server gated by Access and signed in to with OAuth is
+/// the case that proves it: the headers get the request past the gate, and the
+/// 401 behind the gate still starts the browser dance.
+///
+/// Every value is a secret and is stored, spent and hidden exactly as a pasted
+/// key is. What crosses IPC on the way back out is [`Headers::names`] and never
+/// a value, which is the same boundary a connector's secret has: the panel can
+/// say what this server is being sent, and cannot say what it is worth.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers(Vec<(String, String)>);
+
+/// One header, as it crosses IPC and as it is stored.
+///
+/// A named pair rather than a tuple because it is what an operator fills in and
+/// what a column holds, and both of those are read by somebody: a two-element
+/// array in a settings file is a row nobody can tell the halves of apart. What
+/// the transport takes is the tuple, which is what `reqwest` wants.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderPair {
+    pub name: String,
+    pub value: String,
+}
+
+/// Why a header an operator typed cannot be sent.
+///
+/// Each names the header and says what to change. An operator pasting a header
+/// out of a vendor's `curl` example has no idea which of these Guaca reserves,
+/// and a refusal that only says no gets retyped verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum HeaderError {
+    #[error("a header needs a name, such as `X-API-Key`. Remove the empty row or fill it in.")]
+    NoName,
+    #[error(
+        "{0} is not a header name. Use letters, digits and `-`, such as `X-API-Key`: a header \
+         name cannot contain spaces, colons or quotes. Paste only the part before the colon."
+    )]
+    BadName(String),
+    #[error(
+        "{0} needs a value. If the header is meant to be empty, remove it: a server that treats \
+         an absent header and an empty one alike is rare enough not to guess at."
+    )]
+    NoValue(String),
+    #[error(
+        "{0}'s value has a line break or a control character in it. That is usually a key pasted \
+         with the newline after it: paste the key alone."
+    )]
+    BadValue(String),
+    #[error(
+        "{0} is a header Guaca builds itself, and one written here would contradict the request \
+         it is on. The server would refuse the call and say nothing you could act on."
+    )]
+    Reserved(String),
+    #[error("{0} is given twice. A header has one value; remove the row you did not mean.")]
+    Repeated(String),
+    #[error(
+        "that is more than {MAX_HEADERS} headers. A server needing more than that is one being \
+         configured through Guaca rather than reached through it."
+    )]
+    TooMany,
+    #[error(
+        "{0}'s value is longer than {MAX_HEADER_VALUE} characters. That is longer than any \
+         credential, and a proxy will refuse the request before the server sees it."
+    )]
+    LongValue(String),
+}
+
+/// How many headers one server may be sent.
+///
+/// Two is the real answer — Cloudflare Access wants a pair — and eight is room
+/// for a deployment nobody anticipated. A list past that is a configuration
+/// file, and this is not one.
+pub const MAX_HEADERS: usize = 8;
+
+/// The longest value a header may carry.
+///
+/// Long enough for a signed JWT, which is the largest credential anybody sends
+/// this way, and short enough that the whole set stays inside the header
+/// budget of every proxy between here and the server.
+pub const MAX_HEADER_VALUE: usize = 4096;
+
+/// The headers this client builds from the request it is on.
+///
+/// Written here rather than checked against what `mcp.rs` happens to send,
+/// because the failure is silent: a modern server compares `mcp-method` and
+/// `mcp-param-*` against the body and refuses a request where they disagree,
+/// with an error the operator sees as "the server rejected the call". The
+/// `mcp-` prefix covers those and everything the protocol adds later; the rest
+/// are the ones an HTTP client owns.
+const RESERVED: [&str; 5] = ["accept", "content-type", "content-length", "host", "connection"];
+
+impl Headers {
+    /// None, which is what a catalog server and most added ones send.
+    pub fn none() -> Headers {
+        Headers(Vec::new())
+    }
+
+    /// What the operator typed, if every row of it holds up.
+    ///
+    /// Names are lowercased, because HTTP field names are case-insensitive and
+    /// two spellings of one header are the duplicate this refuses rather than
+    /// two headers. What the panel shows is therefore the stored spelling and
+    /// not the typed one, which is the same rule the server's name follows and
+    /// for the same reason: the webview draws what came back.
+    pub fn parse(rows: &[HeaderPair]) -> Result<Headers, HeaderError> {
+        if rows.len() > MAX_HEADERS {
+            return Err(HeaderError::TooMany);
+        }
+        let mut out: Vec<(String, String)> = Vec::new();
+        for row in rows {
+            let name = row.name.trim().to_ascii_lowercase();
+            let value = row.value.trim().to_string();
+            if name.is_empty() {
+                return Err(HeaderError::NoName);
+            }
+            if !name.bytes().all(is_token) {
+                return Err(HeaderError::BadName(row.name.trim().to_string()));
+            }
+            if name.starts_with("mcp-") || RESERVED.contains(&name.as_str()) {
+                return Err(HeaderError::Reserved(name));
+            }
+            if value.is_empty() {
+                return Err(HeaderError::NoValue(name));
+            }
+            if value.len() > MAX_HEADER_VALUE {
+                return Err(HeaderError::LongValue(name));
+            }
+            // Visible ASCII and space only. A newline is the common one and it
+            // is not cosmetic: a value carrying CRLF is header injection, and
+            // the only way it gets into a box like this is a key copied with
+            // the line ending attached.
+            if !value.bytes().all(|b| (0x20..=0x7e).contains(&b)) {
+                return Err(HeaderError::BadValue(name));
+            }
+            if out.iter().any(|(held, _)| held == &name) {
+                return Err(HeaderError::Repeated(name));
+            }
+            out.push((name, value));
+        }
+        Ok(Headers(out))
+    }
+
+    /// The stored form: JSON, in the one column that holds it.
+    pub fn encode(&self) -> String {
+        let rows: Vec<HeaderPair> = self
+            .0
+            .iter()
+            .map(|(name, value)| HeaderPair { name: name.clone(), value: value.clone() })
+            .collect();
+        serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+    }
+
+    /// A stored row, back as headers.
+    ///
+    /// A column that will not parse is no headers rather than an error, for the
+    /// reason an unreadable plugin row is skipped: it can only come from a
+    /// newer build writing to the same file, and a crew losing a routing header
+    /// is a plugin that stops working with a message the operator can act on,
+    /// where a raised error is every agent in the crew losing its turn.
+    pub fn decode(stored: &str) -> Headers {
+        serde_json::from_str::<Vec<HeaderPair>>(stored)
+            .ok()
+            .and_then(|rows| Headers::parse(&rows).ok())
+            .unwrap_or_default()
+    }
+
+    /// What the panel is allowed to know: which headers, never their values.
+    pub fn names(&self) -> Vec<String> {
+        self.0.iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    /// Whether the operator supplied the credential themselves.
+    ///
+    /// `authorization` is allowed here on purpose — it is the only way to send
+    /// `Basic`, or a scheme a vendor invented — and it is the one header that
+    /// collides with a pasted key, which goes in the same slot. The caller that
+    /// has both refuses rather than picking one: see `commands::add_plugin`.
+    pub fn carries_authorization(&self) -> bool {
+        self.0.iter().any(|(name, _)| name == "authorization")
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// The pairs, for the one caller that puts them on a request.
+    pub fn wire(&self) -> &[(String, String)] {
+        &self.0
+    }
+}
+
+/// The characters RFC 9110 allows in a field name.
+fn is_token(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
 impl PluginKind {
     /// The servers Guaca ships the address of. Not every kind: a custom one is
     /// not offered, it is added.
@@ -390,7 +597,7 @@ fn normalize_name(name: &str) -> String {
 /// themselves, and nothing on that connection leaves the machine. Everything
 /// else carries a crew's grant, so it is https or it is refused here rather
 /// than in a packet capture.
-fn canonical_url(url: &str) -> Result<String, CustomError> {
+pub fn canonical_url(url: &str) -> Result<String, CustomError> {
     let url = url.trim();
     if url.is_empty() {
         return Err(CustomError::NoUrl);
@@ -511,6 +718,61 @@ pub fn catalog() -> Vec<PluginOffer> {
             kind,
         })
         .collect()
+}
+
+/// What one dial of a server found out, without connecting anything.
+///
+/// The answer to "why does my server not work", which before this was a single
+/// sentence out of whichever layer failed first. An operator debugging their own
+/// deployment needs the things underneath separately: a `404` on the current
+/// transport and a working event stream are the same failure to a sentence and
+/// opposite instructions to a person.
+///
+/// It authorizes nothing and writes nothing. A server that wants a sign-in is
+/// reported as wanting one rather than sent to a browser: a diagnostic that
+/// opens a consent screen is a diagnostic nobody runs twice.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerReport {
+    /// The address as Guaca canonicalized it, which is not always the address
+    /// that was typed and is the one every later request will use.
+    pub endpoint: String,
+    /// Which transport it answered on, in the words the docs use for them.
+    pub transport: String,
+    /// The revision the two of them settled on. Empty when nothing was settled,
+    /// which is a server that refused before the question was reached.
+    pub protocol: String,
+    /// Whether it wanted `initialize`. Not the same question as the transport:
+    /// both eras are served over streamable HTTP and only one of them over the
+    /// other transport, so an operator reading a bug report needs both.
+    pub handshake: bool,
+    pub signin: SigninNeed,
+    /// How the server names itself, when it says. Often blank.
+    pub server: String,
+    /// Every tool it published, by name. Empty for a server that wants a
+    /// sign-in, because nothing has been signed in to.
+    pub tools: Vec<String>,
+    /// How long the whole exchange took. The number an operator is actually
+    /// after when a turn using this plugin feels slow.
+    pub ms: u64,
+}
+
+/// What the server did about a credential.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SigninNeed {
+    /// It asked for nothing and answered. A public server, or one the
+    /// operator's own headers already authenticate.
+    None,
+    /// It refused without one. Not a failure and not a sign-in: connecting is
+    /// what runs that, and this is what says it will be needed.
+    Wanted,
+    /// Something was presented and it was accepted.
+    Accepted,
+    /// Something was presented and it was refused. The one outcome that is
+    /// neither reachable-and-fine nor unreachable, and the one an operator
+    /// spends longest guessing at: the address is right and the key is not.
+    Refused,
 }
 
 /// One tool a connected server offers.
@@ -720,6 +982,13 @@ pub struct Plugin {
     /// and a personal one — and those are two grants with two ids; this is how
     /// one group says which of them it means while another says the other.
     pub connection: String,
+    /// Which headers the operator gave this server, by name and never by value.
+    ///
+    /// Drawn so the panel can say what is being sent — an operator debugging
+    /// their own server needs to know whether `x-api-key` is on the request —
+    /// without the panel being a place a credential can be read back out of.
+    /// Empty for every catalog server and for most added ones.
+    pub headers: Vec<String>,
     /// False for a server that authorized nothing because it asked for nothing.
     /// Every server on the list today asks, so this is true in practice; it is
     /// read off whether a grant was actually issued rather than off the fact
@@ -802,6 +1071,92 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", kind.slug()));
             assert_eq!(serde_json::from_str::<PluginKind>(&json).unwrap(), kind);
         }
+    }
+
+    fn header(name: &str, value: &str) -> HeaderPair {
+        HeaderPair { name: name.into(), value: value.into() }
+    }
+
+    #[test]
+    fn a_header_is_stored_lowercased_and_goes_out_that_way() {
+        // Field names are case-insensitive on the wire, so the stored spelling
+        // is the one the panel shows and the one duplicates are found by.
+        let headers = Headers::parse(&[header("X-API-Key", " abc ")]).unwrap();
+        assert_eq!(headers.wire(), [("x-api-key".to_string(), "abc".to_string())]);
+        assert_eq!(headers.names(), ["x-api-key"]);
+    }
+
+    #[test]
+    fn two_spellings_of_one_header_are_a_duplicate_rather_than_two_headers() {
+        // Sent as written, one would silently win. Which one is `reqwest`'s
+        // insertion order, which is not a decision anybody made.
+        let both = Headers::parse(&[header("X-Api-Key", "a"), header("x-api-key", "b")]);
+        assert_eq!(both, Err(HeaderError::Repeated("x-api-key".into())));
+    }
+
+    #[test]
+    fn a_header_this_client_builds_itself_is_refused() {
+        // The failure is silent otherwise: a modern server compares the
+        // `mcp-*` headers against the body and refuses the request, with an
+        // error the operator reads as the server rejecting their call.
+        use HeaderError::*;
+        assert!(matches!(Headers::parse(&[header("mcp-method", "x")]), Err(Reserved(_))));
+        assert!(matches!(Headers::parse(&[header("Mcp-Param-Region", "x")]), Err(Reserved(_))));
+        assert!(matches!(Headers::parse(&[header("content-type", "x")]), Err(Reserved(_))));
+        assert!(matches!(Headers::parse(&[header("Accept", "x")]), Err(Reserved(_))));
+    }
+
+    #[test]
+    fn authorization_is_allowed_because_it_is_the_only_way_to_send_another_scheme() {
+        // `Basic`, or a scheme a vendor invented. The key box sends `Bearer`
+        // and nothing else, so refusing this header would make those
+        // unreachable. Who refuses the pair is `commands::presented`.
+        let headers = Headers::parse(&[header("Authorization", "Basic dXNlcjpwYXNz")]).unwrap();
+        assert!(headers.carries_authorization());
+    }
+
+    #[test]
+    fn a_value_with_a_line_break_in_it_is_refused() {
+        // Header injection, and the way it gets into a box like this is a key
+        // copied with the newline after it.
+        use HeaderError::*;
+        assert!(matches!(Headers::parse(&[header("x-key", "a\r\nX-Admin: 1")]), Err(BadValue(_))));
+        // Trailing whitespace alone is trimmed rather than refused: that is a
+        // paste, not an attack, and refusing it teaches nothing.
+        assert_eq!(
+            Headers::parse(&[header("x-key", "abc\n")]).unwrap().wire(),
+            [("x-key".to_string(), "abc".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_a_field_name_says_which_part_to_paste() {
+        use HeaderError::*;
+        assert!(matches!(Headers::parse(&[header("X-API-Key:", "a")]), Err(BadName(_))));
+        assert!(matches!(Headers::parse(&[header("X API Key", "a")]), Err(BadName(_))));
+        assert_eq!(Headers::parse(&[header("  ", "a")]), Err(NoName));
+        assert!(matches!(Headers::parse(&[header("x-key", " ")]), Err(NoValue(_))));
+    }
+
+    #[test]
+    fn a_stored_column_that_will_not_parse_is_no_headers_rather_than_an_error() {
+        // Same rule as an unreadable plugin row. It can only come from a newer
+        // build writing to the same file, and a plugin that stops working with
+        // a message beats every agent in the crew losing its turn.
+        assert_eq!(Headers::decode("not json"), Headers::none());
+        assert_eq!(Headers::decode(""), Headers::none());
+        let round = Headers::parse(&[header("x-key", "abc")]).unwrap();
+        assert_eq!(Headers::decode(&round.encode()), round);
+    }
+
+    #[test]
+    fn a_header_a_server_could_never_receive_is_refused_before_it_is_stored() {
+        use HeaderError::*;
+        let many: Vec<HeaderPair> =
+            (0..MAX_HEADERS + 1).map(|n| header(&format!("x-{n}"), "v")).collect();
+        assert_eq!(Headers::parse(&many), Err(TooMany));
+        let long = header("x-key", &"a".repeat(MAX_HEADER_VALUE + 1));
+        assert!(matches!(Headers::parse(&[long]), Err(LongValue(_))));
     }
 
     #[test]

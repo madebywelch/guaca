@@ -398,6 +398,123 @@ plugins second. A prefix that is neither is not a plugin call at all, which is
 what keeps a model composing `use_screen__click` from being reported as a server
 nobody has ever heard of.
 
+### It speaks the transport that was replaced, and a vendor does not
+
+MCP has had two HTTP transports. Streamable HTTP is one POST per request with
+the reply in its response, and it is what everything in this file assumes. The
+one it replaced — revision `2024-11-05`, still commonly called the SSE transport
+— is a GET that stays open, an `endpoint` event naming a second URL, every
+request POSTed to that URL, and every reply arriving back down the stream. It
+has been deprecated since `2025-03-26`.
+
+Guaca speaks it, for an added server only. The asymmetry is the catalog's own
+argument rather than an inconsistency in it: a vendor Guaca vouches for is a
+vendor Guaca can hold to the current transport, and refusing one of the six over
+it would be a message somebody at that vendor would read. A box in an operator's
+own network is not a vendor. Refusing that is not a migration incentive, it is a
+plugin that does not work, on a server the operator can see working in a browser,
+with nothing on screen saying why. `Dial::legacy_transport` is the switch and
+`plugins::dial` is the only thing that sets it.
+
+Which transport a server wants is probed rather than configured, exactly as the
+era is, and out of the same failure: an MCP endpoint on the older transport
+answers a POST with `405` or `404`, which is a refusal with no JSON-RPC in it,
+which is already the shape that says "this is not a modern server". So the rule
+grows one clause: for an added server, that shape is a reason to try a GET
+before concluding anything. A stream that opens identifies the transport; one
+that does not leaves the original refusal exactly as it was.
+
+**Whose refusal the operator sees turns on how far the second attempt got.** A
+GET answered with something that is not an event stream, or not answered at all,
+says nothing the first attempt did not, so the first one stands. Anything past
+that came off the server's own stream and is the more specific of the two — a
+401 that says to sign in, a revision nothing shares, a session redirected onto
+another host. Reporting the `405` there sends an operator to look at a transport
+that was working.
+
+**A session on that transport belongs to a stream, and the stream is per
+request.** `initialize` establishes a session that is scoped to the event stream
+it was sent on, so a session kept between turns is a socket per plugin per crew,
+held open through sleep and reconnect, for a handshake that costs one round trip.
+Every exchange opens a stream, shakes hands on it, sends one request and drops
+it. That is the same "a session per call" rule this file argues for on the
+current transport, arrived at from the other side.
+
+**The message endpoint has to be on the same origin the stream was.** It is a
+redirect invented by the far end after the connection was made, and following it
+puts a crew's credential and every argument of every tool call on a host the
+operator never named. Relative is the common form, absolute is legal, and an
+absolute one naming anywhere else is refused.
+
+Two older revisions came onto the list of ones this build accepts along with it,
+`2025-03-26` and `2024-11-05`, because a server of that vintage negotiates down
+to one of them and would otherwise be refused for sharing no revision. The cost
+is nothing: `tools/list` and `tools/call` are the only methods this client has
+ever sent and both are unchanged across all five.
+
+### Headers, which are how the request arrives rather than who is asking
+
+A server somebody runs can want a third thing, after an address and a token, and
+it is the one the catalog never needs because nothing can discover it: an
+`X-API-Key` because that is where its framework looks, a pair of
+`Cf-Access-Client-*` because it sits behind Cloudflare Access, a tenant id
+because one deployment serves several.
+
+These are not a third credential and they are not a `Credential` at all. They
+describe how a request *reaches* the server, so they go on every request
+whichever of the other things paid for it — the unauthenticated probe, the
+handshake, the tool list, every call, and the GET that opens an event stream. A
+client that put them only on the requests it thinks of as "the call" never opens
+the stream at all.
+
+Composing rather than choosing is what makes the awkward case work rather than
+needing a case of its own. A server behind Access that also signs in: the
+headers get the request past the gate, the 401 from behind the gate starts the
+browser dance exactly as it would anywhere, and the grant that comes back is
+spent with the headers still on every request. Nothing about that path is
+written down twice.
+
+**A sign-in reaches more hosts than the server, so the headers stop at the
+resource's origin.** `oauth::Gate` is that rule and it is load-bearing in both
+directions. Without it the composition fails before it starts: the gate refuses
+the RFC 9728 metadata document a sign-in has to read first, and the operator
+gets a `403` out of discovery with nothing to act on. Sending them to every host
+in the dance instead would hand the operator's gate credential to a vendor's
+authorization server, which is a credential leak dressed up as a convenience.
+
+The origin rule covers both shapes without a special case. A self-hosted server
+that is its own issuer has registration and the token endpoint behind the same
+gate, and they get the headers. A resource whose authorization server is
+somebody else's host does not, and nothing of the operator's crosses over. The
+refresh is included, and it is the one that would otherwise fail a day after
+everything looked fine: the token endpoint is on that host too.
+
+**Every value is a secret and is treated as one.** Stored in a column read only
+by the code that puts it on the wire, never in a prompt, a transcript, an event
+or a sandbox. What crosses IPC on the way back is the *names*: a panel has to be
+able to say that `x-api-key` is on the request, because that is the question an
+operator debugging their own server is asking, and it must not be a place to
+read back what the key is worth. Same boundary `connector_env` draws, same
+reason.
+
+**A header Guaca builds itself is refused rather than overwritten.** Anything
+starting `mcp-`, and `accept`, `content-type`, `content-length`, `host`,
+`connection`. A modern server compares the `mcp-*` headers against the request
+body and refuses a request where they disagree, so one written here would fail
+every call with an error the operator reads as the server rejecting their work.
+Names are lowercased on the way in, because two spellings of one field name are
+a duplicate rather than two headers and sending both leaves which one wins to
+insertion order. A value carrying a line break is refused: that is header
+injection, and the way it reaches a box like this is a key pasted with the
+newline still attached.
+
+**`authorization` is allowed, and a key beside it is refused.** It is the only
+way to send `Basic`, or a scheme a vendor invented, so refusing it would make
+those unreachable. But the key box sends `Authorization: Bearer` and there is
+one such header on a request: both given, one would silently overwrite the
+other. `commands::presented` refuses the pair in a sentence that says they are
+one slot rather than two.
+
 ### Changing the address is a reconnection
 
 `readdress_plugin`, not an edit, and for the reason `set_plugin_connection` is
@@ -406,6 +523,53 @@ tool list, so the list has to be re-read. What survives is what survives any
 reconnection — the row's id, who may spend it, which of its tools are whose —
 because the operator is fixing an address, not deciding what the crew may do. A
 local server changing port should not cost anybody their permissions.
+
+Headers go the other way from the key on this path, and the difference is what
+can be shown. Sending a set replaces it whole; sending none leaves the stored
+one alone. That is the rule a group's API key already has, for the same reason:
+a value that cannot be read back is one the panel cannot re-send, so "absent"
+has to mean keep or every reconnection would quietly drop it. Removing them is
+an empty set, which is a thing the operator did rather than a thing they forgot.
+The key keeps its own older rule — absent means "ask the server" — because a
+server that stopped needing one would otherwise be unreachable from this panel.
+
+### Testing it is the whole path, minus the browser
+
+An address, a key and a set of headers are four ways to be wrong and one button.
+Before this, finding out which meant pressing Add: a failure replaced nothing
+but told the operator only whichever sentence the first failing layer produced,
+and a success on the wrong address connected a crew to it.
+
+`probe_server` runs the real path — the same probe, both transports, the
+handshake, `tools/list` — with whatever has been typed and not yet saved, and
+writes nothing. What comes back is not a sentence but the things underneath it
+separately, because the failures are separate: which transport answered, which
+revision was settled on, whether there was a handshake, what the server calls
+itself, what it published, and how long it took. A `405` on the current
+transport and a working event stream are the same sentence to a person and
+opposite instructions.
+
+It stops one step short of connecting in exactly one place: **a server that
+wants a sign-in is reported as wanting one rather than sent to a browser.** The
+question being asked is whether this is the right address, and answering it with
+a consent screen is a question nobody asked — and a diagnostic that opens one is
+a diagnostic nobody runs twice.
+
+The two 401s are the reason the answer is four states rather than a boolean.
+"Nothing was presented and it refused" and "something was presented and it
+refused" are one status code and opposite problems: an operator who cannot tell
+them apart re-pastes a key at a server that never wanted one, or goes hunting
+for a sign-in that is really a typo.
+
+`check_plugin` is the same question asked of a plugin the crew already has, and
+it is a separate command because the credential is separate: it spends the grant
+in the store, which is the only way to answer "is our sign-in still good". That
+is the failure a crew notices as an agent reporting a tool it cannot call, and
+the only other way to ask it is to connect again, which replaces the tool list
+and opens a browser. A stale grant is renewed first, because the next real call
+would renew it too and a check that skipped it would report a working plugin as
+broken. It is offered on every connected plugin rather than only the added ones:
+the question is the same for a vendor.
 
 ### What the operator is told
 

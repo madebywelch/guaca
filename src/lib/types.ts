@@ -379,9 +379,62 @@ export interface Plugin {
   access: PluginAccess;
   /** Which authorized identity at the Guaca account this crew uses, if any. */
   connection: string;
+  /**
+   * Which headers the operator gave this server, by name and never by value.
+   *
+   * Drawn so the panel can say what is being sent — an operator debugging their
+   * own server needs to know whether `x-api-key` is on the request — without
+   * being a place a credential can be read back out of. Empty for every server
+   * on the catalog and for most added ones.
+   */
+  headers: string[];
   signedIn: boolean;
   connectedAt: number;
 }
+
+/**
+ * One header the operator wrote, on its way to Rust.
+ *
+ * The value only ever travels in this direction. What comes back on a `Plugin`
+ * is the names, for the reason a connector's secret never comes back either.
+ */
+export interface HeaderPair {
+  name: string;
+  value: string;
+}
+
+/**
+ * What one dial of a server found out, without connecting anything.
+ *
+ * The answer to "why does my server not work", which is otherwise a single
+ * sentence out of whichever layer failed first. The fields are separate because
+ * the failures are: a 405 on the current transport and a working event stream
+ * are the same sentence and opposite instructions to a person.
+ */
+export interface ServerReport {
+  /** The address as Rust canonicalized it, which is what would be stored. */
+  endpoint: string;
+  /** Which transport it answered on. Blank when nothing was established. */
+  transport: string;
+  /** The revision the two of them settled on. Blank for the same reason. */
+  protocol: string;
+  /** Whether it wanted a handshake. Not the same question as the transport. */
+  handshake: boolean;
+  signin: SigninNeed;
+  /** How the server names itself, when it says. Often blank. */
+  server: string;
+  /** Every tool it published. Empty for a server that wants a sign-in. */
+  tools: string[];
+  ms: number;
+}
+
+/**
+ * What the server did about a credential.
+ *
+ * `wanted` and `refused` are the same status code on the wire and opposite
+ * problems: one is a server that signs in, the other is a key it will not take.
+ */
+export type SigninNeed = "none" | "wanted" | "accepted" | "refused";
 
 /**
  * Which of an agent's two places holds a session.

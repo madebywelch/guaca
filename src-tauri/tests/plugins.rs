@@ -35,7 +35,7 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, GroupId};
-use guac_lib::domain::plugin::{PluginAccess, PluginKind};
+use guac_lib::domain::plugin::{HeaderPair, Headers, PluginAccess, PluginKind, SigninNeed};
 use guac_lib::llm::tools::{self, ToolInvocation};
 use guac_lib::mcp::PROTOCOL_VERSION;
 use guac_lib::plugins;
@@ -76,6 +76,15 @@ struct Rules {
     /// prove Guaca does it is a server that demands it and refuses a call that
     /// arrives without it — which is exactly what a real one does.
     mirrors: bool,
+    /// A gate in front of every route on this host, refusing anything without
+    /// the header the operator was given. Cloudflare Access, in one field.
+    ///
+    /// It sits in front of the metadata documents too, which is the whole point
+    /// of it being here rather than in the deployment scripted below: a client
+    /// that puts the operator's headers only on MCP requests gets past the gate
+    /// on the first call, reads the 401, and then fails discovery on a `403`
+    /// nobody can act on.
+    gated: Option<(String, String)>,
 }
 
 /// Which shape of the protocol the scripted server speaks.
@@ -102,6 +111,7 @@ impl Default for Rules {
             era: Era::Legacy,
             versions: Vec::new(),
             mirrors: false,
+            gated: None,
         }
     }
 }
@@ -167,9 +177,13 @@ async fn serve(rules: Rules) -> Server {
         .route("/.well-known/oauth-protected-resource", get(protected_resource))
         .route("/.well-known/oauth-authorization-server", get(authorization_server))
         .route("/register", post(register))
-        .route("/authorize", get(authorize))
         .route("/token", post(token))
         .route("/mcp", post(rpc))
+        // In front of everything a program asks for, and not in front of the
+        // page a person visits: a browser going through Access has a cookie of
+        // its own, which is exactly why the header exists for everything else.
+        .layer(axum::middleware::from_fn_with_state(server.clone(), gate))
+        .route("/authorize", get(authorize))
         .with_state(server.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -177,6 +191,25 @@ async fn serve(rules: Rules) -> Server {
     *server.base.lock() = format!("http://{addr}");
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     server
+}
+
+/// A gate in front of the host, refusing anything without the operator's header.
+///
+/// `403` and not `401`, which is the point: a gate is not the server asking to
+/// be signed in to, and a client that read it as one would send the operator to
+/// a browser over a missing header.
+async fn gate(
+    State(server): State<Server>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some((name, value)) = &server.rules.gated {
+        let sent = request.headers().get(name.as_str()).and_then(|v| v.to_str().ok());
+        if sent != Some(value.as_str()) {
+            return (axum::http::StatusCode::FORBIDDEN, "no").into_response();
+        }
+    }
+    next.run(request).await
 }
 
 async fn protected_resource(State(server): State<Server>) -> impl IntoResponse {
@@ -626,6 +659,7 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
         &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
+        &Headers::none(),
         |_| panic!("a public server must not open a browser"),
     )
     .await
@@ -652,6 +686,7 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
         &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -683,6 +718,7 @@ async fn a_redirect_that_does_not_match_is_refused() {
         &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::WrongState),
     )
     .await
@@ -703,6 +739,7 @@ async fn a_refusal_in_the_browser_is_reported_as_one() {
         &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Refused),
     )
     .await
@@ -729,6 +766,7 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
         &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -749,6 +787,7 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -810,6 +849,7 @@ mod account_backed {
             &PluginKind::Google,
             &format!("{}/mcp", server.base()),
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
         )
         .await
@@ -851,6 +891,7 @@ mod account_backed {
                 token: ACCOUNT,
                 connection: "work",
             }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -871,6 +912,7 @@ mod account_backed {
                 token: ACCOUNT,
                 connection: "personal",
             }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -904,14 +946,18 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
         .unwrap();
 
         match store.plugin_reach(group, agent, &PluginKind::Google, "gmail_search").unwrap() {
-            guac_lib::db::store::PluginReach::Granted { grant, .. } => {
-                assert!(grant.is_none(), "an account-backed plugin holds no grant of its own");
+            guac_lib::db::store::PluginReach::Granted(reached) => {
+                assert!(
+                    reached.grant.is_none(),
+                    "an account-backed plugin holds no grant of its own"
+                );
             }
             other => panic!("expected the plugin to be reachable, got {other:?}"),
         }
@@ -928,6 +974,7 @@ mod account_backed {
             &PluginKind::Google,
             &format!("{}/mcp", server.base()),
             plugins::Credential::Discover,
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -951,6 +998,7 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -989,6 +1037,7 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1027,6 +1076,7 @@ mod account_backed {
             &PluginKind::Google,
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1099,6 +1149,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
         &PluginKind::Google,
         &endpoint,
         plugins::Credential::Account(plugins::AccountUse { token: &token, connection: "" }),
+        &Headers::none(),
         |_| panic!("an account-backed plugin must not open a browser"),
     )
     .await
@@ -1169,6 +1220,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             browser(Outcome::Allowed),
         )
         .await
@@ -1244,6 +1296,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             browser(Outcome::Allowed),
         )
         .await
@@ -1282,6 +1335,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             browser(Outcome::Allowed),
         )
         .await
@@ -1338,6 +1392,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
             |_| panic!("a pasted key must not send anybody to a browser"),
         )
         .await
@@ -1379,6 +1434,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1417,6 +1473,7 @@ mod added {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             browser(Outcome::Allowed),
         )
         .await
@@ -1429,7 +1486,7 @@ mod added {
 
         assert!(matches!(
             store.plugin_reach(group, answerer, &kind, "run_sql").unwrap(),
-            PluginReach::Granted { .. }
+            PluginReach::Granted(_)
         ));
         assert!(matches!(
             store.plugin_reach(group, triage, &kind, "run_sql").unwrap(),
@@ -1481,6 +1538,7 @@ mod added {
                 kind,
                 kind.endpoint(),
                 plugins::Credential::Discover,
+                &Headers::none(),
                 |_| Ok(()),
             )
             .await
@@ -1510,6 +1568,57 @@ mod added {
         assert_eq!(second.called.lock().len(), 1);
         assert!(first.called.lock().is_empty());
     }
+
+    #[tokio::test]
+    async fn a_gated_server_that_also_signs_in_gets_the_headers_on_the_whole_dance() {
+        // The composition, and the reason headers are not a `Credential`. A
+        // gate in front of a self-hosted server refuses the metadata document a
+        // sign-in has to read first, so a client that puts the operator's
+        // headers only on MCP requests gets past the gate on the first call,
+        // reads the 401, and then fails discovery on a `403` nobody can act on.
+        let server = serve(Rules {
+            gated: Some(("cf-access-client-id".into(), "abc.access".into())),
+            issue_expired: true,
+            ..Rules::default()
+        })
+        .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = PluginKind::custom("Home Assistant", &format!("{}/mcp", server.base())).unwrap();
+        let headers = Headers::parse(&[HeaderPair {
+            name: "Cf-Access-Client-Id".into(),
+            value: "abc.access".into(),
+        }])
+        .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            browser(Outcome::Allowed),
+        )
+        .await
+        .expect("past the gate, and then signed in from behind it");
+
+        assert!(plugin.signed_in, "the 401 behind the gate is still a sign-in");
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 1);
+
+        // And the renewal too, which is the one that would fail a day later:
+        // the token endpoint is on the same host, so a refresh without the
+        // header is a 403 long after everything looked fine.
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({ "sql": "select 1" }),
+        )
+        .await
+        .expect("the grant was stale, so this had to renew before it could call");
+        assert_eq!(answer, "run_sql ran");
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+    }
 }
 
 // ---- the two protocol eras ----------------------------------------------
@@ -1536,6 +1645,7 @@ mod eras {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             |_| panic!("this server authorizes everybody"),
         )
         .await
@@ -1592,6 +1702,7 @@ mod eras {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1631,6 +1742,7 @@ mod eras {
                 &kind,
                 kind.endpoint(),
                 plugins::Credential::Discover,
+                &Headers::none(),
                 browser(Outcome::Allowed),
             )
             .await
@@ -1660,6 +1772,7 @@ mod eras {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1687,6 +1800,7 @@ mod eras {
             &kind,
             kind.endpoint(),
             plugins::Credential::Discover,
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -1758,6 +1872,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1805,6 +1920,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1832,12 +1948,12 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
 
     // And the renewed grant is written back, or every later turn pays for the
     // same discovery.
-    let PluginReach::Granted { grant, .. } =
+    let PluginReach::Granted(reached) =
         store.plugin_reach(group, agent, &PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("the plugin is connected and this agent was not excluded from it")
     };
-    assert_eq!(grant.unwrap().access_token, "access-1");
+    assert_eq!(reached.grant.unwrap().access_token, "access-1");
 }
 
 #[tokio::test]
@@ -1852,6 +1968,7 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1880,6 +1997,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1890,18 +2008,23 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
     .unwrap();
 
     assert_eq!(store.group_plugins(group).unwrap().len(), 1);
-    let PluginReach::Granted { grant, .. } =
+    let PluginReach::Granted(reached) =
         store.plugin_reach(group, agent, &PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("connecting again leaves a plugin the crew can use")
     };
-    assert_eq!(grant.unwrap().access_token, "access-1", "the newer sign-in is the one held");
+    assert_eq!(
+        reached.grant.unwrap().access_token,
+        "access-1",
+        "the newer sign-in is the one held"
+    );
 }
 
 #[tokio::test]
@@ -1919,6 +2042,7 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1988,6 +2112,7 @@ async fn a_crew_with_a_plugin_calls_it_through_a_real_turn() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2092,6 +2217,7 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2164,6 +2290,7 @@ async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2225,6 +2352,7 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2281,6 +2409,7 @@ async fn two_agents_on_one_plugin_are_offered_different_tools_and_told_whose_is_
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2362,6 +2491,7 @@ async fn a_tool_that_is_a_peer_s_is_refused_here_and_not_at_the_vendor() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2414,6 +2544,7 @@ async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2447,6 +2578,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
         &PluginKind::Neon,
         &endpoint,
         plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -2489,6 +2621,495 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     )
     .await
     .expect("the crew that signed in still has it");
+}
+
+// ---- the transport streamable HTTP replaced -------------------------------
+
+/// A server on the transport that streamable HTTP replaced, and a server that
+/// wants headers nobody could have discovered.
+///
+/// Both are the same shape of problem and neither is a vendor's: an operator
+/// running their own box has whatever their framework shipped two years ago,
+/// behind whatever their company puts in front of things. The catalog answers
+/// neither question because a catalog server is one somebody checked.
+///
+/// Scripted separately from `serve` on purpose. That server is the five
+/// vendors' shape — OAuth metadata, registration, a token endpoint — and this
+/// one is a box with a key taped to it. Merging them would put an `if` in front
+/// of every route for a case the other never reaches.
+mod deployments {
+    use super::*;
+
+    use axum::body::Body;
+    use axum::extract::Query;
+    use axum::http::StatusCode;
+    use futures_util::StreamExt;
+
+    /// What the scripted deployment insists on before it answers anything.
+    #[derive(Clone, Default)]
+    struct Wants {
+        /// A header and its value, refused with a 403 when it is absent. Not a
+        /// 401: a gate in front of a server is not the server asking for a
+        /// sign-in, and a client that read it as one would open a browser.
+        header: Option<(String, String)>,
+        /// A bearer the server accepts. `None` is a server that asks for
+        /// nothing at all.
+        bearer: Option<String>,
+        /// Where the `endpoint` event points, when it is not this server's own
+        /// `/messages`.
+        redirect: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct Deployment {
+        wants: Wants,
+        base: Arc<Mutex<String>>,
+        /// One sender per open event stream, by the id its `endpoint` named.
+        streams: Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
+        /// Every header set this server was sent, so a test can assert what
+        /// went out rather than only that the call succeeded.
+        seen: Arc<Mutex<Vec<HashMap<String, String>>>>,
+    }
+
+    impl Deployment {
+        fn base(&self) -> String {
+            self.base.lock().clone()
+        }
+
+        fn endpoint(&self) -> String {
+            format!("{}/sse", self.base())
+        }
+    }
+
+    async fn deploy(wants: Wants) -> Deployment {
+        let server = Deployment {
+            wants,
+            base: Arc::new(Mutex::new(String::new())),
+            streams: Arc::new(Mutex::new(HashMap::new())),
+            seen: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = Router::new()
+            .route("/sse", get(stream).post(no_post))
+            .route("/messages", post(message))
+            .with_state(server.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        *server.base.lock() = format!("http://{addr}");
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        server
+    }
+
+    /// What this transport's endpoint does with a POST, which is the thing that
+    /// makes Guaca try the older transport at all.
+    async fn no_post() -> impl IntoResponse {
+        (StatusCode::METHOD_NOT_ALLOWED, "this endpoint is an event stream")
+    }
+
+    fn note(server: &Deployment, headers: &axum::http::HeaderMap) {
+        server.seen.lock().push(
+            headers
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string()))
+                })
+                .collect(),
+        );
+    }
+
+    /// Whether the request got past the gate and past the sign-in.
+    fn refuse(server: &Deployment, headers: &axum::http::HeaderMap) -> Option<StatusCode> {
+        if let Some((name, value)) = &server.wants.header {
+            let sent = headers.get(name.as_str()).and_then(|v| v.to_str().ok());
+            if sent != Some(value.as_str()) {
+                return Some(StatusCode::FORBIDDEN);
+            }
+        }
+        if let Some(bearer) = &server.wants.bearer {
+            let sent = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "));
+            if sent != Some(bearer.as_str()) {
+                return Some(StatusCode::UNAUTHORIZED);
+            }
+        }
+        None
+    }
+
+    async fn stream(
+        State(server): State<Deployment>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response {
+        note(&server, &headers);
+        if let Some(status) = refuse(&server, &headers) {
+            return (status, "").into_response();
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let id = format!("s{}", server.streams.lock().len() + 1);
+        server.streams.lock().insert(id.clone(), tx);
+
+        let named =
+            server.wants.redirect.clone().unwrap_or_else(|| format!("/messages?sessionId={id}"));
+        let first = format!("event: endpoint\ndata: {named}\n\n");
+
+        let opening =
+            futures_util::stream::once(async move { Ok::<String, std::io::Error>(first) });
+        let rest = futures_util::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|line| (Ok::<String, std::io::Error>(line), rx))
+        });
+
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(opening.chain(rest)))
+            .unwrap()
+    }
+
+    async fn message(
+        State(server): State<Deployment>,
+        Query(params): Query<HashMap<String, String>>,
+        headers: axum::http::HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        note(&server, &headers);
+        if let Some(status) = refuse(&server, &headers) {
+            return (status, "").into_response();
+        }
+
+        let method = body["method"].as_str().unwrap_or_default().to_string();
+        let id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let result = match method.as_str() {
+            // The revision this transport belongs to, negotiated down from
+            // whatever was asked for — which is what a server of this vintage
+            // actually does, and the reason the list this build accepts had to
+            // grow two entries.
+            "initialize" => serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "Scripted Deployment" },
+            }),
+            "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+            "tools/list" => serde_json::json!({
+                "tools": [{
+                    "name": "turn_on",
+                    "description": "Turn something on.",
+                    "inputSchema": { "type": "object", "properties": { "what": { "type": "string" } } },
+                }],
+            }),
+            "tools/call" => serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("{} ran", body["params"]["name"].as_str().unwrap_or_default()),
+                }],
+            }),
+            other => {
+                push(
+                    &server,
+                    &params,
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32601, "message": format!("no method {other}") },
+                    }),
+                );
+                return StatusCode::ACCEPTED.into_response();
+            }
+        };
+
+        // The documented answer: 202, and the reply down the stream the request
+        // belongs to. A client that reads the POST's own body for it hangs here.
+        push(&server, &params, serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+        StatusCode::ACCEPTED.into_response()
+    }
+
+    fn push(server: &Deployment, params: &HashMap<String, String>, reply: serde_json::Value) {
+        let Some(id) = params.get("sessionId") else { return };
+        if let Some(sender) = server.streams.lock().get(id) {
+            let _ = sender.send(format!("event: message\ndata: {reply}\n\n"));
+        }
+    }
+
+    fn mine(server: &Deployment) -> PluginKind {
+        PluginKind::custom("Home Assistant", &server.endpoint()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_server_on_the_older_transport_connects_and_answers_a_call() {
+        // The whole feature. Every one of these servers answers a POST to its
+        // stream with a 405, so before this they read as unreachable — which
+        // is a plugin the operator can see working in a browser and cannot
+        // connect, with nothing on screen saying why.
+        let server = deploy(Wants::default()).await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("a server that asks for nothing must not open a browser"),
+        )
+        .await
+        .expect("a server on the older transport is still a server");
+
+        assert_eq!(plugin.name, "home_assistant");
+        assert!(!plugin.signed_in, "it asked for nothing, so nothing was authorized");
+        assert_eq!(
+            plugin.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            vec!["turn_on"],
+        );
+
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "turn_on",
+            &serde_json::json!({ "what": "the kettle" }),
+        )
+        .await
+        .expect("and its tools are callable");
+        assert_eq!(answer, "turn_on ran");
+    }
+
+    #[tokio::test]
+    async fn a_catalog_server_is_never_offered_the_older_transport() {
+        // The asymmetry, and it is the catalog's argument rather than an
+        // oversight: a vendor Guaca vouches for is one it can hold to the
+        // current transport. Pointed at the same deployment, a catalog kind
+        // fails on the POST and never tries the GET.
+        let server = deploy(Wants::default()).await;
+        let (_dir, store, group, _agent) = workspace();
+
+        let refused = plugins::connect(
+            &store,
+            group,
+            &PluginKind::Neon,
+            &server.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("nothing here signs in"),
+        )
+        .await;
+
+        assert!(refused.is_err(), "a vendor is held to the transport it publishes");
+        assert!(server.streams.lock().is_empty(), "and the event stream was never even opened",);
+    }
+
+    #[tokio::test]
+    async fn a_header_the_operator_wrote_is_on_every_request_including_the_stream() {
+        // The Cloudflare Access shape: a gate in front of the server that
+        // refuses anything without a pair of headers, on the GET as well as on
+        // the POST. A client that only put them on requests it thought of as
+        // "the call" never opens the stream at all.
+        let server = deploy(Wants {
+            header: Some(("cf-access-client-id".into(), "abc.access".into())),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+        let headers = Headers::parse(&[HeaderPair {
+            name: "Cf-Access-Client-Id".into(),
+            value: "abc.access".into(),
+        }])
+        .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            |_| panic!("a gate is not a sign-in"),
+        )
+        .await
+        .expect("the headers get the request past the gate");
+
+        // Names on the row, and never the value: the panel has to be able to
+        // say what is being sent without being a place to read it back.
+        assert_eq!(plugin.headers, vec!["cf-access-client-id".to_string()]);
+
+        plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "turn_on",
+            &serde_json::json!({ "what": "the kettle" }),
+        )
+        .await
+        .expect("and stay on every later request too");
+
+        let seen = server.seen.lock().clone();
+        assert!(seen.len() > 3, "the stream, the handshake and the calls: {}", seen.len());
+        assert!(
+            seen.iter().all(|headers| headers.get("cf-access-client-id").map(String::as_str)
+                == Some("abc.access")),
+            "every request has to carry it, including the GET that opens the stream",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_in_a_header_the_operator_named_authenticates_without_a_sign_in() {
+        // The other half of the ask, and the one the bearer box cannot express:
+        // a server whose framework reads `X-API-Key` and has no authorization
+        // server behind it at all.
+        let server = deploy(Wants {
+            header: Some(("x-api-key".into(), "hand-minted".into())),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+        let headers =
+            Headers::parse(&[HeaderPair { name: "X-API-Key".into(), value: "hand-minted".into() }])
+                .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            |_| panic!("nothing here has an authorization server"),
+        )
+        .await
+        .expect("a header is a credential when that is what the server reads");
+
+        // Nothing was authorized, and the row says so rather than claiming a
+        // sign-in that never happened.
+        assert!(!plugin.signed_in);
+    }
+
+    #[tokio::test]
+    async fn a_message_endpoint_on_another_host_is_refused_rather_than_followed() {
+        // A redirect invented by the far end after the connection was made.
+        // Followed, the crew's credential and every tool argument go to a host
+        // the operator never named.
+        let server = deploy(Wants {
+            redirect: Some("https://evil.example/messages".into()),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+
+        let refused = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("nothing signs in"),
+        )
+        .await
+        .expect_err("a server may not redirect a session onto another host");
+        let message = refused.to_string();
+        assert!(message.contains("different server"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn testing_an_address_says_what_it_is_without_connecting_it() {
+        // What the button beside the address box answers. Every field is one an
+        // operator debugging their own deployment has to guess at otherwise,
+        // and the transport is the one that costs the most: a 405 on the
+        // current transport and a working event stream are the same sentence
+        // and opposite instructions.
+        let server = deploy(Wants::default()).await;
+
+        let report = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a reachable server reports");
+
+        assert_eq!(report.transport, "HTTP+SSE (2024-11-05)");
+        assert_eq!(report.protocol, "2024-11-05");
+        assert!(report.handshake);
+        assert_eq!(report.signin, SigninNeed::None);
+        assert_eq!(report.server, "Scripted Deployment");
+        // Twice in one process, and it still names itself. The handshake that
+        // said so belongs to a stream that was dropped, and the second dial
+        // finds the transport remembered and no name with it, so `describe`
+        // has to ask again rather than report a server that lost its name.
+        let again = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a second dial of the same address");
+        assert_eq!(again.server, "Scripted Deployment");
+        assert_eq!(again.protocol, "2024-11-05");
+        assert_eq!(report.tools, vec!["turn_on".to_string()]);
+
+        // And it connected nothing: no crew, no row, no grant.
+        let (_dir, store, group, _agent) = workspace();
+        assert!(store.group_plugins(group).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn testing_tells_a_wrong_key_apart_from_a_server_that_wants_a_sign_in() {
+        // The two 401s, which are the same status code and opposite problems.
+        // An operator who cannot tell them apart re-pastes a key at a server
+        // that never wanted one, or goes looking for a sign-in that is really a
+        // typo in a key.
+        let server = deploy(Wants { bearer: Some("right".into()), ..Wants::default() }).await;
+
+        let asked = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a 401 is a finding rather than a failure");
+        assert_eq!(asked.signin, SigninNeed::Wanted);
+        assert!(asked.tools.is_empty(), "nothing has been signed in to");
+
+        let wrong = plugins::inspect(true, &server.endpoint(), Some("wrong"), &Headers::none())
+            .await
+            .expect("and so is a refused key");
+        assert_eq!(wrong.signin, SigninNeed::Refused);
+
+        let right = plugins::inspect(true, &server.endpoint(), Some("right"), &Headers::none())
+            .await
+            .expect("a key the server takes");
+        assert_eq!(right.signin, SigninNeed::Accepted);
+        assert_eq!(right.tools, vec!["turn_on".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn testing_a_connected_plugin_spends_the_grant_that_is_already_there() {
+        // The other half of "test it", and the one a crew needs: whether the
+        // sign-in the operator did last month is still good. Nothing else in
+        // the app can answer that without reconnecting, which opens a browser.
+        let server = deploy(Wants { bearer: Some("hand-minted".into()), ..Wants::default() }).await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
+            |_| panic!("a pasted key skips discovery"),
+        )
+        .await
+        .expect("connected with a key");
+
+        let dialed = store.plugin_dial(plugin.id).unwrap().expect("the row it was written as");
+        let report = plugins::check(&store, plugin.id, dialed, kind.endpoint(), None)
+            .await
+            .expect("and the key is still accepted");
+        assert_eq!(report.signin, SigninNeed::Accepted);
+        assert_eq!(report.tools, vec!["turn_on".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_there_reports_the_address_rather_than_a_shape() {
+        // The commonest failure of all, and the one where a report is worse
+        // than useless if it invents a transport it never established.
+        let refused =
+            plugins::inspect(true, "http://127.0.0.1:1/mcp", None, &Headers::none()).await;
+        assert!(refused.is_err(), "an address nothing answers on is an error, not a report");
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("127.0.0.1:1"), "{message}");
+    }
 }
 
 // ---- live --------------------------------------------------------------
@@ -2539,7 +3160,7 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
         // believes the fallback rule is; whether six real vendors actually
         // refuse `server/discover` in a shape that reads as legacy is the thing
         // only this can answer.
-        let opened = guac_lib::mcp::open(endpoint, None).await;
+        let opened = guac_lib::mcp::open(guac_lib::mcp::Dial::to(endpoint)).await;
         let challenge = match &opened {
             Ok(session) => {
                 let tools = guac_lib::mcp::list_tools(session).await.unwrap_or_else(|err| {

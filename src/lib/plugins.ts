@@ -24,7 +24,7 @@
  * the one true thing about it — that it is a server somebody plugged in.
  */
 
-import type { CatalogKind, PluginKind } from "./types";
+import type { CatalogKind, PluginKind, ServerReport } from "./types";
 
 export interface Brand {
   /** The `d` of a single path on a 24x24 viewBox, verbatim from Simple Icons. */
@@ -101,4 +101,42 @@ export function hostOf(endpoint: string): string {
   } catch {
     return endpoint;
   }
+}
+
+/**
+ * What one dial of a server found out, as the sentence a person reads.
+ *
+ * Written here rather than assembled in the panel because it is a decision
+ * rather than a layout: which of the four outcomes this was, and which of the
+ * facts underneath are worth saying about each. A server that wants a sign-in
+ * has no transport, no revision and no tools, and a line built by concatenating
+ * whatever was set would say "answered over , MCP" about it.
+ *
+ * The two 401s get different sentences on purpose. They are one status code and
+ * opposite problems: an operator who cannot tell them apart re-pastes a key at
+ * a server that never wanted one, or goes hunting for a sign-in that is really
+ * a typo. Each says what to do next rather than what went wrong.
+ */
+export function reportLine(report: ServerReport): string {
+  const took = `${report.ms} ms`;
+  if (report.signin === "wanted") {
+    return `Reached it in ${took}. It wants a sign-in: connecting opens your browser.`;
+  }
+  if (report.signin === "refused") {
+    return `Reached it in ${took} and it refused what you gave it. The address is right and the key is not.`;
+  }
+
+  const who = report.server || "It";
+  const how = report.handshake
+    ? `${report.transport}, MCP ${report.protocol}, with a handshake`
+    : `${report.transport}, MCP ${report.protocol}`;
+  // Named rather than counted, because the operator is checking that the tools
+  // they expect are the ones this address publishes. A count answers a
+  // different question, and it is one nobody has.
+  const offers =
+    report.tools.length === 0
+      ? "It published no tools, so a crew connecting it would be offered nothing"
+      : `${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}: ${report.tools.join(", ")}`;
+  const paid = report.signin === "accepted" ? " It accepted what you gave it." : "";
+  return `${who} answered in ${took} over ${how}.${paid} ${offers}.`;
 }
