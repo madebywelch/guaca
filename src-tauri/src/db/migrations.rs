@@ -989,6 +989,53 @@ CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
     (
         35,
         r#"
+-- Until now `kind` was a slug out of a closed enum, and the address the runtime
+-- dialled was derived from it. That is still true of the six servers Guaca
+-- ships, and it stays true of them: where a vendor's server lives is a decision
+-- this build makes and re-makes on every release, so a stored copy would keep a
+-- crew dialling the old host after the vendor moved — which is the failure
+-- migration 26 exists to clean up after.
+--
+-- A server the operator added has nowhere else to keep it. `kind` holds the
+-- name they gave it, which is also the prefix its tools are called by, and this
+-- column holds the address. Empty means "the catalog knows where this is", so
+-- every row written before today keeps meaning exactly what it meant, and a row
+-- with neither a catalog slug nor an address is a row nothing can dial — which
+-- is what a newer build's plugin looks like after a downgrade, and is skipped
+-- rather than raised.
+--
+-- `plugins_kind_unique` needs no change and is doing more work than it was: it
+-- was one row per vendor per crew, and it is now also what stops two servers in
+-- one crew sharing a name, which would put two tool lists under one prefix and
+-- make which one a call landed on depend on row order.
+ALTER TABLE plugins ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';
+"#,
+    ),
+    (
+        36,
+        r#"
+-- Headers the operator wrote, for a server they run themselves.
+--
+-- The third thing such a server can want after an address and a token, and the
+-- one the catalog never needs: an `X-API-Key` because that is where its
+-- framework looks, a pair of `Cf-Access-Client-*` because it is behind
+-- Cloudflare Access, a tenant id because one deployment serves several. None of
+-- them is discoverable, so there is nowhere for them to come from but the
+-- person who deployed the thing.
+--
+-- A grant column in everything but name. Every value here is a secret and this
+-- column is read by the one function that puts it on the wire, exactly as
+-- `access_token` is, and `Plugin` carries the names without the values for the
+-- same reason `connectors` does not return `secret`.
+--
+-- `'[]'` is a server that needs none, which is every row written before today
+-- and almost every row written after it.
+ALTER TABLE plugins ADD COLUMN headers TEXT NOT NULL DEFAULT '[]';
+"#,
+    ),
+    (
+        37,
+        r#"
 -- A directory on this machine that a crew may write code in. Scoped to the
 -- group like everything else an agent can see, and holding no secret: a path is
 -- not a credential, which is why it is a plain column and not the shape
@@ -1026,7 +1073,7 @@ CREATE INDEX repository_access_agent ON repository_access (agent_id);
 "#,
     ),
     (
-        36,
+        38,
         r#"
 -- An agent works in at most one repository. That is a decision about
 -- coordination rather than about permissions: two agents on one codebase settle
@@ -1324,6 +1371,60 @@ mod tests {
             .query_row("SELECT count(*) FROM plugin_tool_access", [], |row| row.get(0))
             .unwrap();
         assert_eq!(off, 0, "a migration that switched anything off would break a working crew");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_a_server_could_be_added_keeps_dialling_the_vendor() {
+        // Empty means "the catalog knows where this is", which is what every
+        // row written before today meant and has to go on meaning. A migration
+        // that backfilled the vendor's address into the column would freeze it
+        // there, and the next time a vendor moved, every crew connected before
+        // the move would keep dialling the old host with nothing on screen
+        // saying why their plugin had stopped working.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 35) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let endpoint: String = conn
+            .query_row("SELECT endpoint FROM plugins WHERE id='p1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(endpoint, "", "an address in the row is one the build can no longer change");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_headers_existed_sends_none() {
+        // `'[]'` and not `''`, because the column is read by parsing it. An
+        // empty string parses as nothing either way today, and would be a
+        // corrupt row the day anything decided to tell an unreadable column
+        // apart from an empty one.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 36) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let headers: String = conn
+            .query_row("SELECT headers FROM plugins WHERE id='p1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(headers, "[]");
     }
 
     #[test]

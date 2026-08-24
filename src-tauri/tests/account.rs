@@ -12,6 +12,12 @@
 //! redirect is loopback, and the verifier presented at the token endpoint
 //! actually hashes to the challenge that was sent. A regression in the last one
 //! is a sign-in that still works and no longer proves anything.
+//!
+//! It also has the shape of the real service rather than the simplest one. Its
+//! authorization server is mounted under `/api/auth`, so the issuer it publishes
+//! is not its origin, and it names that issuer in the redirect. A stub at the
+//! root agreed with a substitution the app was making, and passed every test in
+//! this file while every sign-in against `guaca.bot` was refused.
 
 use std::sync::Arc;
 
@@ -61,6 +67,23 @@ struct Script {
     reject_token: bool,
     /// Seconds of life on the access token. `None` means the server did not say.
     expires_in: Option<i64>,
+    /// Sit at the root of the origin rather than under a path.
+    ///
+    /// Off by default, because `guaca.bot` mounts its authorization server at
+    /// `/api/auth` and a stub at the root is what let this suite pass while
+    /// every real sign-in was refused: the app substituted the origin for the
+    /// issuer, and a root-mounted server is the one case where those are the
+    /// same string.
+    root_mounted: bool,
+    /// Publish no `issuer` at all, which RFC 8414 requires and a server can
+    /// still omit.
+    omit_issuer: bool,
+    /// Publish an issuer on another origin while keeping the endpoints here.
+    /// Not the same failure as `foreign_endpoints`: the credential goes to the
+    /// right place and the answer is then checked against a third party's name.
+    foreign_issuer: bool,
+    /// Name somebody else as the issuer in the redirect. RFC 9207's mix-up.
+    wrong_iss: bool,
 }
 
 fn base64url(raw: &[u8]) -> String {
@@ -93,29 +116,50 @@ async fn serve(script: Script) -> Stub {
     let metadata_origin =
         if script.foreign_endpoints { "http://127.0.0.1:9".to_string() } else { origin.clone() };
 
+    // Where the authorization server sits under the origin, which is what makes
+    // its issuer identifier something other than that origin.
+    let mount = if script.root_mounted { "" } else { "/api/auth" };
+    // What the document says. The endpoints hang off it, so a foreign-endpoint
+    // script moves all three at once.
+    let published = format!("{metadata_origin}{mount}");
+    // What the redirect names: this server, wherever the document pointed.
+    let issued_by = format!("{origin}{mount}");
+
     let app = Router::new()
         .route(
             "/.well-known/oauth-authorization-server",
-            get(move || {
-                let base = metadata_origin.clone();
-                async move {
-                    Json(serde_json::json!({
-                        "issuer": base,
-                        "authorization_endpoint": format!("{base}/oauth2/authorize"),
-                        "token_endpoint": format!("{base}/oauth2/token"),
-                        "code_challenge_methods_supported": ["S256"],
-                        "scopes_supported": ["openid", "email", "offline_access", "connectors"],
-                    }))
+            get({
+                let (published, script) = (published.clone(), script.clone());
+                move || {
+                    let (published, script) = (published.clone(), script.clone());
+                    async move {
+                        let mut body = serde_json::json!({
+                            "issuer": published,
+                            "authorization_endpoint": format!("{published}/oauth2/authorize"),
+                            "token_endpoint": format!("{published}/oauth2/token"),
+                            "code_challenge_methods_supported": ["S256"],
+                            "scopes_supported": ["openid", "email", "offline_access", "connectors"],
+                        });
+                        if script.omit_issuer {
+                            body.as_object_mut().expect("an object").remove("issuer");
+                        }
+                        if script.foreign_issuer {
+                            body["issuer"] = "https://elsewhere.example".into();
+                        }
+                        Json(body)
+                    }
                 }
             }),
         )
         .route(
-            "/oauth2/authorize",
+            &format!("{mount}/oauth2/authorize"),
             get({
                 let asked = asked.clone();
                 let script = script.clone();
+                let issued_by = issued_by.clone();
                 move |Query(query): Query<std::collections::HashMap<String, String>>| {
-                    let (asked, script) = (asked.clone(), script.clone());
+                    let (asked, script, issued_by) =
+                        (asked.clone(), script.clone(), issued_by.clone());
                     async move {
                         let seen = Asked {
                             client_id: query.get("client_id").cloned().unwrap_or_default(),
@@ -145,12 +189,22 @@ async fn serve(script: Script) -> Stub {
                         };
                         *asked.lock() = Some(seen);
 
+                        // RFC 9207, percent-encoded the way a real server sends
+                        // it. The app decodes before comparing, so a value that
+                        // skipped the encoding would never exercise that.
+                        let iss = urlencoding_encode(if script.wrong_iss {
+                            "https://not-the-service.example"
+                        } else {
+                            &issued_by
+                        });
+
                         let to = if script.deny {
                             format!(
-                                "{back}?error=access_denied&error_description=Nope&state={state}"
+                                "{back}?error=access_denied&error_description=Nope\
+                                 &state={state}&iss={iss}"
                             )
                         } else {
-                            format!("{back}?code=the-code&state={state}")
+                            format!("{back}?code=the-code&state={state}&iss={iss}")
                         };
                         Redirect::temporary(&to)
                     }
@@ -158,7 +212,7 @@ async fn serve(script: Script) -> Stub {
             }),
         )
         .route(
-            "/oauth2/token",
+            &format!("{mount}/oauth2/token"),
             post({
                 let asked = asked.clone();
                 let exchanges = exchanges.clone();
@@ -251,6 +305,18 @@ async fn serve(script: Script) -> Stub {
 
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Stub { origin, asked, presented, exchanges }
+}
+
+/// Everything but the unreserved set, which is what a real server sends.
+fn urlencoding_encode(raw: &str) -> String {
+    raw.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 fn urlencoding_decode(raw: &str) -> String {
@@ -381,6 +447,58 @@ async fn an_answer_that_does_not_match_the_request_is_treated_as_an_attack() {
 }
 
 #[tokio::test]
+async fn the_answer_is_checked_against_the_issuer_the_service_published() {
+    // The live failure. `guaca.bot` mounts its authorization server at
+    // `/api/auth`, so the issuer it publishes and returns in `iss` is
+    // `https://guaca.bot/api/auth` and its origin is not. The app compared
+    // against the origin, so every sign-in reached the consent screen, was
+    // issued a code, and was refused on the way back.
+    let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+
+    let status = account.sign_in(browse).await.expect("the sign-in should complete");
+    assert!(status.signed_in);
+
+    // And the endpoints it used really were the ones under the path, rather
+    // than the flow having quietly stopped checking.
+    let asked = stub.asked.lock().clone().expect("the browser was sent somewhere");
+    assert!(asked.redirect_uri.starts_with("http://127.0.0.1:"), "{}", asked.redirect_uri);
+    assert_eq!(stub.exchanges.lock().len(), 1, "the code was traded at the mounted endpoint");
+}
+
+#[tokio::test]
+async fn an_answer_naming_another_issuer_is_refused() {
+    // RFC 9207's mix-up: a code minted by a server the operator does not use,
+    // presented to the one they do. Refused before the code is read, so there
+    // is nothing to have traded.
+    let stub = serve(Script { wrong_iss: true, ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+
+    match account.sign_in(browse).await {
+        Err(AccountError::IssuerMismatch { expected, named }) => {
+            assert_eq!(expected, format!("{}/api/auth", stub.origin));
+            assert_eq!(named, "https://not-the-service.example");
+        }
+        other => panic!("expected an issuer mismatch, got {other:?}"),
+    }
+    assert!(!account.is_signed_in(), "nothing is stored");
+    assert!(stub.exchanges.lock().is_empty(), "the code was never traded");
+}
+
+#[tokio::test]
+async fn a_service_that_publishes_no_issuer_is_checked_against_its_origin() {
+    // RFC 8414 requires the field and a server can still leave it out. The
+    // address the document was fetched from is what its absence means: the root
+    // well-known path is the address of an issuer with no path. Substituting
+    // the origin *unconditionally* is the bug; substituting it when nothing was
+    // published is the reading.
+    let stub = serve(Script { root_mounted: true, omit_issuer: true, ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+
+    assert!(account.sign_in(browse).await.expect("the sign-in should complete").signed_in);
+}
+
+#[tokio::test]
 async fn a_service_that_publishes_endpoints_somewhere_else_is_refused() {
     // The one thing discovery could do to move a credential. Refused before a
     // browser is opened, so nothing is sent anywhere.
@@ -392,6 +510,24 @@ async fn a_service_that_publishes_endpoints_somewhere_else_is_refused() {
             assert!(endpoint.starts_with("http://127.0.0.1:9"), "{endpoint}");
         }
         other => panic!("expected a refused endpoint, got {other:?}"),
+    }
+    assert!(stub.asked.lock().is_none(), "the browser was never opened");
+}
+
+#[tokio::test]
+async fn a_service_that_names_someone_else_as_its_issuer_is_refused() {
+    // The issuer is now what the redirect is checked against, so an unchecked
+    // one is a value a third party could put there: a code minted anywhere
+    // would arrive naming that issuer and be accepted. Refused at discovery,
+    // where the endpoints already were.
+    let stub = serve(Script { foreign_issuer: true, ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+
+    match account.sign_in(browse).await {
+        Err(AccountError::ForeignEndpoint { endpoint, .. }) => {
+            assert_eq!(endpoint, "https://elsewhere.example");
+        }
+        other => panic!("expected a refused issuer, got {other:?}"),
     }
     assert!(stub.asked.lock().is_none(), "the browser was never opened");
 }
@@ -488,10 +624,21 @@ async fn the_real_service_still_publishes_where_to_sign_in() {
     let body: serde_json::Value =
         http.get(&url).send().await.expect("metadata unreachable").json().await.expect("not json");
 
-    for field in ["authorization_endpoint", "token_endpoint"] {
+    // The issuer among them, because it is the value the redirect is checked
+    // against and the one this suite could not see: the stub used to publish
+    // its own origin, agreeing with a substitution the app was making, while
+    // the live service published a path under it and every sign-in was refused.
+    for field in ["authorization_endpoint", "token_endpoint", "issuer"] {
         let endpoint = body[field].as_str().unwrap_or_default();
         assert!(endpoint.starts_with(origin.trim_end_matches('/')), "{field} is {endpoint}");
     }
+    // RFC 9207 is only a check if the service says it sends `iss`. A service
+    // that stopped would leave the redirect unverified and nothing would fail.
+    assert_eq!(
+        body["authorization_response_iss_parameter_supported"].as_bool(),
+        Some(true),
+        "the service should still name the issuer in its redirect"
+    );
     let methods = body["code_challenge_methods_supported"].as_array().cloned().unwrap_or_default();
     assert!(
         methods.iter().any(|m| m == "S256"),

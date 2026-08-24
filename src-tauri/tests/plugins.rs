@@ -35,8 +35,9 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, GroupId};
-use guac_lib::domain::plugin::{PluginAccess, PluginKind};
+use guac_lib::domain::plugin::{HeaderPair, Headers, PluginAccess, PluginKind, SigninNeed};
 use guac_lib::llm::tools::{self, ToolInvocation};
+use guac_lib::mcp::PROTOCOL_VERSION;
 use guac_lib::plugins;
 
 /// A tool narrowed to nobody: switched off for the whole crew.
@@ -63,6 +64,40 @@ struct Rules {
     /// an account-backed plugin presents: the token is the machine's Guaca
     /// account, minted somewhere this server's sign-in never ran.
     account_token: Option<String>,
+    /// Which shape of the protocol this server implements.
+    era: Era,
+    /// Every revision it will accept, for a modern one. Empty is "whatever it
+    /// is at", and a list that shares nothing with this build is the failure
+    /// no amount of reconnecting fixes.
+    versions: Vec<String>,
+    /// A tool that asks for one of its arguments in an HTTP header.
+    ///
+    /// Optional for a server and mandatory for a client, so the only way to
+    /// prove Guaca does it is a server that demands it and refuses a call that
+    /// arrives without it — which is exactly what a real one does.
+    mirrors: bool,
+    /// A gate in front of every route on this host, refusing anything without
+    /// the header the operator was given. Cloudflare Access, in one field.
+    ///
+    /// It sits in front of the metadata documents too, which is the whole point
+    /// of it being here rather than in the deployment scripted below: a client
+    /// that puts the operator's headers only on MCP requests gets past the gate
+    /// on the first call, reads the 401, and then fails discovery on a `403`
+    /// nobody can act on.
+    gated: Option<(String, String)>,
+}
+
+/// Which shape of the protocol the scripted server speaks.
+///
+/// Both, because both are in the field and a client that speaks one is a
+/// client that cannot reach half of them. Every vendor on the list today is
+/// `Legacy`; `Modern` is revision 2026-07-28, which deleted the handshake.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Era {
+    /// `initialize`, a session id, and no `server/discover`.
+    Legacy,
+    /// Per-request `_meta`, mirrored headers, and no session at all.
+    Modern,
 }
 
 impl Default for Rules {
@@ -73,6 +108,10 @@ impl Default for Rules {
             expires_in: Some(3600),
             issue_expired: false,
             account_token: None,
+            era: Era::Legacy,
+            versions: Vec::new(),
+            mirrors: false,
+            gated: None,
         }
     }
 }
@@ -92,6 +131,9 @@ struct Server {
     seen: Arc<Mutex<Vec<Option<String>>>>,
     /// What `tools/call` was asked for.
     called: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    /// The `mcp-*` headers on every request, so a test can assert what an
+    /// intermediary would have been able to route on without reading a body.
+    noted: Arc<Mutex<Vec<HashMap<String, String>>>>,
     registrations: Arc<AtomicUsize>,
     refreshes: Arc<AtomicUsize>,
 }
@@ -102,6 +144,11 @@ impl Server {
     }
 
     /// Whether this token is one the server still accepts.
+    /// The revision this server will serve, for a modern one.
+    fn version(&self) -> String {
+        self.rules.versions.first().cloned().unwrap_or_else(|| PROTOCOL_VERSION.to_string())
+    }
+
     fn accepts(&self, token: &str) -> bool {
         if self.revoked.lock().iter().any(|dead| dead == token) {
             return false;
@@ -121,6 +168,7 @@ async fn serve(rules: Rules) -> Server {
         revoked: Arc::new(Mutex::new(Vec::new())),
         seen: Arc::new(Mutex::new(Vec::new())),
         called: Arc::new(Mutex::new(Vec::new())),
+        noted: Arc::new(Mutex::new(Vec::new())),
         registrations: Arc::new(AtomicUsize::new(0)),
         refreshes: Arc::new(AtomicUsize::new(0)),
     };
@@ -129,9 +177,13 @@ async fn serve(rules: Rules) -> Server {
         .route("/.well-known/oauth-protected-resource", get(protected_resource))
         .route("/.well-known/oauth-authorization-server", get(authorization_server))
         .route("/register", post(register))
-        .route("/authorize", get(authorize))
         .route("/token", post(token))
         .route("/mcp", post(rpc))
+        // In front of everything a program asks for, and not in front of the
+        // page a person visits: a browser going through Access has a cookie of
+        // its own, which is exactly why the header exists for everything else.
+        .layer(axum::middleware::from_fn_with_state(server.clone(), gate))
+        .route("/authorize", get(authorize))
         .with_state(server.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -139,6 +191,25 @@ async fn serve(rules: Rules) -> Server {
     *server.base.lock() = format!("http://{addr}");
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     server
+}
+
+/// A gate in front of the host, refusing anything without the operator's header.
+///
+/// `403` and not `401`, which is the point: a gate is not the server asking to
+/// be signed in to, and a client that read it as one would send the operator to
+/// a browser over a missing header.
+async fn gate(
+    State(server): State<Server>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    if let Some((name, value)) = &server.rules.gated {
+        let sent = request.headers().get(name.as_str()).and_then(|v| v.to_str().ok());
+        if sent != Some(value.as_str()) {
+            return (axum::http::StatusCode::FORBIDDEN, "no").into_response();
+        }
+    }
+    next.run(request).await
 }
 
 async fn protected_resource(State(server): State<Server>) -> impl IntoResponse {
@@ -266,29 +337,171 @@ async fn rpc(
     }
 
     let id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
-    let method = body.get("method").and_then(|m| m.as_str()).unwrap_or_default();
-    let result = match method {
+    let method = body.get("method").and_then(|m| m.as_str()).unwrap_or_default().to_string();
+
+    // What an intermediary could have routed on. Recorded whatever the era, so
+    // a test can also assert that a legacy request carries none of it.
+    let noted: HashMap<String, String> = headers
+        .iter()
+        .filter(|(name, _)| name.as_str().starts_with("mcp-"))
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|value| (name.as_str().to_string(), value.to_string()))
+        })
+        .collect();
+    server.noted.lock().push(noted.clone());
+
+    let refusal = |status: axum::http::StatusCode, code: i64, message: String, data| {
+        (
+            status,
+            axum::Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": { "code": code, "message": message, "data": data },
+            })),
+        )
+            .into_response()
+    };
+
+    if server.rules.era == Era::Modern {
+        // A modern-only server has never heard of the handshake, and answers
+        // it the way it answers any unknown method.
+        if method == "initialize" || method == "notifications/initialized" {
+            return refusal(
+                axum::http::StatusCode::NOT_FOUND,
+                -32601,
+                format!("no method {method}"),
+                serde_json::Value::Null,
+            );
+        }
+
+        let want = server.version();
+        let declared = body["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let supported: Vec<String> = if server.rules.versions.is_empty() {
+            vec![want.clone()]
+        } else {
+            server.rules.versions.clone()
+        };
+        if !supported.contains(&declared) {
+            return refusal(
+                axum::http::StatusCode::BAD_REQUEST,
+                -32022,
+                "Unsupported protocol version".into(),
+                serde_json::json!({ "supported": supported, "requested": declared }),
+            );
+        }
+        // The header has to agree with the body, which is the whole reason the
+        // header exists: an intermediary routes on it and the server executes
+        // on the body, and a client that lets them differ is the vulnerability.
+        let mismatch = noted.get("mcp-protocol-version") != Some(&declared)
+            || noted.get("mcp-method") != Some(&method)
+            || (method == "tools/call"
+                && noted.get("mcp-name").map(String::as_str) != body["params"]["name"].as_str());
+        if mismatch {
+            return refusal(
+                axum::http::StatusCode::BAD_REQUEST,
+                -32020,
+                format!("headers do not match the body: {noted:?}"),
+                serde_json::Value::Null,
+            );
+        }
+        if method == "server/discover" {
+            return event(
+                &id,
+                serde_json::json!({
+                    "supportedVersions": supported,
+                    "capabilities": { "tools": {} },
+                    "_meta": {
+                        "io.modelcontextprotocol/serverInfo": { "name": "Scripted MCP Server" },
+                    },
+                }),
+            );
+        }
+    } else if method == "server/discover" {
+        // A legacy server answering an unknown method, which is how this client
+        // finds out it is one. Two hundred with a JSON-RPC error rather than a
+        // status code, because that is what a real one does and it is the case
+        // a status-only fallback rule would get wrong.
+        return axum::Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": -32601, "message": "no method server/discover" },
+        }))
+        .into_response();
+    }
+
+    let result = match method.as_str() {
         "initialize" => serde_json::json!({
             "protocolVersion": "2025-06-18",
             "capabilities": { "tools": {} },
             "serverInfo": { "name": "Scripted MCP Server" },
         }),
         "notifications/initialized" => return axum::http::StatusCode::ACCEPTED.into_response(),
-        "tools/list" => serde_json::json!({
-            "tools": [
-                {
+        "tools/list" => {
+            let mut tools = vec![
+                serde_json::json!({
                     "name": "run_sql",
                     "description": "Run a query.",
                     "inputSchema": { "type": "object", "properties": { "sql": { "type": "string" } } },
-                },
+                }),
                 // No schema at all, which is legal and means no arguments. It
                 // has to reach the model as an empty object rather than as null.
-                { "name": "list_projects", "description": "" },
-            ],
-        }),
+                serde_json::json!({ "name": "list_projects", "description": "" }),
+            ];
+            if server.rules.mirrors {
+                tools.push(serde_json::json!({
+                    "name": "deploy",
+                    "description": "Deploy to a region.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "region": { "type": "string", "x-mcp-header": "Region" },
+                            "what": { "type": "string" },
+                        },
+                    },
+                }));
+                // And one no client may offer at all: its annotation sits under
+                // `items`, where a call has no single value to mirror.
+                tools.push(serde_json::json!({
+                    "name": "broken",
+                    "description": "Annotated somewhere nothing can read.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "rows": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "id": { "type": "string", "x-mcp-header": "Id" },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                }));
+            }
+            serde_json::json!({ "tools": tools })
+        }
         "tools/call" => {
             let name = body["params"]["name"].as_str().unwrap_or_default().to_string();
             let arguments = body["params"]["arguments"].clone();
+            if server.rules.mirrors && name == "deploy" {
+                // The server validates the mirrored header against the body,
+                // which is what the spec requires of it and what makes a client
+                // that skipped the header fail here rather than silently.
+                if noted.get("mcp-param-region").map(String::as_str) != arguments["region"].as_str()
+                {
+                    return refusal(
+                        axum::http::StatusCode::BAD_REQUEST,
+                        -32020,
+                        "Mcp-Param-Region does not match the body".into(),
+                        serde_json::Value::Null,
+                    );
+                }
+            }
             server.called.lock().push((name.clone(), arguments));
             serde_json::json!({ "content": [{ "type": "text", "text": format!("{name} ran") }] })
         }
@@ -302,8 +515,14 @@ async fn rpc(
         }
     };
 
-    // Answered as an event stream rather than as JSON, because a real server on
-    // the list does and parsing only JSON made a working server look broken.
+    event(&id, result)
+}
+
+/// A reply, as an event stream rather than as JSON.
+///
+/// Because a real server on the list does, and parsing only JSON made a working
+/// server look broken.
+fn event(id: &serde_json::Value, result: serde_json::Value) -> axum::response::Response {
     (
         [("content-type", "text/event-stream")],
         format!(
@@ -437,9 +656,10 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
     let plugin = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         |_| panic!("a public server must not open a browser"),
     )
     .await
@@ -463,9 +683,10 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
     let plugin = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -494,9 +715,10 @@ async fn a_redirect_that_does_not_match_is_refused() {
     let failed = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::WrongState),
     )
     .await
@@ -514,9 +736,10 @@ async fn a_refusal_in_the_browser_is_reported_as_one() {
     let failed = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Refused),
     )
     .await
@@ -540,9 +763,10 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
     let failed = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &format!("{}/mcp", server.base()),
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -557,16 +781,24 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     let answer = plugins::call(
         &store,
         plugins::Target {
             group,
             agent,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: &endpoint,
             account: None,
         },
@@ -614,9 +846,10 @@ mod account_backed {
         let plugin = plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &format!("{}/mcp", server.base()),
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
         )
         .await
@@ -652,9 +885,13 @@ mod account_backed {
         let plugin = plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "work" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: ACCOUNT,
+                connection: "work",
+            }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -669,9 +906,13 @@ mod account_backed {
         let moved = plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "personal" }),
+            plugins::Credential::Account(plugins::AccountUse {
+                token: ACCOUNT,
+                connection: "personal",
+            }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -685,7 +926,7 @@ mod account_backed {
         // And the call path agrees with the panel, which is the half that
         // decides what an agent actually gets.
         assert!(matches!(
-            store.plugin_reach(group, agent, PluginKind::Google, "list_projects").unwrap(),
+            store.plugin_reach(group, agent, &PluginKind::Google, "list_projects").unwrap(),
             PluginReach::ToolDenied
         ));
     }
@@ -702,17 +943,21 @@ mod account_backed {
         plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
         .unwrap();
 
-        match store.plugin_reach(group, agent, PluginKind::Google, "gmail_search").unwrap() {
-            guac_lib::db::store::PluginReach::Granted { grant, .. } => {
-                assert!(grant.is_none(), "an account-backed plugin holds no grant of its own");
+        match store.plugin_reach(group, agent, &PluginKind::Google, "gmail_search").unwrap() {
+            guac_lib::db::store::PluginReach::Granted(reached) => {
+                assert!(
+                    reached.grant.is_none(),
+                    "an account-backed plugin holds no grant of its own"
+                );
             }
             other => panic!("expected the plugin to be reachable, got {other:?}"),
         }
@@ -726,9 +971,10 @@ mod account_backed {
         let failed = plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &format!("{}/mcp", server.base()),
-            None,
+            plugins::Credential::Discover,
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -749,9 +995,10 @@ mod account_backed {
         plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -762,7 +1009,7 @@ mod account_backed {
             plugins::Target {
                 group,
                 agent,
-                kind: PluginKind::Google,
+                kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
@@ -787,9 +1034,10 @@ mod account_backed {
         plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -800,7 +1048,7 @@ mod account_backed {
             plugins::Target {
                 group,
                 agent,
-                kind: PluginKind::Google,
+                kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: None,
             },
@@ -825,9 +1073,10 @@ mod account_backed {
         let plugin = plugins::connect(
             &store,
             group,
-            PluginKind::Google,
+            &PluginKind::Google,
             &endpoint,
-            Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
             |_| Ok(()),
         )
         .await
@@ -846,7 +1095,7 @@ mod account_backed {
             plugins::Target {
                 group,
                 agent,
-                kind: PluginKind::Google,
+                kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             },
@@ -897,9 +1146,10 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
     let plugin = plugins::connect(
         &store,
         group,
-        PluginKind::Google,
+        &PluginKind::Google,
         &endpoint,
-        Some(plugins::AccountUse { token: &token, connection: "" }),
+        plugins::Credential::Account(plugins::AccountUse { token: &token, connection: "" }),
+        &Headers::none(),
         |_| panic!("an account-backed plugin must not open a browser"),
     )
     .await
@@ -918,7 +1168,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
             plugins::Target {
                 group,
                 agent,
-                kind: PluginKind::Google,
+                kind: &PluginKind::Google,
                 endpoint: &endpoint,
                 account: Some(plugins::AccountUse { token: &token, connection: "" }),
             },
@@ -942,6 +1192,646 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
     }
 }
 
+// ---- servers the operator added -----------------------------------------
+
+/// Everything below is a server nobody vouched for, and the point of every one
+/// of them is that nothing else about a plugin changes because of it: the same
+/// probe, the same sign-in, the same tool list, the same per-agent and per-tool
+/// answers, and a grant that never leaves the store except onto the wire.
+mod added {
+    use super::*;
+
+    /// The kind an operator would end up with, as `PluginKind::custom` builds
+    /// it. Built through the constructor rather than by hand, so a test cannot
+    /// use a name or an address the app itself would refuse.
+    fn mine(server: &Server) -> PluginKind {
+        PluginKind::custom("Home Assistant", &format!("{}/mcp", server.base())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_server_the_operator_typed_signs_in_like_any_other() {
+        let server = serve(Rules::default()).await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            browser(Outcome::Allowed),
+        )
+        .await
+        .expect("a server nobody vouched for signs in exactly as a vendor's does");
+
+        // The name is the one the crew will call it by, not the one that was
+        // typed, and the row says nobody checked it.
+        assert_eq!(plugin.name, "home_assistant");
+        assert_eq!(plugin.kind.slug(), "home_assistant");
+        assert!(plugin.custom);
+        assert!(plugin.signed_in);
+        assert_eq!(plugin.endpoint, kind.endpoint());
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 1);
+
+        // And it comes back out of the store as the same server, address and
+        // all: the address is on the row, because there is no catalog entry to
+        // look it up in.
+        let held = store.group_plugins(group).unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].kind, kind);
+
+        // Offered to the crew under its own prefix, and callable by it.
+        let connected = store.plugin_tools(group, agent).unwrap();
+        let specs = tools::plugin_specs(&connected);
+        let names: Vec<&str> = specs.iter().map(|spec| spec.name.as_str()).collect();
+        assert_eq!(names, vec!["home_assistant__run_sql", "home_assistant__list_projects"]);
+
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({ "sql": "select 1" }),
+        )
+        .await
+        .expect("the crew's own server answers");
+        assert_eq!(answer, "run_sql ran");
+        assert_eq!(server.seen.lock().last().cloned().flatten(), Some("access-0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn its_name_only_resolves_against_a_crew_that_has_it() {
+        // The one place a custom server differs from a catalog one at parse
+        // time. `neon__` is a name this build knows whether or not anybody
+        // connected it, so an agent calling it gets a refusal that says who can
+        // connect it. A name nobody has ever heard of is not a plugin call, and
+        // must not be reported as a plugin that is merely not connected: that
+        // sends the operator looking for a server nobody has ever named.
+        let server = serve(Rules::default()).await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+
+        let call = |name: &str| guac_lib::llm::openrouter::ToolCall {
+            id: "1".into(),
+            name: name.into(),
+            arguments: "{}".into(),
+        };
+
+        // Before it is connected: not a plugin, and not a tool either.
+        let before = store.group_plugin_kinds(group).unwrap();
+        assert!(tools::parse(&call("home_assistant__run_sql"), &before).is_err());
+        // A catalog name is still recognized with nothing connected at all.
+        assert!(matches!(
+            tools::parse(&call("neon__run_sql"), &before),
+            Ok(ToolInvocation::Plugin { .. })
+        ));
+        // And a model composing two of the app's own tool names is still an
+        // unknown tool rather than a server nobody has.
+        assert!(tools::parse(&call("use_screen__click"), &before).is_err());
+
+        plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            browser(Outcome::Allowed),
+        )
+        .await
+        .unwrap();
+
+        // After: the name resolves, and it carries the address it will be
+        // dialled at, because that is the only place the address exists.
+        let after = store.group_plugin_kinds(group).unwrap();
+        match tools::parse(&call("home_assistant__run_sql"), &after) {
+            Ok(ToolInvocation::Plugin { kind: parsed, tool, .. }) => {
+                assert_eq!(parsed, kind);
+                assert_eq!(parsed.endpoint(), kind.endpoint());
+                assert_eq!(tool, "run_sql");
+            }
+            other => panic!("expected a plugin call, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn an_agent_it_was_narrowed_away_from_is_sent_to_a_peer_rather_than_told_it_does_not_exist(
+    ) {
+        // The reason the list a name is resolved against is the crew's and not
+        // the agent's. Being able to name a thing and being allowed to call it
+        // are two questions, and the second one has the useful answer in it: a
+        // peer has this. Resolved against the agent's own plugins, the name
+        // would not resolve at all and the turn would be told the tool does not
+        // exist — which names no way forward and is not what the six say.
+        let server = serve(Rules::default()).await;
+        let (_dir, store, group, chosen) = workspace();
+        let left_out = crew(&store, group, "Scribe");
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            browser(Outcome::Allowed),
+        )
+        .await
+        .unwrap();
+        store.set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![chosen] }).unwrap();
+
+        // It is not in this agent's own list, which is what decides the tool
+        // definitions and is right: it must not be offered the tool.
+        assert!(store.plugin_tools(group, left_out).unwrap().is_empty());
+
+        // And the name still resolves, because the crew has the server.
+        let call = guac_lib::llm::openrouter::ToolCall {
+            id: "1".into(),
+            name: "home_assistant__run_sql".into(),
+            arguments: "{}".into(),
+        };
+        let named = store.group_plugin_kinds(group).unwrap();
+        assert!(matches!(tools::parse(&call, &named), Ok(ToolInvocation::Plugin { .. })));
+
+        // So the refusal is the one with a peer in it.
+        let refused = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent: left_out,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: None,
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("an agent the operator did not choose cannot call it");
+        assert!(refused.to_string().contains("not for you"), "{refused}");
+        assert!(refused.to_string().contains("peer"), "{refused}");
+    }
+
+    #[tokio::test]
+    async fn a_pasted_key_is_spent_as_a_bearer_and_never_opens_a_browser() {
+        // The case the catalog never has: a server somebody wrote, with a token
+        // minted by hand and no authorization server behind it at all. Asking
+        // one of those to discover a sign-in is a round trip whose only outcome
+        // is a 401 with nothing in it.
+        let server =
+            serve(Rules { account_token: Some("hand-minted".to_string()), ..Default::default() })
+                .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
+            |_| panic!("a pasted key must not send anybody to a browser"),
+        )
+        .await
+        .expect("a key connects");
+
+        assert!(plugin.signed_in, "a key is a sign-in: the server accepted it");
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 0, "nothing to register with");
+
+        // It is stored where a grant is stored and hidden the way one is.
+        let json = serde_json::to_string(&store.group_plugins(group).unwrap()).unwrap();
+        assert!(!json.contains("hand-minted"), "a key must not cross IPC: {json}");
+
+        // And spent the same way.
+        plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect("the key reaches the server");
+        assert_eq!(server.seen.lock().last().cloned().flatten(), Some("hand-minted".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_key_the_server_stops_taking_says_to_paste_another_rather_than_retrying_forever() {
+        // There is no refresh token behind a pasted key, so the one retry the
+        // OAuth path gets does not apply and must not be attempted: a refresh
+        // against an empty token endpoint is a request to nowhere.
+        let server =
+            serve(Rules { account_token: Some("hand-minted".to_string()), ..Default::default() })
+                .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+
+        plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+        server.revoked.lock().push("hand-minted".to_string());
+        let refused = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a key the server stopped taking is not a working plugin");
+
+        let said = refused.to_string();
+        assert!(said.contains("home_assistant"), "{said}");
+        assert!(said.contains("connect it again"), "{said}");
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 0, "there is nothing to refresh");
+    }
+
+    #[tokio::test]
+    async fn it_is_narrowed_by_agent_and_by_tool_exactly_as_a_vendor_s_is() {
+        // The whole claim this feature makes: after the address, nothing is
+        // different. If any of these three had to be special-cased for a server
+        // the operator added, this would be a second code path pretending to be
+        // one.
+        let server = serve(Rules::default()).await;
+        let (_dir, store, group, triage) = workspace();
+        let answerer = crew(&store, group, "Answerer");
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            browser(Outcome::Allowed),
+        )
+        .await
+        .unwrap();
+
+        // One tool for one agent, and the plugin itself for both.
+        store
+            .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![answerer] })
+            .unwrap();
+
+        assert!(matches!(
+            store.plugin_reach(group, answerer, &kind, "run_sql").unwrap(),
+            PluginReach::Granted(_)
+        ));
+        assert!(matches!(
+            store.plugin_reach(group, triage, &kind, "run_sql").unwrap(),
+            PluginReach::ToolNotChosen
+        ));
+
+        // The refusal names the server by the name its tools are called by,
+        // because that is the only name the agent has ever seen.
+        let refused = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent: triage,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: None,
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a tool narrowed away is refused here, not at the server");
+        assert!(refused.to_string().contains("home_assistant"), "{refused}");
+
+        // And what each is offered differs, on one sign-in.
+        let theirs = store.plugin_tools(group, answerer).unwrap();
+        let mine_now = store.plugin_tools(group, triage).unwrap();
+        assert!(theirs[0].offered.iter().any(|tool| tool.name == "run_sql"));
+        assert!(!mine_now[0].offered.iter().any(|tool| tool.name == "run_sql"));
+        assert_eq!(mine_now[0].elsewhere, vec!["run_sql"]);
+    }
+
+    #[tokio::test]
+    async fn two_of_them_in_one_crew_keep_their_own_addresses() {
+        // Which is what the name being the prefix buys, and what the unique
+        // index over (group, kind) is now also doing: two servers under one
+        // name would put two tool lists behind one prefix, and which one a call
+        // landed on would depend on row order.
+        let first = serve(Rules { needs_token: false, ..Default::default() }).await;
+        let second = serve(Rules { needs_token: false, ..Default::default() }).await;
+        let (_dir, store, group, agent) = workspace();
+
+        let vault = PluginKind::custom("Vault", &format!("{}/mcp", first.base())).unwrap();
+        let notes = PluginKind::custom("Notes", &format!("{}/mcp", second.base())).unwrap();
+        for kind in [&vault, &notes] {
+            plugins::connect(
+                &store,
+                group,
+                kind,
+                kind.endpoint(),
+                plugins::Credential::Discover,
+                &Headers::none(),
+                |_| Ok(()),
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(store.group_plugins(group).unwrap().len(), 2);
+        let specs = tools::plugin_specs(&store.plugin_tools(group, agent).unwrap());
+        assert!(specs.iter().any(|spec| spec.name == "vault__run_sql"));
+        assert!(specs.iter().any(|spec| spec.name == "notes__run_sql"));
+
+        // And a call reaches the one it named rather than the other.
+        plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: &notes,
+                endpoint: notes.endpoint(),
+                account: None,
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.called.lock().len(), 1);
+        assert!(first.called.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_gated_server_that_also_signs_in_gets_the_headers_on_the_whole_dance() {
+        // The composition, and the reason headers are not a `Credential`. A
+        // gate in front of a self-hosted server refuses the metadata document a
+        // sign-in has to read first, so a client that puts the operator's
+        // headers only on MCP requests gets past the gate on the first call,
+        // reads the 401, and then fails discovery on a `403` nobody can act on.
+        let server = serve(Rules {
+            gated: Some(("cf-access-client-id".into(), "abc.access".into())),
+            issue_expired: true,
+            ..Rules::default()
+        })
+        .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = PluginKind::custom("Home Assistant", &format!("{}/mcp", server.base())).unwrap();
+        let headers = Headers::parse(&[HeaderPair {
+            name: "Cf-Access-Client-Id".into(),
+            value: "abc.access".into(),
+        }])
+        .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            browser(Outcome::Allowed),
+        )
+        .await
+        .expect("past the gate, and then signed in from behind it");
+
+        assert!(plugin.signed_in, "the 401 behind the gate is still a sign-in");
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 1);
+
+        // And the renewal too, which is the one that would fail a day later:
+        // the token endpoint is on the same host, so a refresh without the
+        // header is a 403 long after everything looked fine.
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({ "sql": "select 1" }),
+        )
+        .await
+        .expect("the grant was stale, so this had to renew before it could call");
+        assert_eq!(answer, "run_sql ran");
+        assert_eq!(server.refreshes.load(Ordering::SeqCst), 1);
+    }
+}
+
+// ---- the two protocol eras ----------------------------------------------
+
+/// A client that speaks one era is a client that cannot reach half the servers
+/// in the field, so it speaks both. The legacy half is every other test in this
+/// file — every vendor on the list shakes hands today — and this is the other.
+mod eras {
+    use super::*;
+
+    fn modern(rules: Rules) -> Rules {
+        Rules { era: Era::Modern, ..rules }
+    }
+
+    #[tokio::test]
+    async fn a_modern_server_is_reached_with_no_handshake_at_all() {
+        let server = serve(modern(Rules { needs_token: false, ..Default::default() })).await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = PluginKind::custom("modern", &format!("{}/mcp", server.base())).unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("this server authorizes everybody"),
+        )
+        .await
+        .expect("a modern server connects");
+
+        let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(named, vec!["run_sql", "list_projects"]);
+        // It named itself through `server/discover`, which is where the modern
+        // revision moved `serverInfo` to.
+        assert_eq!(plugin.account, "Scripted MCP Server");
+
+        plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "run_sql",
+            &serde_json::json!({ "sql": "select 1" }),
+        )
+        .await
+        .expect("a modern call goes through");
+
+        let noted = server.noted.lock().clone();
+        // Nothing shook hands, and nothing was asked to.
+        assert!(!noted.is_empty());
+        // Every request declared its version in the header beside the body, and
+        // named its own method. The server refuses the request outright if the
+        // two disagree, so reaching this line at all is most of the assertion.
+        for seen in &noted {
+            assert_eq!(
+                seen.get("mcp-protocol-version").map(String::as_str),
+                Some(PROTOCOL_VERSION)
+            );
+            assert!(seen.contains_key("mcp-method"), "{seen:?}");
+            assert!(!seen.contains_key("mcp-session-id"), "a modern server mints none: {seen:?}");
+        }
+        let called = noted
+            .iter()
+            .find(|seen| seen.get("mcp-method").map(String::as_str) == Some("tools/call"))
+            .unwrap();
+        assert_eq!(called.get("mcp-name").map(String::as_str), Some("run_sql"));
+    }
+
+    #[tokio::test]
+    async fn a_legacy_server_is_still_shaken_hands_with_after_the_modern_probe_fails() {
+        // The spec's own fallback rule, and the case a status-code-only reading
+        // gets wrong: this server answers an unknown method with 200 and a
+        // JSON-RPC error, which is neither a 400 nor a modern error shape.
+        let server = serve(Rules { needs_token: false, ..Default::default() }).await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = PluginKind::custom("legacy", &format!("{}/mcp", server.base())).unwrap();
+
+        plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| Ok(()),
+        )
+        .await
+        .expect("a legacy server connects through the fallback");
+
+        let noted = server.noted.lock().clone();
+        // Probed once, then handed the handshake. Nothing after the probe
+        // carries the modern headers, which a strict legacy server would refuse.
+        assert!(noted.iter().all(|seen| !seen.contains_key("mcp-name")), "{noted:?}");
+        // And the version every later request declares is the one the handshake
+        // settled on, not the one this build would have preferred.
+        assert!(
+            noted
+                .iter()
+                .filter(|seen| seen.get("mcp-protocol-version").is_some())
+                .any(|seen| seen["mcp-protocol-version"] == "2025-06-18"),
+            "the negotiated revision has to be the one sent afterward: {noted:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_modern_server_connected_twice_signs_in_twice() {
+        // The bug the era cache introduced, and it only ever showed on the
+        // second connect. A modern server has no handshake, so a remembered era
+        // makes `open` return a session with no request in it — and the
+        // deliberate unauthenticated first call, which is the whole way Guaca
+        // finds out a grant is wanted, never went out. The first crew signed in
+        // and every crew after it got a raw 401 out of the tool list.
+        let server = serve(modern(Rules::default())).await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = PluginKind::custom("twice", &format!("{}/mcp", server.base())).unwrap();
+
+        for _ in 0..2 {
+            plugins::connect(
+                &store,
+                group,
+                &kind,
+                kind.endpoint(),
+                plugins::Credential::Discover,
+                &Headers::none(),
+                browser(Outcome::Allowed),
+            )
+            .await
+            .expect("a modern server signs in every time it is connected");
+        }
+
+        assert_eq!(store.group_plugins(group).unwrap().len(), 1);
+        assert_eq!(server.registrations.load(Ordering::SeqCst), 2, "each connect is its own");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_shares_no_revision_says_so_rather_than_reading_as_a_bad_address() {
+        // Nothing an operator can do fixes this one, and it must not look like
+        // a typo in the URL, which is the other reason a connect fails.
+        let server = serve(modern(Rules {
+            needs_token: false,
+            versions: vec!["2099-01-01".to_string()],
+            ..Default::default()
+        }))
+        .await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = PluginKind::custom("future", &format!("{}/mcp", server.base())).unwrap();
+
+        let refused = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| Ok(()),
+        )
+        .await
+        .expect_err("a revision this build does not have is not a connection");
+
+        let said = refused.to_string();
+        assert!(said.contains("2099-01-01"), "{said}");
+        assert!(said.contains("update Guaca"), "{said}");
+        assert!(store.group_plugins(group).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_argument_the_server_wants_in_a_header_is_put_there() {
+        // Optional for a server and mandatory for a client, which means the
+        // only proof is a server that validates it and refuses a call that
+        // arrives without it. This one does exactly what the spec tells it to.
+        let server =
+            serve(modern(Rules { needs_token: false, mirrors: true, ..Default::default() })).await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = PluginKind::custom("mirrored", &format!("{}/mcp", server.base())).unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+        // The tool whose annotation nothing could honor is dropped rather than
+        // offered: a call to it would be refused by the server every time, for
+        // a reason no model can act on.
+        let named: Vec<&str> = plugin.tools.iter().map(|tool| tool.name.as_str()).collect();
+        assert_eq!(named, vec!["run_sql", "list_projects", "deploy"]);
+        assert!(!named.contains(&"broken"), "an unreadable annotation drops one tool, not all");
+
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "deploy",
+            &serde_json::json!({ "region": "us-west1", "what": "the worker" }),
+        )
+        .await
+        .expect("the header the server asked for is on the request");
+        assert_eq!(answer, "deploy ran");
+
+        let noted = server.noted.lock().clone();
+        let called = noted
+            .iter()
+            .find(|seen| seen.get("mcp-method").map(String::as_str) == Some("tools/call"))
+            .unwrap();
+        assert_eq!(called.get("mcp-param-region").map(String::as_str), Some("us-west1"));
+    }
+}
+
 #[tokio::test]
 async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
     let (_dir, store, group, agent) = workspace();
@@ -951,7 +1841,7 @@ async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
         plugins::Target {
             group,
             agent,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: "http://127.0.0.1:1/mcp",
             account: None,
         },
@@ -976,9 +1866,17 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     // Everything before this line was the sign-in spending a token it had just
     // been handed, which is correct however short its life is. What matters is
@@ -990,7 +1888,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
         plugins::Target {
             group,
             agent,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: &endpoint,
             account: None,
         },
@@ -1016,9 +1914,17 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     server.revoked.lock().push("access-0".to_string());
 
@@ -1027,7 +1933,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
         plugins::Target {
             group,
             agent,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: &endpoint,
             account: None,
         },
@@ -1042,12 +1948,12 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
 
     // And the renewed grant is written back, or every later turn pays for the
     // same discovery.
-    let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
+    let PluginReach::Granted(reached) =
+        store.plugin_reach(group, agent, &PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("the plugin is connected and this agent was not excluded from it")
     };
-    assert_eq!(grant.unwrap().access_token, "access-1");
+    assert_eq!(reached.grant.unwrap().access_token, "access-1");
 }
 
 #[tokio::test]
@@ -1059,9 +1965,10 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
     let plugin = plugins::connect(
         &store,
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1070,7 +1977,7 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
     assert!(store.delete_plugin(plugin.id).unwrap());
     assert!(store.group_plugins(group).unwrap().is_empty());
     assert!(matches!(
-        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap(),
+        store.plugin_reach(group, agent, &PluginKind::Neon, "run_sql").unwrap(),
         PluginReach::NotConnected
     ));
 }
@@ -1084,20 +1991,40 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(store.group_plugins(group).unwrap().len(), 1);
-    let PluginReach::Granted { grant, .. } =
-        store.plugin_reach(group, agent, PluginKind::Neon, "run_sql").unwrap()
+    let PluginReach::Granted(reached) =
+        store.plugin_reach(group, agent, &PluginKind::Neon, "run_sql").unwrap()
     else {
         panic!("connecting again leaves a plugin the crew can use")
     };
-    assert_eq!(grant.unwrap().access_token, "access-1", "the newer sign-in is the one held");
+    assert_eq!(
+        reached.grant.unwrap().access_token,
+        "access-1",
+        "the newer sign-in is the one held"
+    );
 }
 
 #[tokio::test]
@@ -1109,9 +2036,17 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     let connected = store.plugin_tools(group, agent).unwrap();
     let specs = tools::plugin_specs(&connected);
@@ -1135,7 +2070,7 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
         name: "neon__run_sql".into(),
         arguments: r#"{"sql":"select 1"}"#.into(),
     };
-    match tools::parse(&call).expect("a plugin tool parses") {
+    match tools::parse(&call, &[]).expect("a plugin tool parses") {
         ToolInvocation::Plugin { kind, tool, arguments } => {
             assert_eq!(kind, PluginKind::Neon);
             assert_eq!(tool, "run_sql");
@@ -1168,15 +2103,16 @@ async fn a_crew_with_a_plugin_calls_it_through_a_real_turn() {
 
     let h =
         harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1272,15 +2208,16 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
         &["Revenue", "Scribe"],
         guac_lib::runtime::guard::GuardLimits::default(),
     );
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1344,15 +2281,16 @@ async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_
 
     let h =
         harness::harness(&model, &["Manager"], guac_lib::runtime::guard::GuardLimits::default());
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1405,15 +2343,16 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
         &["Revenue", "Scribe"],
         guac_lib::runtime::guard::GuardLimits::default(),
     );
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1461,15 +2400,16 @@ async fn two_agents_on_one_plugin_are_offered_different_tools_and_told_whose_is_
         &["Reader", "Writer"],
         guac_lib::runtime::guard::GuardLimits::default(),
     );
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Reader")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1542,15 +2482,16 @@ async fn a_tool_that_is_a_peer_s_is_refused_here_and_not_at_the_vendor() {
         &["Reader", "Writer"],
         guac_lib::runtime::guard::GuardLimits::default(),
     );
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Reader")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1594,15 +2535,16 @@ async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
         &["Revenue", "Scribe"],
         guac_lib::runtime::guard::GuardLimits::default(),
     );
-    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon, endpoint.clone())]));
+    h.runtime.plugins_at(HashMap::from([(PluginKind::Neon.slug().to_string(), endpoint.clone())]));
 
     let group = h.runtime.store().get_agent(h.id("Revenue")).unwrap().unwrap().group_id;
     let plugin = plugins::connect(
         h.runtime.store(),
         group,
-        PluginKind::Neon,
+        &PluginKind::Neon,
         &endpoint,
-        None,
+        plugins::Credential::Discover,
+        &Headers::none(),
         browser(Outcome::Allowed),
     )
     .await
@@ -1630,9 +2572,17 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     let endpoint = format!("{}/mcp", server.base());
     let (_dir, store, group, agent) = workspace();
 
-    plugins::connect(&store, group, PluginKind::Neon, &endpoint, None, browser(Outcome::Allowed))
-        .await
-        .unwrap();
+    plugins::connect(
+        &store,
+        group,
+        &PluginKind::Neon,
+        &endpoint,
+        plugins::Credential::Discover,
+        &Headers::none(),
+        browser(Outcome::Allowed),
+    )
+    .await
+    .unwrap();
 
     let other = store
         .create_group(&CleanGroup { name: "Elsewhere".to_string(), ..Default::default() })
@@ -1645,7 +2595,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
         plugins::Target {
             group: other,
             agent: outsider,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: &endpoint,
             account: None,
         },
@@ -1662,7 +2612,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
         plugins::Target {
             group,
             agent,
-            kind: PluginKind::Neon,
+            kind: &PluginKind::Neon,
             endpoint: &endpoint,
             account: None,
         },
@@ -1671,6 +2621,495 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
     )
     .await
     .expect("the crew that signed in still has it");
+}
+
+// ---- the transport streamable HTTP replaced -------------------------------
+
+/// A server on the transport that streamable HTTP replaced, and a server that
+/// wants headers nobody could have discovered.
+///
+/// Both are the same shape of problem and neither is a vendor's: an operator
+/// running their own box has whatever their framework shipped two years ago,
+/// behind whatever their company puts in front of things. The catalog answers
+/// neither question because a catalog server is one somebody checked.
+///
+/// Scripted separately from `serve` on purpose. That server is the five
+/// vendors' shape — OAuth metadata, registration, a token endpoint — and this
+/// one is a box with a key taped to it. Merging them would put an `if` in front
+/// of every route for a case the other never reaches.
+mod deployments {
+    use super::*;
+
+    use axum::body::Body;
+    use axum::extract::Query;
+    use axum::http::StatusCode;
+    use futures_util::StreamExt;
+
+    /// What the scripted deployment insists on before it answers anything.
+    #[derive(Clone, Default)]
+    struct Wants {
+        /// A header and its value, refused with a 403 when it is absent. Not a
+        /// 401: a gate in front of a server is not the server asking for a
+        /// sign-in, and a client that read it as one would open a browser.
+        header: Option<(String, String)>,
+        /// A bearer the server accepts. `None` is a server that asks for
+        /// nothing at all.
+        bearer: Option<String>,
+        /// Where the `endpoint` event points, when it is not this server's own
+        /// `/messages`.
+        redirect: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct Deployment {
+        wants: Wants,
+        base: Arc<Mutex<String>>,
+        /// One sender per open event stream, by the id its `endpoint` named.
+        streams: Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<String>>>>,
+        /// Every header set this server was sent, so a test can assert what
+        /// went out rather than only that the call succeeded.
+        seen: Arc<Mutex<Vec<HashMap<String, String>>>>,
+    }
+
+    impl Deployment {
+        fn base(&self) -> String {
+            self.base.lock().clone()
+        }
+
+        fn endpoint(&self) -> String {
+            format!("{}/sse", self.base())
+        }
+    }
+
+    async fn deploy(wants: Wants) -> Deployment {
+        let server = Deployment {
+            wants,
+            base: Arc::new(Mutex::new(String::new())),
+            streams: Arc::new(Mutex::new(HashMap::new())),
+            seen: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = Router::new()
+            .route("/sse", get(stream).post(no_post))
+            .route("/messages", post(message))
+            .with_state(server.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        *server.base.lock() = format!("http://{addr}");
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        server
+    }
+
+    /// What this transport's endpoint does with a POST, which is the thing that
+    /// makes Guaca try the older transport at all.
+    async fn no_post() -> impl IntoResponse {
+        (StatusCode::METHOD_NOT_ALLOWED, "this endpoint is an event stream")
+    }
+
+    fn note(server: &Deployment, headers: &axum::http::HeaderMap) {
+        server.seen.lock().push(
+            headers
+                .iter()
+                .filter_map(|(name, value)| {
+                    value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string()))
+                })
+                .collect(),
+        );
+    }
+
+    /// Whether the request got past the gate and past the sign-in.
+    fn refuse(server: &Deployment, headers: &axum::http::HeaderMap) -> Option<StatusCode> {
+        if let Some((name, value)) = &server.wants.header {
+            let sent = headers.get(name.as_str()).and_then(|v| v.to_str().ok());
+            if sent != Some(value.as_str()) {
+                return Some(StatusCode::FORBIDDEN);
+            }
+        }
+        if let Some(bearer) = &server.wants.bearer {
+            let sent = headers
+                .get("authorization")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "));
+            if sent != Some(bearer.as_str()) {
+                return Some(StatusCode::UNAUTHORIZED);
+            }
+        }
+        None
+    }
+
+    async fn stream(
+        State(server): State<Deployment>,
+        headers: axum::http::HeaderMap,
+    ) -> axum::response::Response {
+        note(&server, &headers);
+        if let Some(status) = refuse(&server, &headers) {
+            return (status, "").into_response();
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let id = format!("s{}", server.streams.lock().len() + 1);
+        server.streams.lock().insert(id.clone(), tx);
+
+        let named =
+            server.wants.redirect.clone().unwrap_or_else(|| format!("/messages?sessionId={id}"));
+        let first = format!("event: endpoint\ndata: {named}\n\n");
+
+        let opening =
+            futures_util::stream::once(async move { Ok::<String, std::io::Error>(first) });
+        let rest = futures_util::stream::unfold(rx, |mut rx| async move {
+            rx.recv().await.map(|line| (Ok::<String, std::io::Error>(line), rx))
+        });
+
+        axum::response::Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(opening.chain(rest)))
+            .unwrap()
+    }
+
+    async fn message(
+        State(server): State<Deployment>,
+        Query(params): Query<HashMap<String, String>>,
+        headers: axum::http::HeaderMap,
+        axum::Json(body): axum::Json<serde_json::Value>,
+    ) -> axum::response::Response {
+        note(&server, &headers);
+        if let Some(status) = refuse(&server, &headers) {
+            return (status, "").into_response();
+        }
+
+        let method = body["method"].as_str().unwrap_or_default().to_string();
+        let id = body.get("id").cloned().unwrap_or(serde_json::Value::Null);
+        let result = match method.as_str() {
+            // The revision this transport belongs to, negotiated down from
+            // whatever was asked for — which is what a server of this vintage
+            // actually does, and the reason the list this build accepts had to
+            // grow two entries.
+            "initialize" => serde_json::json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": { "tools": {} },
+                "serverInfo": { "name": "Scripted Deployment" },
+            }),
+            "notifications/initialized" => return StatusCode::ACCEPTED.into_response(),
+            "tools/list" => serde_json::json!({
+                "tools": [{
+                    "name": "turn_on",
+                    "description": "Turn something on.",
+                    "inputSchema": { "type": "object", "properties": { "what": { "type": "string" } } },
+                }],
+            }),
+            "tools/call" => serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("{} ran", body["params"]["name"].as_str().unwrap_or_default()),
+                }],
+            }),
+            other => {
+                push(
+                    &server,
+                    &params,
+                    serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "error": { "code": -32601, "message": format!("no method {other}") },
+                    }),
+                );
+                return StatusCode::ACCEPTED.into_response();
+            }
+        };
+
+        // The documented answer: 202, and the reply down the stream the request
+        // belongs to. A client that reads the POST's own body for it hangs here.
+        push(&server, &params, serde_json::json!({ "jsonrpc": "2.0", "id": id, "result": result }));
+        StatusCode::ACCEPTED.into_response()
+    }
+
+    fn push(server: &Deployment, params: &HashMap<String, String>, reply: serde_json::Value) {
+        let Some(id) = params.get("sessionId") else { return };
+        if let Some(sender) = server.streams.lock().get(id) {
+            let _ = sender.send(format!("event: message\ndata: {reply}\n\n"));
+        }
+    }
+
+    fn mine(server: &Deployment) -> PluginKind {
+        PluginKind::custom("Home Assistant", &server.endpoint()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_server_on_the_older_transport_connects_and_answers_a_call() {
+        // The whole feature. Every one of these servers answers a POST to its
+        // stream with a 405, so before this they read as unreachable — which
+        // is a plugin the operator can see working in a browser and cannot
+        // connect, with nothing on screen saying why.
+        let server = deploy(Wants::default()).await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("a server that asks for nothing must not open a browser"),
+        )
+        .await
+        .expect("a server on the older transport is still a server");
+
+        assert_eq!(plugin.name, "home_assistant");
+        assert!(!plugin.signed_in, "it asked for nothing, so nothing was authorized");
+        assert_eq!(
+            plugin.tools.iter().map(|tool| tool.name.as_str()).collect::<Vec<_>>(),
+            vec!["turn_on"],
+        );
+
+        let answer = plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "turn_on",
+            &serde_json::json!({ "what": "the kettle" }),
+        )
+        .await
+        .expect("and its tools are callable");
+        assert_eq!(answer, "turn_on ran");
+    }
+
+    #[tokio::test]
+    async fn a_catalog_server_is_never_offered_the_older_transport() {
+        // The asymmetry, and it is the catalog's argument rather than an
+        // oversight: a vendor Guaca vouches for is one it can hold to the
+        // current transport. Pointed at the same deployment, a catalog kind
+        // fails on the POST and never tries the GET.
+        let server = deploy(Wants::default()).await;
+        let (_dir, store, group, _agent) = workspace();
+
+        let refused = plugins::connect(
+            &store,
+            group,
+            &PluginKind::Neon,
+            &server.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("nothing here signs in"),
+        )
+        .await;
+
+        assert!(refused.is_err(), "a vendor is held to the transport it publishes");
+        assert!(server.streams.lock().is_empty(), "and the event stream was never even opened",);
+    }
+
+    #[tokio::test]
+    async fn a_header_the_operator_wrote_is_on_every_request_including_the_stream() {
+        // The Cloudflare Access shape: a gate in front of the server that
+        // refuses anything without a pair of headers, on the GET as well as on
+        // the POST. A client that only put them on requests it thought of as
+        // "the call" never opens the stream at all.
+        let server = deploy(Wants {
+            header: Some(("cf-access-client-id".into(), "abc.access".into())),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, agent) = workspace();
+        let kind = mine(&server);
+        let headers = Headers::parse(&[HeaderPair {
+            name: "Cf-Access-Client-Id".into(),
+            value: "abc.access".into(),
+        }])
+        .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            |_| panic!("a gate is not a sign-in"),
+        )
+        .await
+        .expect("the headers get the request past the gate");
+
+        // Names on the row, and never the value: the panel has to be able to
+        // say what is being sent without being a place to read it back.
+        assert_eq!(plugin.headers, vec!["cf-access-client-id".to_string()]);
+
+        plugins::call(
+            &store,
+            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            "turn_on",
+            &serde_json::json!({ "what": "the kettle" }),
+        )
+        .await
+        .expect("and stay on every later request too");
+
+        let seen = server.seen.lock().clone();
+        assert!(seen.len() > 3, "the stream, the handshake and the calls: {}", seen.len());
+        assert!(
+            seen.iter().all(|headers| headers.get("cf-access-client-id").map(String::as_str)
+                == Some("abc.access")),
+            "every request has to carry it, including the GET that opens the stream",
+        );
+    }
+
+    #[tokio::test]
+    async fn a_key_in_a_header_the_operator_named_authenticates_without_a_sign_in() {
+        // The other half of the ask, and the one the bearer box cannot express:
+        // a server whose framework reads `X-API-Key` and has no authorization
+        // server behind it at all.
+        let server = deploy(Wants {
+            header: Some(("x-api-key".into(), "hand-minted".into())),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+        let headers =
+            Headers::parse(&[HeaderPair { name: "X-API-Key".into(), value: "hand-minted".into() }])
+                .unwrap();
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &headers,
+            |_| panic!("nothing here has an authorization server"),
+        )
+        .await
+        .expect("a header is a credential when that is what the server reads");
+
+        // Nothing was authorized, and the row says so rather than claiming a
+        // sign-in that never happened.
+        assert!(!plugin.signed_in);
+    }
+
+    #[tokio::test]
+    async fn a_message_endpoint_on_another_host_is_refused_rather_than_followed() {
+        // A redirect invented by the far end after the connection was made.
+        // Followed, the crew's credential and every tool argument go to a host
+        // the operator never named.
+        let server = deploy(Wants {
+            redirect: Some("https://evil.example/messages".into()),
+            ..Wants::default()
+        })
+        .await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+
+        let refused = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Discover,
+            &Headers::none(),
+            |_| panic!("nothing signs in"),
+        )
+        .await
+        .expect_err("a server may not redirect a session onto another host");
+        let message = refused.to_string();
+        assert!(message.contains("different server"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn testing_an_address_says_what_it_is_without_connecting_it() {
+        // What the button beside the address box answers. Every field is one an
+        // operator debugging their own deployment has to guess at otherwise,
+        // and the transport is the one that costs the most: a 405 on the
+        // current transport and a working event stream are the same sentence
+        // and opposite instructions.
+        let server = deploy(Wants::default()).await;
+
+        let report = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a reachable server reports");
+
+        assert_eq!(report.transport, "HTTP+SSE (2024-11-05)");
+        assert_eq!(report.protocol, "2024-11-05");
+        assert!(report.handshake);
+        assert_eq!(report.signin, SigninNeed::None);
+        assert_eq!(report.server, "Scripted Deployment");
+        // Twice in one process, and it still names itself. The handshake that
+        // said so belongs to a stream that was dropped, and the second dial
+        // finds the transport remembered and no name with it, so `describe`
+        // has to ask again rather than report a server that lost its name.
+        let again = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a second dial of the same address");
+        assert_eq!(again.server, "Scripted Deployment");
+        assert_eq!(again.protocol, "2024-11-05");
+        assert_eq!(report.tools, vec!["turn_on".to_string()]);
+
+        // And it connected nothing: no crew, no row, no grant.
+        let (_dir, store, group, _agent) = workspace();
+        assert!(store.group_plugins(group).unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn testing_tells_a_wrong_key_apart_from_a_server_that_wants_a_sign_in() {
+        // The two 401s, which are the same status code and opposite problems.
+        // An operator who cannot tell them apart re-pastes a key at a server
+        // that never wanted one, or goes looking for a sign-in that is really a
+        // typo in a key.
+        let server = deploy(Wants { bearer: Some("right".into()), ..Wants::default() }).await;
+
+        let asked = plugins::inspect(true, &server.endpoint(), None, &Headers::none())
+            .await
+            .expect("a 401 is a finding rather than a failure");
+        assert_eq!(asked.signin, SigninNeed::Wanted);
+        assert!(asked.tools.is_empty(), "nothing has been signed in to");
+
+        let wrong = plugins::inspect(true, &server.endpoint(), Some("wrong"), &Headers::none())
+            .await
+            .expect("and so is a refused key");
+        assert_eq!(wrong.signin, SigninNeed::Refused);
+
+        let right = plugins::inspect(true, &server.endpoint(), Some("right"), &Headers::none())
+            .await
+            .expect("a key the server takes");
+        assert_eq!(right.signin, SigninNeed::Accepted);
+        assert_eq!(right.tools, vec!["turn_on".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn testing_a_connected_plugin_spends_the_grant_that_is_already_there() {
+        // The other half of "test it", and the one a crew needs: whether the
+        // sign-in the operator did last month is still good. Nothing else in
+        // the app can answer that without reconnecting, which opens a browser.
+        let server = deploy(Wants { bearer: Some("hand-minted".into()), ..Wants::default() }).await;
+        let (_dir, store, group, _agent) = workspace();
+        let kind = mine(&server);
+
+        let plugin = plugins::connect(
+            &store,
+            group,
+            &kind,
+            kind.endpoint(),
+            plugins::Credential::Key("hand-minted"),
+            &Headers::none(),
+            |_| panic!("a pasted key skips discovery"),
+        )
+        .await
+        .expect("connected with a key");
+
+        let dialed = store.plugin_dial(plugin.id).unwrap().expect("the row it was written as");
+        let report = plugins::check(&store, plugin.id, dialed, kind.endpoint(), None)
+            .await
+            .expect("and the key is still accepted");
+        assert_eq!(report.signin, SigninNeed::Accepted);
+        assert_eq!(report.tools, vec!["turn_on".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_is_not_there_reports_the_address_rather_than_a_shape() {
+        // The commonest failure of all, and the one where a report is worse
+        // than useless if it invents a transport it never established.
+        let refused =
+            plugins::inspect(true, "http://127.0.0.1:1/mcp", None, &Headers::none()).await;
+        assert!(refused.is_err(), "an address nothing answers on is an error, not a report");
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("127.0.0.1:1"), "{message}");
+    }
 }
 
 // ---- live --------------------------------------------------------------
@@ -1695,12 +3134,33 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
 #[ignore = "reaches the real vendors; run ./scripts/plugins.sh"]
 async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
     for kind in PluginKind::ALL {
+        // Except the one whose sign-in is not its own. Google's server is the
+        // operator's Guaca account, which is already signed in and publishes no
+        // protected-resource metadata because there is no per-group grant to
+        // issue: `PluginKind::account_backed`, and *Google is a plugin whose
+        // sign-in is the account's* in `docs/PLUGINS.md`. Asking the OAuth
+        // question of it fails every run and always has, which is worse than
+        // not asking — a live gate that is permanently red is one nobody reads,
+        // and the vendor regression it exists to catch goes with it.
+        // `tests/account.rs` is where that server's own contract is checked.
+        if kind.account_backed() {
+            println!(
+                "{}: signs in with the machine's Guaca account, not with a grant of its own",
+                kind.label()
+            );
+            continue;
+        }
         let endpoint = kind.endpoint();
 
         // 1. An unauthenticated open, which is how Guaca finds out whether this
         //    server wants a grant at all, and where the address of the sign-in
         //    comes from when it does.
-        let opened = guac_lib::mcp::open(endpoint, None).await;
+        // This is also, and mainly, the era probe against a real server. Every
+        // offline test of it is a scripted server agreeing with what this build
+        // believes the fallback rule is; whether six real vendors actually
+        // refuse `server/discover` in a shape that reads as legacy is the thing
+        // only this can answer.
+        let opened = guac_lib::mcp::open(guac_lib::mcp::Dial::to(endpoint)).await;
         let challenge = match &opened {
             Ok(session) => {
                 let tools = guac_lib::mcp::list_tools(session).await.unwrap_or_else(|err| {
@@ -1747,7 +3207,14 @@ async fn every_server_on_the_list_still_publishes_what_this_build_expects() {
         //    browser where no error message can reach it.
         let asked = found.requested_scope();
         for scope in asked.iter().flat_map(|s| s.split(' ')) {
-            let published = if found.resource_scopes.is_empty() {
+            // Whichever of the three lists this build would have taken. The
+            // assertion is the same either way and it is the one that matters:
+            // every scope Guaca would send is one this vendor published today.
+            let published = if !found.challenge_scopes.is_empty() {
+                found.challenge_scopes.iter().any(|s| s == scope)
+                    || (scope == "offline_access"
+                        && found.server.scopes_supported.iter().any(|s| s == scope))
+            } else if found.resource_scopes.is_empty() {
                 found.server.scopes_supported.iter().any(|s| s == scope)
             } else {
                 // `offline_access` is the one this build adds, and only ever on

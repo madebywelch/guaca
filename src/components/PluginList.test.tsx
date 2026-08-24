@@ -4,10 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AccountConnectors,
   AgentCard,
+  HeaderPair,
   Plugin,
   PluginAccess,
   PluginOffer,
   PluginToolCard,
+  ServerReport,
 } from "../lib/types";
 import { PluginList } from "./PluginList";
 
@@ -18,6 +20,29 @@ const connectPlugin =
 const disconnectPlugin = vi.fn();
 const setPluginAccess = vi.fn<(id: string, access: PluginAccess) => Promise<Plugin>>();
 const setPluginTool = vi.fn<(id: string, tool: string, access: PluginAccess) => Promise<Plugin>>();
+const addPlugin =
+  vi.fn<
+    (
+      groupId: string,
+      name: string,
+      url: string,
+      key?: string,
+      headers?: HeaderPair[],
+    ) => Promise<Plugin>
+  >();
+const readdressPlugin =
+  vi.fn<
+    (
+      groupId: string,
+      id: string,
+      url: string,
+      key?: string,
+      headers?: HeaderPair[],
+    ) => Promise<Plugin>
+  >();
+const probeServer =
+  vi.fn<(url: string, key?: string, headers?: HeaderPair[]) => Promise<ServerReport>>();
+const checkPlugin = vi.fn<(id: string) => Promise<ServerReport>>();
 const openExternal = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
@@ -33,6 +58,18 @@ vi.mock("../lib/ipc", () => ({
     setPluginAccess: (id: string, access: PluginAccess) => setPluginAccess(id, access),
     setPluginTool: (id: string, tool: string, access: PluginAccess) =>
       setPluginTool(id, tool, access),
+    addPlugin: (groupId: string, name: string, url: string, key?: string, headers?: HeaderPair[]) =>
+      addPlugin(groupId, name, url, key, headers),
+    readdressPlugin: (
+      groupId: string,
+      id: string,
+      url: string,
+      key?: string,
+      headers?: HeaderPair[],
+    ) => readdressPlugin(groupId, id, url, key, headers),
+    probeServer: (url: string, key?: string, headers?: HeaderPair[]) =>
+      probeServer(url, key, headers),
+    checkPlugin: (id: string) => checkPlugin(id),
   },
   openExternal: (url: string) => openExternal(url),
 }));
@@ -86,10 +123,14 @@ function plugin(over: Partial<Plugin> = {}): Plugin {
     id: "p1",
     groupId: GROUP,
     kind: "neon",
+    name: "Neon",
+    endpoint: "https://mcp.neon.tech/mcp",
+    custom: false,
     account: "",
     tools: [tool("run_sql"), tool("create_branch")],
     access: { mode: "everyone" },
     connection: "",
+    headers: [],
     signedIn: true,
     connectedAt: 0,
     ...over,
@@ -131,6 +172,8 @@ describe("PluginList", () => {
     disconnectPlugin.mockReset();
     setPluginAccess.mockReset();
     setPluginTool.mockReset();
+    addPlugin.mockReset();
+    readdressPlugin.mockReset();
     openExternal.mockReset();
     pluginCatalog.mockResolvedValue(OFFERS);
     groupPlugins.mockResolvedValue([]);
@@ -635,5 +678,329 @@ describe("choosing which account a crew uses", () => {
 
     expect(await screen.findByText("Google")).toBeTruthy();
     expect(screen.queryByLabelText(/^Account/)).toBeNull();
+  });
+});
+
+/**
+ * A server nobody vouched for.
+ *
+ * The catalog rows above it are drawn from an offer, and these are drawn from
+ * the row itself, because there is no offer: what it is called and where it is
+ * come back from Rust with the plugin. Everything else on the row — who can use
+ * it, which of its tools are whose — is the same code and is tested above.
+ */
+describe("a server the operator added", () => {
+  const added = (over: Partial<Plugin> = {}): Plugin =>
+    plugin({
+      id: "p2",
+      kind: "home_assistant",
+      name: "home_assistant",
+      endpoint: "https://ha.example.com/mcp",
+      custom: true,
+      ...over,
+    });
+
+  beforeEach(() => {
+    pluginCatalog.mockReset();
+    groupPlugins.mockReset();
+    addPlugin.mockReset();
+    readdressPlugin.mockReset();
+    disconnectPlugin.mockReset();
+    probeServer.mockReset();
+    checkPlugin.mockReset();
+    pluginCatalog.mockResolvedValue(OFFERS);
+    groupPlugins.mockResolvedValue([]);
+  });
+
+  it("draws it under the name its tools are called by, not the one that was typed", async () => {
+    // The row shows what came back rather than predicting it, because the rule
+    // that turns one into the other lives in Rust and a second copy of it here
+    // would be a second place for it to be wrong.
+    groupPlugins.mockResolvedValue([added()]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText("home_assistant")).toBeTruthy();
+    expect(screen.getByText("ha.example.com")).toBeTruthy();
+    // And it says out loud that nobody checked it, which is the whole of the
+    // difference between this row and the six above it.
+    expect(screen.getByText(/nobody has checked it/)).toBeTruthy();
+  });
+
+  it("adds one, and keeps what was typed when the address is refused", async () => {
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+
+    fireEvent.change(screen.getByPlaceholderText("Home Assistant"), {
+      target: { value: "Home Assistant" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "http://ha.example.com/mcp" },
+    });
+
+    // Refused: a crew's grant would cross the network in the open.
+    addPlugin.mockRejectedValue(new Error("that is not https"));
+    fireEvent.click(screen.getByText("Add and connect"));
+    expect(await screen.findByText(/not https/)).toBeTruthy();
+    // The form is still there, still filled in. A refusal that made the
+    // operator retype the URL costs more than the mistake did.
+    expect((screen.getByPlaceholderText("Home Assistant") as HTMLInputElement).value).toBe(
+      "Home Assistant",
+    );
+
+    addPlugin.mockResolvedValue(added());
+    groupPlugins.mockResolvedValue([added()]);
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://ha.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Add and connect"));
+
+    await waitFor(() =>
+      expect(addPlugin).toHaveBeenLastCalledWith(
+        GROUP,
+        "Home Assistant",
+        "https://ha.example.com/mcp",
+        undefined,
+        [],
+      ),
+    );
+    // Cleared only once it worked, and the row it produced is what is drawn.
+    expect(await screen.findByText("home_assistant")).toBeTruthy();
+    expect(screen.queryByPlaceholderText("Home Assistant")).toBeNull();
+  });
+
+  it("sends a pasted key only when there is one", async () => {
+    // Empty means "ask the server what it wants", which is what a vendor's
+    // server gets. Sending an empty string would be a key that authorizes
+    // nothing, presented as though it were one.
+    addPlugin.mockResolvedValue(added());
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("Home Assistant"), {
+      target: { value: "Vault" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://vault.example.com/mcp" },
+    });
+    // Anchored: the label wraps the hint under it, so the accessible name is
+    // the whole paragraph and an exact match would never find the box.
+    fireEvent.change(screen.getByLabelText(/^Key \(optional\)/), {
+      target: { value: "abc123" },
+    });
+    fireEvent.click(screen.getByText("Add and connect"));
+
+    await waitFor(() =>
+      expect(addPlugin).toHaveBeenCalledWith(
+        GROUP,
+        "Vault",
+        "https://vault.example.com/mcp",
+        "abc123",
+        [],
+      ),
+    );
+  });
+
+  it("moves one to a new address without disconnecting it", async () => {
+    // A local server changing port is the common case, and Disconnect plus Add
+    // would take the per-tool switches with it.
+    groupPlugins.mockResolvedValue([added()]);
+    readdressPlugin.mockResolvedValue(added({ endpoint: "http://localhost:9000/mcp" }));
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Change address"));
+    const address = screen.getByDisplayValue("https://ha.example.com/mcp");
+    fireEvent.change(address, { target: { value: "http://localhost:9000/mcp" } });
+    fireEvent.click(screen.getByText("Save and reconnect"));
+
+    await waitFor(() =>
+      expect(readdressPlugin).toHaveBeenCalledWith(
+        GROUP,
+        "p2",
+        "http://localhost:9000/mcp",
+        undefined,
+        // Untouched, which is what keeps the stored set: a value cannot be read
+        // back, so a reconnection that meant "replace" would drop it.
+        undefined,
+      ),
+    );
+    expect(disconnectPlugin).not.toHaveBeenCalled();
+  });
+
+  it("sends the headers that were typed, and never sends a name back as a value", async () => {
+    // The third thing a server somebody runs can want, and the one nothing can
+    // discover: an `X-API-Key` because that is where its framework looks.
+    addPlugin.mockResolvedValue(added());
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+
+    fireEvent.change(screen.getByPlaceholderText("Home Assistant"), {
+      target: { value: "Vault" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://vault.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Add a header"));
+    fireEvent.change(screen.getByLabelText("Header 1 name"), { target: { value: "X-API-Key" } });
+    fireEvent.change(screen.getByLabelText("Header 1 value"), { target: { value: "abc123" } });
+    fireEvent.click(screen.getByText("Add and connect"));
+
+    await waitFor(() =>
+      expect(addPlugin).toHaveBeenCalledWith(
+        GROUP,
+        "Vault",
+        "https://vault.example.com/mcp",
+        undefined,
+        [{ name: "X-API-Key", value: "abc123" }],
+      ),
+    );
+  });
+
+  it("keeps a half-typed header on the row it was typed on", async () => {
+    // Keyed by position instead, removing the first row hands its DOM node —
+    // and whatever is in it — to the second, which is exactly when the operator
+    // is looking at two boxes that both say something they did not type.
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.click(screen.getByText("Add a header"));
+    fireEvent.click(screen.getByText("Add a header"));
+    fireEvent.change(screen.getByLabelText("Header 1 name"), { target: { value: "first" } });
+    fireEvent.change(screen.getByLabelText("Header 2 name"), { target: { value: "second" } });
+
+    fireEvent.click(screen.getByLabelText("Remove header 1"));
+
+    expect((screen.getByLabelText("Header 1 name") as HTMLInputElement).value).toBe("second");
+  });
+
+  it("hides a header's value and shows its name on the row", async () => {
+    // Both halves. The value is a credential and the panel must not be a place
+    // to read one back; the name is what an operator debugging their own
+    // server needs, because "is x-api-key on the request" is the question.
+    groupPlugins.mockResolvedValue([added({ headers: ["x-api-key", "cf-access-client-id"] })]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText(/Sends x-api-key, cf-access-client-id/)).toBeTruthy();
+  });
+
+  it("leaves stored headers alone unless the operator replaces them", async () => {
+    // A value cannot be read back, so a reconnection that meant "replace" would
+    // drop it: the same rule a group's API key has. Replacing is a thing the
+    // operator does on purpose, and the box starts with the names and no
+    // values, because that is exactly what is knowable.
+    groupPlugins.mockResolvedValue([added({ headers: ["x-api-key"] })]);
+    readdressPlugin.mockResolvedValue(added());
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Change address"));
+    fireEvent.click(screen.getByText("Replace headers"));
+    expect((screen.getByLabelText("Header 1 name") as HTMLInputElement).value).toBe("x-api-key");
+    expect((screen.getByLabelText("Header 1 value") as HTMLInputElement).value).toBe("");
+
+    fireEvent.change(screen.getByLabelText("Header 1 value"), { target: { value: "new" } });
+    fireEvent.click(screen.getByText("Save and reconnect"));
+
+    await waitFor(() =>
+      expect(readdressPlugin).toHaveBeenCalledWith(
+        GROUP,
+        "p2",
+        "https://ha.example.com/mcp",
+        undefined,
+        [{ name: "x-api-key", value: "new" }],
+      ),
+    );
+  });
+
+  it("tests an address before anything is connected, and says what it found", async () => {
+    // The whole point of the button: an operator who has to press Add to find
+    // out what is wrong connects the same server four times.
+    probeServer.mockResolvedValue({
+      endpoint: "https://ha.example.com/mcp",
+      transport: "HTTP+SSE (2024-11-05)",
+      protocol: "2024-11-05",
+      handshake: true,
+      signin: "none",
+      server: "Home Assistant",
+      tools: ["turn_on"],
+      ms: 42,
+    });
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://ha.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+
+    // The transport is the field that costs the most to guess at: a refusal on
+    // the current one and a working event stream are the same sentence and
+    // opposite instructions.
+    expect(await screen.findByText(/HTTP\+SSE \(2024-11-05\)/)).toBeTruthy();
+    expect(screen.getByText(/1 tool: turn_on/)).toBeTruthy();
+    // And it connected nothing.
+    expect(addPlugin).not.toHaveBeenCalled();
+  });
+
+  it("keeps a refusal on screen rather than clearing the form it was about", async () => {
+    // `run` reloads the panel and drops what it was told; a test has to keep
+    // its answer on a failure, because a server that refused is what somebody
+    // pressed this to find out.
+    probeServer.mockRejectedValue(new Error("could not reach https://ha.example.com/mcp"));
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Add a server"));
+    fireEvent.change(screen.getByPlaceholderText("https://example.com/mcp"), {
+      target: { value: "https://ha.example.com/mcp" },
+    });
+    fireEvent.click(screen.getByText("Test"));
+
+    expect(await screen.findByText(/could not reach/)).toBeTruthy();
+    expect((screen.getByPlaceholderText("https://example.com/mcp") as HTMLInputElement).value).toBe(
+      "https://ha.example.com/mcp",
+    );
+  });
+
+  it("tests a connected plugin against the sign-in it already has", async () => {
+    // The question a crew notices as an agent reporting a tool it cannot call,
+    // and the only other way to ask it is to connect again, which replaces the
+    // tool list and opens a browser.
+    groupPlugins.mockResolvedValue([added()]);
+    checkPlugin.mockResolvedValue({
+      endpoint: "https://ha.example.com/mcp",
+      transport: "",
+      protocol: "",
+      handshake: false,
+      signin: "refused",
+      server: "",
+      tools: [],
+      ms: 31,
+    });
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Test it"));
+
+    await waitFor(() => expect(checkPlugin).toHaveBeenCalledWith("p2"));
+    expect(await screen.findByText(/refused what you gave it/)).toBeTruthy();
+    expect(readdressPlugin).not.toHaveBeenCalled();
+  });
+
+  it("draws a mark for a server named after something on Object's prototype", async () => {
+    // A name here is an operator's word, and the prototype chain answers to
+    // several of them. A plain lookup with a fallback finds a truthy value that
+    // is not a brand for `constructor`, so the fallback never fires and the row
+    // draws an empty square, which reads as a broken row rather than an added
+    // server.
+    groupPlugins.mockResolvedValue([added({ kind: "constructor", name: "constructor" })]);
+    const { container } = render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText("constructor")).toBeTruthy();
+    const marks = [...container.querySelectorAll(".mark__icon path")];
+    expect(marks.every((path) => path.getAttribute("d"))).toBe(true);
+  });
+
+  it("offers no address control on a server Guaca ships", async () => {
+    // Where a vendor's server lives is not an operator setting: it is a
+    // decision the build makes, and a box implying otherwise is a way to point
+    // a crew's sign-in somewhere nobody chose.
+    groupPlugins.mockResolvedValue([plugin()]);
+    render(<PluginList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText(/2 tools/)).toBeTruthy();
+    expect(screen.queryByText("Change address")).toBeNull();
   });
 });

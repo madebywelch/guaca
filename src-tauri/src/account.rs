@@ -123,10 +123,38 @@ pub enum AccountError {
     Refused { error: String, description: Option<String> },
     #[error("the answer from your browser did not match the sign-in that was started")]
     StateMismatch,
+    /// RFC 9207: the redirect named an authorization server other than the one
+    /// the sign-in was started against.
+    ///
+    /// A different sentence from [`OauthError::IssuerMismatch`] on purpose. A
+    /// plugin's issuer is discovered per sign-in, so a mismatch there is an
+    /// answer arriving from somewhere unexpected. Here the expected value is
+    /// one the service itself published moments earlier, so a mismatch means
+    /// the service is contradicting its own metadata, and saying so is the
+    /// difference between an operator retrying forever and an operator
+    /// reporting it.
+    #[error(
+        "{expected} was published as the sign-in service and the answer came back naming \
+         {named}. Nothing was connected, and signing in again will not help until those two \
+         agree."
+    )]
+    IssuerMismatch { expected: String, named: String },
     #[error("{origin} answered HTTP {status}: {message}")]
     Upstream { origin: String, status: u16, message: String },
     #[error("could not reach {origin}: {detail}")]
     Transport { origin: String, detail: String },
+    /// An [`OauthError`] this flow has no way to produce.
+    ///
+    /// It exists so the conversion below can be exhaustive, which is the whole
+    /// point: the catch-all it replaced put "could not reach" in front of every
+    /// answer that arrived and disagreed, with an empty origin where the
+    /// service's name should have been. A new variant in `oauth.rs` is now a
+    /// compile error here rather than a sentence about the network.
+    #[error(
+        "the sign-in did something this build has no answer for: {detail}. That is a bug in Guaca \
+         rather than something to retry."
+    )]
+    Unexpected { detail: String },
     #[error("not signed in to a Guaca account")]
     NotSignedIn,
     #[error("the sign-in to {origin} has expired. Sign in again.")]
@@ -139,15 +167,27 @@ pub enum AccountError {
     },
 }
 
+/// Exhaustive rather than defensive.
+///
+/// [`OauthError`] describes a plugin sign-in as well, and that flow registers a
+/// client and renews its own grant where this one does neither, so three of its
+/// variants cannot arrive here. Naming them anyway is what stopped the ones
+/// that *can* arrive from being folded into `Transport`: an `IssuerMismatch` is
+/// an answer that came back and disagreed, and reporting it as a service that
+/// could not be reached sends the operator to check their network.
 impl From<OauthError> for AccountError {
     fn from(err: OauthError) -> Self {
         match err {
             OauthError::NoPort { source } => AccountError::NoPort { source },
+            OauthError::NoBrowser { detail } => AccountError::NoBrowser { detail },
             OauthError::TimedOut => AccountError::TimedOut,
             OauthError::Refused { error, description } => {
                 AccountError::Refused { error, description }
             }
             OauthError::StateMismatch => AccountError::StateMismatch,
+            OauthError::IssuerMismatch { expected, named } => {
+                AccountError::IssuerMismatch { expected, named }
+            }
             OauthError::NoMetadata { url, .. } => AccountError::NoMetadata { origin: url },
             OauthError::Status { url, status, body, .. } => {
                 AccountError::Upstream { origin: url, status, message: body }
@@ -155,7 +195,13 @@ impl From<OauthError> for AccountError {
             OauthError::Transport { url, source, .. } => {
                 AccountError::Transport { origin: url, detail: source.to_string() }
             }
-            other => AccountError::Transport { origin: String::new(), detail: other.to_string() },
+            // The three the plugin flow owns. `NoRegistration` and
+            // `NoRefreshToken` come from `oauth::connect` and `oauth::refresh`,
+            // which this module does not call; `NoToken` is raised by the one
+            // place that reads a grant rather than by `post_token`.
+            err @ (OauthError::NoRegistration { .. }
+            | OauthError::NoToken { .. }
+            | OauthError::NoRefreshToken) => AccountError::Unexpected { detail: err.to_string() },
         }
     }
 }
@@ -370,7 +416,13 @@ impl Account {
 
         open(&url).map_err(|detail| AccountError::NoBrowser { detail })?;
 
-        let code = oauth::wait_for_redirect(listener, &state).await?;
+        // RFC 9207. The value compared against is the issuer the service
+        // published and nothing else: see `ServerMetadata::issuer`, which is
+        // where the origin used to be substituted for it. Read out of the
+        // document before the browser opens rather than out of the answer,
+        // because the check is only worth anything against a value recorded in
+        // advance.
+        let code = oauth::wait_for_redirect(listener, &state, &server.issuer).await?;
 
         let issued = oauth::post_token(
             &oauth::http()?,
@@ -382,6 +434,7 @@ impl Account {
                 ("client_id".to_string(), CLIENT_ID.to_string()),
                 ("code_verifier".to_string(), verifier),
             ],
+            &oauth::Gate::none(),
         )
         .await?;
 
@@ -464,6 +517,7 @@ impl Account {
                 ("refresh_token".to_string(), refresh_token.to_string()),
                 ("client_id".to_string(), CLIENT_ID.to_string()),
             ],
+            &oauth::Gate::none(),
         )
         .await?;
 
@@ -484,22 +538,37 @@ impl Account {
 
     /// Where the service says to sign in, read from the service.
     ///
-    /// RFC 8414, at the root of the origin. Guaca could hard-code the two paths
-    /// and save a round trip, and then a service that moved one would be a
-    /// sign-in nobody could complete until every copy of the app was updated.
+    /// RFC 8414, at the root of the origin. Guaca could hard-code the paths and
+    /// save a round trip, and then a service that moved one would be a sign-in
+    /// nobody could complete until every copy of the app was updated.
     ///
-    /// Both endpoints are checked to be on the origin that published them. That
-    /// is not defensiveness about a document Guaca fetched over TLS from the one
-    /// place it trusts: it is the difference between a service that can change
-    /// its own paths and a service that can redirect an operator's credential to
-    /// a third party, and the check costs one string comparison.
+    /// Everything in the document is checked to be on the origin that published
+    /// it, the issuer included. That is not defensiveness about a document Guaca
+    /// fetched over TLS from the one place it trusts: it is the difference
+    /// between a service that can change its own paths and a service that can
+    /// redirect an operator's credential to a third party, and the check costs
+    /// three string comparisons.
+    ///
+    /// The issuer is filled in here when the service published none, so that
+    /// [`Self::sign_in`] has exactly one value to read and no reason to reach
+    /// for the origin itself. The origin is what an absent issuer means rather
+    /// than a guess: this document was fetched from the root well-known address,
+    /// which under RFC 8414 section 3.3 is the address of an issuer with no
+    /// path. It is also the reading the field's absence used to be given
+    /// unconditionally, and `guaca.bot` is the service that showed why that is
+    /// not the same thing.
     async fn discover(&self) -> Result<oauth::ServerMetadata, AccountError> {
         if !self.is_safe_origin() {
             return Err(AccountError::UnsafeOrigin { origin: self.origin.clone() });
         }
 
-        let server = oauth::server_metadata(&self.http, &self.origin).await?;
-        for endpoint in [&server.authorization_endpoint, &server.token_endpoint] {
+        let mut server =
+            oauth::server_metadata(&self.http, &self.origin, &oauth::Gate::none()).await?;
+        if server.issuer.is_empty() {
+            server.issuer = self.origin.clone();
+        }
+
+        for endpoint in [&server.authorization_endpoint, &server.token_endpoint, &server.issuer] {
             if !self.is_same_origin(endpoint) {
                 return Err(AccountError::ForeignEndpoint {
                     origin: self.origin.clone(),

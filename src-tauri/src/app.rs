@@ -390,7 +390,7 @@ pub fn run() {
             runtime.with_account(account.clone());
             if account.origin() != crate::account::DEFAULT_ORIGIN {
                 runtime.plugins_at(std::collections::HashMap::from([(
-                    crate::domain::plugin::PluginKind::Google,
+                    crate::domain::plugin::PluginKind::Google.slug().to_string(),
                     format!("{}/mcp", account.origin()),
                 )]));
             }
@@ -434,6 +434,10 @@ pub fn run() {
             commands::set_plugin_access,
             commands::set_plugin_tool,
             commands::connect_plugin,
+            commands::add_plugin,
+            commands::readdress_plugin,
+            commands::probe_server,
+            commands::check_plugin,
             commands::disconnect_plugin,
             commands::scan_agent_signins,
             commands::agent_signins,

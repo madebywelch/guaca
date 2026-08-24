@@ -17,9 +17,14 @@
  * Google is the one row whose server is not the vendor's: the tools come from
  * the operator's own Guaca account, which holds the grant. The mark is still
  * Google's, because what the crew reaches is Google.
+ *
+ * A server the operator added has no mark here and cannot: nobody knows what it
+ * is, and an approximation would be a logo this file invented for somebody
+ * else's software. It gets a plug instead, in the app's own accent, which says
+ * the one true thing about it — that it is a server somebody plugged in.
  */
 
-import type { PluginKind } from "./types";
+import type { CatalogKind, PluginKind, ServerReport } from "./types";
 
 export interface Brand {
   /** The `d` of a single path on a 24x24 viewBox, verbatim from Simple Icons. */
@@ -28,7 +33,7 @@ export interface Brand {
   color: string;
 }
 
-export const BRANDS: Record<PluginKind, Brand> = {
+export const BRANDS: Record<CatalogKind, Brand> = {
   neon: {
     path: "M24 0V24l-9.365-8.045V24H0V0ZM2.942 21.087h8.751V9.563l9.365 8.204V2.919L2.942 2.914Z",
     color: "#34d59a",
@@ -56,6 +61,34 @@ export const BRANDS: Record<PluginKind, Brand> = {
 };
 
 /**
+ * What a server the operator added is drawn as.
+ *
+ * A plug, from the same Simple Icons set as the rest, and the app's own accent
+ * rather than a color pulled out of the address: a brand color for a server
+ * nobody has heard of would be a claim this file cannot make.
+ */
+const ADDED: Brand = {
+  path: "M18.36 9 17 14.5a5 5 0 0 1-5 3.5 5 5 0 0 1-5-3.5L5.64 9H4V7h16v2ZM9 2v3H7V2Zm8 0v3h-2V2Zm-6 17h2v3h-2Z",
+  color: "var(--accent)",
+};
+
+/**
+ * Its mark, whichever kind it turns out to be.
+ *
+ * Keyed on what the backend said rather than on the shape of the slug: the six
+ * are the six, and everything else is a server somebody added. A lookup that
+ * missed would otherwise draw an empty square, which reads as a broken row.
+ *
+ * `Object.hasOwn` rather than a lookup with a fallback, because a name here is
+ * an operator's word and the prototype chain answers to several of them. A
+ * server called `constructor` or `toString` finds a truthy value that is not a
+ * brand, so the fallback never fires and the row draws nothing at all.
+ */
+export function markFor(kind: PluginKind): Brand {
+  return Object.hasOwn(BRANDS, kind) ? BRANDS[kind as CatalogKind] : ADDED;
+}
+
+/**
  * The host a plugin's calls go to, for the line under its name.
  *
  * Read off the endpoint the backend reported rather than written down again
@@ -68,4 +101,42 @@ export function hostOf(endpoint: string): string {
   } catch {
     return endpoint;
   }
+}
+
+/**
+ * What one dial of a server found out, as the sentence a person reads.
+ *
+ * Written here rather than assembled in the panel because it is a decision
+ * rather than a layout: which of the four outcomes this was, and which of the
+ * facts underneath are worth saying about each. A server that wants a sign-in
+ * has no transport, no revision and no tools, and a line built by concatenating
+ * whatever was set would say "answered over , MCP" about it.
+ *
+ * The two 401s get different sentences on purpose. They are one status code and
+ * opposite problems: an operator who cannot tell them apart re-pastes a key at
+ * a server that never wanted one, or goes hunting for a sign-in that is really
+ * a typo. Each says what to do next rather than what went wrong.
+ */
+export function reportLine(report: ServerReport): string {
+  const took = `${report.ms} ms`;
+  if (report.signin === "wanted") {
+    return `Reached it in ${took}. It wants a sign-in: connecting opens your browser.`;
+  }
+  if (report.signin === "refused") {
+    return `Reached it in ${took} and it refused what you gave it. The address is right and the key is not.`;
+  }
+
+  const who = report.server || "It";
+  const how = report.handshake
+    ? `${report.transport}, MCP ${report.protocol}, with a handshake`
+    : `${report.transport}, MCP ${report.protocol}`;
+  // Named rather than counted, because the operator is checking that the tools
+  // they expect are the ones this address publishes. A count answers a
+  // different question, and it is one nobody has.
+  const offers =
+    report.tools.length === 0
+      ? "It published no tools, so a crew connecting it would be offered nothing"
+      : `${report.tools.length} tool${report.tools.length === 1 ? "" : "s"}: ${report.tools.join(", ")}`;
+  const paid = report.signin === "accepted" ? " It accepted what you gave it." : "";
+  return `${who} answered in ${took} over ${how}.${paid} ${offers}.`;
 }

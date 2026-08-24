@@ -341,12 +341,29 @@ export interface RepositoryDraft {
 
 export type PluginId = string;
 
-/** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */
-export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
+/**
+ * The servers Guaca ships the address of.
+ *
+ * Closed, and the same everywhere: each of these is on the list because
+ * somebody checked that it publishes its own tools, acts on the operator's
+ * account and lets an application register itself.
+ */
+export type CatalogKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
+
+/**
+ * What a connected plugin is called, which is also the prefix its tools are
+ * called by.
+ *
+ * One of the six, or the name an operator gave a server they added. Not a union
+ * of the six, because the whole point of a custom server is that this side does
+ * not know the set: what a plugin is called comes back from Rust with the row,
+ * along with a `custom` flag saying whether anybody vouched for it.
+ */
+export type PluginKind = CatalogKind | (string & {});
 
 /** A plugin on offer, before anybody has connected it. */
 export interface PluginOffer {
-  kind: PluginKind;
+  kind: CatalogKind;
   name: string;
   /** One line about what the crew gets. */
   blurb: string;
@@ -406,6 +423,18 @@ export interface Plugin {
   id: PluginId;
   groupId: GroupId;
   kind: PluginKind;
+  /**
+   * What it is called, and where it is.
+   *
+   * Read off the row rather than paired with a catalog entry, because a server
+   * the operator added has no catalog entry: a connected plugin has to be
+   * drawable from what came back, or a row the panel cannot name is a row with
+   * no way to disconnect it.
+   */
+  name: string;
+  endpoint: string;
+  /** Whether nobody vouched for this server: the operator added it. */
+  custom: boolean;
   /** Whose account, when the server said. Usually blank. */
   account: string;
   /**
@@ -417,9 +446,62 @@ export interface Plugin {
   access: PluginAccess;
   /** Which authorized identity at the Guaca account this crew uses, if any. */
   connection: string;
+  /**
+   * Which headers the operator gave this server, by name and never by value.
+   *
+   * Drawn so the panel can say what is being sent — an operator debugging their
+   * own server needs to know whether `x-api-key` is on the request — without
+   * being a place a credential can be read back out of. Empty for every server
+   * on the catalog and for most added ones.
+   */
+  headers: string[];
   signedIn: boolean;
   connectedAt: number;
 }
+
+/**
+ * One header the operator wrote, on its way to Rust.
+ *
+ * The value only ever travels in this direction. What comes back on a `Plugin`
+ * is the names, for the reason a connector's secret never comes back either.
+ */
+export interface HeaderPair {
+  name: string;
+  value: string;
+}
+
+/**
+ * What one dial of a server found out, without connecting anything.
+ *
+ * The answer to "why does my server not work", which is otherwise a single
+ * sentence out of whichever layer failed first. The fields are separate because
+ * the failures are: a 405 on the current transport and a working event stream
+ * are the same sentence and opposite instructions to a person.
+ */
+export interface ServerReport {
+  /** The address as Rust canonicalized it, which is what would be stored. */
+  endpoint: string;
+  /** Which transport it answered on. Blank when nothing was established. */
+  transport: string;
+  /** The revision the two of them settled on. Blank for the same reason. */
+  protocol: string;
+  /** Whether it wanted a handshake. Not the same question as the transport. */
+  handshake: boolean;
+  signin: SigninNeed;
+  /** How the server names itself, when it says. Often blank. */
+  server: string;
+  /** Every tool it published. Empty for a server that wants a sign-in. */
+  tools: string[];
+  ms: number;
+}
+
+/**
+ * What the server did about a credential.
+ *
+ * `wanted` and `refused` are the same status code on the wire and opposite
+ * problems: one is a server that signs in, the other is a key it will not take.
+ */
+export type SigninNeed = "none" | "wanted" | "accepted" | "refused";
 
 /**
  * Which of an agent's two places holds a session.

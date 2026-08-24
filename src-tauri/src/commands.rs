@@ -25,7 +25,9 @@ use crate::domain::ids::{
     AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
-use crate::domain::plugin::{self, Plugin, PluginAccess, PluginKind, PluginOffer};
+use crate::domain::plugin::{
+    self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
+};
 use crate::domain::repository::{Repository, RepositoryDraft};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
@@ -668,8 +670,13 @@ pub async fn connect_plugin(
     // sign-in of its own: see `PluginKind::account_backed`.
     let token = if kind.account_backed() { state.account.access().await.ok() } else { None };
     let connection = connection.unwrap_or_default();
-    let account =
-        token.as_deref().map(|token| crate::plugins::AccountUse { token, connection: &connection });
+    let credential = match token.as_deref() {
+        Some(token) => crate::plugins::Credential::Account(crate::plugins::AccountUse {
+            token,
+            connection: &connection,
+        }),
+        None => crate::plugins::Credential::Discover,
+    };
 
     // An account-backed plugin's server is the operator's own account, and
     // which identity it means is part of the address. The other kinds ignore
@@ -677,15 +684,129 @@ pub async fn connect_plugin(
     let endpoint = if kind.account_backed() {
         crate::plugins::AccountUse::endpoint(state.account.origin(), &connection)
     } else {
-        state.runtime.plugin_endpoint(kind).to_string()
+        state.runtime.plugin_endpoint(&kind)
     };
 
+    // A catalog server is dialled at the address this build ships, with nothing
+    // on the request but the credential. Headers are the operator's answer to a
+    // server nobody vouched for, and there is nothing here to answer.
+    sign_in(&state, group_id, &kind, &endpoint, credential, &Headers::none()).await
+}
+
+/// Adds a server the operator addressed themselves, and connects it.
+///
+/// Two fields, because two is what the catalog was supplying: a name, which
+/// becomes the prefix every one of this server's tools is called by, and the
+/// URL its MCP endpoint answers on. Everything after that is the flow the six
+/// go through — the same era probe, the same sign-in, the same tool list, the
+/// same per-agent and per-tool answers, and a grant that never reaches a model.
+///
+/// The key is optional and is the one thing the catalog never needs. A server
+/// somebody wrote has often got no authorization server behind it at all, just
+/// a token minted by hand, and asking that server to discover a sign-in is a
+/// round trip whose only outcome is a 401 with nothing useful in it. Left out,
+/// the server is asked what it wants exactly as a vendor's is.
+///
+/// The headers are the third thing, and they are not a third credential: they
+/// are how the request reaches the server at all, so they go on every one of
+/// them whichever of the other two paid for it. That is what makes an MCP
+/// server behind Cloudflare Access work — the headers get past the gate, and
+/// the 401 behind the gate still starts the sign-in.
+///
+/// Refused rather than silently replacing when the crew already has a server
+/// under that name: `plugins_kind_unique` would take the collision as a
+/// reconnection, which is right for the same address and wrong for a different
+/// one — two tool lists under one prefix, with which one a call landed on
+/// decided by row order.
+#[tauri::command]
+pub async fn add_plugin(
+    state: State<'_, AppState>,
+    group_id: GroupId,
+    name: String,
+    url: String,
+    key: Option<String>,
+    headers: Option<Vec<HeaderPair>>,
+) -> Reply<Plugin> {
+    let kind = PluginKind::custom(&name, &url)
+        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+
+    let held = state.runtime.store().group_plugins(group_id)?;
+    if let Some(clash) = held.iter().find(|held| held.kind.slug() == kind.slug()) {
+        if clash.endpoint != kind.endpoint() {
+            return Err(CommandError::new(
+                "validation",
+                format!(
+                    "this group already has a server called {} at {}. Give this one another name, or \
+                     disconnect that one first: two servers under one name would put two \
+                     tool lists behind the same prefix.",
+                    kind.slug(),
+                    clash.endpoint
+                ),
+            ));
+        }
+    }
+
+    let (key, headers) = presented(key, headers)?;
+    let credential = match key.as_deref() {
+        Some(key) => crate::plugins::Credential::Key(key),
+        None => crate::plugins::Credential::Discover,
+    };
+    let endpoint = state.runtime.plugin_endpoint(&kind);
+    sign_in(&state, group_id, &kind, &endpoint, credential, &headers).await
+}
+
+/// What the operator gave, as the two things the connect path takes.
+///
+/// One function because the rule it enforces has to hold in both places that
+/// take a key and headers, and because the rule is easy to state and easy to
+/// get silently wrong: a key and an `authorization` header are the same slot on
+/// the request. Both given, one would overwrite the other, and which one won
+/// would depend on the order two loops happened to run in — so both given is
+/// refused, in a sentence that says they are one thing rather than two.
+///
+/// The key comes back rather than the credential built from it, because the
+/// credential borrows it: built here, it would name a string that goes out of
+/// scope on the way back.
+fn presented(
+    key: Option<String>,
+    headers: Option<Vec<HeaderPair>>,
+) -> Result<(Option<String>, Headers), CommandError> {
+    let key = key.map(|key| key.trim().to_string()).filter(|key| !key.is_empty());
+    let headers = Headers::parse(&headers.unwrap_or_default())
+        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+    if key.is_some() && headers.carries_authorization() {
+        return Err(CommandError::new(
+            "validation",
+            "you gave a key and an `authorization` header, and they are the same slot on the \
+             request. Keep the key and drop the header, or keep the header — which is how to \
+             send a scheme other than `Bearer` — and clear the key.",
+        ));
+    }
+    Ok((key, headers))
+}
+
+/// The half of connecting that is the same whatever the server is.
+///
+/// One function rather than two that agree, because the difference between a
+/// catalog server and one the operator added is entirely in how the kind and
+/// the credential were arrived at. After this line there is no difference at
+/// all, and a second copy of it would be a second place for a crew's tools to
+/// stop being refreshed or an event to stop being emitted.
+async fn sign_in(
+    state: &AppState,
+    group_id: GroupId,
+    kind: &PluginKind,
+    endpoint: &str,
+    credential: crate::plugins::Credential<'_>,
+    headers: &Headers,
+) -> Reply<Plugin> {
     let plugin = crate::plugins::connect(
         state.runtime.store(),
         group_id,
         kind,
-        &endpoint,
-        account,
+        endpoint,
+        credential,
+        headers,
         move |url| {
             // The one line in this feature that knows the app is a Tauri app. The
             // flow itself takes a callback so that `oauth.rs` does not have to.
@@ -724,6 +845,154 @@ pub async fn set_plugin_connection(
         ));
     }
     connect_plugin(state, group_id, kind, Some(connection)).await
+}
+
+/// Points a crew's custom server at a different address, or hands it a new key.
+///
+/// Reconnecting rather than editing a row, and that is the same act connecting
+/// is: the tool list has to be re-read, because a server at a new address is
+/// not the one that published the old list. What survives is what survives a
+/// reconnection anywhere else — the row's id, who may spend it, and which of
+/// its tools are whose — because the operator is fixing an address, not
+/// deciding what the crew may do.
+///
+/// Sending headers replaces the whole set and sending none leaves them alone,
+/// which is the rule a group's API key already has and for the same reason: a
+/// value that cannot be read back is one a panel cannot re-send, so "absent"
+/// has to mean keep or every reconnection would quietly drop it. Sending an
+/// empty list is how they are removed, and it is a thing the operator did
+/// rather than a thing they forgot.
+///
+/// The key is the other way round here, and that is this command's own history
+/// rather than a second rule: absent means "ask the server", which is what the
+/// box beside it says. It stays because a server that stopped needing a key is
+/// otherwise unreachable from this panel.
+#[tauri::command]
+pub async fn readdress_plugin(
+    state: State<'_, AppState>,
+    group_id: GroupId,
+    id: PluginId,
+    url: String,
+    key: Option<String>,
+    headers: Option<Vec<HeaderPair>>,
+) -> Reply<Plugin> {
+    let held = state
+        .runtime
+        .store()
+        .group_plugins(group_id)?
+        .into_iter()
+        .find(|held| held.id == id)
+        .ok_or_else(|| CommandError::new("validation", "that plugin is not in this group"))?;
+    if !held.custom {
+        return Err(CommandError::new(
+            "validation",
+            format!(
+                "{} is a server Guaca ships the address of, and where it lives is not an operator \
+                 setting. Disconnect it if it is the wrong one.",
+                held.name
+            ),
+        ));
+    }
+
+    // Rebuilt through the same constructor an added one goes through, so the
+    // address is checked by the code that checked it the first time rather than
+    // by a second copy of the rules here.
+    let kind = PluginKind::custom(&held.name, &url)
+        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+    let (key, headers) = match headers {
+        Some(rows) => presented(key, Some(rows))?,
+        // Read back off the row rather than left out of the write, so there is
+        // one path into `save_plugin` and one meaning for what it is handed.
+        None => {
+            let stored = state
+                .runtime
+                .store()
+                .plugin_dial(id)?
+                .map(|dialed| dialed.headers)
+                .unwrap_or_default();
+            let (key, _) = presented(key, None)?;
+            if key.is_some() && stored.carries_authorization() {
+                return Err(CommandError::new(
+                    "validation",
+                    "this server already has an `authorization` header, and a key goes in the \
+                     same slot. Replace its headers, or leave the key empty.",
+                ));
+            }
+            (key, stored)
+        }
+    };
+    let credential = match key.as_deref() {
+        Some(key) => crate::plugins::Credential::Key(key),
+        None => crate::plugins::Credential::Discover,
+    };
+    let endpoint = state.runtime.plugin_endpoint(&kind);
+    sign_in(&state, group_id, &kind, &endpoint, credential, &headers).await
+}
+
+/// Dials a server and says what it found, connecting nothing.
+///
+/// The button beside the address box. It runs the real path — the same probe,
+/// both transports, the handshake, `tools/list` — with the credential and
+/// headers the operator has typed but not yet saved, and writes nothing. What
+/// comes back is either a report or the same sentence adding it would have
+/// failed with, which is the point: an operator who has to press Add to find
+/// out what is wrong is an operator connecting a server four times.
+///
+/// It stops one step short of `add_plugin` in exactly one place: a server that
+/// wants a sign-in is reported as wanting one rather than sent to a browser.
+/// The question here is whether this is the right address, and answering it
+/// with a consent screen is a question nobody asked.
+///
+/// No group, because nothing is being connected to one, and no name, because a
+/// name is what a server's tools are called by and this calls none of them.
+#[tauri::command]
+pub async fn probe_server(
+    url: String,
+    key: Option<String>,
+    headers: Option<Vec<HeaderPair>>,
+) -> Reply<ServerReport> {
+    // Through the same canonicalizer an added server goes through, so the
+    // address that is tested is the address that would be stored. A test run
+    // against `https://example.com/mcp/` that passes, followed by a sign-in
+    // scoped to `https://example.com/mcp` that fails, is worse than no test.
+    let endpoint = plugin::canonical_url(&url)
+        .map_err(|err| CommandError::new("validation", err.to_string()))?;
+    let (key, headers) = presented(key, headers)?;
+    Ok(crate::plugins::inspect(true, &endpoint, key.as_deref(), &headers).await?)
+}
+
+/// The same question, asked of a plugin this crew already has.
+///
+/// Kept apart from `probe_server` because the credential is: this one spends
+/// the grant in the store, which is the only way to answer "is our sign-in
+/// still good", and that is the failure a crew notices as an agent reporting a
+/// tool it cannot call. A stale grant is renewed first, because the next real
+/// call would renew it too and a check that skipped it would report a working
+/// plugin as broken.
+#[tauri::command]
+pub async fn check_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<ServerReport> {
+    let dialed = state
+        .runtime
+        .store()
+        .plugin_dial(id)?
+        .ok_or_else(|| CommandError::new("validation", "that plugin is not connected"))?;
+
+    // The same two-line resolution `connect_plugin` does, and for the same
+    // reason: an account-backed plugin's server is the operator's own account
+    // and which identity it means is part of the address.
+    let token = if dialed.kind.account_backed() { state.account.access().await.ok() } else { None };
+    let endpoint = if dialed.kind.account_backed() {
+        crate::plugins::AccountUse::endpoint(state.account.origin(), &dialed.connection)
+    } else {
+        state.runtime.plugin_endpoint(&dialed.kind)
+    };
+    // Copied off the row before it is handed over, because the check takes the
+    // row and the identity travels with the token rather than with it.
+    let connection = dialed.connection.clone();
+    let account =
+        token.as_deref().map(|token| crate::plugins::AccountUse { token, connection: &connection });
+
+    Ok(crate::plugins::check(state.runtime.store(), id, dialed, &endpoint, account).await?)
 }
 
 /// Chooses which of a crew's agents may call one plugin.

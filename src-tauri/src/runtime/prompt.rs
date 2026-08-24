@@ -245,12 +245,23 @@ pub fn system_prompt(
             );
             for set in plugins {
                 out.push_str(&format!(
-                    "- {} — {} tool{}, called as `{}{}…`\n",
+                    "- {} — {} tool{}, called as `{}{}…`{}\n",
                     set.kind.label(),
                     set.offered.len(),
                     if set.offered.len() == 1 { "" } else { "s" },
                     set.kind.slug(),
                     crate::llm::tools::PLUGIN_SEPARATOR,
+                    // Where it is, but only for a server the operator added. A
+                    // model knows what Neon is and has never heard of
+                    // `homeassistant`, and the host is the one thing that says
+                    // whose machine is on the other end of the call. For the
+                    // six it would be noise: the name already says it, and the
+                    // address is the same on every install.
+                    if set.kind.is_custom() {
+                        format!(" (your operator's own server at {})", set.kind.endpoint())
+                    } else {
+                        String::new()
+                    },
                 ));
                 // Named, not counted, and not left out. An agent that is simply
                 // not offered `refund` answers "we cannot do refunds", which is

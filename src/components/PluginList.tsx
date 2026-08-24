@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
-import { BRANDS, hostOf } from "../lib/plugins";
+import { hostOf, markFor, reportLine } from "../lib/plugins";
 import {
   type AccountConnection,
   type AgentCard,
   type AgentId,
+  type CatalogKind,
   errorMessage,
   type GroupId,
+  type HeaderPair,
   type Plugin,
   type PluginAccess,
+  type PluginKind,
   type PluginOffer,
   type PluginToolCard,
+  type ServerReport,
 } from "../lib/types";
 
 interface Props {
@@ -37,6 +41,112 @@ const ACCESS_MODES = [
   { value: "everyone", label: "Every agent", short: "Everyone" },
   { value: "chosen", label: "Only chosen agents", short: "Chosen" },
 ] as const;
+
+/**
+ * One header row while it is being typed.
+ *
+ * The id is the editor's and never leaves it. A header has no identity until it
+ * has a name, and a name is exactly what is half-typed when the operator adds
+ * the second row: keyed by position instead, removing the first row hands its
+ * DOM node — and the focus and the selection in it — to the second.
+ */
+interface HeaderDraft extends HeaderPair {
+  id: number;
+}
+
+/** Ids for the rows above. Monotonic, per session, and read by nothing else. */
+let headerRows = 0;
+function blankHeader(name = "", value = ""): HeaderDraft {
+  headerRows += 1;
+  return { id: headerRows, name, value };
+}
+
+/** What Rust takes: the pairs, without the identity the editor gave them. */
+function sent(rows: HeaderDraft[]): HeaderPair[] {
+  return rows.map(({ name, value }) => ({ name, value }));
+}
+
+/**
+ * The headers an operator gives a server they run themselves.
+ *
+ * The third thing such a server can want, after an address and a token, and the
+ * one nothing can discover: an `X-API-Key` because that is where its framework
+ * looks, a pair of `Cf-Access-Client-*` because it sits behind a gate, a tenant
+ * id because one deployment serves several.
+ *
+ * Values are write-only here for the reason a connector's secret is: they are
+ * sent, stored and spent, and the panel can say which headers a server is being
+ * given without being a place to read what they are worth. What comes back on a
+ * connected row is the names.
+ *
+ * The rules — which names are refused, how many, how long a value may be — are
+ * in Rust and are not repeated here. A second copy would be a second place for
+ * them to be wrong, and the refusal that comes back names the header and the
+ * fix, which is what an operator pasting out of a vendor's `curl` example
+ * needs.
+ */
+function HeaderFields({
+  rows,
+  onChange,
+  disabled,
+}: {
+  rows: HeaderDraft[];
+  onChange: (rows: HeaderDraft[]) => void;
+  disabled: boolean;
+}) {
+  const edit = (id: number, part: Partial<HeaderPair>) =>
+    onChange(rows.map((was) => (was.id === id ? { ...was, ...part } : was)));
+
+  return (
+    <div className="field">
+      <span className="field__label">Headers (optional)</span>
+      {rows.map((row, at) => (
+        <div className="choices" key={row.id}>
+          <input
+            className="input"
+            placeholder="X-API-Key"
+            aria-label={`Header ${at + 1} name`}
+            value={row.name}
+            disabled={disabled}
+            onChange={(event) => edit(row.id, { name: event.target.value })}
+          />
+          <input
+            className="input"
+            type="password"
+            placeholder="value"
+            aria-label={`Header ${at + 1} value`}
+            value={row.value}
+            disabled={disabled}
+            onChange={(event) => edit(row.id, { value: event.target.value })}
+          />
+          <button
+            type="button"
+            className="btn btn--small btn--ghost"
+            aria-label={`Remove header ${at + 1}`}
+            disabled={disabled}
+            onClick={() => onChange(rows.filter((was) => was.id !== row.id))}
+          >
+            Remove
+          </button>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="toolset__more"
+        disabled={disabled}
+        onClick={() => onChange([...rows, blankHeader()])}
+      >
+        Add a header
+      </button>
+      <span className="field__hint">
+        Sent on every request to this server, whatever else authorizes it: an API key the server
+        reads from a header it named, or the pair a gate in front of it wants. They stay here — a
+        value never reaches a model, a transcript or an agent's machine, and never comes back to
+        this panel.
+      </span>
+    </div>
+  );
+}
 
 /** The chosen set with one agent added or taken out. */
 function toggled(access: PluginAccess, agent: AgentId): AgentId[] {
@@ -118,6 +228,56 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
 }
 
 /**
+ * One line in the panel: a server, whether or not this crew has it.
+ *
+ * Assembled so the six on offer and the ones the operator added draw through
+ * one piece of code. They differ in exactly two places — where the name and
+ * address come from, and whether anybody vouched for the server — and every
+ * other decision on the row is the same question about the same thing. Two
+ * loops would be two places for "who can use it" to drift.
+ */
+interface Row {
+  /** The name, which is also the prefix its tools are called by. */
+  kind: PluginKind;
+  name: string;
+  endpoint: string;
+  /** Only on a server Guaca ships: what it is for, and where to read about it. */
+  offer?: PluginOffer;
+  custom: boolean;
+  held?: Plugin;
+}
+
+/**
+ * Every server on this panel, offers first.
+ *
+ * The catalog's order is the backend's and is drawn as it arrives: a list the
+ * webview sorted would be a second opinion about which servers exist. What the
+ * operator added comes after it, in the order the store returns, which is by
+ * name — the six are a starting point and the crew's own are the additions to
+ * it, so that is the order somebody reads them in.
+ */
+function rows(offers: PluginOffer[], connected: Plugin[]): Row[] {
+  const shipped: Row[] = offers.map((offer) => ({
+    kind: offer.kind,
+    name: offer.name,
+    endpoint: offer.endpoint,
+    offer,
+    custom: false,
+    held: connected.find((plugin) => plugin.kind === offer.kind),
+  }));
+  const added: Row[] = connected
+    .filter((plugin) => plugin.custom)
+    .map((plugin) => ({
+      kind: plugin.kind,
+      name: plugin.name,
+      endpoint: plugin.endpoint,
+      custom: true,
+      held: plugin,
+    }));
+  return [...shipped, ...added];
+}
+
+/**
  * The plugins a crew has, and the ones it can have.
  *
  * A plugin is a server the operator signs in to once, on behalf of the whole
@@ -143,15 +303,22 @@ function callers(plugin: Plugin, tool: PluginToolCard, crew: AgentCard[]): strin
  * disconnecting above it: there is no Save on this panel, so a draft nobody
  * submitted would be a permission the operator thinks they granted.
  *
- * A short list, and that is the design rather than a starting point. The list
- * this replaced was twelve brands and a text box, which asked the operator for
- * four things about a token they had — the variable it belongs in, the account
- * it acts as, a note for the agent, and whether the service was worth wiring up
- * at all. A server that publishes its own tools answers all four itself.
+ * The six at the top are a catalog rather than a limit, and the difference
+ * matters. Each is on the list because somebody checked that it publishes its
+ * own tools, acts on the operator's account and lets an application register
+ * itself, and what that buys is a name, a sentence and a working sign-in behind
+ * one click. Adding a server is the same mechanism with none of that done: the
+ * operator supplies the two things the catalog was supplying, and everything
+ * after that — the sign-in, the tool list, who may spend it, which tools are
+ * whose — is the code above, unchanged. The row says nobody vouched for it,
+ * because that is the whole of the difference.
  *
  * What is on the list comes from Rust, in order, and is drawn as it arrives: a
  * catalog the webview sorted or filtered would be a second opinion about
- * which servers exist, and the runtime is the one that dials them.
+ * which servers exist, and the runtime is the one that dials them. The same
+ * goes for a name: what an operator typed and what their agents will call it
+ * are not always the same string, and the row draws what came back rather than
+ * a second copy of the rule that turned one into the other.
  *
  * Connecting can take minutes, because part of it happens in a browser in front
  * of a person. The row says so while it waits: a spinner with no explanation on
@@ -182,6 +349,34 @@ export function PluginList({ groupId, crew }: Props) {
   // keyed by kind. Only ever holds a pre-connect choice: once connected, the
   // stored row is what the picker reads, because that is what a turn will use.
   const [picked, setPicked] = useState<Record<string, string>>({});
+  // The server being added, and the one being readdressed. Both are drafts and
+  // neither is submitted on a keystroke, which is the one place on this panel
+  // that is true: everything else here is a decision about a plugin that
+  // already exists, and a half-typed URL is not a decision at all.
+  const [draft, setDraft] = useState<{
+    name: string;
+    url: string;
+    key: string;
+    headers: HeaderDraft[];
+  }>({ name: "", url: "", key: "", headers: [] });
+  const [adding, setAdding] = useState(false);
+  // Keyed by plugin id, and absent until the operator opens the control: an
+  // address box standing open under every added server is an invitation to
+  // change something nobody came here to change.
+  //
+  // `headers` is `null` until the operator opens that control too, and the
+  // difference is what reaches Rust: null keeps the stored set, a list replaces
+  // it whole. Same rule a group's API key has, for the same reason — a value
+  // that cannot be read back is one this panel cannot re-send, so a
+  // reconnection that meant "replace" would quietly drop it.
+  const [moving, setMoving] = useState<
+    Record<string, { url: string; key: string; headers: HeaderDraft[] | null }>
+  >({});
+  // What the last test of each thing found. Keyed the way `busy` is, and
+  // cleared whenever the thing it was about changes: a report that outlived the
+  // address it was run against is worse than no report, because it reads as one
+  // about the address on screen.
+  const [tested, setTested] = useState<Record<string, ServerReport>>({});
 
   const load = useCallback(async () => {
     try {
@@ -226,25 +421,47 @@ export function PluginList({ groupId, crew }: Props) {
     }
   };
 
+  /**
+   * Dials a server and keeps what it said, without reloading the panel.
+   *
+   * Its own runner rather than `run`, because a test changes nothing: reloading
+   * after it would redraw every row in the crew to report that one address
+   * answered. It also keeps its answer on a failure, which `run` cannot: a
+   * server that refused is exactly what somebody pressed this to find out.
+   */
+  const test = async (key: string, dial: () => Promise<ServerReport>) => {
+    setBusy(key);
+    setError(null);
+    try {
+      const report = await dial();
+      setTested((was) => ({ ...was, [key]: report }));
+    } catch (caught) {
+      setTested(({ [key]: _gone, ...rest }) => rest);
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   if (offers === null || connected === null) return <p className="field__hint">Loading plugins…</p>;
 
   return (
     <div className="access">
-      {offers.map((offer) => {
-        const held = connected.find((plugin) => plugin.kind === offer.kind);
-        const brand = BRANDS[offer.kind];
-        const working = busy === offer.kind;
+      {rows(offers, connected).map((row) => {
+        const { kind, held, offer } = row;
+        const brand = markFor(kind);
+        const working = busy === kind;
         const chosen = held?.access.mode === "chosen" ? held.access.agents : [];
         // Two Google accounts are two grants, and a crew uses one of them.
-        const mine = connections.filter((connection) => connection.provider === offer.kind);
+        const mine = connections.filter((connection) => connection.provider === kind);
         // What this row is bound to, or about to be. A connected plugin reads
         // its stored row, because that is what a turn actually uses; one that
         // is not connected reads whatever the operator picked, defaulting to
         // the first.
-        const using = held ? held.connection || mine[0]?.id : (picked[offer.kind] ?? mine[0]?.id);
+        const using = held ? held.connection || mine[0]?.id : (picked[kind] ?? mine[0]?.id);
 
         return (
-          <div className="access__item" key={offer.kind}>
+          <div className="access__item" key={kind}>
             <div className="access__row">
               <span
                 className="mark"
@@ -255,38 +472,40 @@ export function PluginList({ groupId, crew }: Props) {
                   <path d={brand.path} fill="currentColor" />
                 </svg>
               </span>
-              <strong className="access__name">{offer.name}</strong>
+              <strong className="access__name">{row.name}</strong>
               {/* The host, not the whole URL: what matters before authorizing
                   is which company is about to be handed the operator's
                   account, and the path is noise beside that. */}
-              <span className="access__where">{hostOf(offer.endpoint)}</span>
+              <span className="access__where">{hostOf(row.endpoint)}</span>
 
               {held ? (
                 <button
                   type="button"
                   className="btn btn--small btn--ghost"
                   disabled={busy !== null}
-                  onClick={() => void run(offer.kind, () => api.disconnectPlugin(held.id))}
+                  onClick={() => void run(kind, () => api.disconnectPlugin(held.id))}
                 >
                   {working ? "Disconnecting…" : "Disconnect"}
                 </button>
               ) : (
-                <button
-                  type="button"
-                  className="btn btn--small btn--primary"
-                  disabled={busy !== null}
-                  onClick={() =>
-                    void run(offer.kind, () =>
-                      // What the picker above says, which defaults to the first
-                      // identity. With none, this connects against the account's
-                      // default and the refusal from Rust is what says an
-                      // account is needed.
-                      api.connectPlugin(groupId, offer.kind, using),
-                    )
-                  }
-                >
-                  {working ? "Waiting for your browser…" : "Connect"}
-                </button>
+                offer && (
+                  <button
+                    type="button"
+                    className="btn btn--small btn--primary"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      void run(kind, () =>
+                        // What the picker above says, which defaults to the
+                        // first identity. With none, this connects against the
+                        // account's default and the refusal from Rust is what
+                        // says an account is needed.
+                        api.connectPlugin(groupId, offer.kind, using),
+                      )
+                    }
+                  >
+                    {working ? "Waiting for your browser…" : "Connect"}
+                  </button>
+                )
               )}
             </div>
 
@@ -296,11 +515,11 @@ export function PluginList({ groupId, crew }: Props) {
                 ends up on the wrong mailbox with nothing on screen saying so.
                 Only for a plugin whose credential is the account; the others
                 sign in per group and their grant names its own identity. */}
-            {offer.accountBacked &&
+            {offer?.accountBacked &&
               (mine.length === 0 ? (
                 <div className="access__empty">
                   <p className="field__hint">
-                    No {offer.name} account is authorized on
+                    No {row.name} account is authorized on
                     {accountEmail ? ` your Guaca account, ${accountEmail}` : " your Guaca account"}.
                     Authorize one there, then connect it here.
                   </p>
@@ -309,7 +528,7 @@ export function PluginList({ groupId, crew }: Props) {
                     className="btn btn--ghost btn--small"
                     onClick={() => void openExternal("https://guaca.bot/app")}
                   >
-                    Authorize a {offer.name} account
+                    Authorize a {row.name} account
                   </button>
                 </div>
               ) : mine.length === 1 ? (
@@ -336,14 +555,14 @@ export function PluginList({ groupId, crew }: Props) {
                       const chosen = event.target.value;
                       if (!held) {
                         // Nothing to write yet: remembered until Connect.
-                        setPicked((was) => ({ ...was, [offer.kind]: chosen }));
+                        setPicked((was) => ({ ...was, [kind]: chosen }));
                         return;
                       }
                       // Connected, so this moves the crew. Its own command
                       // rather than a reconnect, which would replace the row
                       // and lose the per-tool switches.
-                      void run(offer.kind, () =>
-                        api.setPluginConnection(groupId, offer.kind, chosen),
+                      void run(kind, () =>
+                        api.setPluginConnection(groupId, offer.kind as CatalogKind, chosen),
                       );
                     }}
                   >
@@ -354,13 +573,177 @@ export function PluginList({ groupId, crew }: Props) {
                     ))}
                   </select>
                   <span className="field__hint">
-                    Which {offer.name} account this crew acts as
+                    Which {row.name} account this crew acts as
                     {accountEmail ? `, from your Guaca account ${accountEmail}` : ""}.{" "}
                     {held
                       ? "Its tools are re-read when you change it, because two accounts do not always authorize the same things."
                       : "Pick before connecting; you can change it afterward."}
                   </span>
                 </label>
+              ))}
+
+            {/* Where a server the operator added actually is, and how to move
+                it. Its own control rather than Disconnect and Add again, for
+                the reason `setPluginConnection` is its own: those are different
+                acts, and reconnecting replaces the row and loses the per-tool
+                switches. A local server changing port is the common case and
+                should not cost the operator their permissions. */}
+            {held?.custom &&
+              (moving[held.id] ? (
+                <>
+                  <label className="field">
+                    <span className="field__label">Address</span>
+                    <input
+                      className="input"
+                      value={moving[held.id]?.url ?? ""}
+                      disabled={busy !== null}
+                      onChange={(event) =>
+                        setMoving((was) => ({
+                          ...was,
+                          [held.id]: { ...was[held.id]!, url: event.target.value },
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field__label">Key (optional)</span>
+                    <input
+                      className="input"
+                      type="password"
+                      value={moving[held.id]?.key ?? ""}
+                      disabled={busy !== null}
+                      onChange={(event) =>
+                        setMoving((was) => ({
+                          ...was,
+                          [held.id]: { ...was[held.id]!, key: event.target.value },
+                        }))
+                      }
+                    />
+                    {/* Empty means "ask the server", not "keep what you had".
+                        The stored key cannot be read back, so a box that
+                        implied otherwise would be a box that silently kept a
+                        key the operator meant to replace. */}
+                    <span className="field__hint">
+                      Paste one to replace the key this server has. Leave it empty and Guaca asks
+                      the server what it wants, the way it does for a new one.
+                    </span>
+                  </label>
+                  {/* The headers go the other way, and the difference is what
+                      can be shown: their names come back, so the panel can say
+                      what is stored and leave it alone unless the operator says
+                      otherwise. Opening this replaces the whole set, and an
+                      empty set removes them. */}
+                  {moving[held.id]?.headers ? (
+                    <HeaderFields
+                      rows={moving[held.id]?.headers ?? []}
+                      disabled={busy !== null}
+                      onChange={(rows) =>
+                        setMoving((was) => ({
+                          ...was,
+                          [held.id]: { ...was[held.id]!, headers: rows },
+                        }))
+                      }
+                    />
+                  ) : (
+                    <p className="field__hint">
+                      {held.headers.length === 0
+                        ? "No headers. "
+                        : `Sends ${held.headers.join(", ")}. `}
+                      <button
+                        type="button"
+                        className="toolset__more"
+                        disabled={busy !== null}
+                        onClick={() =>
+                          setMoving((was) => ({
+                            ...was,
+                            [held.id]: {
+                              ...was[held.id]!,
+                              // Prefilled with the names and no values, because
+                              // that is exactly what is knowable: a value never
+                              // comes back, so replacing a set is retyping it.
+                              headers: held.headers.map((name) => blankHeader(name)),
+                            },
+                          }))
+                        }
+                      >
+                        Replace headers
+                      </button>
+                    </p>
+                  )}
+                  <div className="choices">
+                    <button
+                      type="button"
+                      className="btn btn--small btn--primary"
+                      disabled={busy !== null || !moving[held.id]?.url.trim()}
+                      onClick={() =>
+                        void run(`${kind}-address`, async () => {
+                          const change = moving[held.id];
+                          await api.readdressPlugin(
+                            groupId,
+                            held.id,
+                            change?.url ?? "",
+                            change?.key || undefined,
+                            change?.headers ? sent(change.headers) : undefined,
+                          );
+                          setMoving(({ [held.id]: _gone, ...rest }) => rest);
+                        })
+                      }
+                    >
+                      {busy === `${kind}-address` ? "Reconnecting…" : "Save and reconnect"}
+                    </button>
+                    {/* Before the reconnection rather than after it, because a
+                        reconnection replaces the tool list: an address that
+                        turns out to be wrong costs the crew every tool the
+                        server used to publish until somebody fixes it. */}
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      disabled={busy !== null || !moving[held.id]?.url.trim()}
+                      onClick={() =>
+                        void test(`${kind}-address-test`, () => {
+                          const change = moving[held.id];
+                          return api.probeServer(
+                            change?.url ?? "",
+                            change?.key || undefined,
+                            change?.headers ? sent(change.headers) : undefined,
+                          );
+                        })
+                      }
+                    >
+                      {busy === `${kind}-address-test` ? "Testing…" : "Test"}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn--small btn--ghost"
+                      disabled={busy !== null}
+                      onClick={() => setMoving(({ [held.id]: _gone, ...rest }) => rest)}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {tested[`${kind}-address-test`] && (
+                    <p className="field__hint">{reportLine(tested[`${kind}-address-test`]!)}</p>
+                  )}
+                </>
+              ) : (
+                <p className="field__hint">
+                  You added this one, so nobody has checked it. It gets everything a server on the
+                  list above gets. <code>{held.endpoint}</code>
+                  {held.headers.length > 0 && ` Sends ${held.headers.join(", ")}.`}{" "}
+                  <button
+                    type="button"
+                    className="toolset__more"
+                    disabled={busy !== null}
+                    onClick={() =>
+                      setMoving((was) => ({
+                        ...was,
+                        [held.id]: { url: held.endpoint, key: "", headers: null },
+                      }))
+                    }
+                  >
+                    Change address
+                  </button>
+                </p>
               ))}
 
             {held ? (
@@ -372,8 +755,25 @@ export function PluginList({ groupId, crew }: Props) {
                       an account. */}
                   {held.account && ` Signed in as ${held.account}.`}
                   {!held.signedIn &&
-                    " This server asked for no sign-in, so nothing was authorized."}
+                    " This server asked for no sign-in, so nothing was authorized."}{" "}
+                  {/* On every connected row and not only the added ones. The
+                      question it answers — is this reachable, and is our
+                      sign-in still good — is the same for a vendor, and the
+                      only other way to ask it is to connect again, which
+                      replaces the tool list and opens a browser. */}
+                  <button
+                    type="button"
+                    className="toolset__more"
+                    disabled={busy !== null}
+                    onClick={() => void test(`${kind}-check`, () => api.checkPlugin(held.id))}
+                  >
+                    {busy === `${kind}-check` ? "Testing…" : "Test it"}
+                  </button>
                 </p>
+
+                {tested[`${kind}-check`] && (
+                  <p className="field__hint">{reportLine(tested[`${kind}-check`]!)}</p>
+                )}
 
                 {/* Two buttons rather than a list with an "all" entry at the
                     top: every agent is a standing answer that covers whoever
@@ -394,7 +794,7 @@ export function PluginList({ groupId, crew }: Props) {
                         // would be a click that changed nothing, on the button
                         // whose whole purpose is to take something away.
                         if (held.access.mode === mode.value) return;
-                        void run(`${offer.kind}-access`, () =>
+                        void run(`${kind}-access`, () =>
                           api.setPluginAccess(
                             held.id,
                             mode.value === "everyone"
@@ -429,7 +829,7 @@ export function PluginList({ groupId, crew }: Props) {
                             aria-pressed={has}
                             disabled={busy !== null}
                             onClick={() =>
-                              void run(`${offer.kind}-${agent.id}`, () =>
+                              void run(`${kind}-${agent.id}`, () =>
                                 api.setPluginAccess(held.id, {
                                   mode: "chosen",
                                   agents: toggled(held.access, agent.id),
@@ -460,21 +860,21 @@ export function PluginList({ groupId, crew }: Props) {
                     <button
                       type="button"
                       className="toolset__more"
-                      aria-expanded={opened.includes(offer.kind)}
+                      aria-expanded={opened.includes(kind)}
                       onClick={() =>
                         setOpened((open) =>
-                          open.includes(offer.kind)
-                            ? open.filter((kind) => kind !== offer.kind)
-                            : [...open, offer.kind],
+                          open.includes(kind)
+                            ? open.filter((open) => open !== kind)
+                            : [...open, kind],
                         )
                       }
                     >
-                      {opened.includes(offer.kind) ? "Hide them" : `Show all ${held.tools.length}`}
+                      {opened.includes(kind) ? "Hide them" : `Show all ${held.tools.length}`}
                     </button>
                   </>
                 )}
 
-                {opened.includes(offer.kind) && (
+                {opened.includes(kind) && (
                   <ul className="toolset">
                     {held.tools.map((tool) => (
                       <li className="toolset__item" key={tool.name}>
@@ -519,7 +919,7 @@ export function PluginList({ groupId, crew }: Props) {
                                 // take something away must not be a click that
                                 // changes nothing.
                                 if (tool.access.mode === mode.value) return;
-                                void run(`${offer.kind}-${tool.name}`, () =>
+                                void run(`${kind}-${tool.name}`, () =>
                                   api.setPluginTool(
                                     held.id,
                                     tool.name,
@@ -546,7 +946,7 @@ export function PluginList({ groupId, crew }: Props) {
                                 aria-pressed={allows(tool.access, agent.id)}
                                 disabled={busy !== null}
                                 onClick={() =>
-                                  void run(`${offer.kind}-${tool.name}-${agent.id}`, () =>
+                                  void run(`${kind}-${tool.name}-${agent.id}`, () =>
                                     api.setPluginTool(held.id, tool.name, {
                                       mode: "chosen",
                                       agents: toggled(tool.access, agent.id),
@@ -565,28 +965,165 @@ export function PluginList({ groupId, crew }: Props) {
                 )}
               </>
             ) : (
-              <p className="field__hint">
-                {offer.blurb}{" "}
-                <a
-                  href={offer.docs}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="access__docs"
-                  // Opened by the shell rather than in the webview, which has
-                  // no way back. The href stays so the address is readable and
-                  // copyable before it is followed.
-                  onClick={(event) => {
-                    event.preventDefault();
-                    void openExternal(offer.docs);
-                  }}
-                >
-                  What this can do
-                </a>
-              </p>
+              offer && (
+                <p className="field__hint">
+                  {offer.blurb}{" "}
+                  <a
+                    href={offer.docs}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="access__docs"
+                    // Opened by the shell rather than in the webview, which has
+                    // no way back. The href stays so the address is readable and
+                    // copyable before it is followed.
+                    onClick={(event) => {
+                      event.preventDefault();
+                      void openExternal(offer.docs);
+                    }}
+                  >
+                    What this can do
+                  </a>
+                </p>
+              )
             )}
           </div>
         );
       })}
+
+      {/* Adding one. Below the six rather than beside them, because the order
+          says what it is: the catalog is where to look first, and this is what
+          to do when the server you want is not on it. */}
+      <div className="access__item">
+        {adding ? (
+          <>
+            <span className="field__label">Add a server</span>
+            <label className="field">
+              <span className="field__label">Name</span>
+              <input
+                className="input"
+                value={draft.name}
+                placeholder="Home Assistant"
+                disabled={busy !== null}
+                onChange={(event) => setDraft((was) => ({ ...was, name: event.target.value }))}
+              />
+              {/* What the name is *for*, rather than the rules it has to obey.
+                  The rules live in Rust, which normalizes what was typed, and a
+                  second copy of them here would be a second place for them to
+                  be wrong — so the row shows the name that came back instead of
+                  predicting it. */}
+              <span className="field__hint">
+                {/* Not one of the six above, which would read as an instruction
+                    to name it after a server that is already on the list. */}
+                Your agents call this server's tools by this name: a server named
+                <code> vault </code> offers <code>vault__read_secret</code>. Spaces and punctuation
+                become underscores.
+              </span>
+            </label>
+            <label className="field">
+              <span className="field__label">Address</span>
+              <input
+                className="input"
+                value={draft.url}
+                placeholder="https://example.com/mcp"
+                disabled={busy !== null}
+                onChange={(event) => setDraft((was) => ({ ...was, url: event.target.value }))}
+              />
+              <span className="field__hint">
+                The URL its MCP endpoint answers on. HTTPS, unless it is on this machine.
+              </span>
+            </label>
+            <label className="field">
+              <span className="field__label">Key (optional)</span>
+              <input
+                className="input"
+                type="password"
+                value={draft.key}
+                disabled={busy !== null}
+                onChange={(event) => setDraft((was) => ({ ...was, key: event.target.value }))}
+              />
+              {/* Both halves are worth saying. What it is for, because a server
+                  that signs in properly needs nothing here and pasting a key
+                  into a box marked optional is otherwise a guess; and where it
+                  goes, because that is the whole promise a plugin makes. */}
+              <span className="field__hint">
+                For a server that wants a bearer token and has no sign-in of its own. Leave it empty
+                and Guaca asks the server what it wants. Either way the key stays here: it never
+                reaches a model, a transcript or an agent's machine.
+              </span>
+            </label>
+            <HeaderFields
+              rows={draft.headers}
+              disabled={busy !== null}
+              onChange={(headers) => setDraft((was) => ({ ...was, headers }))}
+            />
+            <div className="choices">
+              <button
+                type="button"
+                className="btn btn--small btn--primary"
+                disabled={busy !== null || !draft.name.trim() || !draft.url.trim()}
+                onClick={() =>
+                  void run("add", async () => {
+                    await api.addPlugin(
+                      groupId,
+                      draft.name,
+                      draft.url,
+                      draft.key || undefined,
+                      sent(draft.headers),
+                    );
+                    // Cleared only once it worked. A refused address the
+                    // operator has to retype is a refusal that costs more than
+                    // the mistake did.
+                    setDraft({ name: "", url: "", key: "", headers: [] });
+                    setAdding(false);
+                  })
+                }
+              >
+                {busy === "add" ? "Connecting…" : "Add and connect"}
+              </button>
+              {/* Needs no name, because nothing is being called by one: this
+                  dials the address and reports what is there. It is the one
+                  control on this panel that can be pressed before the operator
+                  knows whether they have got the right thing. */}
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                disabled={busy !== null || !draft.url.trim()}
+                onClick={() =>
+                  void test("add-test", () =>
+                    api.probeServer(draft.url, draft.key || undefined, draft.headers))
+                }
+              >
+                {busy === "add-test" ? "Testing…" : "Test"}
+              </button>
+              <button
+                type="button"
+                className="btn btn--small btn--ghost"
+                disabled={busy !== null}
+                onClick={() => setAdding(false)}
+              >
+                Cancel
+              </button>
+            </div>
+            {tested["add-test"] && <p className="field__hint">{reportLine(tested["add-test"]!)}</p>}
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="btn btn--small btn--ghost"
+              disabled={busy !== null}
+              onClick={() => setAdding(true)}
+            >
+              Add a server
+            </button>
+            <p className="field__hint">
+              Any MCP server: one you run, one your company runs, or a vendor that is not on this
+              list. Nobody has checked it, and it gets exactly what the six above get — so add one
+              you would give the account to.
+            </p>
+          </>
+        )}
+      </div>
 
       {busy !== null && (
         <p className="field__hint">
