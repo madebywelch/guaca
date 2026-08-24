@@ -88,8 +88,8 @@ service drops the device table.
 2. Bind `127.0.0.1:0`. Only now is the redirect URI known.
 3. Open the operator's browser at the authorization endpoint, with a PKCE
    challenge and a state.
-4. Catch the redirect on that port. Check the state before writing a success
-   page, so a mismatch is never told it worked.
+4. Catch the redirect on that port. Check the issuer and the state before
+   writing a success page, so a mismatch is never told it worked.
 5. `POST` the code and the verifier to the token endpoint.
 6. Spend the token once, on `/api/connectors`, before anything is written.
 
@@ -108,7 +108,41 @@ The fixed client is the smaller surface and the more honest screen.
 **The redirect URI is registered with no port.** RFC 8252 §7.3 has the
 authorization server compare a loopback redirect on scheme, host, path and query
 while ignoring the port. That is what makes "bind first, then ask" possible at
-all, and it is the one thing the service must not stop honouring.
+all, and it is the one thing the service must not stop honoring.
+
+### The issuer is read, never assumed
+
+RFC 9207 puts an `iss` on the redirect, and that check is worth exactly what the
+value it is compared against is worth. The value is the `issuer` field of the
+metadata document from step 1, and nothing else.
+
+It used to be the origin, on the reasoning that the document was fetched from the
+root of the origin so the two had to be the same string. They are the same string
+only for an authorization server mounted at that root, and `guaca.bot` mounts its
+own under a path:
+
+```json
+{
+  "issuer": "https://guaca.bot/api/auth",
+  "authorization_endpoint": "https://guaca.bot/api/auth/oauth2/authorize",
+  "authorization_response_iss_parameter_supported": true
+}
+```
+
+So every sign-in opened a browser, reached the consent screen, was issued a code,
+and was refused on the way back for naming the issuer the service publishes. RFC
+8414 §3.3 wants a document served at the root well-known path to claim the bare
+origin, so the service is bending that rule as well, but where the two disagree
+the published value is the one that wins: it is also the one the server will
+send.
+
+The origin is still what an *absent* `issuer` means, because that is what the
+address the document arrived from implies. Substituting it unconditionally was
+the bug; substituting it when nothing was published is the reading.
+
+Both are then checked to be on the configured origin, alongside the two
+endpoints. An unchecked issuer is worse than no check at all: a metadata document
+naming a third party would have Guaca accept a code minted by that third party.
 
 ## Where the service is
 
@@ -123,9 +157,10 @@ environment variable is still an input:
 - **HTTPS, or loopback.** Anything else is refused before a request is made. The
   failure this prevents is a credential on a plaintext connection across a
   network; loopback is exempt because it does not cross one.
-- **Discovered endpoints must be on the origin that published them.** A metadata
-  document is the one place discovery could move a credential to a third party,
-  and the check costs one string comparison.
+- **Everything discovered must be on the origin that published it.** Both
+  endpoints and the issuer. A metadata document is the one place discovery could
+  move a credential to a third party, or name one whose codes Guaca would then
+  accept, and the check costs three string comparisons.
 - **An override is logged at startup, and shown in the pane.** A machine left
   pointed at a development service is not a silent state, and the two hold
   different accounts.

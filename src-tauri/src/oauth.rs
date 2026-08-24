@@ -381,6 +381,23 @@ async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<Resourc
 /// RFC 8414 authorization-server metadata, as far as this build reads it.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerMetadata {
+    /// The issuer identifier, which is the only value RFC 9207's `iss` check
+    /// may be made against.
+    ///
+    /// Not the address the document was fetched from. Those two are the same
+    /// string only for an authorization server at the root of an origin, and
+    /// `guaca.bot` mounts its own under `/api/auth`: a sign-in checked against
+    /// the origin reached the consent screen, was issued a code, and was then
+    /// refused at the redirect for naming the issuer the service publishes. RFC
+    /// 8414 section 3.3 wants the two to agree, and where they do not, the
+    /// published value wins, because it is also the one the server will send.
+    ///
+    /// `default` because the plugin flow takes its issuer from the *resource's*
+    /// metadata, where RFC 9728 has already named it, and never reads this
+    /// field. A vendor that omits a required one must not become a plugin
+    /// nobody can connect.
+    #[serde(default)]
+    pub issuer: String,
     pub authorization_endpoint: String,
     pub token_endpoint: String,
     /// Absent is a server Guaca cannot sign in to at all: with no RFC 7591
@@ -946,6 +963,7 @@ mod tests {
 
     fn server_offering(scopes: &[&str]) -> ServerMetadata {
         ServerMetadata {
+            issuer: "https://x.test".into(),
             authorization_endpoint: "https://x.test/a".into(),
             token_endpoint: "https://x.test/t".into(),
             registration_endpoint: None,
