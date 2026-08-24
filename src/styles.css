@@ -1198,11 +1198,25 @@ button {
    ========================================================================== */
 
 .msg {
-  position: relative;
+  /* The lane the clock is drawn in, floored at what a twelve-hour one needs.
+     A floor and not a width, because the string is the operator's locale
+     rather than this file's: "22:37", "10:37 PM" and "10:37 p.m." are 1.8rem,
+     2.9rem and 3.6rem of it. Both halves of that earn their keep. Held open
+     whether or not the row has a clock, a bubble settling out of the stream
+     lands at the width it was already being drawn at. Free to grow past the
+     floor, there is no locale where the words run under the time. */
+  --clock: 2.9rem;
+
   display: grid;
-  grid-template-columns: 2.1rem 1fr;
+  /* Three lanes: the portrait, the words, and the clock. The clock is a lane
+     of its own rather than something laid over the top right corner, because
+     the top right corner is where the first line of a full-measure paragraph
+     already ends. A reserve in the padding is the same bug one number later:
+     whatever is written there is too small for somebody's locale, and what it
+     is too small by is a word of the message underneath it. */
+  grid-template-columns: 2.1rem minmax(0, 1fr) minmax(var(--clock), auto);
   gap: 0.75rem;
-  padding: 0.3rem 1.5rem 0.3rem 1.15rem;
+  padding: 0.3rem 0.5rem 0.3rem 1.15rem;
 }
 
 .msg:hover {
@@ -1228,15 +1242,18 @@ button {
 }
 
 /* Yours: no portrait, no gutter, and held off the right edge. Nothing in the
-   log has to say who wrote it, because the side it is on already has. */
+   log has to say who wrote it, because the side it is on already has. Mirrored
+   down to the clock, which takes the lane on the left, so the bubble is held
+   off that edge by the width of a time rather than by a figure that was about
+   that wide. */
 .msg[data-operator="true"] {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(var(--clock), auto) minmax(0, 1fr);
   justify-items: end;
-  padding-left: 4rem;
+  padding-left: 0.5rem;
+  padding-right: 1.5rem;
 }
 
 .msg[data-operator="true"] .msg__body {
-  grid-column: 1;
   /* Shorter than an agent's. What you type is a question or an instruction,
      and a bubble is the wrong shape for anything longer than a few lines. */
   max-width: min(32rem, 100%);
@@ -1267,13 +1284,22 @@ button {
   letter-spacing: -0.003em;
 }
 
-/* Out of the flow entirely, so revealing it moves nothing. Every message has a
-   time; almost none of them are worth a line of their own, and the transcript
-   already draws a line wherever the gap was long enough to notice. */
+/* In its own lane and inked on hover, so revealing it moves nothing and
+   nothing is under it to move. Every message has a time; almost none of them
+   are worth a line of their own, and the transcript already draws a line
+   wherever the gap was long enough to notice. */
 .msg__at {
-  position: absolute;
-  top: 0.42rem;
-  right: 0.5rem;
+  grid-column: 3;
+  /* Stated, because it is the one child placed behind the cursor. Sparse
+     auto-placement only ever moves forward, so the operator's clock, which is
+     written after the bubble and drawn in the lane before it, lands on a
+     second row of its own without this. */
+  grid-row: 1;
+  justify-self: end;
+  align-self: start;
+  /* Onto the first line of the message rather than the top of the row. */
+  margin-top: 0.12rem;
+  white-space: nowrap;
   font-family: var(--font-mono);
   font-size: 0.6rem;
   font-variant-numeric: tabular-nums;
@@ -1284,8 +1310,8 @@ button {
 }
 
 .msg[data-operator="true"] .msg__at {
-  right: auto;
-  left: 1.15rem;
+  grid-column: 1;
+  justify-self: start;
 }
 
 .msg:hover .msg__at {
