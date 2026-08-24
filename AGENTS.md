@@ -352,6 +352,18 @@ the model takes a screenshot to see what `browse` did.
   decoration: everything under a transcript takes height from it without
   anything arriving or scrolling, so a composer growing a line or the working
   panel opening put the newest message under the fold and left it there.
+- **The issuer a redirect is checked against is the one the service published,
+  not the origin the document was fetched from.** Those are the same string only
+  for an authorization server at the root of an origin, and `guaca.bot` mounts
+  its own at `/api/auth`. Substituting the origin opened a browser, reached the
+  consent screen, took a code and refused it on the way back, every time; the
+  offline suite agreed with the substitution, because its stub published its own
+  origin as the issuer and sent no `iss` at all. An absent `issuer` still means
+  the origin, because that is what the root well-known address implies, and both
+  are checked to be on the configured origin: an issuer nobody checked is one a
+  metadata document could point at a third party whose codes Guaca would then
+  accept. `ServerMetadata::issuer`, then *The issuer is read, never assumed* in
+  `docs/ACCOUNT.md`.
 - **What a plugin's sign-in asks for is the resource's list, not its
   authorization server's.** They are two documents and two lists: RFC 9728 names
   the scopes for *that resource*, RFC 8414 names everything the server can issue
