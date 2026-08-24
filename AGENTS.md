@@ -108,7 +108,10 @@ repo: the frontend renders state and forwards intent.
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
 | A server the operator added: its name, its address, a pasted key | *A server the operator added* in `docs/PLUGINS.md`, then `PluginKind::custom` and `PluginKind::from_row` |
+| Headers an operator gave a server: what is refused, where they go | *Headers, which are how the request arrives* in `docs/PLUGINS.md`, then `domain::plugin::Headers`, the loops in `mcp.rs` that apply them, and `oauth::Gate`, which is why they stop at one origin |
+| Testing an address or a connected plugin without connecting it | *Testing it is the whole path, minus the browser* in `docs/PLUGINS.md`, then `plugins::inspect` and `plugins::check` |
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
+| Which transport a server is spoken to over, and who gets the older one | *It speaks the transport that was replaced* in `docs/PLUGINS.md`, then `mcp::probe` and `sse_exchange` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
@@ -470,6 +473,66 @@ the model takes a screenshot to see what `browse` did.
   that is what migration 26 exists to clean up after. A row with neither a
   catalog slug nor an address is one nothing can dial, which is a newer build's
   plugin after a downgrade, and is skipped. `PluginKind::from_row`.
+- **A header the operator wrote is not a credential, and that is why it
+  composes.** It describes how a request *reaches* the server rather than who is
+  asking, so it goes on every one — the unauthenticated probe, the handshake,
+  the tool list, every call, and the GET that opens an event stream — whichever
+  of the other things paid for it. That is what makes a server behind Cloudflare
+  Access that also signs in work without a case of its own: the headers get past
+  the gate, and the 401 behind it starts the browser dance unchanged. A client
+  that put them only on what it thinks of as "the call" never opens the stream.
+- **A sign-in reaches more hosts than the server, so the operator's headers stop
+  at the resource's origin.** `oauth::Gate`. Both directions are load-bearing:
+  without them the gate refuses the metadata document a sign-in reads first and
+  discovery dies on a `403`, and with them everywhere the operator's gate
+  credential reaches a vendor's authorization server. The rule covers a
+  self-hosted server that is its own issuer — registration, token and refresh
+  all behind the same gate — without a case of its own. The refresh is the one
+  that would otherwise fail a day after everything looked fine.
+- **A header this client builds itself is refused rather than overwritten, and
+  `authorization` is not one of them.** Anything `mcp-*` disagreeing with the
+  body is refused by a modern server with an error that reads as the server
+  rejecting the operator's work. `authorization` is allowed because it is the
+  only way to send `Basic` or a scheme a vendor invented — and a key beside it
+  is refused, because the key box writes the same header and one would silently
+  win. `Headers::parse` does the first, `commands::presented` does the second.
+- **Header *names* cross IPC and values never do.** A panel has to be able to
+  say `x-api-key` is on the request, because that is the question an operator
+  debugging their own server is asking, and it must not be a place to read back
+  what the key is worth. Same boundary `connector_env` draws.
+- **Sending headers to `readdress_plugin` replaces the set and sending none
+  keeps it.** The rule a group's API key has, for its reason: a value that
+  cannot be read back is one the panel cannot re-send, so absent has to mean
+  keep. An empty list removes them, which is a thing the operator did. The key
+  on that command is the other way round and stays that way: it is this
+  command's own older rule, and a server that stopped needing a key would
+  otherwise be unreachable from the panel.
+- **The older transport is offered to a server the operator added and to no
+  vendor.** A vendor Guaca vouches for is one it can hold to streamable HTTP,
+  and refusing one of the six over it is a message somebody at that vendor
+  reads. A box in an operator's own network is not a vendor: refusing it is not
+  a migration incentive, it is a plugin that does not work on a server they can
+  see working in a browser. `Dial::legacy_transport`, set only in
+  `plugins::dial`.
+- **Whose refusal the operator sees after a fallback turns on how far the
+  second attempt got.** A GET that was not answered with a stream, or not
+  answered at all, says nothing the POST did not, so the POST's stands.
+  Anything past that came off the server's own stream and is the more specific
+  of the two. Reporting the `405` there sends an operator to look at a
+  transport that was working, which is why *not an event stream* is its own
+  error variant rather than a sentence inside `Malformed`.
+- **A message endpoint on another origin is refused rather than followed.** It
+  is a redirect invented by the far end after the connection was made, and
+  following it puts a crew's credential and every tool argument on a host the
+  operator never named.
+- **Testing reports a server that wants a sign-in; it does not run one.** That
+  is the single step `probe_server` stops short of `add_plugin` at. The question
+  is whether this is the right address, and answering it with a consent screen
+  is a question nobody asked — and a diagnostic that opens one is a diagnostic
+  nobody runs twice. It is also why "nothing presented and refused" and
+  "something presented and refused" are two states: one status code, opposite
+  problems, and told apart wrongly an operator re-pastes a key at a server that
+  never wanted one.
 - **A name only resolves against a crew that has it, and a catalog name always
   resolves.** `neon__run_sql` parses whether or not Neon is connected, which is
   what makes "Neon is not connected, ask the operator" reachable instead of
@@ -821,7 +884,10 @@ cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 
 Another, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
-turn that calls a plugin tool end to end. Its live half runs `oauth::discover`
+turn that calls a plugin tool end to end. Its `deployments` module is a second
+scripted server and deliberately not the same one: that one is the five vendors'
+shape, and this one is a box in somebody's own network — the older transport, a
+gate wanting headers, a key taped to it. Its live half runs `oauth::discover`
 against every vendor on the list and asks whether each still publishes what this
 build expects, which is the failure no offline test can see. It reaches the internet, authorizes nothing and spends nothing.
 

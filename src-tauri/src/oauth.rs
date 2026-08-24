@@ -39,6 +39,7 @@
 
 use std::time::Duration;
 
+use reqwest::RequestBuilder;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -158,6 +159,63 @@ impl Grant {
     }
 }
 
+/// Headers the operator gave the resource, and the rule about where they go.
+///
+/// A sign-in normally reaches several hosts: the resource publishes its
+/// metadata, an authorization server publishes its own, and registration and
+/// the token exchange happen at that server. Most of the time those are two
+/// different origins.
+///
+/// The operator's headers belong to *their* server and nowhere else. A gate in
+/// front of a self-hosted MCP server refuses everything on that host including
+/// the metadata document a sign-in has to read first, so leaving them off makes
+/// the composition — behind a gate, and signing in — fail at discovery with a
+/// `403` nobody can act on. Sending them to every host in the dance instead
+/// would hand the operator's gate credential to a vendor's authorization
+/// server, which is a credential leak dressed up as a convenience.
+///
+/// So the rule is the origin: same origin as the resource, headers go on;
+/// anywhere else, they do not. That covers the self-hosted server that is its
+/// own issuer, where every request in the flow is behind the same gate, and it
+/// covers a challenge that names metadata on somebody else's host, where none
+/// of them are.
+#[derive(Clone, Default)]
+pub struct Gate<'a> {
+    origin: String,
+    headers: &'a [(String, String)],
+}
+
+impl<'a> Gate<'a> {
+    /// Nothing to send, which is every catalog server and most added ones.
+    pub fn none() -> Gate<'static> {
+        Gate::default()
+    }
+
+    pub fn on(resource: &str, headers: &'a [(String, String)]) -> Gate<'a> {
+        Gate {
+            origin: split_origin(resource).map(|(origin, _)| origin).unwrap_or_default(),
+            headers,
+        }
+    }
+
+    /// This request, with the operator's headers on it if it is going to their
+    /// own server.
+    fn apply(&self, request: RequestBuilder, url: &str) -> RequestBuilder {
+        if self.headers.is_empty() || self.origin.is_empty() {
+            return request;
+        }
+        let Some((origin, _)) = split_origin(url) else { return request };
+        if !origin.eq_ignore_ascii_case(&self.origin) {
+            return request;
+        }
+        let mut request = request;
+        for (name, value) in self.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        request
+    }
+}
+
 /// Runs the whole flow and hands back a usable grant.
 ///
 /// `open` is given the URL the operator has to visit. It is a callback rather
@@ -167,11 +225,12 @@ impl Grant {
 pub async fn authorize(
     resource: &str,
     challenge_header: Option<&str>,
+    gate: &Gate<'_>,
     open: impl FnOnce(&str) -> Result<(), String>,
     now_ms: impl Fn() -> i64,
 ) -> Result<Grant, OauthError> {
     let http = http()?;
-    let discovered = discover(resource, challenge_header).await?;
+    let discovered = discover_through(resource, challenge_header, gate).await?;
     let scope = discovered.requested_scope();
     let Discovered { issuer, server, .. } = discovered;
 
@@ -188,7 +247,7 @@ pub async fn authorize(
     let port = listener.local_addr().map_err(|source| OauthError::NoPort { source })?.port();
     let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 
-    let client = register(&http, &registration_endpoint, &redirect_uri).await?;
+    let client = register(&http, &registration_endpoint, &redirect_uri, gate).await?;
 
     let verifier = secret();
     let challenge = pkce_challenge(&verifier);
@@ -219,7 +278,8 @@ pub async fn authorize(
     // the operator does not use hands back a code this client would then present
     // to the one they do.
     let code = wait_for_redirect(listener, &state, &issuer).await?;
-    exchange(&http, &server, &client, &code, &verifier, &redirect_uri, resource, &now_ms).await
+    exchange(&http, &server, &client, &code, &verifier, &redirect_uri, resource, gate, &now_ms)
+        .await
 }
 
 /// Trades a refresh token for a fresh grant.
@@ -227,7 +287,11 @@ pub async fn authorize(
 /// Keeps the old refresh token when the server does not issue a new one, which
 /// is legal and common: dropping it would make the next renewal impossible and
 /// the plugin would quietly stop working a day later.
-pub async fn refresh(grant: &Grant, now_ms: impl Fn() -> i64) -> Result<Grant, OauthError> {
+pub async fn refresh(
+    grant: &Grant,
+    gate: &Gate<'_>,
+    now_ms: impl Fn() -> i64,
+) -> Result<Grant, OauthError> {
     let Some(refresh_token) = grant.refresh_token.clone() else {
         return Err(OauthError::NoRefreshToken);
     };
@@ -242,7 +306,7 @@ pub async fn refresh(grant: &Grant, now_ms: impl Fn() -> i64) -> Result<Grant, O
         form.push(("client_secret".to_string(), secret.clone()));
     }
 
-    let issued = post_token(&http, &grant.token_endpoint, &form).await?;
+    let issued = post_token(&http, &grant.token_endpoint, &form, gate).await?;
     Ok(Grant {
         access_token: issued.access_token,
         refresh_token: issued.refresh_token.or(Some(refresh_token)),
@@ -285,9 +349,18 @@ pub async fn discover(
     resource: &str,
     challenge_header: Option<&str>,
 ) -> Result<Discovered, OauthError> {
+    discover_through(resource, challenge_header, &Gate::none()).await
+}
+
+/// The same, for a resource that is behind something.
+async fn discover_through(
+    resource: &str,
+    challenge_header: Option<&str>,
+    gate: &Gate<'_>,
+) -> Result<Discovered, OauthError> {
     let http = http()?;
-    let Resource { issuer, scopes } = resource_for(&http, resource, challenge_header).await?;
-    let server = server_metadata(&http, &issuer).await?;
+    let Resource { issuer, scopes } = resource_for(&http, resource, challenge_header, gate).await?;
+    let server = server_metadata(&http, &issuer, gate).await?;
     Ok(Discovered {
         issuer,
         server,
@@ -337,19 +410,20 @@ async fn resource_for(
     http: &reqwest::Client,
     resource: &str,
     challenge: Option<&str>,
+    gate: &Gate<'_>,
 ) -> Result<Resource, OauthError> {
     let mut tried = Vec::new();
 
     if let Some(url) = challenge.and_then(resource_metadata_url) {
         tried.push(url.clone());
-        if let Some(found) = protected_resource(http, &url).await {
+        if let Some(found) = protected_resource(http, &url, gate).await {
             return Ok(found);
         }
     }
 
     for url in well_known(resource, "oauth-protected-resource") {
         tried.push(url.clone());
-        if let Some(found) = protected_resource(http, &url).await {
+        if let Some(found) = protected_resource(http, &url, gate).await {
             return Ok(found);
         }
     }
@@ -360,7 +434,11 @@ async fn resource_for(
     })
 }
 
-async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<Resource> {
+async fn protected_resource(
+    http: &reqwest::Client,
+    url: &str,
+    gate: &Gate<'_>,
+) -> Option<Resource> {
     #[derive(Deserialize)]
     struct Metadata {
         #[serde(default)]
@@ -369,7 +447,7 @@ async fn protected_resource(http: &reqwest::Client, url: &str) -> Option<Resourc
         scopes_supported: Vec<String>,
     }
 
-    let response = http.get(url).timeout(HTTP_TIMEOUT).send().await.ok()?;
+    let response = gate.apply(http.get(url), url).timeout(HTTP_TIMEOUT).send().await.ok()?;
     if !response.status().is_success() {
         return None;
     }
@@ -415,12 +493,14 @@ pub struct ServerMetadata {
 pub(crate) async fn server_metadata(
     http: &reqwest::Client,
     issuer: &str,
+    gate: &Gate<'_>,
 ) -> Result<ServerMetadata, OauthError> {
     let mut tried = Vec::new();
     for name in ["oauth-authorization-server", "openid-configuration"] {
         for url in well_known(issuer, name) {
             tried.push(url.clone());
-            let Ok(response) = http.get(&url).timeout(HTTP_TIMEOUT).send().await else {
+            let Ok(response) = gate.apply(http.get(&url), &url).timeout(HTTP_TIMEOUT).send().await
+            else {
                 continue;
             };
             if !response.status().is_success() {
@@ -556,6 +636,7 @@ async fn register(
     http: &reqwest::Client,
     endpoint: &str,
     redirect_uri: &str,
+    gate: &Gate<'_>,
 ) -> Result<Registered, OauthError> {
     let body = serde_json::json!({
         "client_name": "Guaca",
@@ -565,9 +646,16 @@ async fn register(
         "token_endpoint_auth_method": "none",
     });
 
-    let response =
-        http.post(endpoint).timeout(HTTP_TIMEOUT).json(&body).send().await.map_err(|source| {
-            OauthError::Transport { what: "to register", url: endpoint.to_string(), source }
+    let response = gate
+        .apply(http.post(endpoint), endpoint)
+        .timeout(HTTP_TIMEOUT)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|source| OauthError::Transport {
+            what: "to register",
+            url: endpoint.to_string(),
+            source,
         })?;
 
     let status = response.status();
@@ -717,6 +805,7 @@ async fn exchange(
     verifier: &str,
     redirect_uri: &str,
     resource: &str,
+    gate: &Gate<'_>,
     now_ms: &impl Fn() -> i64,
 ) -> Result<Grant, OauthError> {
     let secret = client.secret();
@@ -734,7 +823,7 @@ async fn exchange(
         form.push(("client_secret".to_string(), secret.clone()));
     }
 
-    let issued = post_token(http, &server.token_endpoint, &form).await?;
+    let issued = post_token(http, &server.token_endpoint, &form, gate).await?;
     if issued.access_token.is_empty() {
         return Err(OauthError::NoToken { issuer: server.token_endpoint.clone() });
     }
@@ -753,10 +842,18 @@ pub(crate) async fn post_token(
     http: &reqwest::Client,
     endpoint: &str,
     form: &[(String, String)],
+    gate: &Gate<'_>,
 ) -> Result<Issued, OauthError> {
-    let response =
-        http.post(endpoint).timeout(HTTP_TIMEOUT).form(form).send().await.map_err(|source| {
-            OauthError::Transport { what: "for a token", url: endpoint.to_string(), source }
+    let response = gate
+        .apply(http.post(endpoint), endpoint)
+        .timeout(HTTP_TIMEOUT)
+        .form(form)
+        .send()
+        .await
+        .map_err(|source| OauthError::Transport {
+            what: "for a token",
+            url: endpoint.to_string(),
+            source,
         })?;
 
     let status = response.status();
