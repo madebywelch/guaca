@@ -528,21 +528,35 @@ pub fn system_prompt(
     // Nothing in the app was broken. The operator was handed a location on a
     // machine they do not have and cannot reach, in a chat window with nothing
     // to click, and the document may as well not have existed.
+    out.push_str("\n## Handing over a document\n");
     out.push_str(
-        "\n## Handing over a document\n\
-         Your computer is yours alone. Nobody else can open a path on it, so naming a file you \
-         made, or its directory, or telling the operator it is on screen in an editor, hands over \
-         nothing at all: they cannot reach any of it.\n\
-         - `attach_file` is what delivers it. Give it the path and the file rides on your reply, \
-         where the operator can read it, open it and save it.\n\
-         - Attach anything you were asked to produce as a document, and anything long enough that \
-         a file reads better than a message: a brief, a report, a table, a draft.\n\
+        "`write_document` is how you produce one: give it a name and the whole document, and it \
+         is written and attached to your reply, where the operator can read it, open it and save \
+         it. It needs no machine and no shell command.\n\
+         - Do this for anything you were asked to produce as a document, and anything long \
+         enough that a file reads better than a message: a brief, a report, a table, a draft.\n\
          - Then write your reply as if they are holding it, because they are. Say what it is and \
          what you want them to notice. Do not paste its contents back, and do not describe where \
          it lives.\n\
-         - To hand the same file to a colleague rather than to the operator, pass it in the \
-         `files` of a `send_message`.\n",
+         - To hand the same document to a colleague as well, name it in the `files` of a \
+         `send_message` in the same turn.\n",
     );
+    // The paragraph about a path is only true for an agent that has a machine
+    // to put one on, and said to an agent that has none it is the instruction
+    // that produced the failure: told its documents live on a computer, an
+    // agent with no computer invented `/home/user/…`, was refused, and tried
+    // again. `write_document` above is what every agent has, so it leads, and
+    // this is the extra route for the ones that also have a disk.
+    if surfaces.computer {
+        out.push_str(
+            "- A file you made with `run_command` is a different case, and your computer is \
+             yours alone: nobody else can open a path on it, so naming the file, or its \
+             directory, or saying it is on screen in an editor, hands over nothing. Pass its \
+             path to `attach_file` and it rides on your reply the same way. For something you \
+             are writing yourself, `write_document` is fewer steps than saving it and attaching \
+             it.\n",
+        );
+    }
 
     // Said only where the reply is read by a person. A peer is a model and
     // wants the numbers, so a chart spec on that path is tokens spent drawing

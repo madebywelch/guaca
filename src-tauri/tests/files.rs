@@ -517,3 +517,109 @@ async fn an_agent_reads_its_own_attachment_back_on_the_next_turn() {
         "its own turn lost the file it attached: {assistant:?}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_is_written_and_handed_over_with_no_machine_anywhere() {
+    // The hole under `attach_file`. There is no sandbox in CI and no E2B key,
+    // so this agent has no computer, which is the state most agents are in.
+    // Until `write_document` there was no way for one to produce a file at all:
+    // it had the whole report in the turn and the only route to an attachment
+    // ran through a shell command on a machine it did not have. One agent spent
+    // four turns on that, twice invented a `/home/user` path, and delivered
+    // eight pages as chat text.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Written up and attached.".into())
+        } else {
+            Script::Write {
+                tool: "write_document".into(),
+                name: "readiness.md".into(),
+                content: "# Readiness\n\nEverything is UNEXECUTED.".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Write me the readiness report.").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        handed_over(&h, "Manager"),
+        vec!["readiness.md"],
+        "the document has to arrive as a file:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_written_this_turn_can_be_sent_on_in_the_same_turn() {
+    // A document a moment old is in no channel yet: the message carrying it has
+    // not landed. Resolved against the channel alone, an agent that wrote a
+    // brief and passed it to a colleague was told its own document did not
+    // exist, which is the failure this whole file is about, one step along.
+    let stub = serve(|body| {
+        // Counted rather than pattern-matched on the text: what round this is
+        // decides what to play, and the tool results are how many have run.
+        let results = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter(|msg| msg["role"] == "tool").count())
+            .unwrap_or(0);
+        match results {
+            0 => Script::Write {
+                tool: "write_document".into(),
+                name: "brief.md".into(),
+                content: "# Brief\n\nThe short version.".into(),
+            },
+            1 => Script::SendFiles {
+                recipients: vec!["Scribe".into()],
+                text: "Here is the brief.".into(),
+                files: vec!["brief.md".into()],
+            },
+            _ => Script::Say("Sent it on.".into()),
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Scribe"], GuardLimits::default());
+    let run =
+        h.runtime.send_from_human(h.id("Manager"), "Write a brief and give it to Scribe.").unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(
+        !told.contains("was not attached") && !told.contains("did not get it"),
+        "its own document has to resolve by name: {told}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_document_called_for_with_nothing_in_it_is_refused_with_the_reason() {
+    // The mistake this catches is a model calling the tool intending to fill it
+    // in on a later round. There is no later round, and an empty file attached
+    // to an answer is the same lie as a phantom attachment.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("I could not produce it.".into())
+        } else {
+            Script::Write {
+                tool: "write_document".into(),
+                name: "brief.md".into(),
+                content: "   ".into(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Write me a brief.").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        handed_over(&h, "Manager").is_empty(),
+        "nothing should have been attached:\n{}",
+        h.transcript()
+    );
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("no second call"), "it has to say there is no later round: {told}");
+}

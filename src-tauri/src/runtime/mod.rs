@@ -1049,6 +1049,7 @@ impl Runtime {
         &self,
         card: &AgentCard,
         wanted: &[String],
+        made: &[Attachment],
         consequence: &str,
     ) -> (Vec<Attachment>, Vec<String>) {
         let mut found = Vec::new();
@@ -1060,6 +1061,16 @@ impl Runtime {
         let known = self.attachments_in_channel(card.id);
         for name in wanted {
             let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+            // What this turn has just made comes first. `write_document` is the
+            // one way to produce a file with no machine, and a document written
+            // a moment ago is not in any channel yet: the message carrying it
+            // has not landed. Looked for only in the channel, an agent that
+            // wrote a brief and sent it to a colleague in the same turn was
+            // told its own document did not exist.
+            if let Some(file) = made.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
+                found.push(file.clone());
+                continue;
+            }
             if let Some(file) = known.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
                 found.push(file.clone());
                 continue;
@@ -2849,7 +2860,8 @@ impl Runtime {
                 } else {
                     UNSENT_FILE_NO_COMPUTER
                 };
-                let (carried, missing) = self.resolve_files(card, &files, consequence).await;
+                let made = attached.clone();
+                let (carried, missing) = self.resolve_files(card, &files, &made, consequence).await;
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -2908,13 +2920,50 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
+            ToolInvocation::WriteDocument { name, content } => {
+                let (rendered, outcome) = match self.inner.files.put(&name, content.as_bytes()) {
+                    Ok(file) => {
+                        // Deduplicated by digest against the turn, exactly as
+                        // `attach_file` is. Writing the same document twice
+                        // produces one file by construction, since the contents
+                        // are the address, and the operator must not get two
+                        // cards for it.
+                        let already = attached.iter().any(|held| held.digest == file.digest);
+                        let summary = format!("wrote {} ({})", file.name, file.size());
+                        let told = format!(
+                            "{} is written and attached to your answer. The reader gets the \
+                             document itself, so say what it is rather than repeating what is in \
+                             it. To hand it to a colleague as well, name it as `{}` in \
+                             `send_message` in this same turn.",
+                            file.name, file.name
+                        );
+                        if !already {
+                            attached.push(file);
+                        }
+                        (told, ToolOutcome::Ok { summary })
+                    }
+                    // A document that could not be written is the same danger a
+                    // file that could not be attached is: an answer about to
+                    // claim something it does not carry.
+                    Err(err) => (
+                        format!(
+                            "{name} was not written: {err}. It is not on your answer, so do not \
+                             tell them it is attached."
+                        ),
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
+                };
+                (rendered, Part::tool_call(tools::WRITE_DOCUMENT, arguments, outcome))
+            }
+
             ToolInvocation::AttachFile { files } => {
                 let consequence = if self.surfaces_for(card).computer {
                     UNATTACHED_FILE
                 } else {
                     UNATTACHED_FILE_NO_COMPUTER
                 };
-                let (found, missing) = self.resolve_files(card, &files, consequence).await;
+                let made = attached.clone();
+                let (found, missing) = self.resolve_files(card, &files, &made, consequence).await;
 
                 // Deduplicated against the turn rather than the call: a model
                 // that attaches the brief, writes a paragraph, then attaches

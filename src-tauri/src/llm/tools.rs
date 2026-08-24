@@ -30,6 +30,7 @@ pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ATTACH_FILE: &str = "attach_file";
+pub const WRITE_DOCUMENT: &str = "write_document";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -660,6 +661,60 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: WRITE_DOCUMENT.to_string(),
+            // The twelfth, and it exists because the eleventh had a hole under
+            // it. `attach_file` hands over a file; until this, the only way an
+            // agent could *make* one was to write it on a sandbox with
+            // `run_command`. So an agent with no computer could never produce a
+            // document at all, which is most agents: it had the whole report in
+            // hand, in the turn, and no way to turn it into something the
+            // operator could open. One spent four turns trying, twice invented
+            // a `/home/user` path for a machine it did not have, and delivered
+            // eight pages as chat text.
+            //
+            // Nothing about writing a document needs a machine. The bytes are
+            // already in the model's own output, and `Files::put` addresses
+            // them by digest like every other attachment. So this is offered to
+            // every agent, with a computer or without one: an agent that has a
+            // sandbox should still not be spending a shell command and a round
+            // trip on `cat > brief.md`.
+            //
+            // It attaches rather than only writing, and the two are one call on
+            // purpose. The failure `attach_file` was built to fix was an agent
+            // writing a document and then typing its path instead of handing it
+            // over; a `write` that had to be followed by an `attach` is the
+            // same forgetting with an extra step in front of it.
+            description: "Write a document and hand it over, attached to your answer. Use this \
+                          whenever you are asked to produce something that should arrive as a \
+                          file rather than as chat: a brief, a report, a spec, a runbook, a \
+                          table, a draft. The content is the whole document, written out here in \
+                          full. It needs no machine and no shell command. Once written it is \
+                          attached to the answer you are about to give, and you can also name it \
+                          in `send_message` in this same turn to hand it to a colleague. Then say \
+                          what it is in your answer rather than repeating what is in it, because \
+                          the reader has the document itself."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "A file name with an extension, e.g. `readiness.md`. \
+                                        Markdown unless something else is called for."
+                    },
+                    "content": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The document itself, complete. Not a summary of it and \
+                                        not a plan to write it."
+                    }
+                },
+                "required": ["name", "content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: ATTACH_FILE.to_string(),
             // The eleventh tool, and it earns its place because without it a
             // document an agent produces has no way to reach the operator at
@@ -689,11 +744,10 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                  rather than repeating its contents, because the reader has the file itself."
             } else {
                 "Attach a file to your answer, so whoever reads it can open it. You have no \
-                 computer, so there is no filesystem you can write a document to and no path \
-                 that will resolve: the only files you can attach are the ones already in this \
-                 conversation, named by their file name. Use this to hand one of those on. \
-                 Anything you are asked to write yourself goes in your answer as text, and \
-                 there is nothing to attach it to."
+                 computer, so there is no filesystem and no path that will resolve: this hands \
+                 on a file that is already in this conversation, named by its file name. To \
+                 hand over a document you are writing yourself, use `write_document` instead, \
+                 which needs no machine."
             }
             .to_string(),
             parameters: serde_json::json!({
@@ -731,6 +785,16 @@ pub enum ToolInvocation {
     /// Hand files to whoever this turn is answering, on the answer itself.
     AttachFile {
         files: Vec<String>,
+    },
+    /// Write a document out of the turn's own words and hand it over.
+    ///
+    /// The one way to produce a file that needs no machine, which is why it is
+    /// its own invocation rather than a shape of [`ToolInvocation::AttachFile`]:
+    /// that one resolves a name against things that already exist, and this one
+    /// is where a thing starts existing.
+    WriteDocument {
+        name: String,
+        content: String,
     },
     /// Stop and ask the operator whether to go ahead.
     RequestPermission {
@@ -856,6 +920,10 @@ pub enum ToolParseError {
     MissingText,
     #[error("attach_file needs a non-empty `files` list")]
     MissingFiles,
+    #[error("write_document needs a `name`")]
+    MissingDocumentName,
+    #[error("write_document was called for {name} with nothing in it")]
+    EmptyDocument { name: String },
     #[error("update_notes needs a `content` string")]
     MissingContent,
     #[error("run_command needs a non-empty `command` string")]
@@ -941,6 +1009,20 @@ impl ToolParseError {
                  {\"files\": [\"/home/user/brief.md\"]}."
                     .to_string()
             }
+            ToolParseError::MissingDocumentName => {
+                "Error: `name` must be a file name with an extension, for example \
+                 {\"name\": \"readiness.md\", \"content\": \"# Readiness\\n…\"}."
+                    .to_string()
+            }
+            // Named rather than generic, because the mistake it catches is a
+            // model that called the tool intending to fill it in on a later
+            // round. There is no later round: the document is whatever is in
+            // this call.
+            ToolParseError::EmptyDocument { name } => format!(
+                "Error: `content` must be the whole of {name}, written out here. Nothing was \
+                 written and nothing is attached. There is no second call that fills it in: \
+                 call this again with the complete document in `content`."
+            ),
             ToolParseError::IncompleteAgent { needs } => format!(
                 "Error: to create an agent you need {needs}. For example {{\"name\": \"Chief of \
                  Product\", \"instructions\": \"You own the product roadmap. Decide what gets \
@@ -1482,6 +1564,27 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
             }
             Ok(ToolInvocation::AttachFile { files })
         }
+        // The aliases are the words a model reaches for when it has been asked
+        // for a document and has one written. `create_file` and `write_file`
+        // both describe a filesystem this may not have, and both are what a
+        // model says anyway.
+        WRITE_DOCUMENT | "write_file" | "create_file" | "make_file" | "create_document"
+        | "save_file" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: WRITE_DOCUMENT.to_string(),
+                detail: e.to_string(),
+            })?;
+            let name = first_string(&value, &["name", "filename", "file_name", "path", "title"]);
+            let content =
+                first_string(&value, &["content", "text", "body", "document", "contents"]);
+            let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
+                return Err(ToolParseError::MissingDocumentName);
+            };
+            let Some(content) = content.filter(|c| !c.trim().is_empty()) else {
+                return Err(ToolParseError::EmptyDocument { name });
+            };
+            Ok(ToolInvocation::WriteDocument { name, content })
+        }
         other => match split_plugin_tool(other) {
             Some((kind, tool)) => {
                 let arguments = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -1524,6 +1627,15 @@ fn as_label(text: &str, max: usize) -> String {
     }
     let kept: String = flat.chars().take(max.saturating_sub(1)).collect();
     format!("{}…", kept.trim_end())
+}
+
+/// The first of several keys that carries a string.
+///
+/// Models spell one field several ways and each spelling names this and nothing
+/// else, so refusing one buys a retry and a turn spent on vocabulary. The same
+/// argument [`normalize_list`] is built on.
+fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| value.get(*key).and_then(|v| v.as_str()).map(str::to_string))
 }
 
 fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -2298,9 +2410,10 @@ mod tests {
         let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
-            12,
+            13,
             "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
-             create_agent, request_permission, ask_operator, send_message, attach_file, \
+             create_agent, request_permission, ask_operator, send_message, write_document, \
+             attach_file, \
              update_notes"
         );
         for spec in &specs {
