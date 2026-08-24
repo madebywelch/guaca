@@ -14,6 +14,7 @@ pub mod llm;
 pub mod mcp;
 pub mod menubar;
 pub mod oauth;
+pub mod pi;
 pub mod plugins;
 pub mod proxy;
 pub mod repo;

@@ -14,6 +14,7 @@ use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
 use crate::domain::plugin::PluginToolset;
+use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::llm::openrouter::ChatMessage;
@@ -66,6 +67,10 @@ pub fn system_prompt(
     // has to go and ask for is a list it asks for after deciding.
     routines: &[Routine],
     mode: ReplyMode,
+    // The codebase this agent works in, if the operator put it in one. At most
+    // one, always: two agents on one repository coordinate through the crew,
+    // and one agent on two is a change nobody can see the shape of.
+    repository: Option<&Repository>,
     // Which of the two places this agent has. Not a preference: a section
     // describing a machine that is not configured is a promise the app cannot
     // keep, and an agent believing it spends a turn discovering otherwise.
@@ -528,6 +533,30 @@ pub fn system_prompt(
     // Nothing in the app was broken. The operator was handed a location on a
     // machine they do not have and cannot reach, in a chat window with nothing
     // to click, and the document may as well not have existed.
+    // Named here as well as offered as a tool, and for the reason the plugins
+    // are: a tool list is read while deciding *how* to do something, and this
+    // is read while deciding whether it can be done at all, which happens
+    // first. An agent that does not know it has a codebase answers questions
+    // about the code from memory.
+    if let Some(repository) = repository {
+        out.push_str(&format!(
+            "\n## Your repository\n\
+             You work in one codebase: {}. It is a real git repository on the operator's own \
+             machine, with their uncommitted work and their branches in it.\n\
+             - `code` is how you reach it. Hand it a brief and a coding agent does the work \
+              there: reading, editing, running the tests, committing, pushing, opening a pull \
+              request.\n\
+             - It does not block. You get a message back when the work finishes, which may be \
+              many minutes. Start it, say you have started it, and end your turn.\n\
+             - The coding agent cannot see this conversation and cannot ask you anything, so the \
+              brief has to carry everything: what to change, how to tell it worked, and what to \
+              do with the result.\n\
+             - You have not read the code yourself. When the work comes back, report what the \
+              coding agent says it did rather than claiming to have checked it.\n",
+            repository.own_line().trim_start_matches("- "),
+        ));
+    }
+
     out.push_str("\n## Handing over a document\n");
     out.push_str(
         "`write_document` is how you produce one: give it a name and the whole document, and it \
@@ -750,6 +779,7 @@ pub fn build_messages(
     history: &[Envelope],
     inbound: &[Envelope],
     mode: ReplyMode,
+    repository: Option<&Repository>,
     surfaces: Surfaces,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::system(system_prompt(
@@ -762,6 +792,7 @@ pub fn build_messages(
         notes,
         routines,
         mode,
+        repository,
         surfaces,
     ))];
 
@@ -799,7 +830,7 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], &[], notes, &[], mode, Surfaces::both())
+        system_prompt(card, "", roster, &[], &[], &[], notes, &[], mode, None, Surfaces::both())
     }
 
     /// The prompt for an agent that already keeps a schedule.
@@ -814,6 +845,7 @@ mod tests {
             "",
             routines,
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         )
     }
@@ -841,6 +873,7 @@ mod tests {
             history,
             inbound,
             mode,
+            None,
             Surfaces::both(),
         )
     }
@@ -1068,6 +1101,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
 
@@ -1123,6 +1157,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
 
@@ -1154,6 +1189,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::none(),
         );
 
@@ -1186,6 +1222,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::none(),
         );
 
@@ -1215,6 +1252,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::none(),
         );
 
@@ -1251,6 +1289,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         assert!(prompt.contains("may also be signed in"), "a guess has to read as one");
@@ -1282,6 +1321,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
 
@@ -1316,6 +1356,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         assert!(prompt.contains("that session has ended"), "name what a login wall means");
@@ -1345,6 +1386,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         assert!(prompt.contains("- Researcher (web research) — signed in to LinkedIn"));
@@ -1660,6 +1702,7 @@ mod tests {
             &[sent],
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         let assistant = messages
@@ -1731,6 +1774,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         assert!(prompt.contains("Robert"), "the operator's name belongs in every prompt");
@@ -1746,6 +1790,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::both(),
         );
         assert!(!anonymous.contains("is called"), "no name means no claim about one");
@@ -1888,6 +1933,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::none(),
         );
         assert!(!neither.contains("## Your computer"), "{neither}");
@@ -1906,7 +1952,8 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
-            Surfaces { computer: true, browser: false },
+            None,
+            Surfaces { computer: true, browser: false, repository: false },
         );
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
@@ -1955,6 +2002,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            None,
             Surfaces::none(),
         );
         assert!(!nowhere.contains("request_permission"), "{nowhere}");
@@ -1979,7 +2027,8 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
-            Surfaces { computer: false, browser: true },
+            None,
+            Surfaces { computer: false, browser: true, repository: false },
         );
         assert!(somewhere.contains("request_permission"), "{somewhere}");
         assert!(somewhere.contains("Declining is the correct response"), "{somewhere}");

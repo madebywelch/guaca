@@ -448,6 +448,16 @@ const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    /// Asked to code with nowhere to do it.
+    ///
+    /// Reachable even though the tool is not offered without a repository: an
+    /// agent can be taken out of one between the moment its turn was built and
+    /// the moment it called this, and a model names tools it was never offered.
+    #[error(
+        "{0} has not been put in a repository, so there is nowhere to write code. The operator \
+         puts an agent in one by dragging it onto that repository in the rail"
+    )]
+    NoRepository(String),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("no agent with id {0}")]
@@ -1349,6 +1359,122 @@ impl Runtime {
         }
     }
 
+    /// Starts a coding job and returns the repository it is working in.
+    ///
+    /// Returns as soon as the process is spawned. The result comes back later
+    /// as a message, on the same path a routine firing takes: a fresh run with
+    /// a fresh budget, delivered to the agent that asked for it.
+    ///
+    /// That shape is the whole point and it is worth the paragraph. A coding
+    /// task is a few hundred tool calls over many minutes. Awaited inside the
+    /// tool call, the agent would read as `Thinking` for the length of it, its
+    /// inbox would back up behind it, every routine that came due would be
+    /// skipped, and the transcript would show one open chip and nothing else.
+    /// Started and reported, the turn ends in seconds and the agent stays
+    /// reachable while the work happens.
+    fn start_job(&self, card: &AgentCard, task: &str) -> Result<String, RuntimeError> {
+        let repository = self
+            .inner
+            .store
+            .agent_repository(card.id)?
+            .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+
+        let runtime = self.clone();
+        let agent = card.id;
+        let name = repository.name.clone();
+        let path = repository.path.clone();
+        let task = task.to_string();
+        let note = repository.note.clone();
+
+        tokio::spawn(async move {
+            // The operator's note rides in front of the brief rather than being
+            // left for the model to discover. It is the one thing they wrote to
+            // be read at exactly this moment, and the harness cannot see the
+            // conversation the note was attached to.
+            let brief = if note.trim().is_empty() {
+                task.clone()
+            } else {
+                format!("{}\n\nStanding instruction for this repository: {}", task, note.trim())
+            };
+
+            let outcome = crate::pi::run(&path, &brief, |_| {}).await;
+            runtime.job_finished(agent, &name, outcome);
+        });
+
+        Ok(repository.name)
+    }
+
+    /// Hands a finished job back to the agent that started it.
+    ///
+    /// A message rather than a return value, and a new run rather than the one
+    /// that started it. The run that called `code` settled minutes ago; filing
+    /// against it would report spend on a conversation already reported
+    /// finished, which is exactly what the trajectory suite calls broken.
+    ///
+    /// A failure is delivered too. An agent that is never told is an agent
+    /// waiting forever for a message that is not coming, and an operator asking
+    /// it later gets "I started that and have not heard back", which is true
+    /// and useless.
+    fn job_finished(
+        &self,
+        agent: AgentId,
+        repository: &str,
+        outcome: Result<crate::pi::Outcome, crate::pi::PiError>,
+    ) {
+        let text = match outcome {
+            Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
+                "The coding agent in {repository} finished without doing anything or saying \
+                 why. Nothing changed. Say so rather than reporting the work as done."
+            ),
+            Ok(done) => {
+                let mut text = format!(
+                    "The coding agent working in {repository} has finished. In its own words:\n\n\
+                     {}\n\nIt ran {} tool call{}",
+                    done.said.trim(),
+                    done.tool_calls,
+                    if done.tool_calls == 1 { "" } else { "s" },
+                );
+                if let Some(cost) = done.cost {
+                    text.push_str(&format!(" and cost ${cost:.2}"));
+                }
+                text.push_str(
+                    ". You have not seen the code and did not write it: report what it says it \
+                     did, say it was done by the coding agent, and do not claim to have checked \
+                     anything you have not.",
+                );
+                text
+            }
+            Err(err) => format!(
+                "The coding agent in {repository} could not finish: {err}. Nothing was \
+                 necessarily left in a working state, so say what you asked for and what \
+                 happened rather than reporting it as done."
+            ),
+        };
+
+        let run_id = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: agent,
+            from: Participant::System,
+            to: Participant::Agent { id: agent },
+            parts: vec![Part::Text { text }],
+            // Guaca speaking about what it did, not a model's words: the
+            // harness's own sentence is quoted inside, and the trust boundary
+            // is the same one a guard notice carries.
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+
+        if let Err(err) = self.deliver(envelope) {
+            tracing::error!(%err, agent = %agent.short(), "a finished coding job reached nobody");
+        }
+    }
+
     /// Operator sends a message to one agent. Returns the run it starts.
     pub fn send_from_human(&self, to: AgentId, text: &str) -> Result<RunId, RuntimeError> {
         self.send_from_human_with(to, text, Vec::new())
@@ -1995,6 +2121,13 @@ impl Runtime {
         // told it had a machine whether or not a provider was configured and
         // whether or not the operator had given it one.
         let surfaces = self.surfaces_for(&card);
+        // Read once for the turn, from the same card `surfaces` was decided
+        // from, so the section describing the repository and the tool that
+        // reaches it can never disagree about whether there is one.
+        let repository = self.inner.store.agent_repository(card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's repository for its turn");
+            None
+        });
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -2009,6 +2142,7 @@ impl Runtime {
             &history,
             &batch,
             mode,
+            repository.as_ref(),
             surfaces,
         );
         // After assembly, because what a file becomes depends on things the
@@ -2928,6 +3062,27 @@ impl Runtime {
                     format!("{rendered}\n{}", missing.join("\n"))
                 };
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
+            }
+
+            ToolInvocation::Code { task } => {
+                let (rendered, outcome) = match self.start_job(card, &task) {
+                    Ok(repository) => {
+                        let summary = format!("started work in {repository}");
+                        (
+                            format!(
+                                "Started. A coding agent is working in {repository} now. It will \
+                                 send you a message when it is done, which may be several \
+                                 minutes. End your turn and say you have started it: there is \
+                                 nothing to wait for and nothing to check.",
+                            ),
+                            ToolOutcome::Ok { summary },
+                        )
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::CODE, arguments, outcome))
             }
 
             ToolInvocation::WriteDocument { name, content } => {
@@ -4055,6 +4210,19 @@ impl Runtime {
         tools::Surfaces {
             computer: !config.e2b.api_key.trim().is_empty(),
             browser: !config.kernel.api_key.trim().is_empty(),
+            // Always. A computer and a browser need a provider the operator has
+            // to go and sign up for, and a workspace without one can hand out
+            // neither. A repository needs a directory they already have, so
+            // there is no workspace-level precondition to fail: the only
+            // question is whether this agent was put in one, which is on the
+            // card.
+            //
+            // Whether the harness is installed is deliberately not asked here.
+            // That is a broken installation rather than an absent setting, and
+            // it is reported as a failure naming the install command, which an
+            // agent can put in its reply and an operator can act on. Asked
+            // here it would be a process spawn on the way into every turn.
+            repository: true,
         }
     }
 
