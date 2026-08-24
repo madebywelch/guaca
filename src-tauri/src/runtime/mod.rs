@@ -2144,6 +2144,14 @@ impl Runtime {
             tracing::warn!(%err, "could not read this agent's repository for its turn");
             None
         });
+        // Read from the messages every turn rather than kept anywhere. A
+        // coordinator was holding this by hand in its own memory, which drifted
+        // three assignments stale and reported work as outstanding that had
+        // never been sent.
+        let waiting_on = self.inner.store.outstanding_asks(card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read what this agent is waiting on");
+            Vec::new()
+        });
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -2158,6 +2166,7 @@ impl Runtime {
             &history,
             &batch,
             mode,
+            &waiting_on,
             repository.as_ref(),
             surfaces,
         );

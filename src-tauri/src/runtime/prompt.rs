@@ -8,12 +8,20 @@
 
 use std::collections::HashMap;
 
+use crate::db::store::Outstanding;
 use crate::domain::agent::{AgentCard, DirectoryEntry};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
 use crate::domain::plugin::PluginToolset;
+
+/// How many outstanding asks are drawn.
+///
+/// A coordinator with more than this waiting is not going to act on the
+/// twelfth, and the list is on every turn of every agent. Newest first, so what
+/// is cut is the oldest, which is also the least likely to still be live.
+const MAX_WAITING: usize = 10;
 use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
@@ -67,6 +75,19 @@ pub fn system_prompt(
     // has to go and ask for is a list it asks for after deciding.
     routines: &[Routine],
     mode: ReplyMode,
+    // What this agent has asked for and not heard back on, newest first.
+    //
+    // In the prompt rather than behind a tool call, for the reason the routines
+    // above it are: a list fetched by a tool arrives after the model has
+    // decided what to do. A coordinator deciding whether to hand out work has
+    // to know what it is already waiting on before it decides, not after.
+    //
+    // It is read from the messages on every turn and stored nowhere. What it
+    // replaces is a board kept by hand in an agent's own memory, which is a
+    // file rewritten whole every turn and cut when it will not fit: one drifted
+    // three assignments stale and reported work as outstanding that had never
+    // been sent.
+    waiting_on: &[Outstanding],
     // The codebase this agent works in, if the operator put it in one. At most
     // one, always: two agents on one repository coordinate through the crew,
     // and one agent on two is a change nobody can see the shape of.
@@ -544,6 +565,24 @@ pub fn system_prompt(
     // Nothing in the app was broken. The operator was handed a location on a
     // machine they do not have and cannot reach, in a chat window with nothing
     // to click, and the document may as well not have existed.
+    if !waiting_on.is_empty() {
+        out.push_str(
+            "\n## What you are waiting on\n\
+             You asked for these and have not heard back since. Taken from your own sent \
+             messages, so it is what happened rather than what you remember.\n",
+        );
+        for one in waiting_on.iter().take(MAX_WAITING) {
+            out.push_str(&format!("- {}\n", one.line(crate::domain::now_ms())));
+        }
+        out.push_str(
+            "Do not ask again for something already on this list: they have it, and a second \
+             copy is two agents doing one piece of work. If one has been outstanding long enough \
+             to matter, chase that one rather than reissuing it. Anything not on this list has \
+             either come back or was never sent, so check here before saying you are blocked on \
+             somebody.\n",
+        );
+    }
+
     // Named here as well as offered as a tool, and for the reason the plugins
     // are: a tool list is read while deciding *how* to do something, and this
     // is read while deciding whether it can be done at all, which happens
@@ -790,6 +829,7 @@ pub fn build_messages(
     history: &[Envelope],
     inbound: &[Envelope],
     mode: ReplyMode,
+    waiting_on: &[Outstanding],
     repository: Option<&Repository>,
     surfaces: Surfaces,
 ) -> Vec<ChatMessage> {
@@ -803,6 +843,7 @@ pub fn build_messages(
         notes,
         routines,
         mode,
+        waiting_on,
         repository,
         surfaces,
     ))];
@@ -841,7 +882,20 @@ mod tests {
         notes: &str,
         mode: ReplyMode,
     ) -> String {
-        system_prompt(card, "", roster, &[], &[], &[], notes, &[], mode, None, Surfaces::both())
+        system_prompt(
+            card,
+            "",
+            roster,
+            &[],
+            &[],
+            &[],
+            notes,
+            &[],
+            mode,
+            &[],
+            None,
+            Surfaces::both(),
+        )
     }
 
     /// The prompt for an agent that already keeps a schedule.
@@ -856,6 +910,7 @@ mod tests {
             "",
             routines,
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         )
@@ -884,6 +939,7 @@ mod tests {
             history,
             inbound,
             mode,
+            &[],
             None,
             Surfaces::both(),
         )
@@ -1112,6 +1168,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1168,6 +1225,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1200,6 +1258,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::none(),
         );
@@ -1233,6 +1292,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::none(),
         );
@@ -1263,6 +1323,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::none(),
         );
@@ -1300,6 +1361,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1332,6 +1394,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1367,6 +1430,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1397,6 +1461,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1713,6 +1778,7 @@ mod tests {
             &[sent],
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1785,6 +1851,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1801,6 +1868,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::both(),
         );
@@ -1944,6 +2012,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::none(),
         );
@@ -1963,6 +2032,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces { computer: true, browser: false, repository: false },
         );
@@ -2013,6 +2083,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces::none(),
         );
@@ -2038,6 +2109,7 @@ mod tests {
             "",
             &[],
             ReplyMode::ToOperator,
+            &[],
             None,
             Surfaces { computer: false, browser: true, repository: false },
         );
@@ -2292,5 +2364,60 @@ mod tests {
             }
             other => panic!("expected user, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn what_an_agent_is_waiting_on_is_in_its_prompt_and_says_not_to_ask_twice() {
+        // The failure this exists for: a coordinator kept its board in its own
+        // memory, the memory truncated, and it reported an assignment as
+        // outstanding that had never been sent. The record cannot drift.
+        let now = crate::domain::now_ms();
+        let waiting = vec![Outstanding {
+            peer: "Vision iOS SRE".into(),
+            at: now - 2 * 3_600 * 1000,
+            asked: "Ship the readiness package".into(),
+        }];
+        let prompt = system_prompt(
+            &card("Product"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            &waiting,
+            None,
+            Surfaces::both(),
+        );
+
+        assert!(prompt.contains("What you are waiting on"), "{prompt}");
+        assert!(prompt.contains("Vision iOS SRE"), "{prompt}");
+        assert!(prompt.contains("2 hours ago"), "{prompt}");
+        // The whole point: without this line the list is read as a to-do and
+        // the coordinator reissues everything on it.
+        assert!(prompt.contains("Do not ask again"), "{prompt}");
+    }
+
+    #[test]
+    fn an_agent_waiting_on_nobody_is_told_nothing() {
+        // Every section costs tokens on every turn of every agent, and an
+        // empty heading reads as a feature that is broken.
+        let prompt = system_prompt(
+            &card("Product"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            Surfaces::both(),
+        );
+        assert!(!prompt.contains("What you are waiting on"), "{prompt}");
     }
 }

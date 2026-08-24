@@ -36,6 +36,53 @@ use crate::domain::usage::{Tokens, UsageEntry};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
+/// One thing an agent asked for and has not heard back on.
+///
+/// Read on every turn and never stored, so it is always true and there is
+/// nothing to keep in step. See [`Store::outstanding_asks`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outstanding {
+    pub peer: String,
+    pub at: i64,
+    /// What was asked, as the agent itself wrote it.
+    pub asked: String,
+}
+
+/// How much of the original ask is quoted back.
+///
+/// A line, not the message. The agent wrote it and can read the whole thing in
+/// the channel; what this list is for is recognising which one it was.
+const ASK_GIST: usize = 120;
+
+impl Outstanding {
+    /// One line, as the prompt draws it.
+    ///
+    /// The wait is in words rather than a timestamp because that is what the
+    /// decision turns on: nobody chases a thing because it happened at 14:03,
+    /// they chase it because it has been two hours.
+    pub fn line(&self, now: i64) -> String {
+        let mut gist: String = self.asked.split_whitespace().collect::<Vec<_>>().join(" ");
+        if gist.chars().count() > ASK_GIST {
+            gist = gist.chars().take(ASK_GIST).collect::<String>().trim_end().to_string();
+            gist.push('…');
+        }
+
+        let waited = (now - self.at).max(0) / 1000;
+        let ago = match waited {
+            0..=90 => "just now".to_string(),
+            91..=5_400 => format!("{} minutes ago", waited / 60),
+            5_401..=172_800 => format!("{} hours ago", waited / 3_600),
+            _ => format!("{} days ago", waited / 86_400),
+        };
+
+        if gist.is_empty() {
+            format!("{}, {ago}", self.peer)
+        } else {
+            format!("{}, {ago}: {gist}", self.peer)
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("database error: {0}")]
@@ -1167,6 +1214,74 @@ impl Store {
     pub fn delete_connector(&self, id: ConnectorId) -> Result<bool, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM connectors WHERE id=?1", params![id.to_string()])? > 0)
+    }
+
+    /// What this agent has asked a peer for and not heard back on.
+    ///
+    /// Derived from the messages rather than kept anywhere. This is the state a
+    /// coordinator was writing into its own memory, which is a file it rewrites
+    /// whole every turn: it drifted, it truncated, and one crew's board
+    /// reported an assignment as outstanding that had never been sent at all.
+    /// The record already knows, and the record cannot drift.
+    ///
+    /// Only `work`. A courtesy is by definition not something anybody owes an
+    /// answer to, and counting one would put "thanks, received" on a list of
+    /// things somebody is waiting for.
+    ///
+    /// Anything at all from the peer since closes it, rather than a reply that
+    /// names the request. Agents do not thread, so holding this open until
+    /// something referenced the original would leave every finished piece of
+    /// work on the list forever, which is what makes a list like this worth
+    /// ignoring.
+    pub fn outstanding_asks(&self, agent: AgentId) -> Result<Vec<Outstanding>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "WITH asked AS (
+                 SELECT to_agent AS peer, max(created_at) AS at
+                   FROM messages
+                  WHERE from_agent = :me AND to_agent IS NOT NULL AND intent = 'work'
+                  GROUP BY to_agent
+             ),
+             heard AS (
+                 SELECT from_agent AS peer, max(created_at) AS at
+                   FROM messages
+                  WHERE to_agent = :me AND from_agent IS NOT NULL
+                  GROUP BY from_agent
+             )
+             SELECT agents.name, asked.at, (
+                 SELECT parts FROM messages
+                  WHERE from_agent = :me AND to_agent = asked.peer
+                    AND intent = 'work' AND created_at = asked.at
+                  LIMIT 1
+             )
+               FROM asked
+               JOIN agents ON agents.id = asked.peer
+               LEFT JOIN heard ON heard.peer = asked.peer
+              WHERE agents.lifecycle <> 'terminated'
+                AND (heard.at IS NULL OR heard.at < asked.at)
+              ORDER BY asked.at DESC",
+        )?;
+
+        let rows = stmt.query_map(named_params! { ":me": agent.to_string() }, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (peer, at, parts) = row?;
+            let asked = parts
+                .and_then(|raw| serde_json::from_str::<Vec<Part>>(&raw).ok())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part.as_plain_text())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            out.push(Outstanding { peer, at, asked });
+        }
+        Ok(out)
     }
 
     // ---- repositories ----------------------------------------------------
@@ -3667,6 +3782,19 @@ mod tests {
             cause: None,
             created_at: now_ms(),
         }
+    }
+
+    /// A peer-to-peer message that gives the recipient something to do, which
+    /// is the only kind `outstanding_asks` counts.
+    fn work(from: AgentId, to: AgentId, text: &str) -> Envelope {
+        let mut envelope = envelope(
+            Participant::Agent { id: from },
+            Participant::Agent { id: to },
+            text,
+            RunId::new(),
+        );
+        envelope.intent = Intent::Work;
+        envelope
     }
 
     fn group_named(name: &str) -> CleanGroup {
@@ -6962,6 +7090,114 @@ mod tests {
             f.store.group_plugins(group).unwrap()[0].access,
             PluginAccess::Chosen { agents: vec![] }
         );
+    }
+
+    // ---- what an agent is waiting on ------------------------------------
+
+    #[test]
+    fn a_work_message_with_no_answer_is_what_the_agent_is_waiting_on() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship the readiness package by Friday.")).unwrap();
+
+        let waiting = f.store.outstanding_asks(pm.id).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].peer, "SRE");
+        assert!(waiting[0].asked.contains("readiness package"));
+
+        // And it is one-sided: the agent that was asked is not waiting on
+        // anybody, which is what stops every crew reporting itself blocked.
+        assert!(f.store.outstanding_asks(sre.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn anything_back_from_the_peer_closes_it() {
+        // Anything, not a reply that names the request. Agents do not thread,
+        // so holding it open until something referenced the original leaves
+        // every finished piece of work on the list forever.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship it.")).unwrap();
+        f.store.append(&work(sre.id, pm.id, "Shipped.")).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn asking_again_after_an_answer_is_outstanding_again() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "First.")).unwrap();
+        f.store.append(&work(sre.id, pm.id, "Done.")).unwrap();
+        f.store.append(&work(pm.id, sre.id, "Second.")).unwrap();
+
+        let waiting = f.store.outstanding_asks(pm.id).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].asked.contains("Second"), "the newest ask is the live one");
+    }
+
+    #[test]
+    fn a_courtesy_is_not_something_anybody_is_waiting_for() {
+        // By definition it gives the recipient nothing to do, so counting one
+        // puts "thanks, received" on a list of things somebody owes an answer
+        // to, and a list like that is one nobody reads.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        let mut thanks = work(pm.id, sre.id, "Thanks, received.");
+        thanks.intent = Intent::Courtesy;
+        f.store.append(&thanks).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_retired_peer_drops_off_the_list() {
+        // A name pointing at nobody is a thing to chase that cannot be chased.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship it.")).unwrap();
+        f.store.set_lifecycle(sre.id, Lifecycle::Terminated).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_line_says_how_long_rather_than_when() {
+        // Nobody chases a thing because it happened at 14:03. They chase it
+        // because it has been two hours.
+        let now = now_ms();
+        let one = Outstanding {
+            peer: "SRE".into(),
+            at: now - 2 * 3_600 * 1000,
+            asked: "Ship the readiness package".into(),
+        };
+        let line = one.line(now);
+        assert!(line.contains("SRE"), "{line}");
+        assert!(line.contains("2 hours ago"), "{line}");
+        assert!(line.contains("readiness package"), "{line}");
+    }
+
+    #[test]
+    fn a_long_ask_is_cut_to_something_recognisable() {
+        let now = now_ms();
+        let one = Outstanding { peer: "SRE".into(), at: now, asked: "x".repeat(400) };
+        assert!(one.line(now).chars().count() < 200, "the list is on every turn");
+        assert!(one.line(now).ends_with('…'));
     }
 
     // ---- repositories ----------------------------------------------------
