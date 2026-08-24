@@ -427,7 +427,7 @@ pub fn run() {
             commands::create_repository,
             commands::update_repository,
             commands::delete_repository,
-            commands::set_repository_access,
+            commands::set_agent_repository,
             commands::plugin_catalog,
             commands::group_plugins,
             commands::set_plugin_access,

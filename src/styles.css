@@ -904,59 +904,87 @@ button {
   box-shadow: 0 0 6px color-mix(in oklab, var(--flesh) 55%, transparent);
 }
 
-/* The codebases a crew works in, above the crew.
+/* The codebases a crew works in, drawn as headings with their agents under
+   them.
 
-   Drawn as its own furniture rather than as more rows, and that is the whole
-   point of the block: dropping an agent on a crew moves it, because an agent is
-   in one crew, and dropping it on a repository grants, because an agent can
-   work in several. Two drops that looked the same would be how an operator
-   loses an agent while trying to give it a codebase. */
+   A tree, which is the whole reason an agent works in at most one repository:
+   every agent has exactly one place in the rail, so a name is never in two
+   sections at once and there is never a question of which row is the real one.
+
+   The rows inside are the rail's own rows, so an agent under a repository has
+   the same menu, the same activity readout and the same drag as one anywhere
+   else. Only the indent and the rule beside it differ. */
 .rail__repos {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
-  padding: 0.15rem 0.6rem 0.35rem 1rem;
 }
 
 .rail__repo {
-  border-radius: 0.4rem;
-  padding: 0.3rem 0.45rem;
-  /* A left edge rather than a full border. The rail is a column of rows and a
-     boxed item in it reads as a control; a rule down one side reads as a
-     heading with things under it, which is what this is. */
-  border-left: 2px solid color-mix(in oklab, var(--flesh) 40%, transparent);
-  background: color-mix(in oklab, var(--flesh-soft) 22%, transparent);
+  padding: 0.1rem 0 0.25rem;
 }
 
 .rail__repo-head {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  padding: 0.5rem 0.6rem 0.3rem 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--rail-muted);
   min-width: 0;
 }
 
+/* A branch glyph, not an icon. Two rules meeting is what a directory looks
+   like in every tree an engineer already reads, and it costs no asset and no
+   color: at this size an icon is a smudge and a colored one competes with the
+   agent avatars, which are the thing in this column that is meant to be
+   recognized at a glance. */
+.rail__repo-mark {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-left: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
+  border-bottom: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
+  border-bottom-left-radius: 2px;
+  margin-bottom: 0.15rem;
+}
+
 .rail__repo-name {
-  font-family: var(--font-mono);
-  font-size: 0.68rem;
-  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--rail-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.rail__repo-who {
-  margin: 0.1rem 0 0;
+/* How many work here. Absent at zero rather than drawn as "0": the line under
+   an empty repository already says so in words, and a zero beside a name reads
+   as a broken counter. */
+.rail__repo-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* The indent, and the rule that makes it read as containment rather than as a
+   margin somebody chose. Down the left of the members, starting under the
+   glyph in the heading. */
+.rail__repo-crew {
+  margin-left: 1.25rem;
+  padding-left: 0.35rem;
+  border-left: 1px solid color-mix(in oklab, var(--rail-wire) 90%, transparent);
+}
+
+.rail__repo-empty {
+  margin: 0;
+  padding: 0.1rem 1rem 0.3rem 1.6rem;
   font-size: 0.64rem;
-  line-height: 1.3;
-  color: var(--rail-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.rail__repo-nobody {
   font-style: italic;
+  color: var(--rail-muted);
 }
 
 /* A whole crew as the target, which is what dropping anywhere but on a row

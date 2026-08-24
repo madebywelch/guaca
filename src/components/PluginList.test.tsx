@@ -111,6 +111,7 @@ function member(id: string, name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     lifecycle: "active",
     pinned: false,
     railOrder: 0,

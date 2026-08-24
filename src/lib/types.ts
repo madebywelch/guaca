@@ -275,12 +275,15 @@ export interface ConnectorDraft {
 export type RepositoryId = string;
 
 /**
- * A directory on this machine that a crew may write code in, and who in it may.
+ * A directory on this machine that a crew may write code in.
  *
  * There is no engineer flag beside this and there is not meant to be. An agent
- * that has no repository is offered nothing that reaches a working tree, so a
- * second mark saying the same thing would be a second place for the answer to
- * be wrong. Designating an engineer is hiring one and giving it one of these.
+ * in no repository is offered nothing that reaches a working tree, so a second
+ * mark saying the same thing would be a second place for the answer to be
+ * wrong. Designating an engineer is hiring one and putting it in one of these.
+ *
+ * Who is in it is not on this type. An agent carries `repositoryId`, so the
+ * roster is the answer, and a list here would be the same fact in two places.
  */
 export interface Repository {
   id: RepositoryId;
@@ -291,12 +294,6 @@ export interface Repository {
   path: string;
   /** One line the agents that have it read on every turn. */
   note: string;
-  /**
-   * The agents that may work in it, by name and only by name. An empty list is
-   * a repository nobody has been given, which is a legitimate state and is
-   * drawn as one: there is no value here that means everybody.
-   */
-  reach: AgentId[];
   createdAt: number;
   updatedAt: number;
 }
@@ -481,6 +478,8 @@ export interface AgentCard {
   hasComputer: boolean;
   /** The same decision about the browser, and separately. */
   hasBrowser: boolean;
+  /** The one repository this agent works in, if it has been put in one. */
+  repositoryId: RepositoryId | null;
   name: string;
   avatar: string;
   color: string;

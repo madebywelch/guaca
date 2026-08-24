@@ -8,7 +8,7 @@ const groupRepositories = vi.fn<(groupId: string) => Promise<Repository[]>>();
 const createRepository = vi.fn<(draft: RepositoryDraft) => Promise<Repository>>();
 const updateRepository = vi.fn();
 const deleteRepository = vi.fn();
-const setRepositoryAccess = vi.fn();
+const setAgentRepository = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -16,8 +16,7 @@ vi.mock("../lib/ipc", () => ({
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
     updateRepository: (id: string, name: string, note: string) => updateRepository(id, name, note),
     deleteRepository: (id: string) => deleteRepository(id),
-    setRepositoryAccess: (id: string, agentId: string, allowed: boolean) =>
-      setRepositoryAccess(id, agentId, allowed),
+    setAgentRepository: vi.fn(),
   },
 }));
 
@@ -37,6 +36,7 @@ function member(id: string, name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     lifecycle: "active",
     pinned: false,
     railOrder: 0,
@@ -55,7 +55,6 @@ function repository(over: Partial<Repository> = {}): Repository {
     name: "guaca",
     path: "/Users/you/dev/guaca",
     note: "",
-    reach: [],
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -68,7 +67,6 @@ describe("RepositoryList", () => {
     createRepository.mockReset();
     updateRepository.mockReset();
     deleteRepository.mockReset();
-    setRepositoryAccess.mockReset();
     groupRepositories.mockResolvedValue([]);
   });
 
@@ -86,26 +84,28 @@ describe("RepositoryList", () => {
     expect(screen.queryByText(/specialist/i)).toBeNull();
   });
 
-  it("says a newly linked repository is handed to nobody", async () => {
+  it("says a newly linked repository is worked in by nobody", async () => {
     // Linking and handing out are two decisions. An operator who links one and
     // walks away has given their source to no agent, and the panel has to say
     // so rather than leaving an empty row that reads as unfinished loading.
     groupRepositories.mockResolvedValue([repository()]);
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
-    expect(await screen.findByText(/Handed to nobody yet\./)).toBeTruthy();
+    expect(await screen.findByText(/Worked in by nobody yet\./)).toBeTruthy();
   });
 
-  it("names who has one without offering to change it here", async () => {
+  it("names who works in one without offering to change it here", async () => {
     // The read stays, because auditing is a real question and answering it
     // should not mean opening six agents. The control does not, because the
     // operator asking "what can Ada work on" is on Ada's panel, not this one.
-    groupRepositories.mockResolvedValue([repository({ reach: ["a1"] })]);
-    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+    groupRepositories.mockResolvedValue([repository()]);
+    render(
+      <RepositoryList groupId={GROUP} crew={[{ ...CREW[0]!, repositoryId: "r1" }, CREW[1]!]} />,
+    );
 
-    expect(await screen.findByText(/Handed to Ada/)).toBeTruthy();
+    expect(await screen.findByText(/Worked in by Ada/)).toBeTruthy();
     expect(screen.queryByText("Grace")).toBeNull();
-    expect(setRepositoryAccess).not.toHaveBeenCalled();
+    expect(setAgentRepository).not.toHaveBeenCalled();
   });
 
   it("sends the path as typed and lets the backend say whether it is a repository", async () => {

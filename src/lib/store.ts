@@ -532,16 +532,18 @@ export const useStore = create<State>((set, get) => ({
       return;
     }
 
-    // Not a move. An agent is in one crew and can work in several
-    // repositories, so this adds rather than relocates, and an agent dropped on
-    // one it already has is a gesture that changes nothing rather than one that
-    // takes it away: a drag is how you give, and the panel on the agent is
-    // where you take back.
+    // A move, like dropping on a crew, but inside the crew: an agent works in
+    // at most one repository, so this replaces whatever it was in rather than
+    // adding to it. Dropping it back where it already is changes nothing, which
+    // is what makes an accidental drag free.
     if (target.kind === "repository") {
       const repository = state.repositories.find((r) => r.id === target.id);
-      if (!repository || repository.reach.includes(id)) return;
+      if (!repository || repository.id === dragged.repositoryId) return;
+      // The store refuses this anyway. Refused here too so a drag across a
+      // crew boundary is a gesture that does nothing rather than one that
+      // raises an error the rail has nowhere to put.
       if (repository.groupId !== dragged.groupId) return;
-      await api.setRepositoryAccess(target.id, id, true);
+      await api.setAgentRepository(id, target.id);
       await get().refreshAgents();
       return;
     }

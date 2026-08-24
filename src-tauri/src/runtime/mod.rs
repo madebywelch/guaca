@@ -5029,6 +5029,7 @@ mod tests {
             sandbox_traffic_token: None,
             has_computer: true,
             has_browser: false,
+            repository_id: None,
             browser_id: None,
             lifecycle,
             pinned: false,

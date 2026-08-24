@@ -5,13 +5,13 @@ import type { AgentCard, Repository } from "../lib/types";
 import { AgentRepositories } from "./AgentRepositories";
 
 const groupRepositories = vi.fn<(groupId: string) => Promise<Repository[]>>();
-const setRepositoryAccess = vi.fn();
+const setAgentRepository = vi.fn();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     groupRepositories: (groupId: string) => groupRepositories(groupId),
-    setRepositoryAccess: (id: string, agentId: string, allowed: boolean) =>
-      setRepositoryAccess(id, agentId, allowed),
+    setAgentRepository: (id: string, repositoryId: string | null) =>
+      setAgentRepository(id, repositoryId),
   },
 }));
 
@@ -30,6 +30,7 @@ const ADA: AgentCard = {
   browserId: null,
   hasComputer: false,
   hasBrowser: false,
+  repositoryId: null,
   lifecycle: "active",
   pinned: false,
   railOrder: 0,
@@ -45,7 +46,6 @@ function repository(over: Partial<Repository> = {}): Repository {
     name: "api",
     path: "/Users/you/dev/api",
     note: "",
-    reach: [],
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -55,7 +55,7 @@ function repository(over: Partial<Repository> = {}): Repository {
 describe("AgentRepositories", () => {
   beforeEach(() => {
     groupRepositories.mockReset();
-    setRepositoryAccess.mockReset();
+    setAgentRepository.mockReset();
     groupRepositories.mockResolvedValue([]);
   });
 
@@ -69,40 +69,53 @@ describe("AgentRepositories", () => {
     expect(await screen.findByText(/cannot write code/)).toBeTruthy();
   });
 
-  it("holds more than one, because a change often spans two", async () => {
-    // Not one agent per repository. An agent that has the API and not the web
-    // app has to hand half of an ordinary change to a peer and wait for it.
+  it("draws the one it is in as chosen and the rest as not", async () => {
+    // One at a time. Two agents on one codebase coordinate in the crew they
+    // share; one agent holding two is a change nobody can see the shape of.
     groupRepositories.mockResolvedValue([
-      repository({ id: "r1", name: "api", reach: ["a1"] }),
-      repository({ id: "r2", name: "web", reach: ["a1"] }),
-      repository({ id: "r3", name: "infra" }),
+      repository({ id: "r1", name: "api" }),
+      repository({ id: "r2", name: "web" }),
     ]);
-    render(<AgentRepositories agent={ADA} />);
+    render(<AgentRepositories agent={{ ...ADA, repositoryId: "r1" }} />);
 
-    expect(await screen.findByText(/Can write code in api, web, and nowhere else\./)).toBeTruthy();
-    expect(screen.getByText("infra").getAttribute("aria-pressed")).toBe("false");
+    expect((await screen.findByText("api")).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByText("web").getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByText(/Works in api, and nowhere else/)).toBeTruthy();
   });
 
-  it("gives one to this agent and names only this agent", async () => {
+  it("puts the agent in one", async () => {
     groupRepositories.mockResolvedValue([repository()]);
-    setRepositoryAccess.mockResolvedValue(repository({ reach: ["a1"] }));
+    setAgentRepository.mockResolvedValue(undefined);
     render(<AgentRepositories agent={ADA} />);
 
     fireEvent.click(await screen.findByText("api"));
 
-    await waitFor(() => expect(setRepositoryAccess).toHaveBeenCalledWith("r1", "a1", true));
+    await waitFor(() => expect(setAgentRepository).toHaveBeenCalledWith("a1", "r1"));
   });
 
-  it("takes one back", async () => {
-    groupRepositories.mockResolvedValue([repository({ reach: ["a1"] })]);
-    setRepositoryAccess.mockResolvedValue(repository());
-    render(<AgentRepositories agent={ADA} />);
+  it("moves rather than adding when a second is chosen", async () => {
+    groupRepositories.mockResolvedValue([
+      repository({ id: "r1", name: "api" }),
+      repository({ id: "r2", name: "web" }),
+    ]);
+    setAgentRepository.mockResolvedValue(undefined);
+    render(<AgentRepositories agent={{ ...ADA, repositoryId: "r1" }} />);
 
-    const api = await screen.findByText("api");
-    expect(api.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(api);
+    fireEvent.click(await screen.findByText("web"));
 
-    await waitFor(() => expect(setRepositoryAccess).toHaveBeenCalledWith("r1", "a1", false));
+    await waitFor(() => expect(setAgentRepository).toHaveBeenCalledWith("a1", "r2"));
+  });
+
+  it("takes the agent out when the one it is in is chosen again", async () => {
+    // A set of buttons where one is always pressed has no other way back to
+    // none, and none is a state the operator has to be able to reach.
+    groupRepositories.mockResolvedValue([repository()]);
+    setAgentRepository.mockResolvedValue(undefined);
+    render(<AgentRepositories agent={{ ...ADA, repositoryId: "r1" }} />);
+
+    fireEvent.click(await screen.findByText("api"));
+
+    await waitFor(() => expect(setAgentRepository).toHaveBeenCalledWith("a1", null));
   });
 
   it("is drawn with nothing to offer, and says where repositories come from", async () => {

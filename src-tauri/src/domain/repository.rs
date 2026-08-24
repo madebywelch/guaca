@@ -1,8 +1,8 @@
 //! Repositories: the directories an agent may write code in.
 //!
 //! A repository is one thing and carries one decision. The thing is a directory
-//! on this machine that is the root of a git work tree. The decision is which
-//! agents in the crew may work in it, by name.
+//! on this machine that is the root of a git work tree. The decision is which of
+//! the crew's agents works in it, and each of them works in at most one.
 //!
 //! ## There is no engineer, and that is the design
 //!
@@ -26,20 +26,28 @@
 //! category, and both work today. Designating an engineer is hiring one and
 //! giving it a repository. Nothing in the runtime has to know the word.
 //!
-//! ## Every agent is named, and there is no everyone
+//! ## An agent works in at most one, and that is about coordination
 //!
-//! [`super::plugin::PluginAccess`] has an `Everyone`, and this deliberately does
-//! not. The argument is the one `docs/PLUGINS.md` already makes about a tool
-//! narrowed to named agents: an unseen agent is one hired next week, and it
-//! must not inherit a capability the operator went out of their way to hand to
-//! somebody. A plugin defaults open because the crew's Linear account is
-//! usually the crew's. A working tree does not: writing to the operator's own
-//! source is the thing they were most deliberate about, and a crew that grows
-//! must not quietly grow into it.
+//! Not permissions. The question a many-to-many answered was "who is allowed in
+//! here", and the question this one answers is "who owns this codebase", which
+//! is the one an operator actually has.
 //!
-//! So reach is a list of agent ids and nothing else. An empty list is a
-//! repository the operator has added and not handed out, which is a legitimate
-//! state to pass through and is drawn as such.
+//! Two agents on one repository settle a change between themselves, in the crew
+//! they already share, with messages the operator can read. One agent quietly
+//! holding two repositories is a change whose shape nobody can see until it
+//! lands in both, and there is no conversation anywhere that says it was
+//! coming. The cost is real and it is the intended one: a change that spans two
+//! codebases is now two agents talking, which is the thing this app is for.
+//!
+//! It is a column on the agent rather than a table between the two, because
+//! "at most one" is the rule and a column is the only shape that cannot
+//! represent anything else. It is also what makes the rail a tree: a repository
+//! is a heading with its agents under it, each drawn once, which a
+//! many-to-many cannot be.
+//!
+//! A repository the operator has linked and given to nobody is an ordinary
+//! state and is drawn as one. Nothing is inherited: an agent hired next week
+//! starts in no repository, like every other capability in this app.
 //!
 //! ## The path is the root, and git is why
 //!
@@ -61,7 +69,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::{AgentId, GroupId, RepositoryId};
+use super::ids::{GroupId, RepositoryId};
 
 /// A label longer than this is a sentence, not a name.
 pub const MAX_NAME_LEN: usize = 48;
@@ -72,10 +80,14 @@ pub const MAX_NOTE_LEN: usize = 240;
 /// as a path rather than stored as one.
 pub const MAX_PATH_LEN: usize = 1024;
 
-/// A directory a crew may work in, and who in it may.
+/// A directory a crew may work in.
+///
+/// Who is in it is not on this type. An agent carries the repository it works
+/// in, so the roster is the answer, and a list here would be the same fact in
+/// two places with nothing keeping them in step.
 ///
 /// Serializable in full. There is nothing secret on it: a path is not a
-/// credential, and the agents named on it are the crew's own.
+/// credential.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Repository {
@@ -92,19 +104,11 @@ pub struct Repository {
     /// One line for the agents that have it, in the operator's words: `run
     /// ./scripts/ci.sh before you say you are done`, `never touch migrations`.
     pub note: String,
-    /// Which agents in the crew may work in it. Named, always. Empty is a
-    /// repository nobody has been given yet.
-    pub reach: Vec<AgentId>,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
 impl Repository {
-    /// Whether one agent may work in this repository.
-    pub fn reaches(&self, agent: AgentId) -> bool {
-        self.reach.contains(&agent)
-    }
-
     /// The line an agent is shown about a repository it has.
     ///
     /// The path is in it because the agent works by path and would otherwise
@@ -252,23 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn reach_is_by_name_and_never_by_default() {
-        let repo = Repository {
-            id: RepositoryId::new(),
-            group_id: GroupId::new(),
-            name: "guaca".into(),
-            path: "/dev/guaca".into(),
-            note: String::new(),
-            reach: Vec::new(),
-            created_at: 0,
-            updated_at: 0,
-        };
-        // The whole point of there being no `Everyone`: a repository nobody has
-        // been given reaches nobody, including agents that do not exist yet.
-        assert!(!repo.reaches(AgentId::new()));
-    }
-
-    #[test]
     fn the_line_an_agent_reads_carries_the_path_and_the_note() {
         let repo = Repository {
             id: RepositoryId::new(),
@@ -276,7 +263,6 @@ mod tests {
             name: "guaca".into(),
             path: "/dev/guaca".into(),
             note: "run ./scripts/ci.sh before you finish".into(),
-            reach: Vec::new(),
             created_at: 0,
             updated_at: 0,
         };

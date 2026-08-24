@@ -893,6 +893,7 @@ mod tests {
             browser_id: None,
             has_computer: true,
             has_browser: true,
+            repository_id: None,
             id: AgentId::new(),
             name: name.into(),
             avatar: "avocado".into(),

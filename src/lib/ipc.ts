@@ -166,10 +166,15 @@ export const api = {
    * panel that is a tick behind cannot revoke somebody while granting somebody
    * else.
    */
-  setRepositoryAccess: (id: RepositoryId, agentId: AgentId, allowed: boolean) =>
-    invoke<Repository>("set_repository_access", { id, agentId, allowed }),
+  /**
+   * Puts one agent in a repository, or takes it out with `null`.
+   *
+   * A move rather than a grant: an agent works in at most one, so there is no
+   * second call that takes one away and no list to send.
+   */
+  setAgentRepository: (id: AgentId, repositoryId: RepositoryId | null) =>
+    invoke<AgentCard>("set_agent_repository", { id, repositoryId }),
 
-  /** The plugins on offer. Static, and the same for every group. */
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 
   /** What one crew has connected. Never carries a grant. */

@@ -119,6 +119,9 @@ fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
         browser_id: None,
         has_computer: false,
         has_browser: false,
+        // Given from the rail, never at creation. A fresh agent belongs to no
+        // codebase, which is the same rule every other capability follows.
+        repository_id: None,
         lifecycle: Lifecycle::Active,
         pinned: false,
         rail_order,
@@ -343,7 +346,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -360,7 +363,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -1168,16 +1171,6 @@ impl Store {
 
     // ---- repositories ----------------------------------------------------
 
-    /// Links a directory to a crew. Nobody is given it here.
-    ///
-    /// Adding and handing out are two decisions, exactly as connecting a plugin
-    /// and choosing who may spend it are. A repository that arrived already
-    /// reaching the crew would hand the operator's own source to every agent in
-    /// it at the moment they linked it, which is the one thing this feature must
-    /// not do by accident.
-    ///
-    /// `clean.path` is expected canonical: [`crate::repo::verify`] is what makes
-    /// it so, and the unique index below is what needs it to have happened.
     pub fn create_repository(&self, clean: &CleanRepository) -> Result<Repository, StoreError> {
         let conn = self.conn()?;
         let now = now_ms();
@@ -1200,133 +1193,78 @@ impl Store {
         self.get_repository(id)?.ok_or(StoreError::RepositoryNotFound(id))
     }
 
-    pub fn get_repository(&self, id: RepositoryId) -> Result<Option<Repository>, StoreError> {
+    /// Every repository in the workspace.
+    ///
+    /// Workspace-wide rather than per group because the rail is: it draws crews
+    /// and their contents from one roster, and a second read per crew would
+    /// make the number of round trips the number of crews.
+    ///
+    /// Who is in each is not on the row and is not a second query. An agent
+    /// carries the repository it works in, so the roster already answers it,
+    /// and a list here would be the same fact in two places with nothing
+    /// keeping them in step.
+    pub fn repositories(&self) -> Result<Vec<Repository>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} WHERE id=?1"))?;
-        let found = stmt.query_row(params![id.to_string()], row_to_repository).optional()?;
-        match found {
-            Some(row) => {
-                let mut repo = row?;
-                repo.reach = self.repository_reach(&conn, id)?;
-                Ok(Some(repo))
-            }
-            None => Ok(None),
+        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} ORDER BY name, rowid"))?;
+        let rows = stmt.query_map([], row_to_repository)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
         }
+        Ok(out)
     }
 
-    /// Every repository one crew has linked, with who may work in each.
-    ///
-    /// What the panel is drawn from and what the operator answers with. Two
-    /// queries rather than a join, because a repository nobody has been given is
-    /// a row the panel has to show: an inner join drops exactly the state the
-    /// operator is in the middle of fixing.
+    /// Every repository one crew has linked.
     pub fn group_repositories(&self, group: GroupId) -> Result<Vec<Repository>, StoreError> {
         let conn = self.conn()?;
         let mut stmt =
             conn.prepare(&format!("{REPOSITORY_COLUMNS} WHERE group_id=?1 ORDER BY name, rowid"))?;
         let rows = stmt.query_map(params![group.to_string()], row_to_repository)?;
-
-        let mut reach: HashMap<RepositoryId, Vec<AgentId>> = HashMap::new();
-        let mut names = conn.prepare(
-            "SELECT repository_access.repository_id, repository_access.agent_id
-               FROM repository_access
-               JOIN repositories ON repositories.id = repository_access.repository_id
-              WHERE repositories.group_id = ?1
-              ORDER BY repository_access.rowid",
-        )?;
-        let pairs = names.query_map(params![group.to_string()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for pair in pairs {
-            let (repo, agent) = pair?;
-            let (Ok(repo), Ok(agent)) = (repo.parse::<RepositoryId>(), agent.parse::<AgentId>())
-            else {
-                continue;
-            };
-            reach.entry(repo).or_default().push(agent);
-        }
-
         let mut out = Vec::new();
         for row in rows {
-            let mut repo = row??;
-            repo.reach = reach.remove(&repo.id).unwrap_or_default();
-            out.push(repo);
+            out.push(row??);
         }
         Ok(out)
     }
 
-    /// Every repository in the workspace, with who may work in each.
-    ///
-    /// Workspace-wide rather than per group because the rail is: it draws
-    /// crews and their contents from one roster, and a second read per crew
-    /// would make the number of round trips the number of crews. The caller
-    /// filters by group exactly as it already does for agents.
-    pub fn repositories(&self) -> Result<Vec<Repository>, StoreError> {
+    pub fn get_repository(&self, id: RepositoryId) -> Result<Option<Repository>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} ORDER BY name, rowid"))?;
-        let rows = stmt.query_map([], row_to_repository)?;
-
-        let mut reach: HashMap<RepositoryId, Vec<AgentId>> = HashMap::new();
-        let mut names =
-            conn.prepare("SELECT repository_id, agent_id FROM repository_access ORDER BY rowid")?;
-        let pairs =
-            names.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
-        for pair in pairs {
-            let (repo, agent) = pair?;
-            let (Ok(repo), Ok(agent)) = (repo.parse::<RepositoryId>(), agent.parse::<AgentId>())
-            else {
-                continue;
-            };
-            reach.entry(repo).or_default().push(agent);
+        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} WHERE id=?1"))?;
+        match stmt.query_row(params![id.to_string()], row_to_repository).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
         }
-
-        let mut out = Vec::new();
-        for row in rows {
-            let mut repo = row??;
-            repo.reach = reach.remove(&repo.id).unwrap_or_default();
-            out.push(repo);
-        }
-        Ok(out)
     }
 
-    /// The repositories one agent may actually work in.
+    /// The repository one agent works in, if it has been given one.
     ///
     /// Read on the hot path: it decides what the turn is offered and what the
-    /// prompt says, and those two have to be one answer. Separate from
-    /// [`Store::group_repositories`] for the reason `plugin_tools` is separate
-    /// from `group_plugins`.
+    /// prompt says, and those two have to be one answer.
     ///
-    /// The group is compared as well as the name, and that is not belt and
-    /// braces. An agent moved to another crew keeps its rows here until
-    /// something clears them, and a repository is the crew's rather than the
-    /// agent's: reach that survived the move would be one crew's source open to
-    /// another crew's agent, which is the one thing group scoping exists to stop.
-    pub fn agent_repositories(&self, agent: AgentId) -> Result<Vec<Repository>, StoreError> {
+    /// The group is compared as well as the id, and that is not belt and
+    /// braces. An agent moved to another crew keeps the column until something
+    /// clears it, and a repository is the crew's rather than the agent's: a
+    /// link that survived the move would be one crew's source open to another
+    /// crew's agent, which is the one thing group scoping exists to stop.
+    pub fn agent_repository(&self, agent: AgentId) -> Result<Option<Repository>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(&format!(
             "{REPOSITORY_COLUMNS}
-              WHERE {REPOSITORY_REACHED_BY_AGENT}
-                AND group_id = (SELECT group_id FROM agents WHERE id = :agent)
-              ORDER BY name, rowid"
+              WHERE id = (SELECT repository_id FROM agents WHERE id=?1)
+                AND group_id = (SELECT group_id FROM agents WHERE id=?1)"
         ))?;
-        let rows =
-            stmt.query_map(named_params! { ":agent": agent.to_string() }, row_to_repository)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let mut repo = row??;
-            repo.reach = self.repository_reach(&conn, repo.id)?;
-            out.push(repo);
+        match stmt.query_row(params![agent.to_string()], row_to_repository).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
         }
-        Ok(out)
     }
 
     /// Renames one, or rewrites the line its agents read.
     ///
-    /// The path is not among them, and that is the design. The path is what the
-    /// row *is*: reach was granted for that directory, so editing it in place
-    /// would move every named agent's boundary without anything on screen
-    /// saying a decision had been taken. A different directory is a different
-    /// repository, linked and handed out on purpose.
+    /// The path is not editable and that is deliberate. A different directory is
+    /// a different repository: editing it in place would move every agent's
+    /// boundary and its undo without anything on screen saying a decision had
+    /// been taken.
     pub fn update_repository(
         &self,
         id: RepositoryId,
@@ -1344,16 +1282,17 @@ impl Store {
         self.get_repository(id)?.ok_or(StoreError::RepositoryNotFound(id))
     }
 
-    /// Unlinks a repository. Nothing on disk is touched.
+    /// Unlinks one.
     ///
-    /// Worth saying out loud because the button is next to a path: this drops
-    /// Guaca's record of a directory and every agent's reach into it. The
-    /// operator's files are their own.
+    /// Guaca's record of a directory. The operator's files are their own.
     pub fn delete_repository(&self, id: RepositoryId) -> Result<bool, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        // Whoever was working in it goes back to being an agent with no
+        // codebase, rather than the delete failing on a foreign key. The agents
+        // are not the thing being removed.
         tx.execute(
-            "DELETE FROM repository_access WHERE repository_id=?1",
+            "UPDATE agents SET repository_id=NULL WHERE repository_id=?1",
             params![id.to_string()],
         )?;
         let gone = tx.execute("DELETE FROM repositories WHERE id=?1", params![id.to_string()])?;
@@ -1361,88 +1300,67 @@ impl Store {
         Ok(gone > 0)
     }
 
-    /// Gives one agent a repository, or takes it back.
+    /// Puts one agent in a repository, or takes it out.
     ///
-    /// One agent at a time rather than a whole list, because that is what the
-    /// operator does: a list write would need the panel to send back every name
-    /// it believes in, and a panel that is one tick behind would quietly revoke
-    /// somebody while granting somebody else.
+    /// A move, not a grant, because an agent works in at most one. `None` takes
+    /// it out and leaves it in its crew, which is where an agent with no
+    /// codebase belongs.
     ///
-    /// An agent from another crew is refused rather than stored. A row that
-    /// `agent_repositories` filters out on every read is a name the panel draws
-    /// as granted and the runtime treats as absent, which is the disagreement
-    /// this whole table exists to avoid.
-    pub fn set_repository_access(
+    /// A repository from another crew is refused rather than stored. A column
+    /// every read filters out is a name the rail draws as assigned and the
+    /// runtime treats as absent, which is the disagreement group scoping exists
+    /// to prevent.
+    pub fn set_agent_repository(
         &self,
-        id: RepositoryId,
         agent: AgentId,
-        allowed: bool,
-    ) -> Result<Repository, StoreError> {
+        repository: Option<RepositoryId>,
+    ) -> Result<AgentCard, StoreError> {
         let conn = self.conn()?;
-        let group: String = conn
+        let theirs: String = conn
             .query_row(
-                "SELECT group_id FROM repositories WHERE id=?1",
-                params![id.to_string()],
+                "SELECT group_id FROM agents WHERE id=?1",
+                params![agent.to_string()],
                 |row| row.get(0),
             )
             .optional()?
-            .ok_or(StoreError::RepositoryNotFound(id))?;
+            .ok_or(StoreError::AgentNotFound(agent))?;
 
-        if allowed {
-            let theirs: Option<String> = conn
+        if let Some(id) = repository {
+            let owner: String = conn
                 .query_row(
-                    "SELECT group_id FROM agents WHERE id=?1",
-                    params![agent.to_string()],
+                    "SELECT group_id FROM repositories WHERE id=?1",
+                    params![id.to_string()],
                     |row| row.get(0),
                 )
-                .optional()?;
-            if theirs.as_deref() != Some(group.as_str()) {
+                .optional()?
+                .ok_or(StoreError::RepositoryNotFound(id))?;
+            if owner != theirs {
                 return Err(StoreError::AgentNotInGroupForRepository(agent));
             }
-            conn.execute(
-                "INSERT OR IGNORE INTO repository_access (repository_id, agent_id) VALUES (?1, ?2)",
-                params![id.to_string(), agent.to_string()],
-            )?;
-        } else {
-            conn.execute(
-                "DELETE FROM repository_access WHERE repository_id=?1 AND agent_id=?2",
-                params![id.to_string(), agent.to_string()],
-            )?;
         }
 
-        self.get_repository(id)?.ok_or(StoreError::RepositoryNotFound(id))
+        conn.execute(
+            "UPDATE agents SET repository_id=?2, updated_at=?3 WHERE id=?1",
+            params![agent.to_string(), repository.map(|id| id.to_string()), now_ms()],
+        )?;
+
+        self.get_agent(agent)?.ok_or(StoreError::AgentNotFound(agent))
     }
 
-    /// Drops one agent's reach into every repository that named it.
+    /// Takes a retired agent out of whatever it was working in.
     ///
     /// Called when an agent is retired, for the reason its plugin permissions
-    /// are: a name in a panel that points at nobody is a decision the operator
-    /// cannot see the shape of, and a retired agent must not leave a working
-    /// tree looking like it is handed out to somebody.
-    pub fn delete_agent_repository_access(&self, agent: AgentId) -> Result<usize, StoreError> {
+    /// are: a decision pointing at nobody is one the operator cannot see the
+    /// shape of. It matters more here, because the rail draws a repository's
+    /// members from this column and a terminated agent would sit under a
+    /// codebase forever.
+    pub fn clear_agent_repository(&self, agent: AgentId) -> Result<(), StoreError> {
         let conn = self.conn()?;
-        Ok(conn.execute(
-            "DELETE FROM repository_access WHERE agent_id=?1",
+        conn.execute(
+            "UPDATE agents SET repository_id=NULL WHERE id=?1",
             params![agent.to_string()],
-        )?)
-    }
-
-    fn repository_reach(
-        &self,
-        conn: &rusqlite::Connection,
-        id: RepositoryId,
-    ) -> Result<Vec<AgentId>, StoreError> {
-        let mut stmt = conn.prepare(
-            "SELECT agent_id FROM repository_access WHERE repository_id=?1 ORDER BY rowid",
         )?;
-        let rows = stmt.query_map(params![id.to_string()], |row| row.get::<_, String>(0))?;
-        let mut out = Vec::new();
-        for row in rows {
-            if let Ok(agent) = row?.parse::<AgentId>() {
-                out.push(agent);
-            }
-        }
-        Ok(out)
+        Ok(())
     }
 
     // ---- plugins ---------------------------------------------------------
@@ -2400,7 +2318,7 @@ impl Store {
         // was named on one goes first, or the foreign key refuses the line after
         // it, which is the same ordering the plugin tables below need.
         conn.execute(
-            "DELETE FROM repository_access WHERE repository_id IN
+            "UPDATE agents SET repository_id=NULL WHERE repository_id IN
                  (SELECT id FROM repositories WHERE group_id=?1)",
             params![id.to_string()],
         )?;
@@ -2872,7 +2790,7 @@ impl Store {
     pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid",
         )?;
         let rows = stmt.query_map(params![group.to_string()], row_to_card)?;
@@ -3014,6 +2932,12 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             browser_id: row.get(17)?,
             has_computer: row.get::<_, i64>(18)? != 0,
             has_browser: row.get::<_, i64>(19)? != 0,
+            repository_id: row
+                .get::<_, Option<String>>(20)?
+                .filter(|raw| !raw.trim().is_empty())
+                .map(|raw| raw.parse::<RepositoryId>())
+                .transpose()
+                .map_err(|e| StoreError::Corrupt(format!("bad repository id: {e}")))?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -3238,18 +3162,6 @@ pub enum PluginReach {
 const REPOSITORY_COLUMNS: &str =
     "SELECT id,group_id,name,path,note,created_at,updated_at FROM repositories";
 
-/// The one rule that decides whether an agent may work in a repository.
-///
-/// Written once and read in one place today, in the same shape as
-/// [`PLUGIN_REACHED_BY_AGENT`] so the two read alike where they sit beside each
-/// other. It has no `everyone` branch and must never grow one: a plugin
-/// defaults open because a crew's Linear account is usually the crew's, and a
-/// working tree does not, because an agent hired next week must not inherit the
-/// operator's own source. `domain/repository.rs` is the long version.
-const REPOSITORY_REACHED_BY_AGENT: &str = "EXISTS (SELECT 1 FROM repository_access
-     WHERE repository_access.repository_id = repositories.id
-       AND repository_access.agent_id = :agent)";
-
 /// A unique-index failure here is one directory linked twice, and the operator
 /// wants to be told which rather than told the database said no.
 fn classify_repository(err: rusqlite::Error, path: &str) -> StoreError {
@@ -3261,11 +3173,6 @@ fn classify_repository(err: rusqlite::Error, path: &str) -> StoreError {
     StoreError::Sqlite(err)
 }
 
-/// Reach is left empty here and filled in by the caller.
-///
-/// It is a second query against a second table, so a row mapper cannot produce
-/// it, and a `Repository` that quietly claimed nobody could reach it would be
-/// indistinguishable from one nobody has been given.
 fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
     let id_raw: String = row.get(0)?;
     let group_raw: String = row.get(1)?;
@@ -3281,7 +3188,6 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             name: row.get(2)?,
             path: row.get(3)?,
             note: row.get(4)?,
-            reach: Vec::new(),
             created_at: row.get(5)?,
             updated_at: row.get(6)?,
         })
@@ -3572,6 +3478,11 @@ mod tests {
 
     fn group_named(name: &str) -> CleanGroup {
         CleanGroup { name: name.into(), ..Default::default() }
+    }
+
+    /// An agent in a named crew, which every repository test needs.
+    fn draft_in(name: &str, group: GroupId) -> CleanDraft {
+        CleanDraft { group_id: Some(group), ..draft(name) }
     }
 
     fn repo_at(group: GroupId, path: &str) -> CleanRepository {
@@ -6556,192 +6467,164 @@ mod tests {
     // ---- repositories ----------------------------------------------------
 
     #[test]
-    fn a_linked_repository_reaches_nobody_until_somebody_is_named() {
-        // The whole grant model in one assertion. Linking is not handing out,
-        // and there is no value of `reach` that means everybody: an agent that
-        // has not been named is refused, and so is one hired after the fact.
+    fn a_linked_repository_holds_nobody_until_somebody_is_put_in_it() {
+        // Linking is not handing out, and nothing is inherited: an agent hired
+        // after the fact starts in no repository, like every other capability.
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
         let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
 
-        assert!(repo.reach.is_empty());
-
-        let later = f
-            .store
-            .create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Hired Later") })
-            .unwrap();
-        assert!(!repo.reaches(later.id));
-        assert!(f.store.agent_repositories(later.id).unwrap().is_empty());
+        let later = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        assert!(later.repository_id.is_none());
+        assert!(f.store.agent_repository(later.id).unwrap().is_none());
+        assert_eq!(f.store.group_repositories(group.id).unwrap(), vec![repo]);
     }
 
     #[test]
-    fn one_agent_is_named_at_a_time_and_the_others_are_untouched() {
+    fn an_agent_works_in_at_most_one_and_a_second_replaces_the_first() {
+        // The rule the column exists to make unrepresentable. Two agents on one
+        // codebase coordinate in the crew they share; one agent quietly holding
+        // two is a change whose shape nobody can see until it lands in both.
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Ada") }).unwrap();
-        let grace = f
-            .store
-            .create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Grace") })
-            .unwrap();
-        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let api = f.store.create_repository(&repo_at(group.id, "/dev/api")).unwrap();
+        let web = f.store.create_repository(&repo_at(group.id, "/dev/web")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
 
-        let after = f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-        assert_eq!(after.reach, vec![ada.id]);
-        assert_eq!(f.store.agent_repositories(ada.id).unwrap().len(), 1);
-        assert!(f.store.agent_repositories(grace.id).unwrap().is_empty());
+        let card = f.store.set_agent_repository(ada.id, Some(api.id)).unwrap();
+        assert_eq!(card.repository_id, Some(api.id));
 
-        let back = f.store.set_repository_access(repo.id, ada.id, false).unwrap();
-        assert!(back.reach.is_empty());
-        assert!(f.store.agent_repositories(ada.id).unwrap().is_empty());
+        let moved = f.store.set_agent_repository(ada.id, Some(web.id)).unwrap();
+        assert_eq!(moved.repository_id, Some(web.id), "the second is a move, not a second one");
+        assert_eq!(f.store.agent_repository(ada.id).unwrap().unwrap().id, web.id);
     }
 
     #[test]
-    fn naming_the_same_agent_twice_is_not_two_grants() {
-        // The panel sends a change rather than a state, and a double click is a
-        // change sent twice. A second row would make revoking take two clicks,
-        // one of which does nothing visible.
+    fn taking_an_agent_out_leaves_it_in_its_crew() {
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Ada") }).unwrap();
         let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
 
-        f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-        let twice = f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-        assert_eq!(twice.reach, vec![ada.id]);
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+        let out = f.store.set_agent_repository(ada.id, None).unwrap();
+
+        assert!(out.repository_id.is_none());
+        assert_eq!(out.group_id, group.id, "out of the codebase, not out of the crew");
+        assert!(f.store.agent_repository(ada.id).unwrap().is_none());
     }
 
     #[test]
-    fn an_agent_in_another_crew_is_refused_rather_than_stored() {
-        // A row that every read filters out is a name the panel draws as
-        // granted and the runtime treats as absent. Refusing is what keeps the
-        // two from ever disagreeing.
+    fn another_crews_repository_is_refused_rather_than_stored() {
+        // A column every read filters out is a name the rail draws as assigned
+        // and the runtime treats as absent, which is the disagreement group
+        // scoping exists to prevent.
         let f = fixture();
         let mine = f.store.create_group(&group_named("Platform")).unwrap();
         let theirs = f.store.create_group(&group_named("Growth")).unwrap();
-        let outsider = f
-            .store
-            .create_agent(&CleanDraft { group_id: Some(theirs.id), ..draft("Outsider") })
-            .unwrap();
-        let repo = f.store.create_repository(&repo_at(mine.id, "/dev/guaca")).unwrap();
+        let repo = f.store.create_repository(&repo_at(theirs.id, "/dev/growth")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", mine.id)).unwrap();
 
-        let refused = f.store.set_repository_access(repo.id, outsider.id, false);
-        assert!(refused.is_ok(), "taking one back must always work, even for a stranger");
-
-        match f.store.set_repository_access(repo.id, outsider.id, true) {
-            Err(StoreError::AgentNotInGroupForRepository(id)) => assert_eq!(id, outsider.id),
-            other => panic!("expected a refusal naming the agent, got {other:?}"),
+        match f.store.set_agent_repository(ada.id, Some(repo.id)) {
+            Err(StoreError::AgentNotInGroupForRepository(who)) => assert_eq!(who, ada.id),
+            other => panic!("another crew's source must be refused, got {other:?}"),
         }
+        assert!(f.store.get_agent(ada.id).unwrap().unwrap().repository_id.is_none());
     }
 
     #[test]
     fn moving_an_agent_out_of_the_crew_takes_the_repository_with_it() {
-        // Reach is the crew's decision about the crew's source. A row that
-        // survived a move would be one crew's working tree open to another
-        // crew's agent, which is what group scoping exists to stop.
+        // The column survives the move until something clears it, so the read
+        // compares the group as well as the id. A link that outlived a move
+        // would be one crew's source open to another crew's agent.
         let f = fixture();
         let mine = f.store.create_group(&group_named("Platform")).unwrap();
         let theirs = f.store.create_group(&group_named("Growth")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(mine.id), ..draft("Ada") }).unwrap();
         let repo = f.store.create_repository(&repo_at(mine.id, "/dev/guaca")).unwrap();
-        f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-        assert_eq!(f.store.agent_repositories(ada.id).unwrap().len(), 1);
+        let ada = f.store.create_agent(&draft_in("Ada", mine.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
 
         f.store.move_agent(ada.id, theirs.id, None).unwrap();
         assert!(
-            f.store.agent_repositories(ada.id).unwrap().is_empty(),
-            "a moved agent must not keep its old crew's source"
+            f.store.agent_repository(ada.id).unwrap().is_none(),
+            "a repository belongs to the crew, not to whoever walked out with it"
         );
     }
 
     #[test]
-    fn one_directory_cannot_be_linked_to_a_crew_twice() {
+    fn retiring_an_agent_takes_it_out_of_the_repository() {
+        // The rail draws a repository's members from this column, so a
+        // terminated agent would sit under a codebase forever.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        f.store.clear_agent_repository(ada.id).unwrap();
+        assert!(f.store.agent_repository(ada.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn unlinking_a_repository_leaves_its_agents_where_they_are() {
+        // The agents are not the thing being removed, and the delete must not
+        // fail on a foreign key pointing at them.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        assert!(f.store.delete_repository(repo.id).unwrap());
+        assert!(f.store.group_repositories(group.id).unwrap().is_empty());
+
+        let still = f.store.get_agent(ada.id).unwrap().unwrap();
+        assert!(still.repository_id.is_none());
+        assert_eq!(still.group_id, group.id);
+    }
+
+    #[test]
+    fn one_directory_is_one_repository_however_it_is_spelled() {
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
         f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
 
         match f.store.create_repository(&repo_at(group.id, "/dev/guaca")) {
             Err(StoreError::DuplicateRepository(path)) => assert_eq!(path, "/dev/guaca"),
-            other => panic!("expected the path to be named back, got {other:?}"),
+            other => panic!("a second link on one directory must be refused, got {other:?}"),
         }
     }
 
     #[test]
-    fn two_crews_can_work_in_the_same_directory() {
-        // The index is per group on purpose. Two crews on one codebase is an
-        // ordinary shape, and each one's reach is its own.
+    fn every_repository_in_the_workspace_comes_back_in_one_read() {
+        // The rail draws every crew from one roster; a call per crew would make
+        // the round trips the number of crews.
         let f = fixture();
-        let mine = f.store.create_group(&group_named("Platform")).unwrap();
-        let theirs = f.store.create_group(&group_named("Growth")).unwrap();
+        let one = f.store.create_group(&group_named("Platform")).unwrap();
+        let two = f.store.create_group(&group_named("Growth")).unwrap();
+        f.store.create_repository(&repo_at(one.id, "/dev/api")).unwrap();
+        f.store.create_repository(&repo_at(two.id, "/dev/site")).unwrap();
 
-        f.store.create_repository(&repo_at(mine.id, "/dev/guaca")).unwrap();
-        f.store.create_repository(&repo_at(theirs.id, "/dev/guaca")).unwrap();
-
-        assert_eq!(f.store.group_repositories(mine.id).unwrap().len(), 1);
-        assert_eq!(f.store.group_repositories(theirs.id).unwrap().len(), 1);
+        assert_eq!(f.store.repositories().unwrap().len(), 2);
+        assert_eq!(f.store.group_repositories(one.id).unwrap().len(), 1);
     }
 
     #[test]
-    fn a_repository_nobody_has_still_appears_on_the_panel() {
-        // An inner join would drop exactly the row the operator is in the
-        // middle of fixing, and a panel that hides it reads as a link that
-        // failed.
+    fn a_renamed_repository_keeps_whoever_is_in_it() {
         let f = fixture();
         let group = f.store.create_group(&group_named("Platform")).unwrap();
-        f.store.create_repository(&repo_at(group.id, "/dev/nobodys")).unwrap();
-
-        let listed = f.store.group_repositories(group.id).unwrap();
-        assert_eq!(listed.len(), 1);
-        assert!(listed[0].reach.is_empty());
-    }
-
-    #[test]
-    fn renaming_one_leaves_its_path_and_its_reach_alone() {
-        let f = fixture();
-        let group = f.store.create_group(&group_named("Platform")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Ada") }).unwrap();
         let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
-        f.store.set_repository_access(repo.id, ada.id, true).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
 
-        let renamed = f.store.update_repository(repo.id, "the app", "run ./scripts/ci.sh").unwrap();
-        assert_eq!(renamed.name, "the app");
+        let renamed = f.store.update_repository(repo.id, "guac", "run ./scripts/ci.sh").unwrap();
+        assert_eq!(renamed.name, "guac");
         assert_eq!(renamed.note, "run ./scripts/ci.sh");
-        assert_eq!(renamed.path, "/dev/guaca", "the path is what the row is");
-        assert_eq!(renamed.reach, vec![ada.id], "and who has it survives a rename");
-    }
-
-    #[test]
-    fn retiring_an_agent_takes_its_reach_with_it() {
-        // A name is free to reuse the moment an agent is deleted, so a row left
-        // behind would hand the operator's source to whoever takes the name.
-        let f = fixture();
-        let group = f.store.create_group(&group_named("Platform")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Ada") }).unwrap();
-        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
-        f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-
-        assert_eq!(f.store.delete_agent_repository_access(ada.id).unwrap(), 1);
-        assert!(f.store.group_repositories(group.id).unwrap()[0].reach.is_empty());
-    }
-
-    #[test]
-    fn unlinking_takes_every_name_on_it() {
-        // The foreign key would refuse the delete otherwise, and a repository
-        // that cannot be unlinked is a path the operator is stuck with.
-        let f = fixture();
-        let group = f.store.create_group(&group_named("Platform")).unwrap();
-        let ada =
-            f.store.create_agent(&CleanDraft { group_id: Some(group.id), ..draft("Ada") }).unwrap();
-        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
-        f.store.set_repository_access(repo.id, ada.id, true).unwrap();
-
-        assert!(f.store.delete_repository(repo.id).unwrap());
-        assert!(f.store.group_repositories(group.id).unwrap().is_empty());
-        assert!(f.store.agent_repositories(ada.id).unwrap().is_empty());
+        assert_eq!(
+            f.store.agent_repository(ada.id).unwrap().unwrap().id,
+            repo.id,
+            "a rename is not a decision about the crew"
+        );
     }
 
     #[test]

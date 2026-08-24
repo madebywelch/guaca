@@ -1025,6 +1025,32 @@ CREATE TABLE repository_access (
 CREATE INDEX repository_access_agent ON repository_access (agent_id);
 "#,
     ),
+    (
+        36,
+        r#"
+-- An agent works in at most one repository. That is a decision about
+-- coordination rather than about permissions: two agents on one codebase settle
+-- it between themselves in the crew they share, and one agent quietly holding
+-- two is a change whose shape nobody can see until it lands in both.
+--
+-- A column rather than the junction table it replaces, because the rule is
+-- "at most one" and a column is the only shape that cannot represent anything
+-- else. It also makes the rail a tree: the repository is a heading and its
+-- agents are under it, each drawn once, which a many-to-many cannot be.
+ALTER TABLE agents ADD COLUMN repository_id TEXT REFERENCES repositories(id);
+
+-- Whoever was named on one keeps it. An agent named on more than one keeps the
+-- first it was given: the rows are in the order the operator ticked them, so
+-- the first is the one they chose before there was a rule about it.
+UPDATE agents SET repository_id = (
+    SELECT repository_id FROM repository_access
+     WHERE repository_access.agent_id = agents.id
+     ORDER BY rowid LIMIT 1
+);
+
+DROP TABLE repository_access;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

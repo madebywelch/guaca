@@ -15,9 +15,9 @@ interface Props {
   crew: AgentCard[];
 }
 
-/** Who a repository is currently handed to, as a sentence. */
-function handedTo(repository: Repository, crew: AgentCard[]): string {
-  const named = crew.filter((agent) => repository.reach.includes(agent.id));
+/** Who works in a repository, as a sentence. */
+function worksIn(repository: Repository, crew: AgentCard[]): string {
+  const named = crew.filter((agent) => agent.repositoryId === repository.id);
   if (named.length === 0) return "nobody yet";
   return named.map((agent) => agent.name).join(", ");
 }
@@ -202,7 +202,8 @@ export function RepositoryList({ groupId, crew }: Props) {
           )}
 
           <p className="field__hint">
-            Handed to {handedTo(repository, crew)}. Give it to an agent from that agent's own panel.
+            Worked in by {worksIn(repository, crew)}. Put an agent in it by dragging it onto this
+            repository in the rail.
           </p>
         </div>
       ))}

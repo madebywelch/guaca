@@ -88,6 +88,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

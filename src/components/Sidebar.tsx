@@ -488,7 +488,11 @@ export function Sidebar({
                     every row to reach. */}
                 <RailRepositories
                   repositories={repositories.filter((r) => r.groupId === focused.id)}
-                  crew={agents.filter((a) => a.groupId === focused.id)}
+                  crew={railOrder(
+                    agents.filter((a) => a.groupId === focused.id),
+                    shape,
+                  )}
+                  row={row}
                   isOver={isOver}
                   onDragOver={hover}
                   // Back to the crew rather than to nothing. Leaving a
@@ -498,8 +502,11 @@ export function Sidebar({
                   onDragLeave={() => hover({ kind: "group", id: focused.id })}
                   dragging={drag !== null}
                 />
+                {/* Whoever is in no repository. Every agent is drawn once,
+                    which is the whole reason an agent works in at most one:
+                    the rail is a tree and a name has one place in it. */}
                 {railOrder(
-                  agents.filter((a) => a.groupId === focused.id),
+                  agents.filter((a) => a.groupId === focused.id && !a.repositoryId),
                   shape,
                 ).map(row)}
                 {agents.every((a) => a.groupId !== focused.id) && (
@@ -538,13 +545,14 @@ export function Sidebar({
                       </div>
                       <RailRepositories
                         repositories={repositories.filter((r) => r.groupId === group.id)}
-                        crew={members}
+                        crew={here}
+                        row={row}
                         isOver={isOver}
                         onDragOver={hover}
                         onDragLeave={() => hover({ kind: "group", id: group.id })}
                         dragging={drag !== null}
                       />
-                      {here.map(row)}
+                      {here.filter((a) => !a.repositoryId).map(row)}
                       {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
                     </div>
                   );

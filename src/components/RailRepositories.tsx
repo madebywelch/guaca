@@ -1,11 +1,15 @@
+import type { ReactNode } from "react";
+
 import type { DropTarget } from "../lib/rail";
-import type { AgentCard, AgentId, Repository } from "../lib/types";
+import type { AgentCard, Repository } from "../lib/types";
 
 interface Props {
   /** This crew's repositories, already filtered. */
   repositories: Repository[];
-  /** This crew, for turning the ids on a repository into names. */
+  /** This crew's agents, in rail order. */
   crew: AgentCard[];
+  /** Draws one agent as the rail draws every other row. */
+  row: (agent: AgentCard) => ReactNode;
   isOver: (target: DropTarget) => boolean;
   onDragOver: (target: DropTarget) => void;
   onDragLeave: () => void;
@@ -14,7 +18,7 @@ interface Props {
 }
 
 /**
- * The codebases a crew works in, in the rail, above the crew.
+ * The codebases a crew works in, as headings with their agents under them.
  *
  * ## Why they are here and not in settings
  *
@@ -23,31 +27,31 @@ interface Props {
  * that is the wrong shelf: which codebases this crew has, and who is on each,
  * is the first question asked on opening the app and it was three clicks deep.
  *
+ * ## Why this is a tree and not two lists
+ *
+ * An agent works in at most one repository, so every agent has exactly one
+ * place in the rail: under its codebase, or under the crew if it has none.
+ * That is the whole reason the exclusive rule is worth its cost. A
+ * many-to-many cannot be drawn as a tree, and the version that tried put every
+ * name in two places at once and left the operator working out which of them
+ * was the real row.
+ *
+ * The rows here are the rail's own rows, passed in rather than reinvented, so
+ * an agent under a repository is the same row with the same menu, the same
+ * activity and the same drag as an agent anywhere else. Only its indent
+ * differs.
+ *
  * ## Why they are not circles in the crews column
  *
- * The column on the far left is crews, and dropping an agent on one *moves* it,
- * because an agent is in exactly one crew. Dropping on a repository *grants*,
- * because an agent can work in several. Two gestures that look identical and
- * mean opposite things is how an operator loses an agent while trying to give
- * it a codebase.
- *
- * So repositories sit inside the crew, drawn as their own furniture rather than
- * as more rows, and the difference between the two drops is visible before the
- * hand commits to either.
- *
- * ## Why an agent is named here and still drawn below
- *
- * A crew's roster is every agent in it, once. These are a second view over some
- * of the same agents, and the honest way to draw a many-to-many is to let a
- * name appear in both places rather than to move a row out of the roster into a
- * section: an agent on two repositories would have to be in two sections at
- * once, and an agent on none would look like it had been left out of the crew.
- * The names here are text rather than rows for the same reason. A row is a
- * channel you open; this is a statement about who can reach the code.
+ * That column is crews, and dropping an agent on one moves it between crews.
+ * Dropping here moves it between codebases inside the crew it is already in.
+ * Both are moves, which is what makes the gesture learnable, but they move
+ * different things, so they are different furniture in different places.
  */
 export function RailRepositories({
   repositories,
   crew,
+  row,
   isOver,
   onDragOver,
   onDragLeave,
@@ -55,15 +59,13 @@ export function RailRepositories({
 }: Props) {
   if (repositories.length === 0) return null;
 
-  const nameOf = (id: AgentId) => crew.find((agent) => agent.id === id)?.name;
-
   return (
     <div className="rail__repos">
       {repositories.map((repository) => {
-        // Only agents still in this crew. Reach outlives a move until something
-        // clears it, and a name here that the runtime would refuse is the one
-        // thing a permission panel must not draw.
-        const on = repository.reach.map(nameOf).filter(Boolean) as string[];
+        // Only agents still in this crew. The column outlives a move between
+        // crews until something clears it, and a name here the runtime would
+        // refuse is the one thing a panel about access must not draw.
+        const inside = crew.filter((agent) => agent.repositoryId === repository.id);
         return (
           <div
             key={repository.id}
@@ -71,24 +73,23 @@ export function RailRepositories({
             data-over={isOver({ kind: "repository", id: repository.id }) ? "true" : undefined}
             onPointerEnter={() => onDragOver({ kind: "repository", id: repository.id })}
             onPointerLeave={onDragLeave}
-            title={repository.path}
           >
-            <div className="rail__repo-head">
+            <div className="rail__repo-head" title={repository.path}>
+              <span className="rail__repo-mark" aria-hidden="true" />
               <span className="rail__repo-name">{repository.name}</span>
+              <span className="rail__repo-count">{inside.length || ""}</span>
             </div>
-            <p className="rail__repo-who">
-              {on.length > 0 ? (
-                on.join(", ")
-              ) : (
-                // The empty state is an instruction, because this is the one
-                // moment the operator can act on: a repository nobody has is
-                // linked and not handed out, which is a state to pass through
-                // rather than a failure.
-                <span className="rail__repo-nobody">
-                  {dragging ? "drop to give it this" : "nobody yet"}
-                </span>
-              )}
-            </p>
+
+            {inside.length > 0 ? (
+              <div className="rail__repo-crew">{inside.map(row)}</div>
+            ) : (
+              // Says which state it is in rather than drawing an empty gap: a
+              // repository linked and given to nobody is ordinary, and blank
+              // reads as still loading.
+              <p className="rail__repo-empty">
+                {dragging ? "drop an agent here" : "nobody works here yet"}
+              </p>
+            )}
           </div>
         );
       })}

@@ -587,21 +587,21 @@ pub fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> Reply<
     Ok(())
 }
 
-/// Gives one agent a repository, or takes it back.
+/// Puts one agent in a repository, or takes it out.
 ///
-/// One agent per call. The panel sends the change rather than the list it
-/// believes in, so a panel one tick behind cannot revoke somebody while
-/// granting somebody else.
+/// A move rather than a grant: an agent works in at most one, so `null` is how
+/// it comes back out and there is no second call that takes one away. The rail
+/// drops an agent onto a repository exactly as it drops one onto a crew, and
+/// the two gestures mean the same kind of thing for the same reason.
 #[tauri::command]
-pub fn set_repository_access(
+pub fn set_agent_repository(
     state: State<'_, AppState>,
-    id: RepositoryId,
-    agent_id: AgentId,
-    allowed: bool,
-) -> Reply<Repository> {
-    let repository = state.runtime.store().set_repository_access(id, agent_id, allowed)?;
+    id: AgentId,
+    repository_id: Option<RepositoryId>,
+) -> Reply<AgentCard> {
+    let card = state.runtime.store().set_agent_repository(id, repository_id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(repository)
+    Ok(card)
 }
 
 // ---- plugins -------------------------------------------------------------
@@ -1049,7 +1049,7 @@ async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()
     // And its reach into whatever the crew was working in. Same argument, and
     // one more that only applies here: a repository is the operator's own
     // source, so a retired agent must not leave one drawn as handed out.
-    let _ = state.runtime.store().delete_agent_repository_access(id);
+    let _ = state.runtime.store().clear_agent_repository(id);
     Ok(())
 }
 
