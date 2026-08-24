@@ -403,6 +403,17 @@ pub struct Routine {
     /// survive being switched off, which is what makes it different from
     /// deleting the thing.
     pub active: bool,
+    /// Whether a firing that comes due while the agent is already working is
+    /// dropped instead of queued behind whatever it is doing.
+    ///
+    /// For the sweep that must not stack: an agent still working through the
+    /// last hour's listings does not want this hour's waiting for it, and the
+    /// next slot is a few minutes away regardless.
+    ///
+    /// Only ever true on a routine that repeats, which [`validate`] is what
+    /// enforces. A one-off dropped is a one-off that never happens, and the
+    /// slot it was holding goes with it.
+    pub skip_if_working: bool,
     /// The moment it is next due, for a routine that waits on the clock.
     ///
     /// `None` is a routine that does not: an event trigger fires when its event
@@ -430,13 +441,20 @@ pub enum NextSlot {
     Done,
 }
 
-/// Why a routine ran.
+/// What happened at one firing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunKind {
-    /// It came due.
+    /// It came due and was delivered.
     Scheduled,
     /// The operator pressed the button. Nothing about the schedule moved.
     Test,
+    /// It came due, the agent was already working, and the routine says not to
+    /// land on that. Nothing was delivered and the slot moved on anyway.
+    ///
+    /// Recorded rather than passed over in silence: a firing that does not
+    /// happen leaves a gap in this history, and a gap is what a broken
+    /// scheduler looks like too.
+    Skipped,
 }
 
 impl RunKind {
@@ -444,6 +462,7 @@ impl RunKind {
         match self {
             RunKind::Scheduled => "scheduled",
             RunKind::Test => "test",
+            RunKind::Skipped => "skipped",
         }
     }
 
@@ -451,6 +470,7 @@ impl RunKind {
         match value {
             "scheduled" => Some(RunKind::Scheduled),
             "test" => Some(RunKind::Test),
+            "skipped" => Some(RunKind::Skipped),
             _ => None,
         }
     }
@@ -469,10 +489,14 @@ impl Serialize for RunKind {
 /// `spent` is the second of those, read back at the same time, because "did
 /// Tuesday's sweep actually do anything" is answered by whether the firing
 /// bought any model calls and not by the fact that it was delivered.
+///
+/// A skipped firing has no run at all, which is why the id is optional. An
+/// invented one would read back exactly like a delivery that spent nothing,
+/// and telling those two apart is the whole job of this row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutineRun {
-    pub run_id: RunId,
+    pub run_id: Option<RunId>,
     pub kind: RunKind,
     pub at: i64,
     pub spent: super::usage::Tokens,
@@ -534,14 +558,23 @@ impl Routine {
     /// hours" about a row that will not fire reports work as being in hand
     /// that nobody is going to do.
     pub fn describe(&self) -> String {
-        if !self.active {
-            return format!("{}, switched off by the operator", self.trigger.describe());
+        let mut out = if !self.active {
+            format!("{}, switched off by the operator", self.trigger.describe())
+        } else {
+            match self.next_run_at {
+                Some(at) => format!("{}, next {}", self.trigger.describe(), when(at)),
+                // Nothing to promise: it happens when the event does.
+                None => self.trigger.describe(),
+            }
+        };
+        // Said here rather than only in the panel, because this is the line an
+        // agent reads its own schedule off. One that cannot see which of its
+        // routines drops a firing cannot answer why yesterday's did not run,
+        // and books a second one to cover the gap.
+        if self.skip_if_working {
+            out.push_str(", dropped if you are already working");
         }
-        match self.next_run_at {
-            Some(at) => format!("{}, next {}", self.trigger.describe(), when(at)),
-            // Nothing to promise: it happens when the event does.
-            None => self.trigger.describe(),
-        }
+        out
     }
 }
 
@@ -639,6 +672,11 @@ pub enum RoutineError {
     TooFar,
     #[error("an event trigger has no start time: it fires when {service} reports {topic}")]
     EventHasNoStart { service: String, topic: String },
+    #[error(
+        "only a routine that repeats can skip a firing: a one-off skipped is one that never \
+         happens at all"
+    )]
+    SkipNeedsARepeat,
 }
 
 /// Checks what was asked for before it becomes a row.
@@ -647,6 +685,7 @@ pub fn validate(
     what: &str,
     trigger: &Trigger,
     in_secs: Option<u32>,
+    skip_if_working: bool,
 ) -> Result<(), RoutineError> {
     if what.trim().is_empty() {
         return Err(RoutineError::Empty);
@@ -676,6 +715,13 @@ pub fn validate(
     }
     if in_secs.is_some_and(|delay| delay > MAX_DELAY_SECS) {
         return Err(RoutineError::TooFar);
+    }
+    // Refused rather than stored and honored, because honoring it destroys the
+    // routine: skipping moves the slot on, and the slot a one-off holds is the
+    // only one it has, so the row would be deleted having done nothing. The
+    // operator would find an empty list where their alarm used to be.
+    if skip_if_working && !trigger.repeats() {
+        return Err(RoutineError::SkipNeedsARepeat);
     }
     Ok(())
 }
@@ -776,6 +822,7 @@ mod tests {
             what: "check".into(),
             trigger,
             active: true,
+            skip_if_working: false,
             next_run_at,
             last_run_at: None,
             created_at: 0,
@@ -1026,20 +1073,23 @@ mod tests {
 
     #[test]
     fn a_routine_that_does_nothing_or_runs_constantly_is_refused() {
-        assert_eq!(validate("", "  ", &clock(Cadence::Daily), None), Err(RoutineError::Empty));
         assert_eq!(
-            validate("", "x", &clock(Cadence::Every(5)), None),
+            validate("", "  ", &clock(Cadence::Daily), None, false),
+            Err(RoutineError::Empty)
+        );
+        assert_eq!(
+            validate("", "x", &clock(Cadence::Every(5)), None, false),
             Err(RoutineError::TooOften { got: 5 })
         );
         assert_eq!(
-            validate("", "x", &clock(Cadence::Once), Some(MAX_DELAY_SECS + 1)),
+            validate("", "x", &clock(Cadence::Once), Some(MAX_DELAY_SECS + 1), false),
             Err(RoutineError::TooFar)
         );
         assert_eq!(
-            validate(&"n".repeat(MAX_NAME_LEN + 1), "x", &clock(Cadence::Daily), None),
+            validate(&"n".repeat(MAX_NAME_LEN + 1), "x", &clock(Cadence::Daily), None, false),
             Err(RoutineError::NameTooLong)
         );
-        assert_eq!(validate("Sweep", "x", &clock(Cadence::Every(3600)), Some(60)), Ok(()));
+        assert_eq!(validate("Sweep", "x", &clock(Cadence::Every(3600)), Some(60), false), Ok(()));
     }
 
     #[test]
@@ -1048,13 +1098,68 @@ mod tests {
         // scheduled something, and the refusal has to say what will happen
         // instead: an error an agent reads mid-turn needs a way forward.
         let trigger = event("stripe", "invoice.payment_failed");
-        let refused = validate("Dunning", "chase it", &trigger, Some(3600)).unwrap_err();
+        let refused = validate("Dunning", "chase it", &trigger, Some(3600), false).unwrap_err();
         assert_eq!(
             refused.to_string(),
             "an event trigger has no start time: it fires when Stripe reports \
              invoice.payment_failed"
         );
-        assert_eq!(validate("Dunning", "chase it", &trigger, None), Ok(()));
+        assert_eq!(validate("Dunning", "chase it", &trigger, None, false), Ok(()));
+    }
+
+    #[test]
+    fn only_something_that_repeats_can_skip_a_firing() {
+        // A skip moves the slot on, and the slot a one-off holds is the only
+        // one it has: honoring the pair would delete the row having done
+        // nothing, and the operator would find an empty list where their alarm
+        // was. Refused where it is asked for rather than dropped quietly.
+        let refused =
+            validate("Wake me", "check the listings", &clock(Cadence::Once), Some(3600), true)
+                .unwrap_err();
+        assert_eq!(refused, RoutineError::SkipNeedsARepeat);
+        assert!(
+            refused.to_string().contains("never happens"),
+            "an error read mid-turn has to say what would go wrong: {refused}"
+        );
+
+        // Every repeat takes it, including one waiting on an event: that fires
+        // each time the event arrives, so there is always a next one.
+        for trigger in [
+            clock(Cadence::Daily),
+            clock(Cadence::Every(3600)),
+            event("stripe", "invoice.payment_failed"),
+        ] {
+            assert_eq!(validate("Sweep", "check", &trigger, None, true), Ok(()), "{trigger:?}");
+        }
+
+        // And a one-off is fine as long as nobody asked for the skip.
+        assert_eq!(validate("Wake me", "check", &clock(Cadence::Once), Some(3600), false), Ok(()));
+    }
+
+    #[test]
+    fn a_routine_that_drops_a_firing_says_so_to_the_agent_keeping_it() {
+        // This line is the whole of what an agent reads its own schedule off,
+        // in the prompt and from `list`. One that cannot see which of its
+        // routines skips cannot say why yesterday's did not run, and books a
+        // second one to cover the gap.
+        let mut r = routine(clock(Cadence::Daily), Some(at(2025, 6, 10, 9, 0)));
+        assert!(!r.describe().contains("dropped"), "silent unless it was asked for");
+
+        r.skip_if_working = true;
+        assert!(
+            r.describe().starts_with("every day, next"),
+            "the cadence and the countdown still lead: {}",
+            r.describe()
+        );
+        assert!(r.describe().ends_with(", dropped if you are already working"));
+
+        // Both facts survive together. A routine switched off that also skips
+        // must not report either one instead of the other.
+        r.active = false;
+        assert_eq!(
+            r.describe(),
+            "every day, switched off by the operator, dropped if you are already working"
+        );
     }
 
     #[test]
@@ -1063,7 +1168,7 @@ mod tests {
         // that bought no model call is a routine that did not run. Nothing else
         // in the row distinguishes the two.
         let run = RoutineRun {
-            run_id: RunId::new(),
+            run_id: Some(RunId::new()),
             kind: RunKind::Scheduled,
             at: 1_000,
             spent: Tokens { prompt: 900, completion: 100, cost: Some(0.002), calls: 2 },

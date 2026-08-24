@@ -801,6 +801,16 @@ impl Runtime {
         self.inner.activity.lock().clone()
     }
 
+    /// Whether work sent to this agent now would have to wait.
+    ///
+    /// An agent with no entry is one with no actor: nothing is running, so
+    /// nothing is being waited on. Answering "working" there would silently
+    /// suppress every firing a `skip_if_working` routine had, and a routine
+    /// that does not run is invisible in a way one that runs is not.
+    fn working(&self, id: AgentId) -> bool {
+        self.inner.activity.lock().get(&id).is_some_and(|activity| activity.is_working())
+    }
+
     fn set_activity(&self, id: AgentId, activity: Activity) {
         let changed = {
             let mut map = self.inner.activity.lock();
@@ -1171,9 +1181,14 @@ impl Runtime {
     /// the button is what they will see on Tuesday morning. Deliberately does
     /// not move `next_run_at` or delete a one-shot: testing a routine must not
     /// be a way to spend the only firing it had.
+    ///
+    /// `skip_if_working` is not consulted here, and that is not an oversight:
+    /// the operator pressed a button. A test that quietly did nothing because
+    /// the agent was mid-turn would answer a question nobody asked, and read
+    /// as the button being broken.
     pub fn test_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
         let run = self.send_from_routine(routine)?;
-        self.log_routine_run(routine, run, RunKind::Test, now_ms());
+        self.log_routine_run(routine, Some(run), RunKind::Test, now_ms());
         Ok(run)
     }
 
@@ -1181,7 +1196,7 @@ impl Runtime {
     ///
     /// A history nobody can read is not worth failing a delivery over, so this
     /// warns and carries on: the agent has already been given the work.
-    fn log_routine_run(&self, routine: &Routine, run: RunId, kind: RunKind, at: i64) {
+    fn log_routine_run(&self, routine: &Routine, run: Option<RunId>, kind: RunKind, at: i64) {
         if let Err(err) = self.inner.store.record_routine_run(routine.id, run, kind, at) {
             tracing::warn!(%err, "could not record what a routine did");
         }
@@ -1231,6 +1246,10 @@ impl Runtime {
         };
 
         for routine in due {
+            // Asked before the slot moves, because the question is what the
+            // agent was doing at the moment this came due.
+            let skipping = routine.skip_if_working && self.working(routine.agent_id);
+
             // Recorded as run before it is run. A routine that fails on
             // delivery must not come due again on the next tick and again on
             // the one after that.
@@ -1247,10 +1266,22 @@ impl Runtime {
                 agent = %routine.agent_id.short(),
                 trigger = %routine.trigger.as_str(),
                 repeats = routine.repeats(),
+                skipping,
                 "a routine came due"
             );
+
+            // The slot has already moved on, which is what the operator asked
+            // for: skipping is dropping this firing, not deferring it onto the
+            // moment the agent goes quiet. Written down all the same, because
+            // a firing that leaves no trace at all is indistinguishable from a
+            // scheduler that has stopped working.
+            if skipping {
+                self.log_routine_run(&routine, None, RunKind::Skipped, now);
+                continue;
+            }
+
             match self.send_from_routine(&routine) {
-                Ok(run) => self.log_routine_run(&routine, run, RunKind::Scheduled, now),
+                Ok(run) => self.log_routine_run(&routine, Some(run), RunKind::Scheduled, now),
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
         }
@@ -4171,8 +4202,8 @@ impl Runtime {
                 Ok(out)
             }
 
-            tools::ScheduleAction::Add { name, what, trigger, in_secs } => {
-                if let Err(err) = validate(name, what, trigger, *in_secs) {
+            tools::ScheduleAction::Add { name, what, trigger, in_secs, skip_if_working } => {
+                if let Err(err) = validate(name, what, trigger, *in_secs, *skip_if_working) {
                     return Ok(format!(
                         "Refused: {err}. The shortest repeat is {}.",
                         human_gap(MIN_EVERY_SECS)
@@ -4183,8 +4214,14 @@ impl Runtime {
                 // stands beside.
                 let standing = self.inner.store.agent_routines(card.id)?;
                 let first = trigger.first_run(now_ms(), *in_secs);
-                let routine =
-                    self.inner.store.create_routine(card.id, name, what, trigger.clone(), first)?;
+                let routine = self.inner.store.create_routine(
+                    card.id,
+                    name,
+                    what,
+                    trigger.clone(),
+                    first,
+                    *skip_if_working,
+                )?;
                 self.emit(UiEvent::RoutinesChanged { agent_id: card.id });
 
                 let mut answer = format!(
@@ -4217,7 +4254,7 @@ impl Runtime {
                 Ok(answer)
             }
 
-            tools::ScheduleAction::Update { id, name, what, trigger, in_secs } => {
+            tools::ScheduleAction::Update { id, name, what, trigger, in_secs, skip_if_working } => {
                 let Some(existing) = self.my_routine(card, id)? else {
                     return Ok(format!(
                         "You have no routine with the id {id}. Your own are listed with their \
@@ -4231,7 +4268,8 @@ impl Runtime {
                 let name = name.clone().unwrap_or_else(|| existing.name.clone());
                 let what = what.clone().unwrap_or_else(|| existing.what.clone());
                 let trigger = trigger.clone().unwrap_or_else(|| existing.trigger.clone());
-                if let Err(err) = validate(&name, &what, &trigger, *in_secs) {
+                let skipping = skip_if_working.unwrap_or(existing.skip_if_working);
+                if let Err(err) = validate(&name, &what, &trigger, *in_secs, skipping) {
                     return Ok(format!(
                         "Refused: {err}. {} is unchanged, and the shortest repeat is {}.",
                         existing.id,
@@ -4240,8 +4278,14 @@ impl Runtime {
                 }
 
                 let next = next_slot_for(&trigger, &existing, *in_secs);
-                let routine =
-                    self.inner.store.update_routine(existing.id, &name, &what, trigger, next)?;
+                let routine = self.inner.store.update_routine(
+                    existing.id,
+                    &name,
+                    &what,
+                    trigger,
+                    next,
+                    skipping,
+                )?;
                 self.emit(UiEvent::RoutinesChanged { agent_id: card.id });
                 Ok(format!("Updated {}: {} ({}).", routine.id, routine.what, routine.describe()))
             }

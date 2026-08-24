@@ -33,6 +33,30 @@ pub enum Activity {
     Paused,
 }
 
+impl Activity {
+    /// Whether anything landing on this agent now would wait its turn.
+    ///
+    /// What a routine's `skip_if_working` is asking about. Deliberately read
+    /// off the same value the dot beside the agent's name is drawn from, so
+    /// "it says Thinking and the sweep was skipped" is one fact rather than
+    /// two that agree on the day they were written.
+    ///
+    /// Idle is the only state where a delivery starts work immediately. A
+    /// queue that is not empty is work already waiting, a request on the
+    /// operator's desk is a turn parked mid-flight, and a paused agent takes
+    /// nothing off its inbox at all: putting a firing behind any of those is
+    /// the pile-up the option exists to avoid.
+    pub fn is_working(self) -> bool {
+        match self {
+            Activity::Idle => false,
+            Activity::Thinking
+            | Activity::Queued { .. }
+            | Activity::AwaitingApproval
+            | Activity::Paused => true,
+        }
+    }
+}
+
 /// The single event channel the frontend subscribes to.
 pub const CHANNEL: &str = "guac://event";
 
@@ -285,6 +309,19 @@ mod tests {
             cause: None,
             created_at: 0,
         }
+    }
+
+    #[test]
+    fn idle_is_the_only_state_where_work_starts_at_once() {
+        // What a routine's `skip_if_working` is asking about, so every state
+        // has to be answered for deliberately: a firing put behind a queue, a
+        // permission request or a pause is the pile-up the option exists to
+        // prevent, and only one of the five is the agent standing free.
+        assert!(!Activity::Idle.is_working());
+        assert!(Activity::Thinking.is_working());
+        assert!(Activity::Queued { depth: 1 }.is_working());
+        assert!(Activity::AwaitingApproval.is_working());
+        assert!(Activity::Paused.is_working());
     }
 
     #[test]

@@ -49,6 +49,7 @@ function routine(over: Partial<Routine> = {}): Routine {
     what: "check what I promised and remind me",
     trigger: "weekdays",
     active: true,
+    skipIfWorking: false,
     nextRunAt: MORNING,
     lastRunAt: null,
     createdAt: 0,
@@ -155,6 +156,64 @@ describe("RoutineDetail", () => {
     // Four places, because a firing costs fractions of a cent and $0.00 reads
     // as free.
     expect(screen.getByText("$0.0040")).toBeTruthy();
+  });
+
+  it("says which firings were skipped rather than leaving a gap", async () => {
+    // A skipped firing that left no row would read as a scheduler that has
+    // stopped working, and it must not be drawn as "nothing ran" either: that
+    // one was delivered to an agent that did not act on it, which is a
+    // different problem with a different fix.
+    routineRuns.mockResolvedValue([
+      { runId: null, kind: "skipped", at: MORNING, spent: spent({ calls: 0 }) },
+      { runId: "run-1", kind: "scheduled", at: MORNING - 86_400_000, spent: spent({ calls: 2 }) },
+    ]);
+    open({ skipIfWorking: true });
+
+    expect(await screen.findByText("skipped, already working")).toBeTruthy();
+    expect(screen.queryByText("nothing ran")).toBeNull();
+  });
+
+  it("offers the skip only where there is a next firing to fall back on", async () => {
+    // A one-off that skipped would be a one-off that never happened: the slot
+    // it was holding is the only one it has. The backend refuses the pair, so
+    // the tick must not be reachable there.
+    open({ trigger: "once" });
+    await screen.findByLabelText("Date");
+    expect(screen.queryByLabelText(/Skip it if the agent/)).toBeNull();
+  });
+
+  it("drops the skip when the trigger it depended on becomes a one-off", async () => {
+    // The tick is hidden on a one-off, so a routine switched to one while it
+    // was ticked would be refused by the backend with its reason attached to a
+    // control the operator can no longer see.
+    open({ trigger: "daily", skipIfWorking: true });
+    const tick = (await screen.findByLabelText(/Skip it if the agent/)) as HTMLInputElement;
+    expect(tick.checked).toBe(true);
+
+    fireEvent.change(screen.getByLabelText("Trigger"), { target: { value: "once" } });
+    fireEvent.change(screen.getByLabelText("Date"), { target: { value: "2025-06-13" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(updateRoutine).toHaveBeenCalledTimes(1));
+    expect(updateRoutine.mock.calls[0]![1].skipIfWorking).toBe(false);
+  });
+
+  it("saves the skip as part of the draft rather than on the click", async () => {
+    // Unlike Active, which acts at once. This one changes what a firing does
+    // rather than whether the routine runs at all, so it belongs with the
+    // wording and the schedule, behind Save.
+    open();
+    const tick = (await screen.findByLabelText(/Skip it if the agent/)) as HTMLInputElement;
+    expect(tick.checked).toBe(false);
+
+    fireEvent.click(tick);
+    expect(updateRoutine).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(updateRoutine).toHaveBeenCalledTimes(1));
+    expect(updateRoutine.mock.calls[0]![1].skipIfWorking).toBe(true);
+    // And nothing else moved: ticking it is not a statement about when it runs.
+    expect(updateRoutine.mock.calls[0]![1].inSecs).toBeNull();
   });
 
   it("asks which weekday a weekly routine keeps", async () => {

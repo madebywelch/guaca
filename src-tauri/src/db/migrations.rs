@@ -954,6 +954,41 @@ ALTER TABLE approvals ADD COLUMN answer TEXT;
     (
         34,
         r#"
+-- A routine that must not land on an agent which is already working. Off for
+-- every routine that exists: a schedule an operator set last week goes on
+-- firing exactly as it has been.
+ALTER TABLE routines ADD COLUMN skip_if_working INTEGER NOT NULL DEFAULT 0;
+
+-- A skipped firing is a row in this history with no run behind it. `run_id` is
+-- the thread back to what a firing produced: the messages in the channel, the
+-- model calls on the bill. A firing that was deliberately not delivered
+-- produced neither, so the column has to be able to say so. An invented id
+-- would read back as a delivery that spent nothing, which is the one thing
+-- this history exists to tell apart.
+--
+-- SQLite cannot drop NOT NULL in place, so the table is rebuilt. Nothing
+-- references it, so the DROP takes nothing else with it; the index does not
+-- survive a rebuild and is made again below.
+CREATE TABLE routine_runs_new (
+    id         INTEGER PRIMARY KEY,
+    routine_id TEXT    NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+    run_id     TEXT,
+    kind       TEXT    NOT NULL,
+    at         INTEGER NOT NULL
+);
+
+INSERT INTO routine_runs_new (id,routine_id,run_id,kind,at)
+     SELECT id,routine_id,run_id,kind,at FROM routine_runs;
+
+DROP TABLE routine_runs;
+ALTER TABLE routine_runs_new RENAME TO routine_runs;
+
+CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
+"#,
+    ),
+    (
+        35,
+        r#"
 -- Until now `kind` was a slug out of a closed enum, and the address the runtime
 -- dialled was derived from it. That is still true of the six servers Guaca
 -- ships, and it stays true of them: where a vendor's server lives is a decision
@@ -1260,7 +1295,7 @@ mod tests {
         // the move would keep dialling the old host with nothing on screen
         // saying why their plugin had stopped working.
         let mut conn = memory();
-        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 34) {
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 35) {
             conn.execute_batch(sql).unwrap();
             conn.pragma_update(None, "user_version", *version).unwrap();
         }
@@ -1798,6 +1833,79 @@ mod tests {
             })
             .unwrap();
         assert_eq!(due, 1, "and it is not due, however far ahead you look");
+    }
+
+    #[test]
+    fn an_existing_schedule_keeps_its_firings_and_lands_on_the_ordinary_rule() {
+        // Migration 34 rebuilds `routine_runs` to let a skipped firing say it
+        // had no run. The rows already in it are recorded history, so they have
+        // to come over exactly, and every routine written before the column
+        // existed has to keep firing the way it has been: skipping is a thing
+        // somebody asks for, never a default an upgrade applies.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 34) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id)
+             VALUES ('a','Manager','avocado','#000','m','','[]','active',1,0,0,?1)",
+            [DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO routines (id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at)
+             VALUES ('r1','a','Sweep','check','weekdays',1,1750000000000,1740000000000,5)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES ('r1','run-1','scheduled',7)",
+            [],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let skipping: i64 = conn
+            .query_row("SELECT skip_if_working FROM routines WHERE id='r1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(skipping, 0, "an upgrade must not start dropping an operator's firings");
+
+        let (run_id, kind, at): (String, String, i64) = conn
+            .query_row("SELECT run_id,kind,at FROM routine_runs", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!((run_id.as_str(), kind.as_str(), at), ("run-1", "scheduled", 7));
+
+        // The point of the rebuild: a firing with nothing behind it is now
+        // storable, and the index that answers the only question asked of this
+        // table survived being dropped with it.
+        conn.execute(
+            "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES ('r1',NULL,'skipped',9)",
+            [],
+        )
+        .unwrap();
+        let indexed: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type='index' AND name='routine_runs_routine'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(indexed, 1, "a rebuild takes the index with it unless it is made again");
+
+        // And the cascade still points at the parent it did before the rename.
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        conn.execute("DELETE FROM routines WHERE id='r1'", []).unwrap();
+        let left: i64 =
+            conn.query_row("SELECT count(*) FROM routine_runs", [], |r| r.get(0)).unwrap();
+        assert_eq!(left, 0, "history for a deleted routine is history nothing can draw");
     }
 
     #[test]

@@ -1645,6 +1645,7 @@ mod live {
                             guac_lib::domain::routine::Cadence::Weekdays,
                         ),
                         Some(guac_lib::domain::now_ms() + 3_600_000),
+                        false,
                     )
                     .unwrap();
             },

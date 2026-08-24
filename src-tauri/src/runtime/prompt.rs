@@ -1433,6 +1433,7 @@ mod tests {
             what: what.to_string(),
             trigger,
             active: true,
+            skip_if_working: false,
             next_run_at: Some(crate::domain::now_ms() + 3_600_000),
             last_run_at: None,
             created_at: 0,
