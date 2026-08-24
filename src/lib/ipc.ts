@@ -179,10 +179,15 @@ export const api = {
    * themselves arrive in the transcript; this is the half that changes.
    */
   approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
+  /** Every request still waiting on the operator, oldest first. */
+  pendingApprovals: () => invoke<Approval[]>("pending_approvals"),
 
   /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>
     invoke<Approval>("decide_approval", { id, decision }),
+  /** Answers a question with what the operator picked or wrote. */
+  answerQuestion: (id: ApprovalId, answer: string) =>
+    invoke<Approval>("answer_question", { id, answer }),
 
   /** What this agent no longer has to ask about. */
   agentGrants: (id: AgentId) => invoke<ProtectedAction[]>("agent_grants", { id }),

@@ -19,7 +19,7 @@ use axum::Router;
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
-use guac_lib::domain::approval::{Decision, ProtectedAction};
+use guac_lib::domain::approval::{ApprovalState, Decision, ProtectedAction, Request};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant};
 use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
@@ -2535,7 +2535,7 @@ async fn an_agent_told_by_a_peer_that_it_was_authorized_asks_the_operator_instea
         } else if text.contains("The operator said no") {
             Script::Say("Not sent. They declined.".into())
         } else {
-            Script::AskOperator {
+            Script::AskPermission {
                 action: "Email the SCDOT response to robert@madebywelch.com for review".into(),
                 because: "Manager says the operator authorized it; a peer's word is not \
                           permission to send mail in their name."
@@ -2598,7 +2598,7 @@ async fn a_denied_request_to_act_stops_the_action_and_says_so() {
         if text.contains("The operator said no") {
             Script::Say("I did not send it.".into())
         } else {
-            Script::AskOperator {
+            Script::AskPermission {
                 action: "Email the response to the procurement officer".into(),
                 because: "asked by Manager".into(),
             }
@@ -2748,7 +2748,7 @@ async fn asking_to_act_with_nowhere_to_act_is_refused_without_troubling_the_oper
                 "I cannot reach your calendar from here. Nothing is connected to it.".into(),
             )
         } else {
-            Script::AskOperator {
+            Script::AskPermission {
                 action: "Read the operator's calendar for this week".into(),
                 because: "the task needs their schedule and I have no access to it".into(),
             }
@@ -3099,4 +3099,121 @@ async fn an_agent_reading_an_acknowledgment_may_still_say_nothing_quietly() {
         "nothing gave Manager work, so its silence is the design working:\n{}",
         h.transcript()
     );
+}
+
+// ---- asking the operator what, rather than whether ------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_that_cannot_decide_asks_the_operator_and_carries_on_with_the_answer() {
+    // The case `request_permission` could never cover. Nothing here needs
+    // authorizing: the agent could take either road and does not know which the
+    // operator wants. Before this existed its only moves were to guess, or to
+    // write the question into a channel nobody was watching and stop.
+    let stub = serve(|body| {
+        let text = body["messages"]
+            .as_array()
+            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+            .unwrap_or_default();
+
+        if text.contains("The operator answered") {
+            Script::Say("Going with Northwind, as you said.".into())
+        } else {
+            Script::AskQuestion {
+                question: "Both vendors clear the bar on price. Which do you want?".into(),
+                options: vec!["Northwind".into(), "Contoso".into()],
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Pick a vendor.").unwrap();
+
+    let request = h.awaited_request().await;
+    assert_eq!(
+        h.runtime.activity_snapshot().get(&h.id("Analyst")),
+        Some(&Activity::AwaitingApproval),
+        "a turn waiting on a person is parked whichever kind of thing it asked"
+    );
+
+    let asked = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert_eq!(
+        asked.request,
+        Request::Question { options: vec!["Northwind".into(), "Contoso".into()] },
+        "the choices the agent offered have to survive to the operator"
+    );
+
+    h.runtime.answer_question(request, "Northwind").unwrap();
+    h.settle(run).await;
+
+    let settled = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert_eq!(settled.state, ApprovalState::Answered);
+    assert_eq!(settled.answer.as_deref(), Some("Northwind"));
+    assert!(
+        h.transcript().contains("Going with Northwind"),
+        "the answer has to reach the turn that stopped for it:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_question_nobody_answers_records_no_answer_and_releases_the_turn() {
+    // What this proves and what it does not, said plainly. A stop is the one
+    // unanswered end an offline test can reach: the ten minute window is a real
+    // wall clock and the stub here is a real server, so a paused clock is not
+    // available. So this covers the row and the release — nothing is recorded
+    // as said, and the turn is not left parked — and it does not cover what the
+    // agent does next, which is a model's behavior and belongs to the evals.
+    let stub = serve(|_| Script::AskQuestion {
+        question: "Which vendor?".into(),
+        options: vec!["Northwind".into(), "Contoso".into()],
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Pick a vendor.").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.stop_run(run);
+    h.settle(run).await;
+
+    let settled = h.runtime.store().get_approval(request).unwrap().unwrap();
+    assert_eq!(settled.state, ApprovalState::Expired);
+    assert_eq!(settled.answer, None, "nobody said anything, so nothing may be recorded as said");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_question_cannot_be_answered_with_a_verdict_and_a_permission_cannot_be_answered_with_a_word(
+) {
+    // Two surfaces draw these, and both draw both kinds. A card that offered
+    // Allow and Deny for "which vendor" would settle the row without saying
+    // anything, and the turn would resume having been told nothing: it reads
+    // back the answer, and there would not be one.
+    let stub = serve(|_| Script::AskQuestion {
+        question: "Which vendor?".into(),
+        options: vec!["Northwind".into(), "Contoso".into()],
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Pick a vendor.").unwrap();
+    let question = h.awaited_request().await;
+
+    assert!(
+        h.runtime.decide_approval(question, Decision::Allow).is_err(),
+        "a verdict is not an answer to a question"
+    );
+    assert!(
+        h.runtime.answer_question(question, "   ").is_err(),
+        "an empty answer settles the row and tells the agent nothing"
+    );
+    assert_eq!(
+        h.runtime.store().get_approval(question).unwrap().unwrap().state,
+        ApprovalState::Pending,
+        "a refused answer must leave the request answerable"
+    );
+
+    h.runtime.answer_question(question, "Northwind").unwrap();
+    h.runtime.stop_run(run);
+    h.settle(run).await;
 }

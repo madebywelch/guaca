@@ -407,9 +407,25 @@ either view. Neither view gives them a heading: everybody drawn under a crew is
 in that crew already, and a heading over one or two rows would divide nothing.
 The mark on the row is what says which rows are pinned.
 
+The circles live in a column of their own on the far left, and that column is
+the second change here. They were a strip inside the rail: a wrapping row of
+circles that fit four across, went to a second line at five and a third at nine.
+It did not overflow and it did not scroll. It ate the rail's own height, so a
+workspace with a dozen crews spent the top third of its agent list on the
+navigation for it, and four was a hard wall nobody had chosen. Upright, the axis
+is the one there is room on, and the crews that do not fit scroll instead of
+folding.
+
+Two things follow from the column that the strip could not buy. The crews are on
+screen wherever the operator is, including while the rail is inside one of them,
+which is what lets a circle carry a permanent statement about the crews nobody is
+looking at. And "which crew am I in" stops being something the rail has to
+answer, because the answer is a lit circle in a fixed place.
+
 The circles are faces, not names. A crew is recognized by who is in it long
-before its name is read, and four of these have to fit across a rail that is
-15.5rem wide.
+before its name is read. The name is not drawn under the circle at all: the
+column is four rem wide, a name cut to fit that is a name nobody can read, and
+it heads the crew column the moment the circle is clicked.
 
 How the faces stand is the size of the crew. One is a portrait, two stand side
 by side, and three to six stand on a ring, so a strip of crews is a strip of
@@ -430,23 +446,52 @@ that is not somebody's face.
 Each circle does two jobs, which is why it is a circle and not an item in a menu.
 Clicking it opens the group. Dropping an agent on it puts the agent in the group,
 so the shortest gesture for moving somebody between crews is the one that also
-says which crew, and it is on screen for the whole of the drag. The circle also
-carries whether anyone inside is working and whether anyone is waiting on the
-operator: once the rail is inside one group, the strip is the only place the
-other crews are visible at all.
+says which crew, and it is on screen for the whole of the drag. A column makes
+that gesture better rather than worse: the target never scrolls out from under
+the hand, and pointer events cross a column boundary for free where HTML5 drag
+and drop would not.
 
-The strip is absent while there is one group, which is the state most workspaces
-are in. A choice of one is chrome that never changes and a drop target that
-cannot move anybody anywhere.
+**What the circle says, it says in two marks, and they are deliberately not
+one.** A ring means somebody in this crew is working, with no number on it,
+because how many agents are mid-turn is not a thing anybody acts on. A count in
+the corner is how many turns in this crew are parked on the operator, and that
+one is a number because three and one are different amounts of work and a dot
+says neither. The same two states the menu bar's glyph already distinguishes:
+that reports them for the workspace while the window is shut, and this reports
+them per crew while it is open. One rule, two granularities, one fold, in
+`src/lib/presence.ts`. It is counted off the activity map rather than off the
+pending requests, and the two agree by construction: an agent runs one turn at a
+time and a turn parks on one request.
+
+What is deliberately not there is unread. Discord's rail carries a dot for
+messages you have not seen, and Guaca does not know which those are, because
+nothing records what the operator has read. A dot derived from "this channel is
+not the open one" would be lit on every crew but one, forever. Unread is a
+persisted per-channel marker and a migration, not a badge.
+
+The column is still absent while there is one group, which is the state most
+workspaces are in, and it is the same rule the strip had. A column offering a
+choice of one is a drop target that cannot move anybody anywhere, and with one
+crew the rail *is* that crew: every row of it is already on screen saying what
+the badge would.
 
 The group being looked inside is in the store rather than in the sidebar, because
-it and the open channel invalidate each other, and both are in the store. A
+it and the open channel have to agree, and both are in the store. One invariant
+holds them together: the rail draws the row of whatever the pane is showing. A
 search hit or a click on the flow board can land on an agent in another crew, and
-a rail still showing the group you were in has the open channel nowhere on it, so
-`select` lets the focus go. Going inside a crew is the same mismatch from the
-other end, so `focusGroup` closes the channel and the pane falls back to the
-activity feed, which belongs to no crew and is never closed. Whichever of the two
-the operator just asked for is the one that survives.
+`select` repairs that by following the agent into its crew. It used to drop out
+to the overview instead, which was the only honest answer while the crews were a
+strip inside the rail: the overview was the one view where every row was
+drawable. With a column that is on screen whichever crew you are in, following
+is both possible and less, because one lit circle moves instead of the whole
+rail changing shape.
+
+`focusGroup` repairs the same invariant from the other end, and lets go rather
+than following. The asymmetry is the point: `select` is the operator naming an
+agent, so taking them to that agent's crew is what they asked for, and
+`focusGroup` is the operator naming a crew, so following the channel back out of
+it would undo the click. The pane falls back to the activity feed, which belongs
+to no crew and is never closed.
 
 Closing it is not tidiness. Two crews can hold two agents with the same name and
 the same face, and a rail that is not drawing the row leaves nothing on screen

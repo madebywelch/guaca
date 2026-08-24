@@ -309,6 +309,24 @@ impl Presence {
         if !self.waiting.is_empty() {
             rows.push(Row::Note("Waiting on you".to_string()));
             for approval in self.waiting.iter().take(MAX_WAITING) {
+                // A question is counted here and cannot be answered here. Its
+                // answer is a word the operator picks or writes, and a menu
+                // item is a thing you click: the shapes do not meet, and a menu
+                // that offered Allow and Deny for "which vendor" would be
+                // asking a question it could not take the answer to.
+                //
+                // So it is a row that opens the channel, which is where it can
+                // be answered. Left out of the menu entirely it would still be
+                // in the title's count, and the operator would open the window
+                // looking for a request the menu had not mentioned.
+                let Some(action) = approval.request.action() else {
+                    rows.push(Row::Agent {
+                        id: approval.agent_id,
+                        label: format!("{} · in Guaca", one_line(&approval.summary, 110)),
+                    });
+                    continue;
+                };
+
                 rows.push(Row::Waiting {
                     id: approval.id,
                     agent: approval.agent_id,
@@ -327,7 +345,7 @@ impl Presence {
                         .collect(),
                     // Mirrors the card in the transcript, and for the same
                     // reason: `ActOnBehalf` has no standing yes.
-                    always: approval.action == ProtectedAction::CreateAgent,
+                    always: action == ProtectedAction::CreateAgent,
                 });
             }
             // Said rather than dropped. A menu that quietly stops at five
@@ -588,20 +606,25 @@ pub fn escape_mnemonic(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::approval::{ApprovalState, DetailField};
+    use crate::domain::approval::{ApprovalState, DetailField, Request};
     use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
     use crate::domain::ids::{GroupId, MessageId, RunId};
 
     fn approval(agent: AgentId, action: ProtectedAction, summary: &str) -> Approval {
+        request(agent, Request::Permission { action }, summary)
+    }
+
+    fn request(agent: AgentId, request: Request, summary: &str) -> Approval {
         Approval {
             id: ApprovalId::new(),
             agent_id: agent,
             group_id: GroupId::new(),
             run_id: RunId::new(),
-            action,
+            request,
             summary: summary.to_string(),
             detail: vec![DetailField::new("Name", "Scribe")],
             state: ApprovalState::Pending,
+            answer: None,
             created_at: 0,
             decided_at: None,
         }

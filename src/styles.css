@@ -31,6 +31,10 @@
   --rail-text: #e7ebdc;
   --rail-muted: #8b9c8d;
   --rail-wire: #2b3c32;
+  /* A shade under the rail. The crews sit behind the crew, and a column that
+     is the same ground as the one it borders needs a rule drawn between them
+     to be a second surface at all. */
+  --grail-ground: #0e1512;
 
   /* The reading surface, and the only half of the app a surface choice moves.
      Messages are long-form text read for minutes at a time, and paper is the
@@ -67,6 +71,9 @@
      in the smallest window they would otherwise leave the reading column
      narrower than a message can draw. */
   --rail-w: min(15.5rem, 28vw);
+  /* The crews' own column, which holds one circle across and nothing else, so
+     it is capped in the same proportion as the rail beside it. */
+  --grail-w: min(4rem, 8vw);
   --radius: 0.7rem;
   --radius-sm: 0.4rem;
 
@@ -220,6 +227,242 @@ button {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* ==========================================================================
+   The desk
+
+   Everything waiting on the operator, in the corner, wherever they are.
+   `components/Desk.tsx` has the argument for what it may and may not hold.
+   ========================================================================== */
+
+/* Outside `main` and outside the two navigation columns, fixed to the window
+   rather than to a pane. Three reasons, all of them things that broke a panel
+   put anywhere else: it must not move when the inspector opens, it must not be
+   clipped by the overflow of whatever is scrolling underneath it, and it has to
+   survive a view change, which unmounts every pane in the reading column.
+
+   Not a dialog. No scrim, no focus trap, nothing behind it goes inert: a
+   request arrives while the operator is doing something else, and the whole
+   point is that they can finish that first. */
+.desk {
+  position: fixed;
+  right: 1rem;
+  /* Level with the composer's own bottom edge, so the two read as sitting on
+     one line rather than one being slightly adrift of the other. */
+  bottom: 1.15rem;
+  z-index: 40;
+  /* The inspector's width, deliberately, and the same cap on it. Something has
+     to be underneath a panel in a corner, and the inspector is a column of
+     details that can be scrolled back to; the composer is where the operator is
+     typing. A wider desk overhangs the inspector into the reading column and
+     covers the right end of the composer, which is the one thing on screen that
+     must never be sat on. */
+  width: min(20rem, 30vw);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--raised);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+.desk__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  background: none;
+  border: 0;
+  text-align: left;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+}
+
+.desk[data-open] .desk__head {
+  border-bottom: 1px solid var(--edge);
+}
+
+/* The number is the thing being glanced at, so it is drawn as a number and not
+   as part of the sentence beside it. Same warm red as the count on a crew's
+   circle and the menu bar's attention glyph: one statement, three places. */
+.desk__count {
+  flex: none;
+  min-width: 1.15rem;
+  padding: 0 0.25rem;
+  border-radius: 0.6rem;
+  background: var(--alarm);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.15rem;
+  text-align: center;
+}
+
+.desk__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desk__chevron {
+  flex: none;
+  color: var(--faint);
+  font-size: 0.7rem;
+}
+
+/* Capped and scrolling rather than growing. A queue of nine must not become a
+   panel the height of the window: what is on screen at the bottom right is a
+   thing to answer, and a thing that covers the conversation it is about is a
+   thing the operator closes. */
+.desk__queue {
+  max-height: min(26rem, 55vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.desk__card + .desk__card {
+  border-top: 1px solid var(--edge);
+}
+
+.desk__card {
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.desk__who {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.desk__whotext {
+  min-width: 0;
+}
+
+.desk__asker {
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.desk__summary {
+  font-size: 0.82rem;
+  line-height: 1.35;
+  color: var(--text);
+}
+
+/* Every value in here is what a model asked for. Drawn as data under a heading
+   Guaca wrote, never as prose, and never as markdown: see `domain::approval`. */
+.desk__detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.45rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+.desk__detail dt {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.desk__detail dd {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  color: var(--text);
+  /* A field can be an entire system prompt, and it is shown because a decision
+     made without it is made blind. Wrapped rather than cut, inside a box that
+     scrolls, so the whole of it is reachable without leaving the card. */
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.desk__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+/* Pushed to the far end, because it is the way out of this surface rather than
+   one of the answers it takes. */
+.desk__open {
+  margin-left: auto;
+}
+
+/* ==========================================================================
+   Group column
+
+   The crews, upright on the far left. This was a wrapping strip inside the
+   rail: four circles across, then a second line, then a third, taking the
+   height out of the list it sat above. `components/GroupRail.tsx` has the rest
+   of the argument.
+   ========================================================================== */
+
+/* Pinned here for the same reason the rail pins them, and it is the same trap:
+   this column is dark under both surfaces, so a token the reading column
+   redefines for dark paper would repaint it and nothing would draw attention to
+   it. `--alarm` is on the list because the waiting badge is the one thing in
+   either dark column that is drawn in it. */
+.grail {
+  --flesh: #4e6b16;
+  --flesh-soft: #eef2d8;
+  --alarm: #b03728;
+
+  width: var(--grail-w);
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  background: var(--grail-ground);
+  border-right: 1px solid var(--rail-edge);
+  color: var(--rail-text);
+  /* The window's own buttons float over the top left corner, which is now this
+     column rather than the rail. The first circle starts under them. */
+  padding: 2.25rem 0 0.5rem;
+  gap: 0.3rem;
+}
+
+.grail__rule {
+  flex: none;
+  width: 1.5rem;
+  height: 1px;
+  background: var(--rail-edge);
+  margin: 0.1rem 0 0.2rem;
+}
+
+/* Scrolls rather than wraps, which is the whole reason this is a column. The
+   bar itself is hidden: it would take a quarter of the width of a surface whose
+   entire job is to be one circle wide, and a circle cut by the bottom edge is
+   what says there is more. */
+.grail__list {
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.grail__list::-webkit-scrollbar {
+  display: none;
 }
 
 /* ==========================================================================
@@ -676,26 +919,16 @@ button {
    there is one group, because a choice of one is chrome.
    ========================================================================== */
 
-.rail__strip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem;
-  padding: 0.5rem 0.6rem 0.35rem;
-  border-bottom: 1px solid var(--rail-edge);
-}
-
 .orb {
   flex: none;
-  width: 3.4rem;
+  position: relative;
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.2rem;
-  padding: 0.25rem 0 0.3rem;
+  justify-content: center;
+  padding: 0.15rem 0;
   background: none;
   border: 0;
   color: inherit;
-  border-radius: 0.5rem;
 }
 
 .orb__ring {
@@ -717,15 +950,20 @@ button {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--rail-text) 30%, transparent);
 }
 
-/* The group the rail is inside. The ring is the only permanent mark of it: the
-   heading below says which group by name, and two loud statements of one fact
-   is one too many. */
-.orb[aria-current="true"] .orb__ring {
-  box-shadow: inset 0 0 0 2px var(--flesh);
-}
-
-.orb[aria-current="true"] .orb__name {
-  color: var(--rail-text);
+/* The crew the rail is inside. A bar on the edge of the column and not a ring,
+   because the ring already carries whether anyone here is working, and a circle
+   saying two things at once says neither. The bar is also readable down a
+   column of twelve in a way a 2px inset is not. */
+.orb[aria-current="true"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 0.2rem;
+  height: 1.6rem;
+  transform: translateY(-50%);
+  border-radius: 0 0.2rem 0.2rem 0;
+  background: var(--flesh-soft);
 }
 
 /* Faces, standing in a ring. Where each one goes is `lib/orb.ts`: a crew of
@@ -805,7 +1043,7 @@ button {
   line-height: 1;
   padding: 0.12rem 0.2rem;
   border-radius: 0.35rem;
-  background: var(--rail-ground);
+  background: var(--grail-ground);
   box-shadow: inset 0 0 0 1px var(--rail-edge);
   color: var(--rail-muted);
 }
@@ -821,18 +1059,6 @@ button {
   color: var(--rail-text);
 }
 
-.orb__name {
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--rail-muted);
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* Somebody in this crew is working. After focusing on one group the strip is
    the only place the others are still visible, so it has to carry that. */
 .orb[data-state="working"] .orb__ring {
@@ -840,17 +1066,26 @@ button {
   animation: orb-breathe 2.6s ease-in-out infinite;
 }
 
-/* And louder for the one state the operator is the fix for. */
-.orb[data-state="asking"] .orb__ring::after {
-  content: "";
+/* And the one state the operator is the fix for, which is a number rather than
+   a dot: three parked turns and one are different amounts of work, and a crew
+   is the unit an operator triages by. Drawn in the same warm red the menu bar's
+   attention glyph uses, because it is the same statement made in the other
+   place Guaca can make it. */
+.orb__waiting {
   position: absolute;
-  top: -0.1rem;
-  right: -0.1rem;
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--flesh);
-  box-shadow: 0 0 0 2px var(--rail-ground);
+  right: 0.25rem;
+  bottom: 0.05rem;
+  min-width: 0.95rem;
+  padding: 0 0.18rem;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  font-weight: 600;
+  line-height: 0.95rem;
+  text-align: center;
+  border-radius: 0.5rem;
+  background: var(--alarm);
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--grail-ground);
 }
 
 @keyframes orb-breathe {
@@ -2628,6 +2863,44 @@ button {
   flex-basis: 100%;
   font-size: 0.72rem;
   color: var(--faint);
+}
+
+/* A question rather than a request for permission. Nothing answered on one of
+   these grants anything, so it does not carry the ring the other has: that
+   border is the app saying "this one is about to do something in your name",
+   and spending it on both makes it mean neither. */
+.ask--question[data-state="pending"] {
+  border-color: var(--edge);
+  box-shadow: none;
+}
+
+.ask__answer,
+.desk__answer {
+  display: flex;
+  gap: 0.4rem;
+  flex: 1;
+  min-width: 0;
+}
+
+/* A field, not a composer. One line, and it goes when the question is
+   answered: `components/Desk.tsx` on what that surface must never become. */
+.ask__field,
+.desk__field {
+  flex: 1;
+  min-width: 0;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--ground);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 0.82rem;
+}
+
+.ask__field:focus-visible,
+.desk__field:focus-visible {
+  outline: 2px solid var(--flesh);
+  outline-offset: 1px;
 }
 
 .wire-modal__head {

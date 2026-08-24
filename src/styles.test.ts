@@ -64,6 +64,81 @@ describe("the file reading view", () => {
   });
 });
 
+describe("the dark columns", () => {
+  /**
+   * The rail and the group column are dark under both surfaces, so a token the
+   * reading column redefines for dark paper repaints them unless they pin it.
+   * `--flesh` on dark paper is a bright leaf green meant to sit on a near-black
+   * page; landing it on the rail turns Guaca's one accent into a highlighter,
+   * and no DOM assertion notices, which is the whole of the note about it in
+   * `docs/WORKSPACE.md`.
+   *
+   * Checked in the source rather than through the cascade, and that is not
+   * laziness: jsdom resolves a custom property declared on an element but does
+   * not inherit one down a subtree, so reading `--alarm` off a child of the
+   * column reports nothing at all whether it is pinned or not. The declaration
+   * is the thing that has to be there, so the declaration is what is read.
+   *
+   * Only the two families that are drawn nowhere else are covered. A rule under
+   * `.agent-row` reaching for an unpinned token is the same defect and is not
+   * caught here: that family predates this check and pinning is a property of a
+   * column, so the map below has to say which column a class is inside.
+   */
+  const SURFACE_VARYING = new Set(
+    [
+      ...(css.match(/:root\[data-surface="dark"\] \{[\s\S]*?\n\}/)?.[0] ?? "").matchAll(
+        /^\s{2}(--[a-z-]+):/gm,
+      ),
+    ].map((found) => found[1]!),
+  );
+
+  /** Every rule in the file, as its selector and its body. */
+  const RULES = [...css.matchAll(/^([^\n@}][^{\n]*)\{\n([\s\S]*?)^\}/gm)];
+
+  /**
+   * Selectors naming one of these class families.
+   *
+   * The suffixes are part of the match on purpose: `.orb__waiting` is drawn
+   * inside the group column exactly as `.orb` is, and a pattern that stopped at
+   * the base class would skip every element that carries the color.
+   */
+  function family(...names: string[]): RegExp {
+    return new RegExp(`(?:^|[\\s,>])\\.(?:${names.join("|")})(?:__|--)?[\\w-]*`);
+  }
+
+  /** What a scope's own base rule declares. */
+  function pinnedOn(scope: string): Set<string> {
+    const base = RULES.find((rule) => rule[1]!.trim() === scope);
+    if (!base) throw new Error(`no base rule for ${scope}`);
+    return new Set([...base[2]!.matchAll(/^\s{2}(--[a-z-]+):/gm)].map((found) => found[1]!));
+  }
+
+  it("found the tokens a surface moves", () => {
+    // Every assertion below is vacuous if this regex stops matching.
+    expect(SURFACE_VARYING.has("--flesh")).toBe(true);
+    expect(SURFACE_VARYING.has("--alarm")).toBe(true);
+    expect(RULES.length).toBeGreaterThan(50);
+  });
+
+  it.each([
+    [".grail", family("grail", "orb")],
+    [".rail", family("rail")],
+  ])("pin every accent %s draws with", (scope, family) => {
+    const pinned = pinnedOn(scope);
+
+    for (const [, selector, body] of RULES) {
+      if (!family.test(selector!)) continue;
+      for (const [, token] of body!.matchAll(/var\((--[a-z-]+)/g)) {
+        if (!SURFACE_VARYING.has(token!)) continue;
+        expect(
+          pinned.has(token!),
+          `${selector!.trim()} draws with ${token}, which ${scope} does not pin`,
+        ).toBe(true);
+      }
+    }
+  });
+});
+
 describe("dialog modifiers", () => {
   /**
    * A modifier declared above `.dialog` silently loses to it.
