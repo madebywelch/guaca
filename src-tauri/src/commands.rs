@@ -1759,6 +1759,25 @@ pub fn stop_run(state: State<'_, AppState>, run_id: RunId) -> Reply<bool> {
     Ok(state.runtime.stop_run(run_id))
 }
 
+/// Empties one agent's channel, and touches nothing else it knows.
+///
+/// An agent carries two kinds of state and this is one of them. The channel is
+/// what its turns read back as conversation, and it is where a crew's habits
+/// accumulate: a coordinator that spent a day inventing assignment numbers has
+/// a day of that in front of it on every turn, and it will keep going. Its
+/// memory is the other, a file it wrote deliberately and would have to write
+/// again, and it is a markdown file in the workspace folder that nothing here
+/// reaches.
+///
+/// So this is the operator's way to give an agent a fresh start without taking
+/// away what it learned, and the wording on the menu item says so, because an
+/// operator who cannot tell the two apart does not use it.
+///
+/// One channel, not a conversation. A message this agent sent a peer is filed
+/// in the *peer's* channel, so clearing here leaves what it told them where
+/// they can still read it, and takes away only what this agent would read
+/// back. That asymmetry is the point rather than a limitation: resetting one
+/// confused agent must not erase a colleague's record of what it asked for.
 #[tauri::command]
 pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)

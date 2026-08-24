@@ -59,11 +59,18 @@ export function AgentMenu({
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: target.x, y: target.y });
   /**
-   * Clearing, asked twice.
+   * Clearing, asked twice, and the second wording says what survives.
    *
    * In the menu rather than in the pane behind it: a confirmation drawn where
    * the click did not happen is a confirmation the operator has to go and find,
    * and this menu opens from two places that draw nothing in common.
+   *
+   * It said "Delete this history", which is accurate and is not the question
+   * the operator is actually asking. An agent has two kinds of state and this
+   * touches one of them: the channel is what its turns read as conversation,
+   * and its memory is a separate file it wrote on purpose and would have to
+   * write again. Not saying so is why this went unused by an operator who
+   * needed it and would not risk finding out.
    */
   const [confirming, setConfirming] = useState(false);
 
@@ -160,7 +167,7 @@ export function AgentMenu({
           ))}
         <hr className="menu__rule" />
         {confirming ? (
-          item("Delete this history", () => onClearHistory(agent), "danger")
+          item("Delete history, keep memory", () => onClearHistory(agent), "danger")
         ) : (
           // The only item that does not close the menu. Nothing has been
           // decided yet, and the next click is the one that matters.
