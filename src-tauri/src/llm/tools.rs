@@ -166,7 +166,7 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
 }
 
 pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
-    all_specs()
+    all_specs(surfaces)
         .into_iter()
         .filter(|spec| match spec.name.as_str() {
             RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN => surfaces.computer,
@@ -177,7 +177,7 @@ pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         .collect()
 }
 
-fn all_specs() -> Vec<ToolSpec> {
+fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
@@ -668,16 +668,34 @@ fn all_specs() -> Vec<ToolSpec> {
             // for a brief wrote one and then typed the path to it. The operator
             // read `/home/user/brief.md`, which is a path on a machine that is
             // not theirs, in an app with no way to open it.
-            description: "Attach a file to your answer, so whoever reads it can open it. The \
-                          file you made is on your own computer and nobody else can reach that \
-                          machine, so writing its path into your answer hands over nothing: this \
-                          is what actually delivers it. Name it by its path, for example \
-                          `/home/user/brief.md`, or by the name of a file already attached to \
-                          something in your channel. Attach anything you were asked to produce as \
-                          a document and anything easier read as one: a brief, a report, a table, \
-                          a draft. Then say what it is in your answer rather than repeating its \
-                          contents, because the reader has the file itself."
-                .to_string(),
+            //
+            // Offered with no computer as well, and the description is the
+            // reason it has to be two. A file already in the channel is
+            // attachable with no machine anywhere, so the tool is genuinely
+            // useful without one; a path is not, because `pull_file` reads it
+            // off a sandbox. Told the version below about a computer it has
+            // not been given, an agent invents `/home/user/…`, is refused, and
+            // spends the rest of the turn finding that out. That is the one
+            // failure this whole surfaces mechanism exists to prevent, and it
+            // reached the operator through a tool nobody thought to gate.
+            description: if surfaces.computer {
+                "Attach a file to your answer, so whoever reads it can open it. The file you \
+                 made is on your own computer and nobody else can reach that machine, so \
+                 writing its path into your answer hands over nothing: this is what actually \
+                 delivers it. Name it by its path, for example `/home/user/brief.md`, or by \
+                 the name of a file already attached to something in your channel. Attach \
+                 anything you were asked to produce as a document and anything easier read as \
+                 one: a brief, a report, a table, a draft. Then say what it is in your answer \
+                 rather than repeating its contents, because the reader has the file itself."
+            } else {
+                "Attach a file to your answer, so whoever reads it can open it. You have no \
+                 computer, so there is no filesystem you can write a document to and no path \
+                 that will resolve: the only files you can attach are the ones already in this \
+                 conversation, named by their file name. Use this to hand one of those on. \
+                 Anything you are asked to write yourself goes in your answer as text, and \
+                 there is nothing to attach it to."
+            }
+            .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -685,8 +703,13 @@ fn all_specs() -> Vec<ToolSpec> {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
-                        "description": "The files to attach: a path on your computer, or the \
-                                        name of one already in your channel."
+                        "description": if surfaces.computer {
+                            "The files to attach: a path on your computer, or the name of one \
+                             already in your channel."
+                        } else {
+                            "The files to attach, by the name each already has in this \
+                             conversation."
+                        }
                     }
                 },
                 "required": ["files"],
@@ -2060,7 +2083,33 @@ mod tests {
             "nothing it could do needs authorizing: {neither:?}"
         );
 
-        assert_eq!(names(Surfaces::both()).len(), all_specs().len());
+        assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
+    }
+
+    #[test]
+    fn attaching_is_offered_with_no_computer_and_stops_describing_one() {
+        // The tool stays, because a file already in the channel is attachable
+        // with no machine anywhere. What has to go is the half of its
+        // description that is about a machine this agent does not have.
+        let without = specs(Surfaces::none())
+            .into_iter()
+            .find(|spec| spec.name == ATTACH_FILE)
+            .expect("a channel file needs no computer, so the tool stays");
+        let words = format!("{} {}", without.description, without.parameters);
+
+        // The exact sentence and the exact example that sent one agent to
+        // `/home/user/vision_backend_coreloop_monitor.md`, twice, on a machine
+        // it had never been given.
+        assert!(!words.contains("/home/user"), "an invented path is what this teaches: {words}");
+        assert!(!words.contains("your own computer"), "it has no computer: {words}");
+        assert!(
+            words.contains("no computer"),
+            "and it has to be told so, or it will go looking: {words}"
+        );
+
+        // With one, the path half is the whole point and stays.
+        let with = description(ATTACH_FILE);
+        assert!(with.contains("/home/user/brief.md"), "{with}");
     }
 
     #[test]

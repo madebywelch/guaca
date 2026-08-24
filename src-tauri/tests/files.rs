@@ -400,10 +400,11 @@ async fn a_document_handed_over_with_nothing_said_still_arrives() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed() {
-    // No sandbox in CI, so a path on the agent's own machine cannot be read,
-    // which is exactly the path this has to get right: an agent told nothing
-    // goes on to tell the operator the brief is attached to a message that
-    // carries no file at all.
+    // No sandbox in CI, and no E2B key, so this agent has no computer at all.
+    // That is the case this covers, and it is the one that reached an operator:
+    // an agent told nothing goes on to say the brief is attached to a message
+    // that carries no file, and an agent given advice it cannot act on rewords
+    // the claim and tries again.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("I could not hand the file over.".into())
@@ -429,8 +430,19 @@ async fn a_document_that_could_not_be_attached_is_admitted_rather_than_claimed()
         "the model has to be told what not to claim: {told}"
     );
     assert!(
-        told.contains("attach it again"),
-        "and given a way forward, or it rewords the claim and retries: {told}"
+        told.contains("nothing to retry"),
+        "no path was ever going to resolve, so trying again is a wasted turn: {told}"
+    );
+    assert!(
+        told.contains("put it in your answer as text"),
+        "and given a way forward it can actually take: {told}"
+    );
+    // The bug this closes. The advice used to be "check the path with
+    // `run_command` and attach it again", and `run_command` is not offered to
+    // an agent with no computer either. One agent followed it twice.
+    assert!(
+        !told.contains("run_command"),
+        "an agent with no computer is not offered that either: {told}"
     );
 }
 

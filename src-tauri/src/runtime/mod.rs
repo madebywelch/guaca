@@ -363,14 +363,54 @@ const PLACE_CHUNK: usize = 192 * 1024;
 
 /// What a model is told it has lost when a file it named could not be resolved.
 ///
-/// Two sentences, one per caller, because the mistake each is about to make is
-/// different: a send leaves a colleague waiting for a document, an attach
-/// leaves an answer claiming one. Silence is the worst outcome available in
-/// both cases, since agent and reader would each believe the file arrived.
+/// What a model is told after a file it named did not get handed over.
+///
+/// Two axes, so four sentences, and collapsing either one produces a turn that
+/// goes round the loop it has just come out of.
+///
+/// **Which caller.** A send leaves a colleague waiting for a document; an
+/// attach leaves an answer claiming one. Silence is the worst outcome available
+/// in both cases, since agent and reader would each believe the file arrived.
+///
+/// **Whether the agent has a computer.** With one, a failure is a wrong path
+/// and checking it is the fix. Without one, no path was ever going to resolve:
+/// [`Runtime::pull_file`] reads a file off a sandbox and there is no sandbox.
+/// Told to check the path with `run_command`, an agent that is not offered
+/// `run_command` either has been handed a dead end, and a refusal that only
+/// says no gets reworded and retried. One did exactly that, twice, and then
+/// spent two more turns recording the lesson in a memory it overflowed.
 const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
+const UNSENT_FILE_NO_COMPUTER: &str =
+    "The recipient did not get it, so do not tell them it is on the way, and there is nothing \
+     to retry. You can only send on a file that is already in this conversation, by the name it \
+     has here. Anything you wrote yourself belongs in the message as text.";
 const UNATTACHED_FILE: &str =
     "It is not on your answer, so do not tell them it is attached. Check the path with \
      `run_command` and attach it again, or say plainly that you could not hand it over.";
+const UNATTACHED_FILE_NO_COMPUTER: &str =
+    "It is not on your answer, so do not tell them it is attached, and there is nothing to \
+     retry. You can only attach a file that is already in this conversation, by the name it has \
+     here. If you were asked to produce a document, put it in your answer as text and say that \
+     is what you have done.";
+
+/// A machine failure as a model should read it.
+///
+/// [`E2bError::NotGiven`] is written for the operator and names the panel they
+/// would fix it from. That sentence is correct where it is used, and it is not
+/// something a model can act on: an agent cannot give itself a computer, and it
+/// has no panel. Every other variant is a machine that failed, which is the
+/// agent's own problem and is reported as itself.
+///
+/// Phrased so it reads in both places a file meets a machine: pulling one off
+/// it, and putting one onto it.
+fn told_to_a_model(err: crate::e2b::E2bError) -> String {
+    match err {
+        crate::e2b::E2bError::NotGiven => {
+            "you have not been given a computer, so there is no filesystem here at all".to_string()
+        }
+        other => other.to_string(),
+    }
+}
 
 /// How long an agent will wait for peers that are still answering the same
 /// thing, before reading what it already has.
@@ -935,14 +975,31 @@ impl Runtime {
                 } else if file.is_text() {
                     match self.inner.files.read_text(&file.digest, Self::FILE_TEXT_LIMIT) {
                         Ok((text, cut)) => {
+                            // The failure is its own sentence rather than
+                            // being interpolated where the path goes. Written
+                            // the other way it read as "the whole file is on
+                            // your machine at you have not been given a
+                            // computer", which is a location an agent will try
+                            // to open.
                             let tail = if cut {
-                                format!(
-                                    "\n\n[cut at {} characters. The whole file is on your \
-                                     machine at {}]",
-                                    Self::FILE_TEXT_LIMIT,
-                                    self.place(card, file).await.unwrap_or_else(|err| err)
-                                )
+                                match self.place(card, file).await {
+                                    Ok(path) => format!(
+                                        "\n\n[cut at {} characters. The whole file is on your \
+                                         machine at {path}]",
+                                        Self::FILE_TEXT_LIMIT,
+                                    ),
+                                    Err(why) => format!(
+                                        "\n\n[cut at {} characters, and the rest could not be \
+                                         put on your machine: {why}. Work from what is above, \
+                                         and say it was truncated if that matters]",
+                                        Self::FILE_TEXT_LIMIT,
+                                    ),
+                                }
                             } else {
+                                // Not placed at all when it fit. A file that
+                                // arrived whole is one the agent has already
+                                // read, and a round trip to a sandbox to write
+                                // a copy nothing will open is one per file.
                                 String::new()
                             };
                             format!("The attached file {} contains:\n\n{text}{tail}", file.name)
@@ -1042,7 +1099,7 @@ impl Runtime {
         if path.contains('\'') {
             return Err("a path with a quote in it cannot be read".to_string());
         }
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(told_to_a_model)?;
 
         // Size first, so a file too big to carry is refused before it is read
         // into this process twice over.
@@ -1089,7 +1146,7 @@ impl Runtime {
             ));
         }
         let bytes = self.inner.files.read(&file.digest).map_err(|e| e.to_string())?;
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(told_to_a_model)?;
 
         let path = format!("{INBOX}/{}", file.name);
         // In pieces, because the whole payload travels inside one shell
@@ -2787,7 +2844,12 @@ impl Runtime {
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
-                let (carried, missing) = self.resolve_files(card, &files, UNSENT_FILE).await;
+                let consequence = if self.surfaces_for(card).computer {
+                    UNSENT_FILE
+                } else {
+                    UNSENT_FILE_NO_COMPUTER
+                };
+                let (carried, missing) = self.resolve_files(card, &files, consequence).await;
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -2847,7 +2909,12 @@ impl Runtime {
             }
 
             ToolInvocation::AttachFile { files } => {
-                let (found, missing) = self.resolve_files(card, &files, UNATTACHED_FILE).await;
+                let consequence = if self.surfaces_for(card).computer {
+                    UNATTACHED_FILE
+                } else {
+                    UNATTACHED_FILE_NO_COMPUTER
+                };
+                let (found, missing) = self.resolve_files(card, &files, consequence).await;
 
                 // Deduplicated against the turn rather than the call: a model
                 // that attaches the brief, writes a paragraph, then attaches
@@ -5240,5 +5307,47 @@ mod tests {
             !claimed.contains("sweep-me"),
             "a terminated agent's sandbox must not shield itself from the sweep"
         );
+    }
+
+    #[test]
+    fn a_file_refusal_never_sends_an_agent_after_a_tool_it_does_not_have() {
+        // The loop this closes. An agent with no computer was offered
+        // `attach_file`, told by its description that its documents were on a
+        // machine, invented `/home/user/…`, and got back a refusal telling it
+        // to check the path with `run_command`, which it is also not offered.
+        // It tried twice and then spent two turns writing the lesson into a
+        // memory it overflowed.
+        for advice in [UNSENT_FILE_NO_COMPUTER, UNATTACHED_FILE_NO_COMPUTER] {
+            assert!(
+                !advice.contains("run_command"),
+                "an agent with no computer is not offered it either: {advice}"
+            );
+            assert!(
+                advice.contains("nothing to retry"),
+                "a refusal that only says no gets reworded and retried: {advice}"
+            );
+            assert!(
+                advice.contains("already in this conversation"),
+                "and it has to say what it can still do: {advice}"
+            );
+        }
+
+        // The version for an agent that does have one is unchanged: there, a
+        // wrong path is the likely cause and checking it is the fix.
+        assert!(UNATTACHED_FILE.contains("run_command"));
+    }
+
+    #[test]
+    fn the_operators_sentence_about_a_computer_never_reaches_a_model() {
+        // `NotGiven` names the panel the operator would fix it from. An agent
+        // cannot give itself a computer and has no panel, so read by a model it
+        // is a refusal with no action behind it.
+        let told = told_to_a_model(crate::e2b::E2bError::NotGiven);
+        assert!(!told.contains("panel"), "nothing a model can act on: {told}");
+        assert!(told.contains("no filesystem"), "it has to say what is actually absent: {told}");
+
+        // Every other variant is a machine that failed, which is the agent's
+        // own problem and is reported as itself.
+        assert!(!told_to_a_model(crate::e2b::E2bError::NoKey).is_empty());
     }
 }
