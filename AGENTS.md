@@ -295,6 +295,15 @@ the model takes a screenshot to see what `browse` did.
   incoming ones.** An agent that reads its last turn back without the file it
   attached has no record of handing anything over, so it attaches the document
   again and reports it as the first time.
+- **The live bubble joins a turn's rounds with `ROUND_BREAK`, exactly as the
+  accumulator does.** A model narrating its work says a sentence before each
+  tool call, and all of a turn's rounds stream into one placeholder. Without the
+  break the operator watches the next round start mid-sentence
+  (`…who is here.Two of us.`) and then watches it correct itself when the real
+  message lands. The pen writes the break in front of the round's first token,
+  so a round that turns out to be tool calls and nothing said leaves none
+  behind, and it decides from what has been *drawn* rather than from what has
+  been collected: a retry throws the bubble away and keeps the accumulator.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
   level higher, a single token re-renders every message in the transcript. The
   same split is why the line above the composer, the turn's chips and the open

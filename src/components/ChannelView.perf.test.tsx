@@ -134,14 +134,7 @@ describe("ChannelView under streaming load", () => {
   });
 
   function draw() {
-    render(
-      <ChannelView
-        channel={AGENT}
-        onOpenMenu={() => {}}
-        onNewAgent={() => {}}
-        onNewGroup={() => {}}
-      />,
-    );
+    render(<ChannelView channel={AGENT} onOpenMenu={() => {}} />);
     rendersOfMessages = 0;
   }
 

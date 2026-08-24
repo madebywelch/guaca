@@ -247,6 +247,14 @@ struct Stream {
     agent_id: AgentId,
     run_id: RunId,
     to: Participant,
+    /// Whether anything has been drawn under the current id.
+    ///
+    /// What decides whether the next round's first token needs a `ROUND_BREAK`
+    /// in front of it. It follows the screen rather than `collected_text`,
+    /// because a retry throws away what was drawn and keeps what was collected:
+    /// read from the accumulator instead, a turn that retried its second round
+    /// would open the replacement bubble with a blank line.
+    drawn: bool,
 }
 
 impl Stream {
@@ -271,9 +279,20 @@ impl Stream {
     fn reopen(&mut self, events: &dyn EventSink) {
         self.close(events);
         self.message_id = MessageId::new();
+        self.drawn = false;
         self.open(events);
     }
 }
+
+/// What joins the text of one round of a turn to the text of the next.
+///
+/// A turn is several model calls under one placeholder, and a model that
+/// narrates its work says something before each tool call. Run together those
+/// sentences read as one with the period in the wrong place: "going straight to
+/// the directory instead.Directory loaded". The message that lands at the end
+/// of the turn and the bubble the operator watches being written are joined by
+/// this same string, or the two disagree for as long as the turn runs.
+const ROUND_BREAK: &str = "\n\n";
 
 /// How many times one model call is attempted before the operator is told.
 ///
@@ -1912,6 +1931,7 @@ impl Runtime {
             agent_id,
             run_id,
             to: stream_to,
+            drawn: false,
         };
         stream.open(&*self.inner.events);
 
@@ -1992,9 +2012,12 @@ impl Runtime {
 
             if !completion.content.is_empty() {
                 if !collected_text.is_empty() {
-                    collected_text.push_str("\n\n");
+                    collected_text.push_str(ROUND_BREAK);
                 }
                 collected_text.push_str(&completion.content);
+                // The pen wrote exactly this, so the next round's first token
+                // is the one that needs the break in front of it.
+                stream.drawn = true;
             }
 
             if completion.tool_calls.is_empty() {
@@ -2190,13 +2213,16 @@ impl Runtime {
 
             let message_id = stream.message_id;
             let channel_id = stream.channel_id;
+            // Read here rather than inside the pen: a reopen above has already
+            // cleared it, so a retry starts its bubble at the left margin.
+            let lead = if stream.drawn { ROUND_BREAK } else { "" };
             // Tokens are coalesced before they cross into the window. Each
             // event is an IPC hop and a render, and a model produces them
             // faster than a screen refreshes, so emitting per token spent the
             // operator's main thread on work no eye could resolve. With
             // several agents answering at once it stopped painting at all,
             // which read as the app freezing and the text arriving in a lump.
-            let mut pen = Pen::new(self.inner.events.clone(), message_id, channel_id);
+            let mut pen = Pen::new(self.inner.events.clone(), message_id, channel_id, lead);
             let result =
                 self.inner.llm.stream_chat(inference, request, |token| pen.write(token)).await;
             pen.flush();
@@ -4696,17 +4722,33 @@ struct Pen {
     events: Arc<dyn EventSink>,
     message_id: MessageId,
     channel_id: AgentId,
+    /// Written in front of the first text token and then gone. Empty for the
+    /// first call of a turn and for the first after a retry; `ROUND_BREAK`
+    /// otherwise, which is what keeps one round's last sentence off the front
+    /// of the next round's first.
+    ///
+    /// In front of the token rather than at the head of the call, because a
+    /// round can turn out to be tool calls and nothing said: a break written
+    /// before the call would leave a blank line under a bubble for the length
+    /// of the tool call, and a trailing one on a turn that never speaks again.
+    lead: &'static str,
     held: String,
     thought: String,
     last: Instant,
 }
 
 impl Pen {
-    fn new(events: Arc<dyn EventSink>, message_id: MessageId, channel_id: AgentId) -> Self {
+    fn new(
+        events: Arc<dyn EventSink>,
+        message_id: MessageId,
+        channel_id: AgentId,
+        lead: &'static str,
+    ) -> Self {
         Self {
             events,
             message_id,
             channel_id,
+            lead,
             held: String::new(),
             thought: String::new(),
             last: Instant::now(),
@@ -4715,7 +4757,10 @@ impl Pen {
 
     fn write(&mut self, token: Token<'_>) {
         match token {
-            Token::Text(text) => self.held.push_str(text),
+            Token::Text(text) => {
+                self.held.push_str(std::mem::take(&mut self.lead));
+                self.held.push_str(text);
+            }
             Token::Reasoning(text) => self.thought.push_str(text),
         }
         if self.last.elapsed() >= PEN_FLUSH {

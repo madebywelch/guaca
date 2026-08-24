@@ -611,7 +611,7 @@ An agent is drawn once, wherever it is drawn: two rows for one agent would be tw
 nodes in the sidebar's `rowRefs`, and the wire would have to pick one to throw a
 message at.
 
-## Making something is one plus, and it is not in the rail
+## Making something is one plus, at the top of the rail
 
 The rail's footer used to carry four rows: the cafeteria, a new agent, a new
 group, and settings. Two of those are places you go and two are things you make,
@@ -619,11 +619,19 @@ and the two kinds sat together because the footer was where there was room. It
 also grew by a row every time something new became makeable, which is a footer
 that gets worse as the app gets better.
 
-Now there is one plus, at the end of the channel header, and it lists what can
-be made. The rail keeps the two places. The plus is at the top of the reading
-column rather than in the rail because the rail is a list of agents and this is
-not about any of them, and because the header is the one bar that is drawn
-whichever channel is open.
+Now there is one plus, beside the wordmark at the top of the rail, and it lists
+what can be made. The footer keeps the two places.
+
+It spent a release at the end of the channel header instead, on the argument
+that the rail is a list of agents and making one is about none of them. That is
+the wrong half of the argument, and the report that ended it came from the
+person who wrote it: an agent is a row in the rail and a group is a heading in
+it, so the rail is where somebody looks to add one, and a plus glyph at the far
+right of the reading column, beside the agent's own actions menu, is not
+somewhere anybody looks at all. The channel header was also the one place the
+plus could not be drawn on an empty workspace, because there is no channel open
+to hang a header on, and that is the state where making an agent is the only
+thing left to do.
 
 It is the shared menu, so it closes on Escape, on a click that lands away from
 it, and on anything that moves the button underneath it. The listeners are bound

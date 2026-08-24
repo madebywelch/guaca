@@ -304,10 +304,11 @@ function ChatBubble({
         ))}
       </div>
 
-      {/* Out of the flow, and revealed by the pointer. Every message has a time
-          and almost none of them are worth a line: four in a row are usually
-          the same minute. Asking for one is a hover; noticing that an hour
-          passed is the line the transcript draws by itself. */}
+      {/* In a lane of its own at the end of the row, and inked by the pointer.
+          Every message has a time and almost none of them are worth a line:
+          four in a row are usually the same minute. Asking for one is a hover;
+          noticing that an hour passed is the line the transcript draws by
+          itself. */}
       <time className="msg__at" dateTime={new Date(message.createdAt).toISOString()}>
         {clockTime(message.createdAt)}
       </time>

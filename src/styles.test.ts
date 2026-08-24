@@ -167,3 +167,36 @@ describe("dialog modifiers", () => {
     }
   });
 });
+
+describe("a message's clock", () => {
+  /**
+   * The clock is a lane, not something laid over the corner.
+   *
+   * It used to be absolutely positioned in the top right of the row, which is
+   * also where the first line of a full-measure paragraph ends: on any window
+   * narrow enough that the words reached the edge, hovering a message put the
+   * time over the last word of its own first line. A reserve in the row's
+   * padding does not fix it, because the width being reserved for is the
+   * operator's locale rather than this file's, so the check is that the clock
+   * and the words are in different columns and neither is out of flow.
+   */
+  it.each([
+    ["an agent's", undefined],
+    ["the operator's", "true"],
+  ])("is beside %s words rather than over them", (_whose, operator) => {
+    const msg = document.createElement("article");
+    msg.className = "msg";
+    if (operator) msg.dataset.operator = operator;
+    const body = document.createElement("div");
+    body.className = "msg__body";
+    const at = document.createElement("time");
+    at.className = "msg__at";
+    msg.append(body, at);
+    document.body.append(msg);
+
+    // Read back as declared: jsdom does not default a property nobody set, so
+    // in the flow is the empty string rather than `static`.
+    expect(getComputedStyle(at).position).not.toBe("absolute");
+    expect(getComputedStyle(at).gridColumn).not.toBe(getComputedStyle(body).gridColumn);
+  });
+});

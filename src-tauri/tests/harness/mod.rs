@@ -60,6 +60,13 @@ pub enum Script {
     /// peer. The tool name is the one a model actually emitted, so the alias
     /// path is exercised wherever a scenario asks for it.
     Attach { tool: String, files: Vec<String> },
+    /// Say something and then call a tool, in one reply.
+    ///
+    /// The shape a model takes when it narrates its work: a sentence about what
+    /// it is doing, then the doing. It is the only shape that puts text in more
+    /// than one round of a turn, and therefore the only one that can run the end
+    /// of one round into the start of the next.
+    Narrate { text: String, then: Box<Script> },
     /// Emit a `directory` tool call.
     Directory,
     /// Call one of a connected plugin's tools, by its prefixed name. Nothing in
@@ -178,6 +185,18 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
+        }
+        Script::Narrate { text, then } => {
+            for piece in text.as_bytes().chunks(7) {
+                let piece = String::from_utf8_lossy(piece).to_string();
+                body.push_str(&frame(
+                    serde_json::json!({"choices":[{"delta":{"content": piece}}]}),
+                ));
+            }
+            // The call it was narrating, with its own arguments and its own
+            // finish reason. A provider sends the text first and settles the
+            // reply once, which is what this concatenation is.
+            body.push_str(&render(then));
         }
         Script::Notes(content) | Script::Memory(content) => {
             let tool =
