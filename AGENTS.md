@@ -13,6 +13,7 @@ table below says which one to open before changing something.
 src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
+  lib/presence.ts     A crew, in the two marks its circle can carry.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
@@ -36,6 +37,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
+    approval.rs       The two things an agent stops to ask a person, and why
+                      only one of them may draw the model's own words.
     group.rs          A crew's wall, and the settings its agents run on.
     plugin.rs         The servers a crew can sign in to, what it got, and
                       which of its agents may spend it.
@@ -90,6 +93,8 @@ repo: the frontend renders state and forwards intent.
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
+| Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
+| The crews' column, its badges, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts` and `src/components/GroupRail.tsx` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
@@ -452,6 +457,42 @@ the model takes a screenshot to see what `browse` did.
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
+- **A question and a permission are two of everything, and folding them into
+  one shape breaks the turn quietly.** Two `Part` variants, two cards, two
+  commands, two `ApprovalState`s. The line is what a yes does: a permission
+  authorizes something the agent could not otherwise do, and a question hands
+  back a value that authorizes nothing and passes through every guard the agent
+  already had. That is the whole reason a question may draw the model's own
+  words on a button, which happens nowhere else in this app. It is also why a
+  verdict on a question is refused before the row moves: `ask_question` reads
+  the answer back off the row, so an Allow would settle it with nothing in it
+  and the turn would resume having been told nothing at all. Underneath they
+  are one row, one waker and one timeout, in `Runtime::park`.
+- **`Part::Approval` was not widened to carry the question, and that is not
+  timidity.** Parts are stored as JSON, so renaming a field on one breaks every
+  historical transcript that contains it: the message fails to parse and the
+  channel is gone, for a request answered a year ago. A new variant costs
+  nothing, because no old row can contain one.
+- **The `approvals` table has no `kind` column.** `action` already
+  discriminates: a question stores the literal `question` there, which is not
+  one of the two protected actions and which `ProtectedAction::parse` refuses. A
+  second column would be a value that has to agree with the first with nothing
+  keeping them in step. Both halves are decoded in `row_to_approval` and
+  encoded in `create_approval`, and nowhere else.
+- **The desk's queue is a read, not a list events are added to and removed
+  from.** Same argument as the menu bar's presence, same failure if it is
+  ignored: a queue assembled from `approvalRequested` and `approvalSettled` is
+  one dropped event away from offering a decision that reaches nobody, and a
+  stale card looks exactly like a live one. Both events invalidate it and the
+  answer comes back from `pending_approvals`. The consequence is the feature:
+  nothing can appear on the desk that is not a row somewhere.
+- **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
+  One invariant from two ends — the rail draws the row of whatever the pane is
+  showing — and the asymmetry is deliberate. `select` is the operator naming an
+  agent, so going to that agent's crew is what they asked for. `focusGroup` is
+  them naming a crew, and following the channel back out of it would undo the
+  click. Before the crews had a column of their own, `select` dropped out to the
+  overview instead, because that was the only view where every row was drawable.
 - **A key in settings says what the workspace can hand out; the card says who
   was given it.** Both have to be true, and `Surfaces::given_to` is the only
   place they meet. Deciding from the key alone is what this replaced: every

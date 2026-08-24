@@ -88,6 +88,18 @@ export type Part =
       action: ProtectedAction;
       summary: string;
       detail: DetailField[];
+    }
+  /**
+   * An agent asking the operator what, rather than whether. Its own part
+   * because nothing answered here grants anything, which is the difference
+   * every surface drawing the two has to make: see {@link Request}.
+   */
+  | {
+      type: "question";
+      id: ApprovalId;
+      question: string;
+      /** What the operator may pick. Empty is a written answer. */
+      options: string[];
     };
 
 /**
@@ -102,10 +114,24 @@ export type ApprovalId = string;
 /** Something an agent may not do without being told it can. */
 export type ProtectedAction = "createAgent" | "actOnBehalf";
 
-/** What the operator can answer. Pending and expired are not answers. */
+/**
+ * What an agent stopped its turn to put to the operator.
+ *
+ * The line between the two is what a yes does. A permission authorizes: the
+ * agent could not do the thing, and the answer is what lets it. A question
+ * informs: the agent could go either way and does not know which way is wanted,
+ * so the answer is a value, and whatever it then does passes through the guards
+ * it already had. That is why a question may draw the agent's own words on a
+ * button and a permission may not.
+ */
+export type Request =
+  | { kind: "permission"; action: ProtectedAction }
+  | { kind: "question"; options: string[] };
+
+/** What the operator can answer a permission with. A question takes text. */
 export type Decision = "allow" | "alwaysAllow" | "deny";
 
-export type ApprovalState = Decision | "pending" | "expired";
+export type ApprovalState = Decision | "pending" | "answered" | "expired";
 
 /**
  * One field of a request. `value` is what the model asked for, so it is
@@ -121,10 +147,12 @@ export interface Approval {
   agentId: AgentId;
   groupId: GroupId;
   runId: RunId;
-  action: ProtectedAction;
+  request: Request;
   summary: string;
   detail: DetailField[];
   state: ApprovalState;
+  /** What the operator picked or wrote. Only ever set on a question. */
+  answer: string | null;
   createdAt: number;
   decidedAt: number | null;
 }

@@ -13,7 +13,9 @@ use rusqlite::{named_params, params, OptionalExtension, Row};
 
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
-use crate::domain::approval::{Approval, ApprovalState, DetailField, ProtectedAction};
+use crate::domain::approval::{
+    Approval, ApprovalState, DetailField, ProtectedAction, Request, QUESTION,
+};
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
@@ -802,37 +804,47 @@ impl Store {
         agent: AgentId,
         group: GroupId,
         run: RunId,
-        action: ProtectedAction,
+        request: Request,
         summary: &str,
         detail: &[DetailField],
     ) -> Result<Approval, StoreError> {
         let conn = self.conn()?;
+        // NULL for a permission, and for a question that takes a written
+        // answer. An empty array is a real state on a question and is not this.
+        let options = match &request {
+            Request::Question { options } => {
+                Some(serde_json::to_string(options).unwrap_or_else(|_| "[]".into()))
+            }
+            Request::Permission { .. } => None,
+        };
         let approval = Approval {
             id: ApprovalId::new(),
             agent_id: agent,
             group_id: group,
             run_id: run,
-            action,
+            request,
             summary: summary.to_string(),
             detail: detail.to_vec(),
             state: ApprovalState::Pending,
+            answer: None,
             created_at: now_ms(),
             decided_at: None,
         };
 
         conn.execute(
-            "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,created_at,options)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
             params![
                 approval.id.to_string(),
                 agent.to_string(),
                 group.to_string(),
                 run.to_string(),
-                action.as_str(),
+                approval.request.as_str(),
                 approval.summary,
                 serde_json::to_string(&approval.detail).unwrap_or_else(|_| "[]".into()),
                 approval.state.as_str(),
                 approval.created_at,
+                options,
             ],
         )?;
 
@@ -842,7 +854,8 @@ impl Store {
     pub fn get_approval(&self, id: ApprovalId) -> Result<Option<Approval>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at
+            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at,
+                    options,answer
                FROM approvals WHERE id=?1",
         )?;
         match stmt.query_row(params![id.to_string()], row_to_approval).optional()? {
@@ -863,10 +876,30 @@ impl Store {
         id: ApprovalId,
         state: ApprovalState,
     ) -> Result<Approval, StoreError> {
+        self.settle_approval_with(id, state, None)
+    }
+
+    /// The same, carrying what the operator said.
+    ///
+    /// Separate from [`Self::settle_approval`] rather than an extra argument on
+    /// it, because three of the four things that settle a row have nothing to
+    /// say: a verdict is the state itself, and a timeout and a stop are not
+    /// anybody speaking. Only a question's answer is a value.
+    pub fn answer_approval(&self, id: ApprovalId, answer: &str) -> Result<Approval, StoreError> {
+        self.settle_approval_with(id, ApprovalState::Answered, Some(answer))
+    }
+
+    fn settle_approval_with(
+        &self,
+        id: ApprovalId,
+        state: ApprovalState,
+        answer: Option<&str>,
+    ) -> Result<Approval, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE approvals SET state=?2, decided_at=?3 WHERE id=?1 AND state='pending'",
-            params![id.to_string(), state.as_str(), now_ms()],
+            "UPDATE approvals SET state=?2, decided_at=?3, answer=?4
+              WHERE id=?1 AND state='pending'",
+            params![id.to_string(), state.as_str(), now_ms(), answer],
         )?;
         if changed == 0 {
             return match self.get_approval(id)? {
@@ -990,7 +1023,8 @@ impl Store {
     pub fn pending_approvals(&self, limit: u32) -> Result<Vec<Approval>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at
+            "SELECT id,agent_id,group_id,run_id,action,summary,detail,state,created_at,decided_at,
+                    options,answer
                FROM approvals WHERE state='pending'
               ORDER BY created_at ASC, id ASC LIMIT ?1",
         )?;
@@ -2765,6 +2799,7 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
     let action_raw: String = row.get(4)?;
     let detail_raw: String = row.get(6)?;
     let state_raw: String = row.get(7)?;
+    let options_raw: Option<String> = row.get(10)?;
 
     Ok((|| {
         Ok(Approval {
@@ -2780,14 +2815,33 @@ fn row_to_approval(row: &Row<'_>) -> RowResult<Approval> {
             run_id: run_raw
                 .parse::<RunId>()
                 .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
-            action: ProtectedAction::parse(&action_raw).ok_or_else(|| {
-                StoreError::Corrupt(format!("unknown protected action {action_raw:?}"))
-            })?,
+            // One column says which kind this is, because a question stores a
+            // token no protected action can be. Both halves are decoded here
+            // and nowhere else, so the shape the rest of the app sees is the
+            // enum rather than the pair of columns behind it.
+            request: if action_raw == QUESTION {
+                Request::Question {
+                    options: match &options_raw {
+                        Some(raw) => serde_json::from_str(raw).map_err(|e| {
+                            StoreError::Corrupt(format!("bad question options: {e}"))
+                        })?,
+                        // A question that takes a written answer.
+                        None => Vec::new(),
+                    },
+                }
+            } else {
+                Request::Permission {
+                    action: ProtectedAction::parse(&action_raw).ok_or_else(|| {
+                        StoreError::Corrupt(format!("unknown protected action {action_raw:?}"))
+                    })?,
+                }
+            },
             summary: row.get(5)?,
             // The wording is what the operator reads, and a request whose
             // fields would not parse is one nobody should be asked to answer.
             detail: serde_json::from_str(&detail_raw)
                 .map_err(|e| StoreError::Corrupt(format!("bad approval detail: {e}")))?,
+            answer: row.get(11)?,
             state: ApprovalState::parse(&state_raw).ok_or_else(|| {
                 StoreError::Corrupt(format!("unknown approval state {state_raw:?}"))
             })?,
@@ -4957,11 +5011,123 @@ mod tests {
                 agent.id,
                 agent.group_id,
                 RunId::new(),
-                ProtectedAction::CreateAgent,
+                Request::Permission { action: ProtectedAction::CreateAgent },
                 "Manager wants to create an agent called Scout",
                 &[DetailField::new("Name", "Scout")],
             )
             .unwrap()
+    }
+
+    /// One question from `agent`, pending.
+    fn asks(store: &Store, agent: &AgentCard, options: &[&str]) -> Approval {
+        store
+            .create_approval(
+                agent.id,
+                agent.group_id,
+                RunId::new(),
+                Request::Question { options: options.iter().map(|it| (*it).to_string()).collect() },
+                "Which vendor?",
+                &[],
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_question_comes_back_as_a_question_with_the_choices_it_was_given() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let written = asks(&f.store, &manager, &["Northwind", "Contoso"]);
+
+        let read = f.store.get_approval(written.id).unwrap().unwrap();
+        assert_eq!(
+            read.request,
+            Request::Question { options: vec!["Northwind".to_string(), "Contoso".to_string()] }
+        );
+        assert_eq!(read.answer, None, "nothing is answered until somebody answers it");
+    }
+
+    #[test]
+    fn a_question_with_no_choices_is_one_that_takes_a_written_answer() {
+        // An empty list and an absent list are the same thing to read back and
+        // must not be: the column is NULL for a permission, which has no list
+        // at all, and an empty list is a real state on a question.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let written = asks(&f.store, &manager, &[]);
+
+        let read = f.store.get_approval(written.id).unwrap().unwrap();
+        assert_eq!(read.request, Request::Question { options: Vec::new() });
+    }
+
+    #[test]
+    fn a_permission_is_still_a_permission_and_carries_no_choices() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let written = ask(&f.store, &manager);
+
+        let read = f.store.get_approval(written.id).unwrap().unwrap();
+        assert_eq!(read.request, Request::Permission { action: ProtectedAction::CreateAgent });
+        assert_eq!(read.request.action(), Some(ProtectedAction::CreateAgent));
+    }
+
+    #[test]
+    fn an_answer_is_recorded_beside_the_state_that_says_it_was_answered() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let written = asks(&f.store, &manager, &["Northwind", "Contoso"]);
+
+        let settled = f.store.answer_approval(written.id, "Northwind").unwrap();
+        assert_eq!(settled.state, ApprovalState::Answered);
+        assert_eq!(settled.answer.as_deref(), Some("Northwind"));
+    }
+
+    #[test]
+    fn a_question_that_has_been_answered_cannot_be_answered_again() {
+        // The same race the verdict path has: the operator's answer and the
+        // turn's own timeout both land here, and whichever is second must not
+        // overwrite the first.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let written = asks(&f.store, &manager, &[]);
+
+        f.store.answer_approval(written.id, "Northwind").unwrap();
+        assert!(matches!(
+            f.store.answer_approval(written.id, "Contoso"),
+            Err(StoreError::ApprovalSettled { state: ApprovalState::Answered })
+        ));
+        assert_eq!(
+            f.store.get_approval(written.id).unwrap().unwrap().answer.as_deref(),
+            Some("Northwind")
+        );
+    }
+
+    #[test]
+    fn a_question_is_never_a_standing_grant_and_never_shows_up_as_one() {
+        // `alwaysAllow` is the one state that outlives its turn, and there is
+        // no standing yes to a question: nothing to be let off asking, because
+        // asking is the whole of what it does.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        asks(&f.store, &manager, &["Northwind"]);
+
+        assert!(f.store.standing_grants(manager.id).unwrap().is_empty());
+        assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
+        assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::ActOnBehalf).unwrap());
+    }
+
+    #[test]
+    fn a_question_waits_in_the_same_queue_a_permission_does() {
+        // One desk, one queue. A question left out of this read would be a
+        // parked turn the operator has no list of.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        ask(&f.store, &manager);
+        asks(&f.store, &manager, &["Northwind", "Contoso"]);
+
+        let waiting = f.store.pending_approvals(10).unwrap();
+        assert_eq!(waiting.len(), 2);
+        assert!(waiting.iter().any(|it| it.request.action().is_some()));
+        assert!(waiting.iter().any(|it| it.request.action().is_none()));
     }
 
     #[test]

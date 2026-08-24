@@ -325,7 +325,9 @@ enum Permission {
 }
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{AgentCard, CleanDraft, DirectoryEntry, Lifecycle};
-use crate::domain::approval::{Approval, ApprovalState, Decision, DetailField, ProtectedAction};
+use crate::domain::approval::{
+    Approval, ApprovalState, Decision, DetailField, ProtectedAction, Request,
+};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::Connector;
 use crate::domain::envelope::{
@@ -416,6 +418,17 @@ pub enum RuntimeError {
         "the message that failed is no longer in the transcript, so there is nothing to send again"
     )]
     NothingToRetry,
+    #[error(
+        "that request is a question, not a permission, so allow and deny are not answers to it; \
+         answer it with what the operator picked or wrote"
+    )]
+    NotAVerdict,
+    #[error(
+        "that request is asking for permission, not for an answer; decide it with allow or deny"
+    )]
+    NotAQuestion,
+    #[error("an answer cannot be empty: the agent would resume having been told nothing")]
+    EmptyAnswer,
 }
 
 struct Inbox {
@@ -1395,7 +1408,43 @@ impl Runtime {
         id: ApprovalId,
         decision: Decision,
     ) -> Result<Approval, RuntimeError> {
+        // A verdict on a question is a request that has been answered from a
+        // surface drawing the wrong card, which is a bug on this side rather
+        // than a stale click, so it is refused before the row moves. Allowing
+        // it would hand the agent an approval state where it is expecting a
+        // value, and `ask_question` reads back `answer`, so the turn would
+        // resume having been told nothing at all.
+        if self.inner.store.get_approval(id)?.is_some_and(|it| it.request.action().is_none()) {
+            return Err(RuntimeError::NotAVerdict);
+        }
+
         let approval = self.inner.store.settle_approval(id, decision.into())?;
+        if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
+            let _ = waiter.send(());
+        }
+        self.inner.events.emit(UiEvent::ApprovalSettled { approval_id: id, state: approval.state });
+        Ok(approval)
+    }
+
+    /// Answers a question and wakes the turn waiting on it.
+    ///
+    /// The same shape as the verdict above and deliberately not folded into it:
+    /// what settles a question is a value rather than one of three tokens, and
+    /// the menu bar, which can offer a verdict from a menu item, has no way to
+    /// take one of these.
+    pub fn answer_question(&self, id: ApprovalId, answer: &str) -> Result<Approval, RuntimeError> {
+        let answer = answer.trim();
+        // An empty answer is the operator pressing send on an empty box. Taken
+        // literally it settles the request with nothing in it, and the agent
+        // resumes as though it had been told something.
+        if answer.is_empty() {
+            return Err(RuntimeError::EmptyAnswer);
+        }
+        if self.inner.store.get_approval(id)?.is_some_and(|it| it.request.action().is_some()) {
+            return Err(RuntimeError::NotAQuestion);
+        }
+
+        let approval = self.inner.store.answer_approval(id, answer)?;
         if let Some(waiter) = self.inner.waiting.lock().remove(&id) {
             let _ = waiter.send(());
         }
@@ -1539,13 +1588,14 @@ impl Runtime {
         }
     }
 
-    /// Puts a request to the operator and holds the turn until it is answered.
+    /// Asks the operator whether this agent may do something, and holds the
+    /// turn until they say.
     ///
     /// The verdict is read back from the row rather than from the channel the
     /// answer arrived on. Those two can disagree by microseconds when a click
     /// lands as the window closes, and the row is the thing the operator can
-    /// see: honouring it means a button that visibly said "allowed" allowed it.
-    async fn ask_operator(
+    /// see: honoring it means a button that visibly said "allowed" allowed it.
+    async fn ask_permission(
         &self,
         card: &AgentCard,
         run_id: RunId,
@@ -1553,22 +1603,83 @@ impl Runtime {
         summary: String,
         detail: Vec<DetailField>,
     ) -> Permission {
+        // The only shortcut either kind has, and it belongs to this one alone:
+        // a standing yes is about an action, and a question asks for nothing.
         match self.inner.store.has_standing_grant(card.id, action) {
             Ok(true) => return Permission::Granted,
             Ok(false) => {}
             Err(err) => return Permission::Failed(err.to_string()),
         }
 
+        let settled =
+            self.park(card, run_id, Request::Permission { action }, summary, detail).await;
+
+        match settled {
+            Ok(Some(approval)) => match approval.state {
+                ApprovalState::Allow | ApprovalState::AlwaysAllow => Permission::Granted,
+                ApprovalState::Deny => Permission::Refused,
+                ApprovalState::Pending | ApprovalState::Answered | ApprovalState::Expired => {
+                    Permission::Unanswered
+                }
+            },
+            // The request cannot be read back, so nothing can be said about
+            // what the operator wanted. Refusing to act is the only safe end.
+            Ok(None) => Permission::Unanswered,
+            Err(err) => Permission::Failed(err),
+        }
+    }
+
+    /// Asks the operator a question, and holds the turn until they answer it.
+    ///
+    /// Nothing here grants anything, which is what makes it a different call
+    /// rather than a third `ProtectedAction`. The agent could have acted either
+    /// way; it has stopped because it does not know which way the operator
+    /// wants, and whatever it does with the answer passes through every guard
+    /// it was already subject to.
+    ///
+    /// `None` is nobody answered, which is a real outcome and not an error: the
+    /// agent is told so and gets to decide what to do about it.
+    async fn ask_question(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        question: String,
+        options: Vec<String>,
+    ) -> Result<Option<String>, String> {
+        let settled =
+            self.park(card, run_id, Request::Question { options }, question, Vec::new()).await?;
+
+        Ok(settled.and_then(|approval| approval.answer))
+    }
+
+    /// The parking itself, which both kinds share.
+    ///
+    /// One row, one waker, one stop check, one timeout, one read back. The two
+    /// callers differ in what they ask for and in what they make of the answer,
+    /// and in nothing else: a second copy of this would be a second place for a
+    /// turn to be left parked forever.
+    ///
+    /// The record that reaches the transcript is built from the row the store
+    /// gave back, not from the arguments, so what a channel shows is what was
+    /// validated and stored.
+    async fn park(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        request: Request,
+        summary: String,
+        detail: Vec<DetailField>,
+    ) -> Result<Option<Approval>, String> {
         let approval = match self.inner.store.create_approval(
             card.id,
             card.group_id,
             run_id,
-            action,
+            request,
             &summary,
             &detail,
         ) {
             Ok(approval) => approval,
-            Err(err) => return Permission::Failed(err.to_string()),
+            Err(err) => return Err(err.to_string()),
         };
 
         let (waker, wait) = tokio::sync::oneshot::channel();
@@ -1591,20 +1702,27 @@ impl Runtime {
                     state: expired.state,
                 });
             }
-            return Permission::Unanswered;
+            return Ok(None);
         }
 
-        self.record_for(
-            card.id,
-            run_id,
-            None,
-            vec![Part::Approval {
+        // Two parts, because a channel draws them differently and has to: one
+        // is somebody asking to be allowed to act and the other is somebody
+        // asking what to do. A single part with a flag would make the two read
+        // as one thing with a variation.
+        let part = match &approval.request {
+            Request::Permission { action } => Part::Approval {
                 id: approval.id,
-                action,
+                action: *action,
                 summary: approval.summary.clone(),
                 detail: approval.detail.clone(),
-            }],
-        );
+            },
+            Request::Question { options } => Part::Question {
+                id: approval.id,
+                question: approval.summary.clone(),
+                options: options.clone(),
+            },
+        };
+        self.record_for(card.id, run_id, None, vec![part]);
         // Parked before the request is announced, so anything that reacts to
         // the announcement sees an agent that is already waiting rather than
         // one that still looks like it is thinking.
@@ -1631,17 +1749,7 @@ impl Runtime {
             }
         }
 
-        match self.inner.store.get_approval(approval.id) {
-            Ok(Some(settled)) => match settled.state {
-                ApprovalState::Allow | ApprovalState::AlwaysAllow => Permission::Granted,
-                ApprovalState::Deny => Permission::Refused,
-                ApprovalState::Pending | ApprovalState::Expired => Permission::Unanswered,
-            },
-            // The request cannot be read back, so nothing can be said about
-            // what the operator wanted. Refusing to act is the only safe end.
-            Ok(None) => Permission::Unanswered,
-            Err(err) => Permission::Failed(err.to_string()),
-        }
+        self.inner.store.get_approval(approval.id).map_err(|err| err.to_string())
     }
 
     // ---- one agent turn --------------------------------------------------
@@ -2454,12 +2562,19 @@ impl Runtime {
             return (rendered, part, None);
         }
 
+        if let ToolInvocation::AskOperator { question, options } = invocation {
+            let (rendered, part) =
+                self.put_to_operator(card, run_id, question, options, arguments).await;
+            return (rendered, part, None);
+        }
+
         let (rendered, part) = match invocation {
             // Both handled above: one answers with a picture, the other has to
             // stop and ask the operator.
             ToolInvocation::UseScreen { .. }
             | ToolInvocation::CreateAgent { .. }
-            | ToolInvocation::RequestPermission { .. } => {
+            | ToolInvocation::RequestPermission { .. }
+            | ToolInvocation::AskOperator { .. } => {
                 unreachable!("taken by the branches above")
             }
             ToolInvocation::Directory => {
@@ -2889,7 +3004,7 @@ impl Runtime {
         };
 
         let permission = self
-            .ask_operator(
+            .ask_permission(
                 card,
                 run_id,
                 ProtectedAction::ActOnBehalf,
@@ -3035,7 +3150,7 @@ impl Runtime {
         }
 
         let permission = self
-            .ask_operator(
+            .ask_permission(
                 card,
                 run_id,
                 ProtectedAction::ActOnBehalf,
@@ -3069,6 +3184,66 @@ impl Runtime {
                 format!(
                     "The operator could not be asked ({err}), so you do not have permission and                      must not act. Tell them what is waiting."
                 ),
+            ),
+        }
+    }
+
+    /// Puts a question to the operator and hands back whatever they said.
+    ///
+    /// No surface gate, unlike `request_permission`. That one is refused for an
+    /// agent with no computer and no browser because there is nothing outside
+    /// the workspace it could do with a yes, so the operator would be deciding
+    /// about nothing. A question is the opposite: an agent with no machine at
+    /// all is exactly the one whose work is writing and thinking, which is the
+    /// work that forks on a judgment call.
+    ///
+    /// Three outcomes, and the middle one is the reason this is here. Answered
+    /// carries the answer back. Unanswered is a real end rather than a failure:
+    /// the operator was not there, the agent is told so, and it decides what to
+    /// do without them. Nothing is refused, because there is nothing to refuse:
+    /// no answer to this authorizes anything.
+    async fn put_to_operator(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        question: String,
+        options: Vec<String>,
+        arguments: serde_json::Value,
+    ) -> (String, Part) {
+        let asked = self.ask_question(card, run_id, question, options.clone()).await;
+
+        let outcome = |status: ToolOutcome, text: String| {
+            (text, Part::tool_call(tools::ASK_OPERATOR, arguments.clone(), status))
+        };
+
+        match asked {
+            Ok(Some(answer)) => outcome(
+                ToolOutcome::Ok { summary: format!("the operator answered: {answer}") },
+                format!(
+                    "The operator answered: {answer}\n\nThat is their decision, so take it and \
+                     carry on in this turn. Do not ask them the same thing again and do not ask a \
+                     colleague to confirm it. Say in your reply what you did with it."
+                ),
+            ),
+            // Nobody was there. Said as an instruction rather than as an error,
+            // because the turn is still the agent's to finish: an agent told
+            // only that something failed reports the failure and stops, which
+            // leaves the operator with no work done and a question they have
+            // already missed once.
+            Ok(None) => outcome(
+                ToolOutcome::Ok { summary: "nobody answered".to_string() },
+                "Nobody answered in time, so you are on your own for this one. Do not ask again \
+                 this turn. Take the most defensible option, do as much of the work as that lets \
+                 you, and in your reply say plainly what you asked, that nobody answered, what \
+                 you assumed instead, and what would change if the assumption is wrong."
+                    .to_string(),
+            ),
+            Err(reason) => outcome(
+                ToolOutcome::Failed { error: reason },
+                "The question could not be put to the operator, so nothing was asked and they \
+                 have not seen it. Carry on without them: decide as best you can, and say in your \
+                 reply what you needed from them and what you assumed instead."
+                    .to_string(),
             ),
         }
     }
@@ -3161,7 +3336,7 @@ impl Runtime {
         }
 
         let permission = self
-            .ask_operator(
+            .ask_permission(
                 card,
                 run_id,
                 ProtectedAction::CreateAgent,

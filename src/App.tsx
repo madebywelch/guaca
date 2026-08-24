@@ -5,6 +5,7 @@ import { AgentEditor } from "./components/AgentEditor";
 import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Cafeteria } from "./components/Cafeteria";
 import { ChannelView } from "./components/ChannelView";
+import { Desk } from "./components/Desk";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
 import { Search } from "./components/Search";
@@ -265,6 +266,11 @@ export default function App() {
       {ready && agents.length > 0 && (
         <Inspector agent={openAgent} onEditProfile={(agent) => setEditing(agent)} />
       )}
+
+      {/* Outside `main` and after the panes, so nothing that scrolls can clip it
+          and no view change can unmount it. Before the dialogs, because a dialog
+          is modal and the one thing that should cover this. */}
+      {ready && <Desk />}
 
       {menu && (
         <AgentMenu

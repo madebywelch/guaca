@@ -1,15 +1,8 @@
 import { useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
-import {
-  type AgentCard,
-  type Decision,
-  errorMessage,
-  type Part,
-  type ProtectedAction,
-} from "../lib/types";
+import type { AgentCard, Decision, Part, ProtectedAction } from "../lib/types";
 
 type ApprovalPart = Extract<Part, { type: "approval" }>;
 
@@ -49,23 +42,18 @@ export function ApprovalRequest({ part, agent }: Props) {
   // so it cannot still be live. Drawing live buttons for one would offer the
   // operator a decision that no longer reaches anybody.
   const state = useStore((s) => s.approvals[part.id]) ?? "expired";
-  const refreshApprovals = useStore((s) => s.refreshApprovals);
-  const setBanner = useStore((s) => s.setBanner);
+  // The same request is live here and on the desk at once, so answering it is
+  // one action in the store rather than one call in each card. Being answered
+  // somewhere else, or lapsing while this was on screen, is handled there: the
+  // runtime's copy is the truth and both readings of it are corrected together.
+  const decide = useStore((s) => s.decideApproval);
   const [deciding, setDeciding] = useState<Decision | null>(null);
 
   const asker = agent?.name ?? "A deleted agent";
 
   const answer = (decision: Decision) => {
     setDeciding(decision);
-    void api
-      .decideApproval(part.id, decision)
-      .catch((error) => {
-        // Answered somewhere else, or lapsed while this was on screen. The
-        // server's copy is the truth, so take it rather than arguing.
-        setBanner({ tone: "error", text: errorMessage(error) });
-        void refreshApprovals();
-      })
-      .finally(() => setDeciding(null));
+    void decide(part.id, decision).finally(() => setDeciding(null));
   };
 
   return (

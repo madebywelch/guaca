@@ -350,7 +350,7 @@ describe("pins", () => {
 describe("groups as places", () => {
   const RESEARCH = "00000000-0000-4000-8000-000000000002";
 
-  it("keeps the strip out of the way while there is one group", () => {
+  it("keeps the column out of the way while there is one group", () => {
     draw([group("everyone")], [agent("Manager")]);
     expect(screen.queryByLabelText("Groups")).toBeNull();
   });
@@ -381,16 +381,47 @@ describe("groups as places", () => {
   });
 
   it("says on the circle when somebody inside it needs the operator", () => {
-    // After focusing on one group the strip is the only place the other crews
-    // are still visible, so it has to carry the one state that is waiting on a
-    // person.
+    // The column is the only thing on screen about the crews the operator is
+    // not looking at, so it has to carry the one state that is waiting on a
+    // person. Said in the label as well as drawn, because the mark is a number
+    // in a corner and nothing reading the page aloud can see it.
     draw(
       [group("everyone"), group("research", null, RESEARCH)],
       [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
       { Reader: { state: "awaitingApproval" } },
     );
 
-    expect(screen.getByLabelText("research, 1 agent, someone needs you")).toBeTruthy();
+    const orb = screen.getByLabelText("research, 1 agent, 1 turn waiting on you");
+    expect(orb.querySelector(".orb__waiting")?.textContent).toBe("1");
+  });
+
+  // A dot says a crew needs you. A number says how much of your time it needs,
+  // which is what an operator triaging a dozen crews is choosing between.
+  it("counts the parked turns rather than reporting that there are some", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [
+        agent("Manager"),
+        agent("Reader", { groupId: RESEARCH, railOrder: 1 }),
+        agent("Writer", { groupId: RESEARCH, railOrder: 2 }),
+      ],
+      { Reader: { state: "awaitingApproval" }, Writer: { state: "awaitingApproval" } },
+    );
+
+    const orb = screen.getByLabelText("research, 2 agents, 2 turns waiting on you");
+    expect(orb.querySelector(".orb__waiting")?.textContent).toBe("2");
+  });
+
+  it("draws no count on a crew that is merely busy", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+      { Reader: { state: "thinking" } },
+    );
+
+    const orb = screen.getByLabelText("research, 1 agent, working");
+    expect(orb.querySelector(".orb__waiting")).toBeNull();
+    expect(orb.dataset.state).toBe("working");
   });
 
   it("draws only that group after clicking into it, and everyone again after leaving", () => {

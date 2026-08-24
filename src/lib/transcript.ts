@@ -211,7 +211,7 @@ export function transcriptRows(messages: Envelope[], lookups: Lookups): Row[] {
     // Ahead of everything else: a permission request is addressed to the
     // operator whoever the envelope says it is from, and it is the one thing
     // in a transcript they are expected to act on rather than read.
-    if (message.parts.some((part) => part.type === "approval")) {
+    if (message.parts.some((part) => part.type === "approval" || part.type === "question")) {
       interrupt({ kind: "message", key: message.id, message, continued: false });
       spoken = undefined;
       continue;
