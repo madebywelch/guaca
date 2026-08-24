@@ -487,8 +487,10 @@ struct Inner {
     viewer_port: AtomicU16,
     /// Where each plugin's MCP server is, when it is not where it usually is.
     ///
-    /// Empty in the app, and written at most once. See `Runtime::plugins_at`.
-    plugin_endpoints: std::sync::OnceLock<HashMap<PluginKind, String>>,
+    /// Keyed by slug rather than by kind, so a server the operator added can be
+    /// moved by the same seam the six are. Empty in the app, and written at
+    /// most once. See `Runtime::plugins_at`.
+    plugin_endpoints: std::sync::OnceLock<HashMap<String, String>>,
     /// The machine's Guaca account, when it has one.
     ///
     /// Absent in every test that does not care and in any install that never
@@ -572,7 +574,7 @@ impl Runtime {
     /// Settable once and never mutated afterward, which is what keeps this from
     /// being a knob: there is no operator-facing reason to change where a plugin
     /// lives, and a mistyped one is a crew's sign-in sent somewhere nobody chose.
-    pub fn plugins_at(&self, endpoints: HashMap<PluginKind, String>) {
+    pub fn plugins_at(&self, endpoints: HashMap<String, String>) {
         let _ = self.inner.plugin_endpoints.set(endpoints);
     }
 
@@ -606,13 +608,17 @@ impl Runtime {
     }
 
     /// Where one plugin's server is for this runtime.
-    pub fn plugin_endpoint(&self, kind: PluginKind) -> &str {
+    ///
+    /// For a server the operator added, the kind carries its own address and
+    /// nothing here has an opinion about it — which is the whole reason the
+    /// address is on the row: there is no catalog entry to look it up in.
+    pub fn plugin_endpoint(&self, kind: &PluginKind) -> String {
         self.inner
             .plugin_endpoints
             .get()
-            .and_then(|moved| moved.get(&kind))
-            .map(String::as_str)
-            .unwrap_or_else(|| kind.endpoint())
+            .and_then(|moved| moved.get(kind.slug()))
+            .cloned()
+            .unwrap_or_else(|| kind.endpoint().to_string())
     }
 
     /// The loopback port the computer viewer is listening on, once it is up.
@@ -1890,6 +1896,16 @@ impl Runtime {
             tracing::warn!(%err, "could not read this agent's plugins for its turn");
             Vec::new()
         });
+        // And which servers the crew has at all, which is a different question
+        // and is asked for a different reason. The list above decides what this
+        // agent is offered and told; this one decides what a name *means*, so
+        // that a call to a plugin this agent was not chosen for reaches the
+        // reach check and is sent to a peer, rather than coming back as a tool
+        // that does not exist. Two columns per row, and no tool lists.
+        let named = self.inner.store.group_plugin_kinds(card.group_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read the crew's plugins for this turn");
+            Vec::new()
+        });
         // What this agent actually has, decided once and used twice: the prompt
         // describes exactly these, and the tool list offers exactly these. The
         // two disagreeing is the failure this replaced, where every agent was
@@ -2052,6 +2068,7 @@ impl Runtime {
                         &mut reading,
                         &mut attached,
                         call,
+                        &named,
                     )
                     .await;
                 tool_parts.push(outcome.part);
@@ -2453,6 +2470,17 @@ impl Runtime {
         // Files this turn has attached to the answer it has not written yet.
         attached: &mut Vec<Attachment>,
         call: &ToolCall,
+        // The crew's servers, as the turn read them. Passed rather than read
+        // again because a call to a server the operator added can only be
+        // resolved against what this group has: its name and its address are on
+        // the row and nowhere else.
+        //
+        // The crew's and not this agent's, which is the whole point of it being
+        // a second read. Resolving a name and being allowed to call it are two
+        // questions, and an agent the operator did not choose for a plugin has
+        // to reach the second one to be told to ask a peer. Given only its own,
+        // the name would not resolve and the answer would be "unknown tool".
+        plugins: &[PluginKind],
     ) -> ToolResult {
         let arguments = call.parsed_arguments().unwrap_or(serde_json::Value::Null);
 
@@ -2475,6 +2503,7 @@ impl Runtime {
                 attached,
                 call,
                 arguments,
+                plugins,
             )
             .await;
 
@@ -2509,8 +2538,9 @@ impl Runtime {
         attached: &mut Vec<Attachment>,
         call: &ToolCall,
         arguments: serde_json::Value,
+        plugins: &[PluginKind],
     ) -> (String, Part, Option<String>) {
-        let invocation = match tools::parse(call) {
+        let invocation = match tools::parse(call, plugins) {
             Ok(invocation) => invocation,
             Err(err) => {
                 return (
@@ -2887,7 +2917,9 @@ impl Runtime {
                     self.store()
                         .group_plugins(card.group_id)
                         .ok()
-                        .and_then(|all| all.into_iter().find(|held| held.kind == kind))
+                        .and_then(|all| {
+                            all.into_iter().find(|held| held.kind.slug() == kind.slug())
+                        })
                         .map(|held| held.connection)
                         .unwrap_or_default()
                 } else {
@@ -2896,14 +2928,14 @@ impl Runtime {
                 let endpoint = if kind.account_backed() {
                     plugins::AccountUse::endpoint(self.account_origin(), &connection)
                 } else {
-                    self.plugin_endpoint(kind).to_string()
+                    self.plugin_endpoint(&kind)
                 };
                 let called = plugins::call(
                     self.store(),
                     plugins::Target {
                         group: card.group_id,
                         agent: card.id,
-                        kind,
+                        kind: &kind,
                         endpoint: &endpoint,
                         account: account
                             .as_deref()

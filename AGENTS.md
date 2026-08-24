@@ -52,7 +52,7 @@ src-tauri/src/
     catalog.rs        Which models OpenRouter sees doing which kind of work.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
-  mcp.rs              The client end of MCP. Three methods, one POST each.
+  mcp.rs              The client end of MCP, in both of its protocol eras.
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
   db/                 SQLite. Plain SQL, numbered migrations.
@@ -106,6 +106,8 @@ repo: the frontend renders state and forwards intent.
 | Hosted browsers, CDP, `browse`, live view, browser profiles | `docs/BROWSERS.md` |
 | Which of the two a piece of work belongs on, and credentials | *Connectors* in `docs/PROTOCOL.md`, then both files above |
 | Plugins: what is on the list, signing one in, calling its tools | `docs/PLUGINS.md`, then `oauth.rs` and `mcp.rs` |
+| A server the operator added: its name, its address, a pasted key | *A server the operator added* in `docs/PLUGINS.md`, then `PluginKind::custom` and `PluginKind::from_row` |
+| Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
@@ -439,7 +441,52 @@ the model takes a screenshot to see what `browse` did.
   the address of the sign-in comes from: the `WWW-Authenticate` challenge names
   the vendor's own protected-resource metadata, which beats any well-known path
   Guaca guessed at. Every server on the list asks today; a public one connects
-  with `signed_in` false rather than claiming a sign-in that never happened.
+  with `signed_in` false rather than claiming a sign-in that never happened. A
+  pasted key is the one credential that skips the question, because a server
+  that takes one has no authorization server to discover.
+- **A server the operator added has one name, and it is the tool prefix.** Not a
+  display name beside a slug: a second name drifts from the one an agent types,
+  and the only place that surfaces is a turn that cannot find a tool it was told
+  it had. What was typed is normalized in Rust and the webview draws what came
+  back rather than predicting it. Collapsing runs of punctuation to one
+  underscore is also what makes a `__` impossible in a name, which is what
+  `split_plugin_tool` splits on.
+- **Its address is on the row, and a catalog kind's is not.** Where a vendor's
+  server lives is a decision the build makes and re-makes every release, so a
+  stored copy would keep a crew dialling the old host after the vendor moved:
+  that is what migration 26 exists to clean up after. A row with neither a
+  catalog slug nor an address is one nothing can dial, which is a newer build's
+  plugin after a downgrade, and is skipped. `PluginKind::from_row`.
+- **A name only resolves against a crew that has it, and a catalog name always
+  resolves.** `neon__run_sql` parses whether or not Neon is connected, which is
+  what makes "Neon is not connected, ask the operator" reachable instead of
+  "unknown tool". A name this build has never heard of cannot do that, because
+  the crew's rows are the only place it or its address could come from — which
+  is also what keeps a model composing `use_screen__click` from being reported
+  as a plugin nobody has.
+- **This client speaks two protocol eras, and the probe is what decides.**
+  `2026-07-28` deleted the handshake. `server/discover` is mandatory for a
+  modern server, so its answer — or a refusal in one of the two shapes only a
+  modern server produces — identifies the era, and anything else is a server
+  that wants `initialize`. The rule is written on the *body*, not the status
+  code: a real legacy server answers an unknown method with `200` and a
+  JSON-RPC error. A `-32022` naming only handshake-era revisions is a fallback
+  rather than a retry, because that is a dual-era server saying to shake hands
+  in the only vocabulary a modern request gave it.
+- **The era is remembered per endpoint and a session is not.** An era belongs to
+  the deployed server rather than to a grant, cannot expire, and re-probes on
+  the one failure it causes. Without it every plugin call on a legacy server
+  pays for a probe whose answer is known, in front of the handshake it replaced.
+- **What later requests declare is what was negotiated, not what was asked
+  for.** A legacy server that only knows `2025-06-18` says so in its handshake
+  reply, and a header carrying the constant instead contradicts it.
+- **A tool whose `x-mcp-header` cannot be honored is dropped, not offered.** A
+  modern server validates the mirrored header against the body, so a call built
+  without it is refused every time for a reason no model can act on. An
+  annotation reachable only through `items` or a `oneOf` has no single value in
+  a call to mirror, so that tool goes and the rest of the server stays. Only on
+  a modern session: on a legacy one the field means nothing and dropping the
+  tool would take a working capability away over something nobody reads.
 - **The loopback port is bound before the client is registered.** That ordering
   is the whole reason a redirect is acceptable here at all, and it is the
   difference between this flow and the one `subscription.rs` argues against:
