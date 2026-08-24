@@ -1781,6 +1781,7 @@ async fn a_routine_that_is_due_wakes_its_agent() {
             "check the listings",
             Trigger::Clock(Cadence::Every(3600)),
             Some(now_ms() - 1000),
+            false,
         )
         .unwrap();
 
@@ -1813,6 +1814,7 @@ async fn a_one_off_routine_does_not_come_due_twice() {
             "wake up",
             Trigger::Clock(Cadence::Once),
             Some(now_ms() - 1000),
+            false,
         )
         .unwrap();
 
@@ -1826,6 +1828,147 @@ async fn a_one_off_routine_does_not_come_due_twice() {
         h.runtime.store().agent_routines(h.id("Sleeper")).unwrap().is_empty(),
         "a one-off must be gone once it has run, not left with a time in the past"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_routine_that_skips_lands_on_the_idle_agent_and_not_on_the_working_one() {
+    // Two agents, one sweep, the same routine, opposite answers. The point of
+    // the option is a sweep that must not stack: an agent still working through
+    // the last one does not want this one waiting behind it, and the next slot
+    // is an hour away regardless.
+    //
+    // Busy is parked on a permission request, which is a turn genuinely in
+    // flight and held open until somebody answers it. Idle has been sent
+    // nothing.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("done".into())
+        } else if speaker(body) == "Busy" {
+            Script::Hire {
+                name: "Chief of Product".into(),
+                instructions: "You own the roadmap.".into(),
+                notes: String::new(),
+            }
+        } else {
+            Script::Say("checked the listings".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Busy", "Idle"], GuardLimits::default());
+    h.runtime.send_from_human(h.id("Busy"), "Create a chief of product.").unwrap();
+    h.awaited_request().await;
+
+    let mut booked = HashMap::new();
+    for who in ["Busy", "Idle"] {
+        booked.insert(
+            who,
+            h.runtime
+                .store()
+                .create_routine(
+                    h.id(who),
+                    "Listings sweep",
+                    "check the listings",
+                    Trigger::Clock(Cadence::Every(3600)),
+                    Some(now_ms() - 1000),
+                    true,
+                )
+                .unwrap(),
+        );
+    }
+
+    h.runtime.start_scheduler();
+    h.wait_until("both routines to come due", |h| {
+        booked.values().all(|r| !h.runtime.store().routine_runs(r.id, 20).unwrap().is_empty())
+    })
+    .await;
+
+    // The working one was passed over, and the history says so rather than
+    // leaving a gap: a firing that vanishes without trace reads exactly like a
+    // scheduler that has stopped running.
+    let skipped = h.runtime.store().routine_runs(booked["Busy"].id, 20).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].kind, RunKind::Skipped);
+    assert_eq!(skipped[0].run_id, None, "nothing ran, so there is nothing to thread back to");
+    assert!(
+        !h.runtime
+            .store()
+            .channel_messages(h.id("Busy"), 50)
+            .unwrap()
+            .iter()
+            .any(|m| m.parts.iter().any(|p| matches!(p, Part::Routine { .. }))),
+        "the instruction must not be queued behind the turn it was skipped for:\n{}",
+        h.transcript()
+    );
+
+    // Dropped, not deferred: the slot moved on exactly as it would have if the
+    // firing had happened, so nothing comes due again on the next tick.
+    let after = h.runtime.store().get_routine(booked["Busy"].id).unwrap().unwrap();
+    assert!(
+        after.next_run_at.expect("a clock routine holds a slot") > now_ms(),
+        "a skipped firing must not still be due, or it fires the moment the agent goes quiet"
+    );
+    assert_eq!(after.last_run_at, Some(after.next_run_at.unwrap() - 3_600_000));
+
+    // And the same routine on an agent with nothing in hand is delivered
+    // normally, which is what stops this being a way to switch a schedule off.
+    h.wait_until("the idle agent to do the work", |h| {
+        h.channel_texts("Idle").iter().any(|t| t.contains("checked the listings"))
+    })
+    .await;
+    let ran = h.runtime.store().routine_runs(booked["Idle"].id, 20).unwrap();
+    assert_eq!(ran[0].kind, RunKind::Scheduled);
+    assert!(ran[0].run_id.is_some());
+}
+
+#[tokio::test]
+async fn a_routine_left_on_the_ordinary_rule_waits_its_turn_rather_than_being_dropped() {
+    // The default, and the one that must not change. An agent busy at nine is
+    // still the agent that has to send the report, so its firing queues and is
+    // read when the turn in front of it finishes.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("done".into())
+        } else {
+            Script::Hire {
+                name: "Chief of Product".into(),
+                instructions: "You own the roadmap.".into(),
+                notes: String::new(),
+            }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Watcher"], GuardLimits::default());
+    h.runtime.send_from_human(h.id("Watcher"), "Create a chief of product.").unwrap();
+    h.awaited_request().await;
+
+    let routine = h
+        .runtime
+        .store()
+        .create_routine(
+            h.id("Watcher"),
+            "Listings sweep",
+            "check the listings",
+            Trigger::Clock(Cadence::Every(3600)),
+            Some(now_ms() - 1000),
+            false,
+        )
+        .unwrap();
+
+    h.runtime.start_scheduler();
+    h.wait_until("the routine to be delivered", |h| {
+        h.runtime
+            .store()
+            .channel_messages(h.id("Watcher"), 50)
+            .unwrap()
+            .iter()
+            .any(|m| m.parts.iter().any(|p| matches!(p, Part::Routine { .. })))
+    })
+    .await;
+
+    let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(history[0].kind, RunKind::Scheduled, "an agent being busy is not a reason to skip");
 }
 
 #[tokio::test]
@@ -1847,6 +1990,7 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
             "Check the listings and say what is new.",
             Trigger::Clock(Cadence::Daily),
             Some(now_ms() + 60_000),
+            false,
         )
         .unwrap();
 
@@ -1903,6 +2047,7 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
             "check the listings",
             Trigger::Clock(Cadence::Once),
             Some(due_next_week),
+            false,
         )
         .unwrap();
 
@@ -1952,6 +2097,7 @@ async fn a_routine_that_fires_is_work_to_do_rather_than_something_to_note() {
             "Check the listings and say what is new.",
             Trigger::Clock(Cadence::Daily),
             Some(now_ms() - 1000),
+            false,
         )
         .unwrap();
 
@@ -2014,6 +2160,7 @@ async fn a_routine_can_hand_its_work_to_the_specialist_it_belongs_to() {
             "Have the filings checked and report what is new.",
             Trigger::Clock(Cadence::Weekly),
             Some(now_ms() - 1000),
+            false,
         )
         .unwrap();
 
@@ -2141,6 +2288,7 @@ async fn a_change_to_a_routine_changes_the_one_that_stands_rather_than_adding_a_
             "Check the listings and say what is new.",
             Trigger::Clock(Cadence::Weekdays),
             Some(now_ms() + 3_600_000),
+            false,
         )
         .unwrap();
 
@@ -2204,6 +2352,7 @@ async fn one_agent_cannot_retime_or_cancel_another_agents_routine() {
             "File yesterday's notes.",
             Trigger::Clock(Cadence::Weekdays),
             Some(now_ms() + 3_600_000),
+            false,
         )
         .unwrap();
 
@@ -2253,6 +2402,7 @@ async fn a_second_routine_for_a_job_already_standing_is_named_while_the_turn_can
             "Check the new listings and email me a summary.",
             Trigger::Clock(Cadence::Weekdays),
             Some(now_ms() + 3_600_000),
+            false,
         )
         .unwrap();
 
@@ -2288,6 +2438,7 @@ async fn a_routine_that_is_switched_off_stays_quiet_and_starts_again_when_asked(
             "check",
             Trigger::Clock(Cadence::Daily),
             Some(now_ms() - 1000),
+            false,
         )
         .unwrap();
     h.runtime.store().set_routine_active(routine.id, false).unwrap();

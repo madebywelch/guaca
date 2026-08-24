@@ -569,6 +569,7 @@ impl Store {
         what: &str,
         trigger: Trigger,
         first_run_at: Option<i64>,
+        skip_if_working: bool,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let routine = Routine {
@@ -578,13 +579,14 @@ impl Store {
             what: what.trim().to_string(),
             trigger,
             active: true,
+            skip_if_working,
             next_run_at: first_run_at,
             last_run_at: None,
             created_at: now_ms(),
         };
         conn.execute(
-            "INSERT INTO routines (id,agent_id,name,what,fires,next_run_at,created_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            "INSERT INTO routines (id,agent_id,name,what,fires,next_run_at,created_at,skip_if_working)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
             params![
                 routine.id.to_string(),
                 agent.to_string(),
@@ -593,6 +595,7 @@ impl Store {
                 routine.trigger.as_str(),
                 routine.next_run_at,
                 routine.created_at,
+                i64::from(routine.skip_if_working),
             ],
         )?;
         Ok(routine)
@@ -601,7 +604,7 @@ impl Store {
     pub fn get_routine(&self, id: RoutineId) -> Result<Option<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working
                FROM routines WHERE id=?1",
         )?;
         match stmt.query_row(params![id.to_string()], row_to_routine).optional()? {
@@ -623,18 +626,27 @@ impl Store {
         what: &str,
         trigger: Trigger,
         next_run_at: Option<i64>,
+        skip_if_working: bool,
     ) -> Result<Routine, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE routines SET name=?2, what=?3, fires=?4, next_run_at=?5 WHERE id=?1",
-            params![id.to_string(), name.trim(), what.trim(), trigger.as_str(), next_run_at],
+            "UPDATE routines SET name=?2, what=?3, fires=?4, next_run_at=?5, skip_if_working=?6
+              WHERE id=?1",
+            params![
+                id.to_string(),
+                name.trim(),
+                what.trim(),
+                trigger.as_str(),
+                next_run_at,
+                i64::from(skip_if_working),
+            ],
         )?;
         if changed == 0 {
             return Err(StoreError::RoutineNotFound(id));
         }
 
         let mut stmt = conn.prepare(
-            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working
                FROM routines WHERE id=?1",
         )?;
         stmt.query_row(params![id.to_string()], row_to_routine)?
@@ -646,7 +658,7 @@ impl Store {
             // Soonest first, then whatever holds no slot. NULL sorts before
             // everything in SQLite, which would put a routine waiting on an
             // event above one firing in ten minutes.
-            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
+            "SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working
                FROM routines WHERE agent_id=?1
               ORDER BY next_run_at IS NULL, next_run_at, created_at",
         )?;
@@ -670,7 +682,7 @@ impl Store {
     pub fn due_routines(&self, now: i64) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT r.id,r.agent_id,r.name,r.what,r.fires,r.active,r.next_run_at,r.last_run_at,r.created_at
+            "SELECT r.id,r.agent_id,r.name,r.what,r.fires,r.active,r.next_run_at,r.last_run_at,r.created_at,r.skip_if_working
                FROM routines r
                JOIN agents a ON a.id = r.agent_id
               WHERE r.next_run_at <= ?1 AND r.active = 1 AND a.lifecycle = 'active'
@@ -738,17 +750,20 @@ impl Store {
     /// Separate from `routine_ran`, which moves the schedule: a test run fires
     /// without the schedule moving at all, and both have to appear in the
     /// history or "did it run on Tuesday" has no answer.
+    ///
+    /// `run` is `None` for a firing that was skipped, which started no run and
+    /// therefore has nothing to thread back to.
     pub fn record_routine_run(
         &self,
         id: RoutineId,
-        run: RunId,
+        run: Option<RunId>,
         kind: RunKind,
         at: i64,
     ) -> Result<(), StoreError> {
         let conn = self.conn()?;
         conn.execute(
             "INSERT INTO routine_runs (routine_id,run_id,kind,at) VALUES (?1,?2,?3,?4)",
-            params![id.to_string(), run.to_string(), kind.as_str(), at],
+            params![id.to_string(), run.map(|run| run.to_string()), kind.as_str(), at],
         )?;
         Ok(())
     }
@@ -2372,7 +2387,7 @@ impl Store {
     fn matching_routines(&self, pattern: &str, limit: u32) -> Result<Vec<Routine>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            r"SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at
+            r"SELECT id,agent_id,name,what,fires,active,next_run_at,last_run_at,created_at,skip_if_working
                 FROM routines
                WHERE what LIKE ?1 ESCAPE '\' OR name LIKE ?1 ESCAPE '\'
                ORDER BY next_run_at IS NULL, next_run_at ASC LIMIT ?2",
@@ -2729,19 +2744,25 @@ fn row_to_routine(row: &Row<'_>) -> RowResult<Routine> {
             next_run_at: row.get(6)?,
             last_run_at: row.get(7)?,
             created_at: row.get(8)?,
+            skip_if_working: row.get::<_, i64>(9)? != 0,
         })
     })())
 }
 
 fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
-    let run_raw: String = row.get(0)?;
+    let run_raw: Option<String> = row.get(0)?;
     let kind_raw: String = row.get(1)?;
 
     Ok((|| {
         Ok(RoutineRun {
+            // Absent on a firing that was skipped: nothing ran, so there is no
+            // run to point at.
             run_id: run_raw
-                .parse::<RunId>()
-                .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
+                .map(|raw| {
+                    raw.parse::<RunId>()
+                        .map_err(|e| StoreError::Corrupt(format!("bad run id {raw:?}: {e}")))
+                })
+                .transpose()?,
             kind: RunKind::parse(&kind_raw)
                 .ok_or_else(|| StoreError::Corrupt(format!("unknown run kind {kind_raw:?}")))?,
             at: row.get(2)?,
@@ -3479,6 +3500,7 @@ mod tests {
                 "check the listings",
                 clock(Cadence::Every(3600)),
                 Some(1_000_000),
+                false,
             )
             .unwrap();
 
@@ -3490,6 +3512,7 @@ mod tests {
                 "check the listings and say what is new",
                 clock(Cadence::Every(3600)),
                 made.next_run_at,
+                false,
             )
             .unwrap();
         assert_eq!(fixed.what, "check the listings and say what is new");
@@ -3501,7 +3524,7 @@ mod tests {
         // success, so an operator editing a stale screen is told.
         f.store.delete_routine(made.id).unwrap();
         assert!(matches!(
-            f.store.update_routine(made.id, "", "anything", clock(Cadence::Once), Some(1)),
+            f.store.update_routine(made.id, "", "anything", clock(Cadence::Once), Some(1), false),
             Err(StoreError::RoutineNotFound(_))
         ));
     }
@@ -3676,7 +3699,7 @@ mod tests {
         {
             let made = f
                 .store
-                .create_routine(card.id, "", "check", clock(cadence), Some(1_000_000))
+                .create_routine(card.id, "", "check", clock(cadence), Some(1_000_000), false)
                 .unwrap();
             let read = f.store.get_routine(made.id).unwrap().unwrap();
             assert_eq!(read.trigger, clock(cadence));
@@ -3693,7 +3716,7 @@ mod tests {
         let friday = friday_at_nine();
         let made = f
             .store
-            .create_routine(card.id, "", "check", clock(Cadence::Weekdays), Some(friday))
+            .create_routine(card.id, "", "check", clock(Cadence::Weekdays), Some(friday), false)
             .unwrap();
 
         f.store.routine_ran(&made, friday + 1000).unwrap();
@@ -3719,6 +3742,7 @@ mod tests {
                 "check the listings",
                 clock(Cadence::Daily),
                 Some(1_000),
+                false,
             )
             .unwrap();
         assert!(made.active, "a routine arrives running");
@@ -3745,19 +3769,80 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000), false)
             .unwrap();
 
         let scheduled = RunId::new();
         let tested = RunId::new();
-        f.store.record_routine_run(made.id, scheduled, RunKind::Scheduled, 1_000).unwrap();
-        f.store.record_routine_run(made.id, tested, RunKind::Test, 2_000).unwrap();
+        f.store.record_routine_run(made.id, Some(scheduled), RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, Some(tested), RunKind::Test, 2_000).unwrap();
 
         let history = f.store.routine_runs(made.id, 20).unwrap();
         assert_eq!(history.len(), 2);
-        assert_eq!(history[0].run_id, tested, "newest first");
+        assert_eq!(history[0].run_id, Some(tested), "newest first");
         assert_eq!(history[0].kind, RunKind::Test);
         assert_eq!(history[1].kind, RunKind::Scheduled);
+    }
+
+    #[test]
+    fn a_skipped_firing_is_in_the_history_with_no_run_behind_it() {
+        // The alternative to recording it is a gap, and a gap in this list is
+        // also what a scheduler that has stopped working looks like. What it
+        // must not do is invent a run: that reads back identically to a
+        // delivery that spent nothing, which is the one thing this history is
+        // for telling apart.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000), true)
+            .unwrap();
+
+        f.store.record_routine_run(made.id, None, RunKind::Skipped, 1_000).unwrap();
+
+        let history = f.store.routine_runs(made.id, 20).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].kind, RunKind::Skipped);
+        assert_eq!(history[0].run_id, None, "nothing ran, so there is nothing to point at");
+        assert_eq!(history[0].spent.calls, 0);
+        assert_eq!(history[0].spent.cost, None, "unpriced, not free");
+    }
+
+    #[test]
+    fn skipping_a_firing_is_kept_on_the_routine_through_an_edit() {
+        // Set by an operator in the panel or by an agent through `schedule`,
+        // and read on every sweep. A row that lost it on an unrelated edit is a
+        // routine that quietly starts stacking again.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Scout")).unwrap();
+        let made = f
+            .store
+            .create_routine(
+                card.id,
+                "Listings sweep",
+                "check the listings",
+                clock(Cadence::Every(3600)),
+                Some(1_000_000),
+                true,
+            )
+            .unwrap();
+        assert!(made.skip_if_working);
+        assert!(f.store.get_routine(made.id).unwrap().unwrap().skip_if_working);
+        assert!(f.store.agent_routines(card.id).unwrap()[0].skip_if_working);
+        assert!(f.store.due_routines(2_000_000).unwrap()[0].skip_if_working);
+
+        let edited = f
+            .store
+            .update_routine(
+                made.id,
+                "Listings sweep",
+                "check the listings twice",
+                clock(Cadence::Every(3600)),
+                made.next_run_at,
+                false,
+            )
+            .unwrap();
+        assert!(!edited.skip_if_working, "and it comes back off when that is what was saved");
     }
 
     #[test]
@@ -3768,9 +3853,9 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000), false)
             .unwrap();
-        f.store.record_routine_run(made.id, RunId::new(), RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, Some(RunId::new()), RunKind::Scheduled, 1_000).unwrap();
 
         f.store.delete_routine(made.id).unwrap();
         assert!(f.store.routine_runs(made.id, 20).unwrap().is_empty());
@@ -3788,8 +3873,10 @@ mod tests {
             service: "stripe".into(),
             topic: "invoice.payment_failed".into(),
         });
-        let made =
-            f.store.create_routine(card.id, "Dunning", "chase it", trigger.clone(), None).unwrap();
+        let made = f
+            .store
+            .create_routine(card.id, "Dunning", "chase it", trigger.clone(), None, false)
+            .unwrap();
 
         assert_eq!(made.next_run_at, None, "it holds no slot");
         assert!(
@@ -3818,10 +3905,15 @@ mod tests {
                 "chase it",
                 Trigger::Event(EventTrigger { service: "stripe".into(), topic: "x.y".into() }),
                 None,
+                false,
             )
             .unwrap();
-        f.store.create_routine(card.id, "Later", "b", clock(Cadence::Daily), Some(9_000)).unwrap();
-        f.store.create_routine(card.id, "Sooner", "a", clock(Cadence::Daily), Some(1_000)).unwrap();
+        f.store
+            .create_routine(card.id, "Later", "b", clock(Cadence::Daily), Some(9_000), false)
+            .unwrap();
+        f.store
+            .create_routine(card.id, "Sooner", "a", clock(Cadence::Daily), Some(1_000), false)
+            .unwrap();
 
         let names: Vec<String> =
             f.store.agent_routines(card.id).unwrap().into_iter().map(|r| r.name).collect();
@@ -3837,13 +3929,13 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000))
+            .create_routine(card.id, "", "check", clock(Cadence::Daily), Some(1_000), false)
             .unwrap();
 
         let worked = RunId::new();
         let silent = RunId::new();
-        f.store.record_routine_run(made.id, worked, RunKind::Scheduled, 1_000).unwrap();
-        f.store.record_routine_run(made.id, silent, RunKind::Scheduled, 2_000).unwrap();
+        f.store.record_routine_run(made.id, Some(worked), RunKind::Scheduled, 1_000).unwrap();
+        f.store.record_routine_run(made.id, Some(silent), RunKind::Scheduled, 2_000).unwrap();
         for (prompt, completion, cost) in [(900u32, 100u32, Some(0.002)), (400, 50, Some(0.001))] {
             f.store
                 .record_usage(&UsageEntry {
@@ -3860,7 +3952,7 @@ mod tests {
 
         let history = f.store.routine_runs(made.id, 20).unwrap();
         assert_eq!(history.len(), 2, "one row per firing, whatever it spent");
-        assert_eq!(history[0].run_id, silent, "newest first");
+        assert_eq!(history[0].run_id, Some(silent), "newest first");
         assert_eq!(history[0].spent.calls, 0, "nothing was spent, so nothing ran");
         assert_eq!(history[0].spent.cost, None, "and unpriced is not free");
         assert_eq!(history[1].spent.calls, 2, "model calls, not turns");
@@ -3874,7 +3966,7 @@ mod tests {
         let card = f.store.create_agent(&draft("Scout")).unwrap();
         let made = f
             .store
-            .create_routine(card.id, "", "wake me", clock(Cadence::Once), Some(1_000))
+            .create_routine(card.id, "", "wake me", clock(Cadence::Once), Some(1_000), false)
             .unwrap();
         f.store.routine_ran(&made, 2_000).unwrap();
         assert!(f.store.get_routine(made.id).unwrap().is_none());
@@ -3921,6 +4013,7 @@ mod tests {
                 "check the listings",
                 clock(Cadence::Every(3600)),
                 Some(1),
+                false,
             )
             .unwrap();
         f.store
@@ -4541,10 +4634,18 @@ mod tests {
                 "post the budget summary",
                 clock(Cadence::Every(3600)),
                 Some(5_000),
+                false,
             )
             .unwrap();
         f.store
-            .create_routine(writer.id, "Watering", "the plants", clock(Cadence::Daily), Some(4_000))
+            .create_routine(
+                writer.id,
+                "Watering",
+                "the plants",
+                clock(Cadence::Daily),
+                Some(4_000),
+                false,
+            )
             .unwrap();
 
         Searchable { f, writer: writer.id }

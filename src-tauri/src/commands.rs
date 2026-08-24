@@ -1321,6 +1321,13 @@ pub struct RoutineDraft {
     /// The stored trigger form: `daily`, `weekdays`, `every:3600`, `once`.
     pub trigger: String,
     pub in_secs: Option<u32>,
+    /// Whether a firing that lands while the agent is working is dropped.
+    ///
+    /// Defaulted rather than required, because a routine that has to happen
+    /// even if it has to wait is the ordinary case and the one an older caller
+    /// means by saying nothing.
+    #[serde(default)]
+    pub skip_if_working: bool,
 }
 
 impl RoutineDraft {
@@ -1331,7 +1338,7 @@ impl RoutineDraft {
         let trigger = Trigger::parse(&self.trigger).ok_or_else(|| {
             CommandError::new("validation", format!("no trigger called {:?}", self.trigger))
         })?;
-        routine::validate(&self.name, &self.what, &trigger, self.in_secs)
+        routine::validate(&self.name, &self.what, &trigger, self.in_secs, self.skip_if_working)
             .map_err(|e| CommandError::new("validation", e.to_string()))?;
         Ok(trigger)
     }
@@ -1345,8 +1352,14 @@ pub fn create_routine(
 ) -> Reply<Routine> {
     let trigger = draft.checked()?;
     let first = trigger.first_run(now_ms(), draft.in_secs);
-    let routine =
-        state.runtime.store().create_routine(agent_id, &draft.name, &draft.what, trigger, first)?;
+    let routine = state.runtime.store().create_routine(
+        agent_id,
+        &draft.name,
+        &draft.what,
+        trigger,
+        first,
+        draft.skip_if_working,
+    )?;
     state.runtime.emit(UiEvent::RoutinesChanged { agent_id });
     Ok(routine)
 }
@@ -1366,8 +1379,14 @@ pub fn update_routine(
         .ok_or_else(|| CommandError::new("notFound", format!("no routine with id {id}")))?;
     let next = routine::next_slot_for(&trigger, &existing, draft.in_secs);
 
-    let routine =
-        state.runtime.store().update_routine(id, &draft.name, &draft.what, trigger, next)?;
+    let routine = state.runtime.store().update_routine(
+        id,
+        &draft.name,
+        &draft.what,
+        trigger,
+        next,
+        draft.skip_if_working,
+    )?;
     state.runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
     Ok(routine)
 }

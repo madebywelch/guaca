@@ -322,6 +322,16 @@ fn all_specs() -> Vec<ToolSpec> {
                                         next firing; leave it out to change the wording without \
                                         moving the schedule."
                     },
+                    "skip_if_working": {
+                        "type": "boolean",
+                        "description": "Drop a firing that comes due while you are already \
+                                        working, instead of queueing it behind what you are \
+                                        doing. For a sweep that is pointless to do twice over: \
+                                        the next one comes at its usual time. Only on something \
+                                        that repeats, and off unless you ask for it, so anything \
+                                        that has to happen even if it has to wait needs nothing \
+                                        here."
+                    },
                     "id": {
                         "type": "string",
                         "description": "The routine to `update` or `cancel`. Every routine you \
@@ -724,6 +734,10 @@ pub enum ScheduleAction {
         what: String,
         trigger: Trigger,
         in_secs: Option<u32>,
+        /// Drop a firing that comes due while this agent is already working,
+        /// rather than queueing it. Refused on a one-off, which has no next
+        /// firing to fall back on.
+        skip_if_working: bool,
     },
     /// Changes a routine that already stands.
     ///
@@ -737,6 +751,7 @@ pub enum ScheduleAction {
         what: Option<String>,
         trigger: Option<Trigger>,
         in_secs: Option<u32>,
+        skip_if_working: Option<bool>,
     },
     Cancel {
         id: String,
@@ -1075,6 +1090,17 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 (None, Some(gap)) => Ok(Some(Trigger::Clock(Cadence::Every(gap)))),
                 (None, None) => Ok(None),
             };
+            // Absent is "leave it alone", so a missing flag and a false one are
+            // not the same thing on an update. Read as a string too, because a
+            // model asked for a boolean sends `"true"` often enough that
+            // dropping it would silently ignore the field it was setting.
+            let flag = |key: &str| {
+                value.get(key).and_then(|v| match v {
+                    serde_json::Value::Bool(on) => Some(*on),
+                    serde_json::Value::String(text) => text.trim().parse::<bool>().ok(),
+                    _ => None,
+                })
+            };
             // A blank string is a model padding out the arguments, not an
             // instruction to blank the field: on an update it would wipe the
             // label or the instruction of a routine that was only being
@@ -1111,7 +1137,13 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                         }
                     };
                     Ok(ToolInvocation::Schedule {
-                        action: ScheduleAction::Add { name, what, trigger, in_secs: delay },
+                        action: ScheduleAction::Add {
+                            name,
+                            what,
+                            trigger,
+                            in_secs: delay,
+                            skip_if_working: flag("skip_if_working").unwrap_or(false),
+                        },
                     })
                 }
                 "update" | "edit" | "change" | "modify" => {
@@ -1127,18 +1159,31 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                     let delay = secs("in_secs");
                     let what = words("what").or_else(|| words("prompt"));
                     let name = words("name");
+                    let skip_if_working = flag("skip_if_working");
                     // Nothing to change is a call that would report success and
                     // do nothing, which reads to the agent as the edit having
                     // landed.
-                    if what.is_none() && name.is_none() && trigger.is_none() && delay.is_none() {
+                    if what.is_none()
+                        && name.is_none()
+                        && trigger.is_none()
+                        && delay.is_none()
+                        && skip_if_working.is_none()
+                    {
                         return Err(ToolParseError::IncompleteSchedule {
                             needs: "something to change: a new `what`, `name`, `repeat`, \
-                                    `every_secs` or `in_secs`"
+                                    `every_secs`, `in_secs` or `skip_if_working`"
                                 .to_string(),
                         });
                     }
                     Ok(ToolInvocation::Schedule {
-                        action: ScheduleAction::Update { id, name, what, trigger, in_secs: delay },
+                        action: ScheduleAction::Update {
+                            id,
+                            name,
+                            what,
+                            trigger,
+                            in_secs: delay,
+                            skip_if_working,
+                        },
                     })
                 }
                 "cancel" | "remove" | "delete" => match value.get("id").and_then(|v| v.as_str()) {
@@ -1594,7 +1639,8 @@ mod tests {
                     name: String::new(),
                     what: "check".into(),
                     trigger: Trigger::Clock(Cadence::Every(18000)),
-                    in_secs: None
+                    in_secs: None,
+                    skip_if_working: false,
                 }
             })
         );
@@ -1613,6 +1659,7 @@ mod tests {
                     what: None,
                     trigger: Some(Trigger::Clock(Cadence::Daily)),
                     in_secs: None,
+                    skip_if_working: None,
                 }
             }),
             "an absent field is a field to leave as it is, not one to blank"
@@ -1648,6 +1695,7 @@ mod tests {
                     what: None,
                     trigger: None,
                     in_secs: Some(3600),
+                    skip_if_working: None,
                 }
             })
         );
@@ -1660,6 +1708,73 @@ mod tests {
         let err = parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\"}")).unwrap_err();
         assert!(matches!(err, ToolParseError::IncompleteSchedule { .. }));
         assert!(err.guidance().contains("update"), "the way out has to be in the message");
+
+        // Switching the skip on is a change like any other. Counted out of the
+        // "nothing to change" test, this call is refused and the agent is told
+        // to send a field it already sent.
+        assert!(matches!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"update\",\"id\":\"r7\",\"skip_if_working\":true}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Update { skip_if_working: Some(true), .. }
+            })
+        ));
+    }
+
+    #[test]
+    fn a_routine_can_be_asked_to_drop_a_firing_it_would_land_on_top_of() {
+        // Off unless it is asked for: a routine that has to happen even if it
+        // has to wait is the ordinary one, and the agent that says nothing
+        // means that one.
+        assert!(matches!(
+            parse(&call(SCHEDULE, "{\"action\":\"add\",\"what\":\"sweep\",\"repeat\":\"daily\"}")),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add { skip_if_working: false, .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"add\",\"what\":\"sweep\",\"repeat\":\"daily\",\
+                  \"skip_if_working\":true}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add { skip_if_working: true, .. }
+            })
+        ));
+
+        // Asked for a boolean, models send the word often enough that reading
+        // only the JSON type would silently ignore the field being set.
+        assert!(matches!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"add\",\"what\":\"sweep\",\"repeat\":\"daily\",\
+                  \"skip_if_working\":\"true\"}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Add { skip_if_working: true, .. }
+            })
+        ));
+
+        // On an update, absent is "leave it as it is" and false is a decision:
+        // a routine being retimed must not lose the skip it was set with.
+        assert!(matches!(
+            parse(&call(SCHEDULE, "{\"action\":\"update\",\"id\":\"r7\",\"in_secs\":600}")),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Update { skip_if_working: None, .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&call(
+                SCHEDULE,
+                "{\"action\":\"update\",\"id\":\"r7\",\"skip_if_working\":false}"
+            )),
+            Ok(ToolInvocation::Schedule {
+                action: ScheduleAction::Update { skip_if_working: Some(false), .. }
+            })
+        ));
     }
 
     #[test]
@@ -1700,7 +1815,8 @@ mod tests {
                     name: "Standup".into(),
                     what: "check".into(),
                     trigger: Trigger::Clock(Cadence::Weekdays),
-                    in_secs: None
+                    in_secs: None,
+                    skip_if_working: false,
                 }
             })
         );
@@ -1728,7 +1844,8 @@ mod tests {
                     name: String::new(),
                     what: "wake me".into(),
                     trigger: Trigger::Clock(Cadence::Once),
-                    in_secs: Some(3600)
+                    in_secs: Some(3600),
+                    skip_if_working: false,
                 }
             })
         );

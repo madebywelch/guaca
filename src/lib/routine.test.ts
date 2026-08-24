@@ -9,6 +9,7 @@ import {
   momentOf,
   parseTrigger,
   repeatLabel,
+  repeats,
   routineTitle,
   secondsUntil,
   TRIGGER_CHOICES,
@@ -52,6 +53,17 @@ describe("trigger vocabulary", () => {
     expect(parseTrigger("every:18000")).toEqual({ kind: "gap", secs: 18_000 });
     expect(repeatLabel("every:18000")).toBe("Every 5 hours");
     expect(repeatLabel("every:90")).toBe("Every 90 seconds");
+  });
+
+  it("counts everything but a one-off as something that repeats", () => {
+    // Mirrors `Trigger::repeats` in Rust, and the panel decides whether to
+    // offer the skip off it: a one-off dropped is one that never happens, and
+    // the backend refuses that pair.
+    expect(repeats("daily")).toBe(true);
+    expect(repeats("every:18000")).toBe(true);
+    // An event repeats: it happens every time the thing it names does.
+    expect(repeats("event:stripe/invoice.payment_failed")).toBe(true);
+    expect(repeats("once")).toBe(false);
   });
 
   it("reads a connector event as the two identifiers it is", () => {

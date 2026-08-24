@@ -95,6 +95,7 @@ repo: the frontend renders state and forwards intent.
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
+| Whether a firing lands on an agent that is already working | *A firing can be skipped, which is not the same as deferred* and *A skipped firing is in the history* in `docs/ROUTINES.md`, then `Activity::is_working` and `Runtime::sweep_schedule` |
 | What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
 | Whether an agent may have a computer or a browser at all | *A computer is given to one agent, not to the workspace* in `docs/MACHINES.md`, then `Runtime::surfaces_for` |
 | Sandboxes, the desktop, the screen, sign-ins on it | `docs/MACHINES.md` |
@@ -505,6 +506,22 @@ the model takes a screenshot to see what `browse` did.
 - **`Routine::next_run_at` is an `Option` because some triggers have no next
   run.** A sentinel date would be shown to the operator, and it is one bad
   comparison away from firing something that was waiting on a connector.
+- **A skipped firing advances the slot, and is refused on anything that does not
+  repeat.** Both follow from skipping being a drop rather than a deferral: an
+  hourly sweep held back until the agent goes quiet fires the moment it does,
+  which is the pile-up in a bunch instead of one at a time. Advancing is also
+  why the pair is refused on a one-off, whose slot is the only one it has: it
+  would be deleted having done nothing, and the operator would find an empty
+  list where their alarm was. The panel hides the tick there rather than relying
+  on the refusal, because a control nobody can see is a save that fails for no
+  visible reason. `validate`, then *A firing can be skipped* in
+  `docs/ROUTINES.md`.
+- **`routine_runs.run_id` is nullable, and a skip is a row in that table.** Two
+  failures read alike and have different fixes. A firing that leaves no trace is
+  a gap, and a gap is what a scheduler that has stopped working looks like; a
+  skip filed under an invented run id reads back as a delivery that bought no
+  model calls, which is the case that history was built to surface. Only the row
+  saying which it was tells them apart, so the id is absent rather than made up.
 - **An agent's standing routines are in its prompt, and that is not a duplicate
   of `schedule` with `list`.** A list behind a tool call arrives after the model
   has decided what to do, so an agent asked to change something it already keeps
