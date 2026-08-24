@@ -84,6 +84,18 @@ pub struct Outcome {
     /// The model the harness chose. Not Guaca's to pick: `pi` resolves it from
     /// its own settings and its own sign-ins.
     pub model: String,
+    /// What the harness said went wrong, when it ended a turn on an error.
+    ///
+    /// `pi` reports a failed turn *inside* its stream and still exits zero: the
+    /// final assistant message carries `stopReason: "error"` and an
+    /// `errorMessage`, with empty content. Read by exit code and text alone,
+    /// that is indistinguishable from a job with nothing to do.
+    ///
+    /// It cost an afternoon to find. An expired Codex token turned every coding
+    /// job in a live workspace into a silent no-op, the agents reported that
+    /// nothing needed doing, and `pi auth check` called the provider ready
+    /// throughout.
+    pub failed: Option<String>,
 }
 
 /// One line of progress, for whoever is watching the job run.
@@ -269,6 +281,15 @@ mod tests {
                     if let Some(model) = event["message"]["model"].as_str() {
                         outcome.model = model.to_string();
                     }
+                    outcome.failed = match event["message"]["stopReason"].as_str() {
+                        Some("error") => Some(
+                            event["message"]["errorMessage"]
+                                .as_str()
+                                .unwrap_or("the harness did not say why")
+                                .to_string(),
+                        ),
+                        _ => None,
+                    };
                 }
                 "message_update" => {
                     if let Some(total) = event["usage"]["cost"]["total"].as_f64() {
@@ -295,6 +316,42 @@ mod tests {
         assert_eq!(outcome.said, "Fixed and pushed.");
         assert_eq!(outcome.tool_calls, 1);
         assert_eq!(outcome.model, "gpt-5.6");
+    }
+
+    #[test]
+    fn a_turn_that_ended_on_an_error_is_a_failure_and_not_an_empty_job() {
+        // The one that cost an afternoon. `pi` reports a failed turn inside its
+        // own stream and exits zero, so an expired credential arrives looking
+        // exactly like a job that found nothing to do, and every agent in the
+        // workspace dutifully reported that nothing needed doing.
+        let outcome = drive(&[
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"Provided authentication token is expired."}}"#,
+        ]);
+        assert_eq!(outcome.failed.as_deref(), Some("Provided authentication token is expired."));
+        assert_eq!(outcome.tool_calls, 0);
+        assert!(outcome.said.is_empty(), "an errored turn carries no answer");
+    }
+
+    #[test]
+    fn a_turn_that_failed_and_was_retried_is_not_a_failed_job() {
+        // Taken from the last message rather than the first. A harness that
+        // retried and then finished has done the work, and reporting the first
+        // wobble as the outcome throws the result away.
+        let outcome = drive(&[
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error","errorMessage":"overloaded"}}"#,
+            r#"{"type":"tool_execution_start","toolName":"edit"}"#,
+            r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Fixed and pushed."}],"stopReason":"stop"}}"#,
+        ]);
+        assert_eq!(outcome.failed, None);
+        assert_eq!(outcome.said, "Fixed and pushed.");
+    }
+
+    #[test]
+    fn an_errored_turn_with_no_message_still_says_something() {
+        let outcome = drive(&[
+            r#"{"type":"message_end","message":{"role":"assistant","content":[],"stopReason":"error"}}"#,
+        ]);
+        assert!(outcome.failed.is_some(), "silence here is what this exists to prevent");
     }
 
     #[test]

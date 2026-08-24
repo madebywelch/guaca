@@ -1428,6 +1428,21 @@ impl Runtime {
         outcome: Result<crate::pi::Outcome, crate::pi::PiError>,
     ) {
         let text = match outcome {
+            // Reported before the empty case below, and that ordering is the
+            // whole of it. `pi` ends a failed turn inside its own stream and
+            // exits zero, so an expired credential arrives looking exactly like
+            // a job with nothing to do. It cost an afternoon: every coding job
+            // in the workspace became a silent no-op and the agents dutifully
+            // reported that nothing needed doing.
+            Ok(done) if done.failed.is_some() => {
+                let why = done.failed.unwrap_or_default();
+                format!(
+                    "The coding agent in {repository} could not run: {why}. Nothing changed and \
+                     this is not something you can fix or retry: it is the coding harness \
+                     itself, on the operator's machine. Say plainly what you asked for and that \
+                     the harness could not run, and name the reason above."
+                )
+            }
             Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
                 "The coding agent in {repository} finished without doing anything or saying \
                  why. Nothing changed. Say so rather than reporting the work as done."
