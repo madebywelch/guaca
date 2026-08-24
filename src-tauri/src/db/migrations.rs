@@ -1011,6 +1011,28 @@ CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
 ALTER TABLE plugins ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';
 "#,
     ),
+    (
+        36,
+        r#"
+-- Headers the operator wrote, for a server they run themselves.
+--
+-- The third thing such a server can want after an address and a token, and the
+-- one the catalog never needs: an `X-API-Key` because that is where its
+-- framework looks, a pair of `Cf-Access-Client-*` because it is behind
+-- Cloudflare Access, a tenant id because one deployment serves several. None of
+-- them is discoverable, so there is nowhere for them to come from but the
+-- person who deployed the thing.
+--
+-- A grant column in everything but name. Every value here is a secret and this
+-- column is read by the one function that puts it on the wire, exactly as
+-- `access_token` is, and `Plugin` carries the names without the values for the
+-- same reason `connectors` does not return `secret`.
+--
+-- `'[]'` is a server that needs none, which is every row written before today
+-- and almost every row written after it.
+ALTER TABLE plugins ADD COLUMN headers TEXT NOT NULL DEFAULT '[]';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1312,6 +1334,32 @@ mod tests {
             .query_row("SELECT endpoint FROM plugins WHERE id='p1'", [], |row| row.get(0))
             .unwrap();
         assert_eq!(endpoint, "", "an address in the row is one the build can no longer change");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_headers_existed_sends_none() {
+        // `'[]'` and not `''`, because the column is read by parsing it. An
+        // empty string parses as nothing either way today, and would be a
+        // corrupt row the day anything decided to tell an unreadable column
+        // apart from an empty one.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 36) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let headers: String = conn
+            .query_row("SELECT headers FROM plugins WHERE id='p1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(headers, "[]");
     }
 
     #[test]

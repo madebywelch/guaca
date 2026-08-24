@@ -24,7 +24,7 @@ use crate::domain::ids::{
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::{
-    Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
+    Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
@@ -1450,7 +1450,7 @@ impl Store {
         let mut stmt = conn.prepare(&format!(
             "SELECT id,access_token,refresh_token,expires_at,client_id,client_secret,
                     token_endpoint,{PLUGIN_REACHED_BY_AGENT},
-                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE},tools
+                    {PLUGIN_TOOL_REACHED_BY_AGENT},{PLUGIN_TOOL_REACHED_BY_ANYONE},tools,headers
                FROM plugins WHERE group_id=:group AND kind=:kind",
         ))?;
         let row = stmt
@@ -1474,6 +1474,7 @@ impl Store {
                         row.get::<_, i64>(8)? != 0,
                         row.get::<_, i64>(9)? != 0,
                         row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
                     ))
                 },
             )
@@ -1491,6 +1492,7 @@ impl Store {
             tool_mine,
             tool_anyones,
             tools,
+            headers,
         )) = row
         else {
             return Ok(PluginReach::NotConnected);
@@ -1533,7 +1535,12 @@ impl Store {
             .and_then(|all| all.into_iter().find(|held| held.name == tool))
             .map(|held| held.input_schema);
 
-        Ok(PluginReach::Granted { id, grant, schema })
+        Ok(PluginReach::Granted(Box::new(Reached {
+            id,
+            grant,
+            headers: Headers::decode(&headers),
+            schema,
+        })))
     }
 
     /// Narrows a plugin to some of the crew, or opens it to all of it.
@@ -1754,6 +1761,11 @@ impl Store {
         // account-backed kind. Empty is the account's default, which is what a
         // row written before connections existed keeps meaning.
         connection: &str,
+        // What the operator gave this server beyond a token. Replaced whole on
+        // a reconnection, exactly as the tool list is: a merge would let a
+        // caller drop a header by forgetting it, and the panel that sends these
+        // renders what it last read.
+        headers: &Headers,
     ) -> Result<Plugin, StoreError> {
         let conn = self.conn()?;
         let id = PluginId::new();
@@ -1763,8 +1775,8 @@ impl Store {
         conn.execute(
             "INSERT INTO plugins
                 (id,group_id,kind,account,tools,client_id,client_secret,token_endpoint,
-                 access_token,refresh_token,expires_at,connected_at,connection,endpoint)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)
+                 access_token,refresh_token,expires_at,connected_at,connection,endpoint,headers)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
              ON CONFLICT(group_id,kind) DO UPDATE SET
                 account=excluded.account,
                 connection=excluded.connection,
@@ -1776,7 +1788,8 @@ impl Store {
                 refresh_token=excluded.refresh_token,
                 expires_at=excluded.expires_at,
                 connected_at=excluded.connected_at,
-                endpoint=excluded.endpoint",
+                endpoint=excluded.endpoint,
+                headers=excluded.headers",
             params![
                 id.to_string(),
                 group.to_string(),
@@ -1794,6 +1807,7 @@ impl Store {
                 // Empty for a catalog kind, whose address belongs to the build.
                 // See `PluginKind::stored_endpoint` and migration 35.
                 kind.stored_endpoint(),
+                headers.encode(),
             ],
         )?;
 
@@ -1804,6 +1818,75 @@ impl Store {
             .into_iter()
             .find(|plugin| plugin.kind.slug() == kind.slug())
             .ok_or(StoreError::PluginNotFound(id))
+    }
+
+    /// What one plugin is dialled with, for a caller holding its id and no agent.
+    ///
+    /// Not a narrower `plugin_reach`, because it answers a different question
+    /// and must not answer that one: this is the operator asking whether their
+    /// own server is reachable, and an operator is not one of the crew. Running
+    /// it through the per-agent rule would make a diagnostic report "not for
+    /// you" about a plugin the person who connected it is looking at.
+    ///
+    /// A row this build cannot dial comes back as `None`, exactly as it is
+    /// skipped in `group_plugins`, and for the same reason.
+    pub fn plugin_dial(&self, id: PluginId) -> Result<Option<Dialed>, StoreError> {
+        let conn = self.conn()?;
+        let row = conn
+            .query_row(
+                "SELECT kind,endpoint,headers,connection,access_token,refresh_token,expires_at,
+                        client_id,client_secret,token_endpoint
+                   FROM plugins WHERE id=?1",
+                params![id.to_string()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                    ))
+                },
+            )
+            .optional()?;
+
+        let Some((
+            kind,
+            endpoint,
+            headers,
+            connection,
+            access,
+            refresh,
+            expires_at,
+            client_id,
+            client_secret,
+            token_endpoint,
+        )) = row
+        else {
+            return Ok(None);
+        };
+        let Some(kind) = PluginKind::from_row(&kind, &endpoint) else { return Ok(None) };
+
+        Ok(Some(Dialed {
+            kind,
+            // Empty is a server that asked for nothing, not a broken row. See
+            // the same read in `plugin_reach`.
+            grant: (!access.is_empty()).then(|| crate::oauth::Grant {
+                access_token: access,
+                refresh_token: (!refresh.is_empty()).then_some(refresh),
+                expires_at,
+                client_id,
+                client_secret: (!client_secret.is_empty()).then_some(client_secret),
+                token_endpoint,
+            }),
+            headers: Headers::decode(&headers),
+            connection,
+        }))
     }
 
     /// Writes back a renewed grant, leaving everything else alone.
@@ -2995,17 +3078,48 @@ pub enum PluginReach {
     /// Connected and this agent's, but this tool was narrowed to other agents.
     /// Somebody in the crew has it.
     ToolNotChosen,
-    /// The row, the grant to spend against it, and the shape the call takes.
+    /// The row, what to reach it with, and the shape the call takes.
     ///
-    /// The grant is `None` for a server that authorized nobody because it asked
-    /// for nothing. The schema is `None` for a tool the stored list no longer
-    /// describes, which mirrors no headers and is otherwise called exactly the
-    /// same way.
-    Granted { id: PluginId, grant: Option<crate::oauth::Grant>, schema: Option<serde_json::Value> },
+    /// Boxed and named rather than four fields on the variant, because the four
+    /// travel together everywhere and because a refusal is a discriminant with
+    /// nothing on it: inline, every "not for you" would carry the width of a
+    /// grant it does not have.
+    Granted(Box<Reached>),
+}
+
+/// What one agent's call on one plugin tool is allowed to use.
+///
+/// The grant is `None` for a server that authorized nobody because it asked for
+/// nothing. The headers are the operator's own and are usually empty: they are
+/// here rather than looked up separately because a call made without them does
+/// not fail at the server, it fails at whatever is in front of it, with a
+/// refusal that says nothing about MCP. The schema is `None` for a tool the
+/// stored list no longer describes, which mirrors no headers and is otherwise
+/// called exactly the same way.
+#[derive(Debug)]
+pub struct Reached {
+    pub id: PluginId,
+    pub grant: Option<crate::oauth::Grant>,
+    pub headers: Headers,
+    pub schema: Option<serde_json::Value>,
+}
+
+/// One plugin, as the thing that dials it needs it.
+///
+/// Four fields because dialling a server takes four answers and three of them
+/// live nowhere else: which server it is, what to present, what to send to get
+/// past whatever is in front of it, and which identity at the account when the
+/// server is the account. A caller holding three of these would be guessing the
+/// fourth, which is the bug `AccountUse` exists to prevent one level down.
+pub struct Dialed {
+    pub kind: PluginKind,
+    pub grant: Option<crate::oauth::Grant>,
+    pub headers: Headers,
+    pub connection: String,
 }
 
 const PLUGIN_COLUMNS: &str = "SELECT id,group_id,kind,account,tools,access_token,connected_at,\
-     access,connection,endpoint FROM plugins";
+     access,connection,endpoint,headers FROM plugins";
 
 /// The one rule that decides whether an agent is offered a plugin's tools and
 /// whether a call it makes may spend the grant.
@@ -3083,6 +3197,7 @@ fn row_to_plugin(
     let reach: String = row.get(7)?;
     let connection: String = row.get(8)?;
     let endpoint_raw: String = row.get(9)?;
+    let headers: String = row.get(10)?;
 
     Ok((|| {
         let Some(kind) = PluginKind::from_row(&kind_raw, &endpoint_raw) else { return Ok(None) };
@@ -3115,6 +3230,10 @@ fn row_to_plugin(
                 .collect(),
             access: PluginAccess::from_row(&reach, chosen.get(&id).cloned().unwrap_or_default()),
             connection,
+            // Names only. The values are in the same column and stay there:
+            // this struct is what every plugin command answers with, and there
+            // is no field on it for a secret to arrive in.
+            headers: Headers::decode(&headers).names(),
             signed_in: !access.is_empty(),
             connected_at: row.get(6)?,
         }))
@@ -3228,6 +3347,7 @@ mod tests {
     use crate::domain::attachment::Attachment;
     use crate::domain::envelope::channel_for;
     use crate::domain::ids::RunId;
+    use crate::domain::plugin::HeaderPair;
     use crate::domain::routine::{Cadence, EventTrigger};
 
     /// A trigger on the clock, which is what most of these are about.
@@ -5524,7 +5644,9 @@ mod tests {
             .store
             .create_group(&CleanGroup { name: "Crew".into(), ..Default::default() })
             .unwrap();
-        f.store.save_plugin(group.id, &PluginKind::Neon, "", &[], None, "").unwrap();
+        f.store
+            .save_plugin(group.id, &PluginKind::Neon, "", &[], None, "", &Headers::none())
+            .unwrap();
 
         f.store.delete_group(group.id).unwrap();
         assert!(f.store.group_plugins(group.id).unwrap().is_empty());
@@ -5546,8 +5668,20 @@ mod tests {
         let group = default_group_id();
         let mine = PluginKind::custom("Home Assistant", "https://ha.example.com/mcp").unwrap();
 
-        f.store.save_plugin(group, &mine, "", &[tool("run_sql")], None, "").unwrap();
-        f.store.save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "").unwrap();
+        f.store
+            .save_plugin(group, &mine, "", &[tool("run_sql")], None, "", &Headers::none())
+            .unwrap();
+        f.store
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
+            .unwrap();
 
         let held = f.store.group_plugins(group).unwrap();
         let added = held.iter().find(|held| held.custom).expect("the added one comes back");
@@ -5574,7 +5708,17 @@ mod tests {
         // turn, which is what raising here would cost.
         let f = fixture();
         let group = default_group_id();
-        f.store.save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "").unwrap();
+        f.store
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
+            .unwrap();
         f.store
             .conn()
             .unwrap()
@@ -5589,6 +5733,44 @@ mod tests {
         let held = f.store.group_plugins(group).unwrap();
         assert_eq!(held.len(), 1, "the unreadable row is dropped and the readable one is not");
         assert_eq!(f.store.plugin_tools(group, agent.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn headers_go_out_with_the_grant_and_come_back_as_names_alone() {
+        // Two boundaries in one row. The call path needs the values, because a
+        // call made without them does not fail at the server but at whatever is
+        // in front of it; the panel needs the names, because "is x-api-key on
+        // the request" is the question an operator debugging their own server
+        // is asking; and neither wants the other's half.
+        let f = fixture();
+        let group = default_group_id();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        let kind = PluginKind::custom("Home Assistant", "https://ha.example.com/mcp").unwrap();
+        let headers =
+            Headers::parse(&[HeaderPair { name: "X-API-Key".into(), value: "hand-minted".into() }])
+                .unwrap();
+
+        let saved =
+            f.store.save_plugin(group, &kind, "", &[tool("turn_on")], None, "", &headers).unwrap();
+        assert_eq!(saved.headers, vec!["x-api-key".to_string()]);
+
+        let PluginReach::Granted(reached) =
+            f.store.plugin_reach(group, agent.id, &kind, "turn_on").unwrap()
+        else {
+            panic!("the crew can call it")
+        };
+        assert_eq!(reached.headers, headers, "the call path gets the values");
+
+        // And a caller holding the id and no agent gets the same, because an
+        // operator testing their own server is not one of the crew.
+        let dialed = f.store.plugin_dial(saved.id).unwrap().expect("the row it was written as");
+        assert_eq!(dialed.headers, headers);
+        assert_eq!(dialed.kind, kind);
+
+        // Replaced whole on a reconnection, exactly as the tool list is.
+        let again =
+            f.store.save_plugin(group, &kind, "", &[tool("turn_on")], None, "", &Headers::none());
+        assert!(again.unwrap().headers.is_empty());
     }
 
     #[test]
@@ -5615,24 +5797,25 @@ mod tests {
                 }],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
-        let PluginReach::Granted { schema, .. } =
+        let PluginReach::Granted(reached) =
             f.store.plugin_reach(group, agent.id, &PluginKind::Neon, "run_sql").unwrap()
         else {
             panic!("the crew can call it")
         };
-        assert_eq!(schema.unwrap()["properties"]["region"]["x-mcp-header"], "Region");
+        assert_eq!(reached.schema.unwrap()["properties"]["region"]["x-mcp-header"], "Region");
 
         // And a tool the stored list no longer describes has none, which is a
         // call that mirrors nothing rather than a call that cannot be made.
-        let PluginReach::Granted { schema, .. } =
+        let PluginReach::Granted(reached) =
             f.store.plugin_reach(group, agent.id, &PluginKind::Neon, "gone").unwrap()
         else {
             panic!("the reach check is about the plugin, not about the tool list")
         };
-        assert!(schema.is_none());
+        assert!(reached.schema.is_none());
     }
 
     #[test]
@@ -5643,15 +5826,15 @@ mod tests {
         // carry `Bearer `. The kind is incidental: the column is what decides.
         let f = fixture();
         let group = default_group_id();
-        f.store.save_plugin(group, &PluginKind::Neon, "", &[], None, "").unwrap();
+        f.store.save_plugin(group, &PluginKind::Neon, "", &[], None, "", &Headers::none()).unwrap();
 
         let agent = f.store.create_agent(&draft("Manager")).unwrap();
-        let PluginReach::Granted { grant, .. } =
+        let PluginReach::Granted(reached) =
             f.store.plugin_reach(group, agent.id, &PluginKind::Neon, "run_sql").unwrap()
         else {
             panic!("a connected plugin is reachable by the crew it was connected for")
         };
-        assert!(grant.is_none());
+        assert!(reached.grant.is_none());
         assert!(!f.store.group_plugins(group).unwrap()[0].signed_in);
     }
 
@@ -5663,7 +5846,17 @@ mod tests {
         let f = fixture();
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
-        f.store.save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "").unwrap();
+        f.store
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
+            .unwrap();
 
         assert_eq!(f.store.group_plugins(group).unwrap()[0].access, PluginAccess::Everyone);
         assert_eq!(f.store.plugin_tools(group, manager.id).unwrap().len(), 1);
@@ -5682,7 +5875,15 @@ mod tests {
         let scribe = f.store.create_agent(&draft("Scribe")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Stripe, "", &[tool("refund")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Stripe,
+                "",
+                &[tool("refund")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         let saved = f
@@ -5698,7 +5899,7 @@ mod tests {
         // tool it was never offered.
         assert!(matches!(
             f.store.plugin_reach(group, revenue.id, &PluginKind::Stripe, "refund").unwrap(),
-            PluginReach::Granted { .. }
+            PluginReach::Granted(_)
         ));
         assert!(matches!(
             f.store.plugin_reach(group, scribe.id, &PluginKind::Stripe, "refund").unwrap(),
@@ -5716,7 +5917,15 @@ mod tests {
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Stripe, "", &[tool("refund")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Stripe,
+                "",
+                &[tool("refund")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         f.store.set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![] }).unwrap();
@@ -5735,7 +5944,10 @@ mod tests {
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
-        let plugin = f.store.save_plugin(group, &PluginKind::Stripe, "", &[], None, "").unwrap();
+        let plugin = f
+            .store
+            .save_plugin(group, &PluginKind::Stripe, "", &[], None, "", &Headers::none())
+            .unwrap();
 
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
@@ -5768,7 +5980,15 @@ mod tests {
             .unwrap();
         let plugin = f
             .store
-            .save_plugin(default_group_id(), &PluginKind::Stripe, "", &[], None, "")
+            .save_plugin(
+                default_group_id(),
+                &PluginKind::Stripe,
+                "",
+                &[],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         let refused = f
@@ -5790,7 +6010,15 @@ mod tests {
         let scribe = f.store.create_agent(&draft("Scribe")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Stripe, "", &[tool("refund")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Stripe,
+                "",
+                &[tool("refund")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
@@ -5798,7 +6026,15 @@ mod tests {
 
         let again = f
             .store
-            .save_plugin(group, &PluginKind::Stripe, "", &[tool("refund")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Stripe,
+                "",
+                &[tool("refund")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         assert_eq!(again.access, PluginAccess::Chosen { agents: vec![revenue.id] });
@@ -5810,7 +6046,10 @@ mod tests {
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
-        let plugin = f.store.save_plugin(group, &PluginKind::Stripe, "", &[], None, "").unwrap();
+        let plugin = f
+            .store
+            .save_plugin(group, &PluginKind::Stripe, "", &[], None, "", &Headers::none())
+            .unwrap();
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
             .unwrap();
@@ -5830,7 +6069,10 @@ mod tests {
         let f = fixture();
         let group = default_group_id();
         let revenue = f.store.create_agent(&draft("Revenue")).unwrap();
-        let plugin = f.store.save_plugin(group, &PluginKind::Stripe, "", &[], None, "").unwrap();
+        let plugin = f
+            .store
+            .save_plugin(group, &PluginKind::Stripe, "", &[], None, "", &Headers::none())
+            .unwrap();
         f.store
             .set_plugin_access(plugin.id, &PluginAccess::Chosen { agents: vec![revenue.id] })
             .unwrap();
@@ -5861,6 +6103,7 @@ mod tests {
                 &[tool("run_sql"), tool("drop_project")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -5895,6 +6138,7 @@ mod tests {
                 &[tool("run_sql"), tool("drop_project")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -5921,7 +6165,7 @@ mod tests {
         ));
         assert!(matches!(
             f.store.plugin_reach(group, manager.id, &PluginKind::Neon, "run_sql").unwrap(),
-            PluginReach::Granted { .. }
+            PluginReach::Granted(_)
         ));
     }
 
@@ -5944,6 +6188,7 @@ mod tests {
                 &[tool("charges"), tool("refund")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -5985,6 +6230,7 @@ mod tests {
                 &[tool("read_thread"), tool("send")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -6017,7 +6263,7 @@ mod tests {
         ));
         assert!(matches!(
             f.store.plugin_reach(group, reply.id, &PluginKind::Agentmail, "send").unwrap(),
-            PluginReach::Granted { .. }
+            PluginReach::Granted(_)
         ));
         assert!(matches!(
             f.store.plugin_reach(group, reply.id, &PluginKind::Agentmail, "read_thread").unwrap(),
@@ -6043,6 +6289,7 @@ mod tests {
                 &[tool("refund"), tool("charges")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -6090,7 +6337,15 @@ mod tests {
         let outside = f.store.create_agent(&draft("Outside")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         f.store
@@ -6132,7 +6387,15 @@ mod tests {
             .unwrap();
         let plugin = f
             .store
-            .save_plugin(default_group_id(), &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                default_group_id(),
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         let refused = f
@@ -6165,7 +6428,15 @@ mod tests {
         let gone = f.store.create_agent(&draft("Gone")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         f.store
             .set_plugin_tool(plugin.id, "run_sql", &PluginAccess::Chosen { agents: vec![gone.id] })
@@ -6194,7 +6465,15 @@ mod tests {
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         f.store
@@ -6228,7 +6507,15 @@ mod tests {
         let f = fixture();
         let plugin = f
             .store
-            .save_plugin(default_group_id(), &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                default_group_id(),
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
 
         let refused = f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap_err();
@@ -6250,8 +6537,10 @@ mod tests {
         let group = default_group_id();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let published = [tool("run_sql"), tool("drop_project")];
-        let plugin =
-            f.store.save_plugin(group, &PluginKind::Neon, "", &published, None, "").unwrap();
+        let plugin = f
+            .store
+            .save_plugin(group, &PluginKind::Neon, "", &published, None, "", &Headers::none())
+            .unwrap();
         f.store.set_plugin_tool(plugin.id, "drop_project", &nobody()).unwrap();
 
         // And a tool the vendor started publishing since arrives switched on,
@@ -6267,6 +6556,7 @@ mod tests {
                 &[tool("run_sql"), tool("drop_project"), tool("list_branches")],
                 None,
                 "",
+                &Headers::none(),
             )
             .unwrap();
 
@@ -6292,7 +6582,15 @@ mod tests {
         let group = default_group_id();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         f.store
@@ -6322,7 +6620,15 @@ mod tests {
             .unwrap();
         let plugin = f
             .store
-            .save_plugin(group.id, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group.id,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         let hand = f
             .store
@@ -6355,7 +6661,15 @@ mod tests {
         let manager = f.store.create_agent(&draft("Manager")).unwrap();
         let plugin = f
             .store
-            .save_plugin(group, &PluginKind::Neon, "", &[tool("run_sql")], None, "")
+            .save_plugin(
+                group,
+                &PluginKind::Neon,
+                "",
+                &[tool("run_sql")],
+                None,
+                "",
+                &Headers::none(),
+            )
             .unwrap();
         f.store
             .conn()

@@ -429,6 +429,8 @@ pub fn run() {
             commands::connect_plugin,
             commands::add_plugin,
             commands::readdress_plugin,
+            commands::probe_server,
+            commands::check_plugin,
             commands::disconnect_plugin,
             commands::scan_agent_signins,
             commands::agent_signins,

@@ -55,14 +55,29 @@
 //! is where the spec puts the address of the metadata that says who can issue
 //! one. `oauth.rs` reads it.
 //!
+//! ## Two transports, and who gets the older one
+//!
+//! Streamable HTTP is one POST per request and is what everything here assumes.
+//! The transport it replaced — HTTP+SSE, revision `2024-11-05` — is a GET that
+//! stays open, an `endpoint` event naming a second URL, and every request POSTed
+//! to that URL with its reply arriving back down the stream. Deprecated since
+//! `2025-03-26`, and still what a great many self-hosted servers speak, because
+//! the framework somebody deployed two years ago has not been updated.
+//!
+//! Guaca falls back to it for a server the operator added and not for one on the
+//! catalog, and the asymmetry is the catalog's whole argument rather than an
+//! inconsistency. A vendor Guaca vouches for is a vendor Guaca can hold to the
+//! current transport; a box in somebody's own network is not a vendor, and
+//! refusing to speak to it is not a migration incentive, it is a plugin that
+//! does not work. [`Dial::legacy_transport`] is the switch and `plugins.rs` is
+//! the only thing that sets it.
+//!
 //! ## What is deliberately not here
 //!
-//! The 2024-11-05 HTTP+SSE transport, which has been deprecated since
-//! `2025-03-26` and is scheduled for removal: a client that falls back to it
-//! keeps servers alive that should be migrating. Resources, prompts,
-//! `subscriptions/listen` and the server-to-client input requests a modern
-//! server can embed in a result: an agent here is offered tools and nothing
-//! else, and a half-implemented capability is worse than an absent one.
+//! Resources, prompts, `subscriptions/listen` and the server-to-client input
+//! requests a modern server can embed in a result: an agent here is offered
+//! tools and nothing else, and a half-implemented capability is worse than an
+//! absent one.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -75,7 +90,16 @@ use serde::Deserialize;
 /// Order is the preference order: the first is what a modern request declares,
 /// and a server that refuses it names what it has instead, out of which the
 /// first of these that appears is taken.
-pub const SUPPORTED: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-06-18"];
+///
+/// The two oldest are here for the servers an operator runs rather than for the
+/// catalog, which negotiates down to neither. `tools/list` and `tools/call` are
+/// the only methods this client has ever sent and both are unchanged across all
+/// five, so the cost of accepting an old revision is nothing and the cost of
+/// refusing one is a working server Guaca will not talk to. A server that
+/// answers `2024-11-05` is usually on the older transport as well: see
+/// [`Transport`].
+pub const SUPPORTED: [&str; 5] =
+    ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// What a modern request declares, and the newest revision this build knows.
 pub const PROTOCOL_VERSION: &str = SUPPORTED[0];
@@ -167,6 +191,23 @@ pub enum McpError {
     /// here rather than anything the operator did, and it says so.
     #[error("{endpoint} refused the request as malformed ({detail}); this is a bug in Guaca")]
     HeaderMismatch { endpoint: String, detail: String },
+    /// A GET that answered with something other than an event stream.
+    ///
+    /// Its own variant rather than a `Malformed` with a sentence in it, because
+    /// the era probe has to tell "this address is not on the older transport"
+    /// apart from "it is, and something on the stream was wrong": the first
+    /// keeps the refusal the current transport already gave, and the second
+    /// replaces it. A message match would put that decision in a string.
+    #[error("{endpoint} answered a GET with {content_type}, not an event stream")]
+    NotAStream { endpoint: String, content_type: String },
+    /// An event stream that opened and then said nothing.
+    ///
+    /// Its own sentence rather than a timeout on the transport, because it is
+    /// the one failure the older transport has that the current one does not:
+    /// the socket is up, the request was accepted, and the answer was supposed
+    /// to arrive on a stream that is still technically connected.
+    #[error("{endpoint} opened an event stream and did not answer {method} on it within {secs}s")]
+    Silent { endpoint: String, method: String, secs: u64 },
 }
 
 impl McpError {
@@ -204,6 +245,59 @@ pub struct ToolDescriptor {
     pub input_schema: Option<serde_json::Value>,
 }
 
+/// Which of the two transports a server turned out to want.
+///
+/// Remembered per endpoint beside the era, and for the same reasons: it is a
+/// property of the deployed server, it cannot expire, and re-probing it in
+/// front of every tool call would be an internet round trip the answer to which
+/// is already known.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transport {
+    /// One POST per request, the reply in its response. Everything current.
+    Streamable,
+    /// `2024-11-05`: a GET that stays open, an `endpoint` event naming a second
+    /// URL, every request POSTed there and every reply arriving on the stream.
+    ///
+    /// Only ever reached for a server the operator added. See the module docs.
+    Sse,
+}
+
+/// Everything needed to open a session, and nothing that comes back from one.
+///
+/// A struct rather than four arguments because two of them are `Option`-shaped
+/// booleans that read identically at a call site, and the failure of getting
+/// them the wrong way round is a crew's credential sent to a server that was
+/// never asked whether it wanted one.
+#[derive(Clone, Copy)]
+pub struct Dial<'a> {
+    pub endpoint: &'a str,
+    /// The grant, a pasted key, or nothing. Sent as `Authorization: Bearer`.
+    pub token: Option<&'a str>,
+    /// What the operator gave this server beyond a credential: an API-key
+    /// header, a pair of Access headers, a tenant id. Empty for the catalog.
+    pub headers: &'a [(String, String)],
+    /// Whether this server may be spoken to over the transport that streamable
+    /// HTTP replaced.
+    ///
+    /// True only for a server the operator added. A vendor on the catalog is
+    /// one Guaca vouched for, and vouching includes the transport; a box in
+    /// somebody's own network is not a vendor, and refusing it is not a
+    /// migration incentive. See the module docs.
+    pub legacy_transport: bool,
+}
+
+impl<'a> Dial<'a> {
+    /// An address and nothing else: no credential, no headers, current
+    /// transport only. What a test and the era probe want.
+    pub fn to(endpoint: &'a str) -> Dial<'a> {
+        Dial { endpoint, token: None, headers: &[], legacy_transport: false }
+    }
+
+    pub fn with_token(self, token: Option<&'a str>) -> Dial<'a> {
+        Dial { token, ..self }
+    }
+}
+
 /// What a request needs to carry, and what the handshake established.
 ///
 /// A modern session is established by nothing at all — it is the era, the
@@ -213,7 +307,15 @@ pub struct ToolDescriptor {
 pub struct Session {
     pub endpoint: String,
     pub token: Option<String>,
+    /// The operator's own headers, on every request this session makes.
+    ///
+    /// Owned rather than borrowed because a session outlives the call that
+    /// opened it by exactly one await point per request, and a lifetime here
+    /// would spread through every caller for a vector that is almost always
+    /// empty and never longer than eight.
+    headers: Vec<(String, String)>,
     pub era: Era,
+    pub transport: Transport,
     /// Whatever the server said, or nothing. Never invented: a server that
     /// issued no session id rejects a request that carries one, and a modern
     /// server never issues one.
@@ -233,6 +335,11 @@ pub struct Session {
 }
 
 impl Session {
+    /// Whether this session talks over the transport streamable HTTP replaced.
+    pub fn sse(&self) -> bool {
+        self.transport == Transport::Sse
+    }
+
     /// The revision every request on this session declares.
     fn version(&self) -> &str {
         match &self.era {
@@ -243,8 +350,14 @@ impl Session {
         }
     }
 
-    fn modern(&self) -> bool {
+    /// Whether this session is on the revision that deleted the handshake.
+    pub fn modern(&self) -> bool {
         matches!(self.era, Era::Modern { .. })
+    }
+
+    /// The revision the two of them settled on, for whoever is reporting it.
+    pub fn protocol(&self) -> &str {
+        self.version()
     }
 }
 
@@ -255,78 +368,143 @@ impl Session {
 /// that was already open; one that does not answers 401 and says where its
 /// authorization server is. That happens before the era is known, because a 401
 /// is the same answer in both.
-pub async fn open(endpoint: &str, token: Option<&str>) -> Result<Session, McpError> {
+pub async fn open(dial: Dial<'_>) -> Result<Session, McpError> {
     let http = client()?;
 
-    // What this endpoint was last time. A remembered era that turns out to be
-    // wrong is a server upgraded underneath a running Guaca: the handshake it
-    // wanted yesterday is a `400` today. One failure, then the truth.
+    // What this endpoint was last time. A remembered answer that turns out to
+    // be wrong is a server upgraded underneath a running Guaca: the handshake
+    // it wanted yesterday is a `400` today. One failure, then the truth.
     //
     // Only a protocol-level failure means that. A 401 is the sign-in and says
     // nothing about the era, and a transport failure says nothing about
     // anything, so both are handed back rather than spent on a second probe of
     // a server that is not answering.
-    if let Some(era) = remembered(endpoint) {
-        match establish(&http, endpoint, token, era, String::new()).await {
+    if let Some(spoken) = remembered(dial.endpoint) {
+        match establish(&http, dial, spoken, String::new()).await {
             Ok(session) => return Ok(session),
             Err(err) if err.is_unauthorized() || matches!(err, McpError::Transport { .. }) => {
                 return Err(err)
             }
-            Err(_) => forget(endpoint),
+            Err(_) => forget(dial.endpoint),
         }
     }
 
-    let probed = probe(&http, endpoint, token).await?;
-    remember(endpoint, &probed.era);
-    establish(&http, endpoint, token, probed.era, probed.server_name).await
+    let probed = probe(&http, dial).await?;
+    remember(dial.endpoint, &probed.spoken);
+    establish(&http, dial, probed.spoken, probed.server_name).await
 }
 
-/// A session for an era that has already been decided.
+/// A session for an era and a transport that have already been decided.
 ///
 /// Free for a modern server, which is the whole of what that revision changed:
-/// there is nothing to establish, because every POST carries what it needs. A
-/// legacy one still has to shake hands.
+/// there is nothing to establish, because every POST carries what it needs.
+/// Free for the older transport too, but for the opposite reason: its handshake
+/// belongs to a stream that has not been opened yet, so every request on it
+/// shakes hands inside itself and there is nothing a session could hold. Only a
+/// legacy server on the current transport establishes anything here.
 async fn establish(
     http: &reqwest::Client,
-    endpoint: &str,
-    token: Option<&str>,
-    era: Era,
+    dial: Dial<'_>,
+    spoken: Spoken,
     server_name: String,
 ) -> Result<Session, McpError> {
-    match era {
-        Era::Modern { .. } => Ok(Session {
-            endpoint: endpoint.to_string(),
-            token: token.map(str::to_string),
-            era,
-            session_id: None,
-            server_name,
-            negotiated: None,
-        }),
-        Era::Legacy => initialize(http, endpoint, token).await,
+    let Spoken { era, transport, negotiated } = spoken;
+    let free = |era: Era, negotiated: Option<String>| Session {
+        endpoint: dial.endpoint.to_string(),
+        token: dial.token.map(str::to_string),
+        headers: dial.headers.to_vec(),
+        era,
+        transport: transport.clone(),
+        session_id: None,
+        server_name: server_name.clone(),
+        negotiated,
+    };
+    match (&era, &transport) {
+        (Era::Modern { .. }, _) => Ok(free(era.clone(), None)),
+        (Era::Legacy, Transport::Sse) => Ok(free(Era::Legacy, negotiated)),
+        (Era::Legacy, Transport::Streamable) => initialize(http, dial).await,
     }
 }
 
 /// How the server names itself.
 ///
-/// Free on a legacy session, because the handshake it already paid for said so.
-/// A round trip on a modern one, where nothing has asked: this is the only
-/// caller of `server/discover` outside the era probe, and only the connect path
-/// calls it. A tool call must never pay for a label nobody reads.
+/// Free on a legacy session over the current transport, because the handshake
+/// it already paid for said so. A round trip on the other two, for opposite
+/// reasons: a modern session has no handshake and nothing has asked, and a
+/// session on the older transport has a handshake that belonged to a stream
+/// which has already been dropped. Only the connect path calls this. A tool
+/// call must never pay for a label nobody reads.
 pub async fn describe(session: &Session) -> Result<String, McpError> {
-    if !session.server_name.is_empty() || !session.modern() {
+    if !session.server_name.is_empty() {
         return Ok(session.server_name.clone());
     }
-    let http = client()?;
-    let (result, _) = post(
-        &http,
-        Wire::of(session),
-        "server/discover",
-        None,
-        serde_json::json!({}),
-        CONNECT_TIMEOUT,
-    )
-    .await?;
+    if session.sse() {
+        let http = client()?;
+        return sse_probe(&http, dial_for(session)).await.map(|(name, _)| name);
+    }
+    if !session.modern() {
+        return Ok(session.server_name.clone());
+    }
+    let result =
+        request(session, "server/discover", None, serde_json::json!({}), CONNECT_TIMEOUT).await?;
     Ok(server_name(&result))
+}
+
+/// This session, as the address and credential it was opened with.
+///
+/// The older transport takes a `Dial` rather than a session, because every
+/// exchange on it establishes its own: the session on that side is the stream,
+/// and the stream lasts one request.
+fn dial_for(session: &Session) -> Dial<'_> {
+    Dial {
+        endpoint: &session.endpoint,
+        token: session.token.as_deref(),
+        headers: &session.headers,
+        legacy_transport: true,
+    }
+}
+
+/// One request, over whichever transport this session turned out to want.
+///
+/// The one place the two meet, and everything above it is written once. A
+/// transport branch inside `list_tools` or `call_tool` would be the same
+/// decision taken twice, and the second copy is the one that gets forgotten
+/// when a third method is added.
+async fn request(
+    session: &Session,
+    method: &str,
+    name: Option<&str>,
+    params: serde_json::Value,
+    timeout: Duration,
+) -> Result<serde_json::Value, McpError> {
+    request_mirroring(session, method, name, params, Vec::new(), timeout).await
+}
+
+/// The same, for the one call that has arguments a modern server wants mirrored.
+async fn request_mirroring(
+    session: &Session,
+    method: &str,
+    name: Option<&str>,
+    params: serde_json::Value,
+    mirrored: Vec<(String, String)>,
+    timeout: Duration,
+) -> Result<serde_json::Value, McpError> {
+    let http = client()?;
+    if session.sse() {
+        // Mirroring is a modern-server rule and a modern server is never on
+        // this transport, so there is nothing here to drop.
+        let answered =
+            sse_exchange(&http, dial_for(session), Some((method, params)), timeout).await?;
+        // What this endpoint is remembered as, kept in step with what its last
+        // handshake actually settled on. A session on this transport has
+        // nowhere of its own to hold the answer, so a report built without this
+        // would name the revision Guaca asked for rather than the one agreed.
+        settled(&session.endpoint, &answered.negotiated);
+        return Ok(answered.result);
+    }
+    let mut wire = Wire::of(session);
+    wire.headers = mirrored;
+    post(&http, wire, method, name, params, timeout).await.map(|(result, _)| result)
 }
 
 /// Everything this server offers, once.
@@ -338,10 +516,8 @@ pub async fn describe(session: &Session) -> Result<String, McpError> {
 /// legacy one the annotation means nothing, and dropping the tool would take a
 /// working capability away over a field nobody reads.
 pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpError> {
-    let http = client()?;
-    let (value, _) =
-        post(&http, Wire::of(session), "tools/list", None, serde_json::json!({}), CONNECT_TIMEOUT)
-            .await?;
+    let value =
+        request(session, "tools/list", None, serde_json::json!({}), CONNECT_TIMEOUT).await?;
 
     #[derive(Deserialize)]
     struct Listed {
@@ -396,20 +572,17 @@ pub async fn call_tool(
     arguments: &serde_json::Value,
     schema: Option<&serde_json::Value>,
 ) -> Result<String, McpError> {
-    let http = client()?;
-    let mut wire = Wire::of(session);
     let mirrored = match schema {
         Some(schema) if session.modern() => mirror(schema, arguments),
         _ => Vec::new(),
     };
-    wire.headers = mirrored;
 
-    let (value, _) = post(
-        &http,
-        wire,
+    let value = request_mirroring(
+        session,
         "tools/call",
         Some(tool),
         serde_json::json!({ "name": tool, "arguments": arguments }),
+        mirrored,
         CALL_TIMEOUT,
     )
     .await?;
@@ -432,8 +605,24 @@ pub async fn call_tool(
 
 /// What a server turned out to be, and what it called itself while saying so.
 struct Probed {
-    era: Era,
+    spoken: Spoken,
     server_name: String,
+}
+
+/// The two things about a server that are fixed once it has been asked.
+///
+/// One value rather than two memos, because they are decided by one probe and
+/// a build that remembered them separately could hold a transport for an
+/// endpoint whose era it had just forgotten.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Spoken {
+    era: Era,
+    transport: Transport,
+    /// What the last handshake on this endpoint settled on, for a server on the
+    /// older transport. `None` everywhere else: a modern session declares its
+    /// own revision and a legacy streamable one is told by `initialize` on
+    /// every open, so only this transport has an answer with nowhere to live.
+    negotiated: Option<String>,
 }
 
 /// Which era this endpoint speaks, by asking it something only a modern server
@@ -455,14 +644,12 @@ struct Probed {
 /// - Anything else — a `400`, a `404`, an unknown-method JSON-RPC error, a body
 ///   that is not MCP at all: a server that has never heard of `server/discover`,
 ///   which is a legacy server.
-async fn probe(
-    http: &reqwest::Client,
-    endpoint: &str,
-    token: Option<&str>,
-) -> Result<Probed, McpError> {
+async fn probe(http: &reqwest::Client, dial: Dial<'_>) -> Result<Probed, McpError> {
+    let endpoint = dial.endpoint;
     let wire = Wire {
         endpoint,
-        token,
+        token: dial.token,
+        extra: dial.headers,
         version: PROTOCOL_VERSION.to_string(),
         modern: true,
         session_id: None,
@@ -470,7 +657,11 @@ async fn probe(
     };
     match post(http, wire, "server/discover", None, serde_json::json!({}), CONNECT_TIMEOUT).await {
         Ok((result, _)) => Ok(Probed {
-            era: Era::Modern { version: PROTOCOL_VERSION.to_string() },
+            spoken: Spoken {
+                era: Era::Modern { version: PROTOCOL_VERSION.to_string() },
+                transport: Transport::Streamable,
+                negotiated: None,
+            },
             server_name: server_name(&result),
         }),
         Err(McpError::NoSharedVersion { endpoint, supported }) => {
@@ -484,11 +675,12 @@ async fn probe(
                 return Err(McpError::NoSharedVersion { endpoint, supported });
             };
             if !modern(&version) {
-                return Ok(Probed { era: Era::Legacy, server_name: String::new() });
+                return Ok(Probed { spoken: handshaking(), server_name: String::new() });
             }
             let wire = Wire {
                 endpoint: &endpoint,
-                token,
+                token: dial.token,
+                extra: dial.headers,
                 version: version.clone(),
                 modern: true,
                 session_id: None,
@@ -497,13 +689,60 @@ async fn probe(
             let (result, _) =
                 post(http, wire, "server/discover", None, serde_json::json!({}), CONNECT_TIMEOUT)
                     .await?;
-            Ok(Probed { era: Era::Modern { version }, server_name: server_name(&result) })
+            Ok(Probed {
+                spoken: Spoken {
+                    era: Era::Modern { version },
+                    transport: Transport::Streamable,
+                    negotiated: None,
+                },
+                server_name: server_name(&result),
+            })
         }
         Err(err @ (McpError::Transport { .. } | McpError::Unauthorized { .. })) => Err(err),
         Err(err @ McpError::HeaderMismatch { .. }) => Err(err),
+        // A refusal that is not MCP at all. On the current transport that is a
+        // server which has never heard of `server/discover`, which is a legacy
+        // server; but it is also exactly what the older transport looks like
+        // from here, because a POST to its event stream lands on a URL that
+        // only answers GET. So an operator's own server gets the older
+        // transport tried before it is called legacy, and the original refusal
+        // is what stands if that turns out to be wrong too.
+        Err(err @ (McpError::Status { .. } | McpError::Malformed { .. }))
+            if dial.legacy_transport =>
+        {
+            match sse_probe(http, dial).await {
+                Ok((server_name, negotiated)) => Ok(Probed {
+                    spoken: Spoken {
+                        era: Era::Legacy,
+                        transport: Transport::Sse,
+                        negotiated: Some(negotiated),
+                    },
+                    server_name,
+                }),
+                // Whose refusal the operator sees turns on how far the second
+                // attempt got. A GET that was not answered with a stream, or
+                // not answered at all, says nothing the first attempt did not;
+                // anything past that came off the server's own event stream and
+                // is the more specific of the two — a 401 that says to sign in,
+                // a revision nothing shares, a session redirected onto another
+                // host. Reporting the `405` there would send an operator to
+                // look at a transport that was working.
+                Err(
+                    McpError::NotAStream { .. }
+                    | McpError::Status { .. }
+                    | McpError::Transport { .. },
+                ) => Err(err),
+                Err(refused) => Err(refused),
+            }
+        }
         // Everything else identifies a server that wants a handshake.
-        Err(_) => Ok(Probed { era: Era::Legacy, server_name: String::new() }),
+        Err(_) => Ok(Probed { spoken: handshaking(), server_name: String::new() }),
     }
+}
+
+/// A server that wants `initialize`, on the transport it was asked over.
+fn handshaking() -> Spoken {
+    Spoken { era: Era::Legacy, transport: Transport::Streamable, negotiated: None }
 }
 
 /// The newest revision this build and that server both have.
@@ -517,14 +756,12 @@ fn agreed(theirs: &[String]) -> Option<String> {
 /// that only knows an older revision answers with that one, and every later
 /// request has to declare it. A revision this build has never heard of is
 /// refused here rather than by sending it back and being refused there.
-async fn initialize(
-    http: &reqwest::Client,
-    endpoint: &str,
-    token: Option<&str>,
-) -> Result<Session, McpError> {
+async fn initialize(http: &reqwest::Client, dial: Dial<'_>) -> Result<Session, McpError> {
+    let endpoint = dial.endpoint;
     let wire = Wire {
         endpoint,
-        token,
+        token: dial.token,
+        extra: dial.headers,
         version: LEGACY_VERSION.to_string(),
         modern: false,
         session_id: None,
@@ -555,8 +792,10 @@ async fn initialize(
 
     let session = Session {
         endpoint: endpoint.to_string(),
-        token: token.map(str::to_string),
+        token: dial.token.map(str::to_string),
+        headers: dial.headers.to_vec(),
         era: Era::Legacy,
+        transport: Transport::Streamable,
         session_id,
         server_name: value
             .get("serverInfo")
@@ -578,26 +817,40 @@ async fn initialize(
 }
 
 /// What every endpoint turned out to speak, for the life of the process.
-fn eras() -> &'static Mutex<HashMap<String, Era>> {
-    static ERAS: OnceLock<Mutex<HashMap<String, Era>>> = OnceLock::new();
+fn eras() -> &'static Mutex<HashMap<String, Spoken>> {
+    static ERAS: OnceLock<Mutex<HashMap<String, Spoken>>> = OnceLock::new();
     ERAS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn remembered(endpoint: &str) -> Option<Era> {
+fn remembered(endpoint: &str) -> Option<Spoken> {
     eras().lock().ok()?.get(endpoint).cloned()
 }
 
-fn remember(endpoint: &str, era: &Era) {
+/// Records what the last handshake on this endpoint settled on.
+///
+/// Only ever called for the older transport, and only for a report: nothing on
+/// a request path reads it, because every exchange on that transport
+/// re-negotiates inside itself.
+fn settled(endpoint: &str, negotiated: &str) {
     if let Ok(mut map) = eras().lock() {
-        map.insert(endpoint.to_string(), era.clone());
+        if let Some(spoken) = map.get_mut(endpoint) {
+            spoken.negotiated = Some(negotiated.to_string());
+        }
+    }
+}
+
+fn remember(endpoint: &str, spoken: &Spoken) {
+    if let Ok(mut map) = eras().lock() {
+        map.insert(endpoint.to_string(), spoken.clone());
     }
 }
 
 /// Forgets what an endpoint was, so the next call probes again.
 ///
-/// Called when a remembered era turns out to be wrong, which is what a server
-/// upgraded underneath a running Guaca looks like: the handshake it wanted
-/// yesterday is a `400` today. One failure, then the truth.
+/// Called when a remembered era or transport turns out to be wrong, which is
+/// what a server upgraded underneath a running Guaca looks like: the handshake
+/// it wanted yesterday is a `400` today, and the event stream it served last
+/// month is a `405`. One failure, then the truth.
 pub fn forget(endpoint: &str) {
     if let Ok(mut map) = eras().lock() {
         map.remove(endpoint);
@@ -624,6 +877,11 @@ fn client_info() -> serde_json::Value {
 struct Wire<'a> {
     endpoint: &'a str,
     token: Option<&'a str>,
+    /// The operator's own headers. Applied before anything this client builds,
+    /// so a name that would contradict the request cannot be written from here
+    /// — `Headers::parse` refuses those, and this ordering is what makes that
+    /// refusal the only thing standing between them.
+    extra: &'a [(String, String)],
     version: String,
     modern: bool,
     session_id: Option<&'a str>,
@@ -636,6 +894,7 @@ impl<'a> Wire<'a> {
         Wire {
             endpoint: &session.endpoint,
             token: session.token.as_deref(),
+            extra: &session.headers,
             version: session.version().to_string(),
             modern: session.modern(),
             session_id: session.session_id.as_deref(),
@@ -684,6 +943,9 @@ async fn post(
         // make a different one per request.
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", &wire.version);
+    for (name, value) in wire.extra {
+        request = request.header(name.as_str(), value.as_str());
+    }
     if let Some(token) = wire.token {
         request = request.header("authorization", format!("Bearer {token}"));
     }
@@ -725,32 +987,7 @@ async fn post(
     let envelope = decode(&content_type, &text);
 
     if let Some(error) = envelope.as_ref().and_then(|value| value.get("error")) {
-        let code = error.get("code").and_then(serde_json::Value::as_i64).unwrap_or_default();
-        let message = error
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("it refused and gave no reason");
-        return Err(match code {
-            UNSUPPORTED_VERSION => McpError::NoSharedVersion {
-                endpoint: wire.endpoint.to_string(),
-                supported: error
-                    .get("data")
-                    .and_then(|data| data.get("supported"))
-                    .and_then(serde_json::Value::as_array)
-                    .map(|all| {
-                        all.iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .map(str::to_string)
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            },
-            HEADER_MISMATCH => McpError::HeaderMismatch {
-                endpoint: wire.endpoint.to_string(),
-                detail: message.to_string(),
-            },
-            _ => McpError::Rejected { message: message.to_string() },
-        });
+        return Err(refusal(wire.endpoint, error));
     }
 
     if !status.is_success() {
@@ -772,6 +1009,47 @@ async fn post(
     })?;
 
     Ok((result, issued))
+}
+
+/// A JSON-RPC `error` object, as the refusal it means here.
+///
+/// One function because both transports produce one and the three codes mean
+/// the same thing on either: two of them are how a modern server is recognized,
+/// and everything else is a server that understood the call and said no.
+fn refusal(endpoint: &str, error: &serde_json::Value) -> McpError {
+    let code = error.get("code").and_then(serde_json::Value::as_i64).unwrap_or_default();
+    let message = error
+        .get("message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("it refused and gave no reason");
+    match code {
+        UNSUPPORTED_VERSION => McpError::NoSharedVersion {
+            endpoint: endpoint.to_string(),
+            supported: error
+                .get("data")
+                .and_then(|data| data.get("supported"))
+                .and_then(serde_json::Value::as_array)
+                .map(|all| {
+                    all.iter().filter_map(serde_json::Value::as_str).map(str::to_string).collect()
+                })
+                .unwrap_or_default(),
+        },
+        HEADER_MISMATCH => {
+            McpError::HeaderMismatch { endpoint: endpoint.to_string(), detail: message.to_string() }
+        }
+        _ => McpError::Rejected { message: message.to_string() },
+    }
+}
+
+/// The `result` out of a decoded reply, or the refusal it carried instead.
+fn result_of(endpoint: &str, envelope: &serde_json::Value) -> Result<serde_json::Value, McpError> {
+    if let Some(error) = envelope.get("error") {
+        return Err(refusal(endpoint, error));
+    }
+    envelope.get("result").cloned().ok_or_else(|| McpError::Malformed {
+        endpoint: endpoint.to_string(),
+        detail: "a reply with neither a result nor an error".to_string(),
+    })
 }
 
 /// A modern request's `params`, with the metadata every one of them carries.
@@ -806,6 +1084,9 @@ async fn notify(
         .header("content-type", "application/json")
         .header("accept", "application/json, text/event-stream")
         .header("mcp-protocol-version", session.version());
+    for (name, value) in &session.headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
     if let Some(token) = &session.token {
         request = request.header("authorization", format!("Bearer {token}"));
     }
@@ -818,6 +1099,362 @@ async fn notify(
         .await
         .map(|_| ())
         .map_err(|source| McpError::Transport { endpoint: session.endpoint.clone(), source })
+}
+
+// ---- the transport streamable HTTP replaced -------------------------------
+
+/// One request over HTTP+SSE, handshake and all, on a stream of its own.
+///
+/// `call` is `None` for the probe, which only wants to know that the server is
+/// there and what it calls itself. Whatever comes back, the stream is dropped
+/// when this returns.
+///
+/// That is the same "a session per call" rule the module argues for on the
+/// current transport, reached from the other side. There, keeping a session
+/// would be a second thing that can go stale. Here there is nothing to keep:
+/// `initialize` establishes a session that belongs to *this* event stream, and
+/// a stream held open between turns is a socket per plugin per crew, kept alive
+/// through sleep and reconnect, for a handshake that costs one round trip.
+///
+/// The whole thing is inside one timeout rather than one per request, because
+/// the failure this transport actually has is a stream that opens and then says
+/// nothing, and a per-request timeout on a socket that is technically still
+/// connected never fires.
+async fn sse_exchange(
+    http: &reqwest::Client,
+    dial: Dial<'_>,
+    call: Option<(&str, serde_json::Value)>,
+    timeout: Duration,
+) -> Result<Answered, McpError> {
+    let endpoint = dial.endpoint;
+    let method = call.as_ref().map(|(method, _)| *method).unwrap_or("initialize").to_string();
+
+    let work = async {
+        let mut request = http.get(endpoint).header("accept", "text/event-stream");
+        for (name, value) in dial.headers {
+            request = request.header(name.as_str(), value.as_str());
+        }
+        if let Some(token) = dial.token {
+            request = request.header("authorization", format!("Bearer {token}"));
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|source| McpError::Transport { endpoint: endpoint.to_string(), source })?;
+
+        let status = response.status();
+        if status.as_u16() == 401 {
+            return Err(McpError::Unauthorized {
+                endpoint: endpoint.to_string(),
+                challenge: header(&response, "www-authenticate"),
+            });
+        }
+        if !status.is_success() {
+            return Err(McpError::Status {
+                endpoint: endpoint.to_string(),
+                status: status.as_u16(),
+                body: String::new(),
+            });
+        }
+        // The one thing that says this is an event stream rather than a page
+        // that happened to answer a GET. Without it, an endpoint behind a login
+        // wall answers 200 with HTML and this would sit reading it for two
+        // minutes before reporting a timeout.
+        let content_type = header(&response, "content-type").unwrap_or_default();
+        if !content_type.contains("text/event-stream") {
+            return Err(McpError::NotAStream { endpoint: endpoint.to_string(), content_type });
+        }
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        // Where requests on this stream go. The server names it first and names
+        // it once, and nothing can be sent until it has.
+        let named =
+            read_until(endpoint, &mut stream, &mut buffer, |name, _| name == "endpoint").await?.1;
+        let messages = same_origin(endpoint, &named)?;
+
+        let hello = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": LEGACY_VERSION,
+                "capabilities": {},
+                "clientInfo": client_info(),
+            },
+        });
+        post_message(http, dial, &messages, &hello).await?;
+        let established = reply_to(endpoint, &mut stream, &mut buffer, 1).await?;
+
+        let agreed = established
+            .get("protocolVersion")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(LEGACY_VERSION)
+            .to_string();
+        if !SUPPORTED.contains(&agreed.as_str()) {
+            return Err(McpError::NoSharedVersion {
+                endpoint: endpoint.to_string(),
+                supported: vec![agreed],
+            });
+        }
+        let server_name = established
+            .get("serverInfo")
+            .and_then(|info| info.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+
+        // A notification, and the servers that gate on it refuse every later
+        // call with "not initialized" if it is skipped. Nothing comes back.
+        let ready = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let _ = post_message(http, dial, &messages, &ready).await;
+
+        let Some((method, params)) = call else {
+            return Ok(Answered {
+                result: serde_json::Value::Null,
+                server_name,
+                negotiated: agreed,
+            });
+        };
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": method,
+            "params": params,
+        });
+        // A server that answers the POST with the reply rather than putting it
+        // on the stream is out of spec and is in the field, so an answer here
+        // is taken and the stream is not waited on for a second copy of it.
+        let result = match post_message(http, dial, &messages, &body).await? {
+            Some(inline) => result_of(endpoint, &inline)?,
+            None => reply_to(endpoint, &mut stream, &mut buffer, 2).await?,
+        };
+        Ok(Answered { result, server_name, negotiated: agreed })
+    };
+
+    tokio::time::timeout(timeout, work).await.map_err(|_| McpError::Silent {
+        endpoint: endpoint.to_string(),
+        method,
+        secs: timeout.as_secs(),
+    })?
+}
+
+/// Opens a stream, shakes hands and asks for nothing else.
+///
+/// The era probe's second question: a server that answers this is one on the
+/// older transport, and its own name comes back as the by-product the connect
+/// path was going to ask for anyway.
+async fn sse_probe(http: &reqwest::Client, dial: Dial<'_>) -> Result<(String, String), McpError> {
+    let answered = sse_exchange(http, dial, None, CONNECT_TIMEOUT).await?;
+    Ok((answered.server_name, answered.negotiated))
+}
+
+/// What one exchange on the older transport produced.
+///
+/// Three, because the handshake on this transport belongs to the stream rather
+/// than to a session, so the two things a handshake establishes come back with
+/// every request instead of being read off the session that has them.
+struct Answered {
+    result: serde_json::Value,
+    server_name: String,
+    negotiated: String,
+}
+
+/// POSTs one JSON-RPC message, and takes a reply if the server gave one.
+///
+/// The documented answer is `202` and an empty body: the reply comes down the
+/// stream. Some servers answer with it directly, which is what the `Some` is
+/// for, and there is no cost to accepting both.
+async fn post_message(
+    http: &reqwest::Client,
+    dial: Dial<'_>,
+    messages: &str,
+    body: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, McpError> {
+    let mut request = http
+        .post(messages)
+        .timeout(CONNECT_TIMEOUT)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream");
+    for (name, value) in dial.headers {
+        request = request.header(name.as_str(), value.as_str());
+    }
+    if let Some(token) = dial.token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let response = request
+        .json(body)
+        .send()
+        .await
+        .map_err(|source| McpError::Transport { endpoint: messages.to_string(), source })?;
+
+    let status = response.status();
+    let challenge = header(&response, "www-authenticate");
+    let content_type = header(&response, "content-type").unwrap_or_default();
+    let text = response
+        .text()
+        .await
+        .map_err(|source| McpError::Transport { endpoint: messages.to_string(), source })?;
+
+    if status.as_u16() == 401 {
+        return Err(McpError::Unauthorized { endpoint: messages.to_string(), challenge });
+    }
+    if !status.is_success() {
+        return Err(McpError::Status {
+            endpoint: messages.to_string(),
+            status: status.as_u16(),
+            body: text.chars().take(400).collect(),
+        });
+    }
+    Ok(decode(&content_type, &text).filter(|value| value.get("jsonrpc").is_some()))
+}
+
+/// Reads the stream until the reply to one request arrives.
+///
+/// Matched on the id rather than taken as the next message, because a server
+/// may push a notification — a log line, a progress report — between the POST
+/// and the answer, and reading one of those as the result is a tool call that
+/// returns somebody else's message.
+async fn reply_to<S, T>(
+    endpoint: &str,
+    stream: &mut S,
+    buffer: &mut String,
+    id: i64,
+) -> Result<serde_json::Value, McpError>
+where
+    S: futures_util::Stream<Item = Result<T, reqwest::Error>> + Unpin,
+    T: AsRef<[u8]>,
+{
+    let matching = |_: &str, data: &str| {
+        serde_json::from_str::<serde_json::Value>(data)
+            .is_ok_and(|value| value.get("id").and_then(serde_json::Value::as_i64) == Some(id))
+    };
+    let (_, data) = read_until(endpoint, stream, buffer, matching).await?;
+    let envelope: serde_json::Value =
+        serde_json::from_str(&data).map_err(|err| McpError::Malformed {
+            endpoint: endpoint.to_string(),
+            detail: format!("an event on its stream did not parse: {err}"),
+        })?;
+    result_of(endpoint, &envelope)
+}
+
+/// Reads events off an open stream until one the caller wants goes past.
+///
+/// A closed stream is the failure this returns rather than looping on: a server
+/// that hangs up mid-session leaves an empty read forever, and an outer timeout
+/// would report it two minutes later as silence, which reads as a slow server
+/// rather than a dropped connection.
+async fn read_until<S, T>(
+    endpoint: &str,
+    stream: &mut S,
+    buffer: &mut String,
+    want: impl Fn(&str, &str) -> bool,
+) -> Result<(String, String), McpError>
+where
+    S: futures_util::Stream<Item = Result<T, reqwest::Error>> + Unpin,
+    T: AsRef<[u8]>,
+{
+    use futures_util::StreamExt;
+    loop {
+        while let Some((name, data)) = take_event(buffer) {
+            if want(&name, &data) {
+                return Ok((name, data));
+            }
+        }
+        let Some(chunk) = stream.next().await else {
+            return Err(McpError::Malformed {
+                endpoint: endpoint.to_string(),
+                detail: "its event stream closed before it answered".to_string(),
+            });
+        };
+        let chunk = chunk
+            .map_err(|source| McpError::Transport { endpoint: endpoint.to_string(), source })?;
+        buffer.push_str(&String::from_utf8_lossy(chunk.as_ref()));
+    }
+}
+
+/// Pulls one complete event off the front of the buffer.
+///
+/// Its own function rather than `SseDecoder` because this transport needs the
+/// event *name*: `endpoint` and `message` are two different things arriving on
+/// one stream, and the decoder beside the model client throws the name away.
+fn take_event(buffer: &mut String) -> Option<(String, String)> {
+    // An event ends at a blank line, which is two newlines with nothing but an
+    // optional carriage return between them.
+    let end = [buffer.find("\n\n").map(|at| (at, 2)), buffer.find("\r\n\r\n").map(|at| (at, 4))]
+        .into_iter()
+        .flatten()
+        .min_by_key(|(at, _)| *at)?;
+    let (at, width) = end;
+    let block: String = buffer.drain(..at + width).collect();
+
+    let mut name = String::new();
+    let mut data = String::new();
+    for raw in block.lines() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if let Some(rest) = line.strip_prefix("event:") {
+            name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("data:") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        }
+    }
+    // The default event name, per the SSE specification.
+    if name.is_empty() {
+        name = "message".to_string();
+    }
+    Some((name, data))
+}
+
+/// The URL the server named for messages, if it is on the server's own origin.
+///
+/// Relative is the common form and absolute is legal, and an absolute one
+/// pointing somewhere else is refused rather than followed. This is a redirect
+/// invented by the far end after the connection was made, and following it
+/// would put the crew's credential and every argument of every tool call on a
+/// host the operator never named.
+fn same_origin(endpoint: &str, named: &str) -> Result<String, McpError> {
+    let named = named.trim();
+    let refuse = |detail: String| McpError::Malformed { endpoint: endpoint.to_string(), detail };
+    if named.is_empty() {
+        return Err(refuse("its event stream named an empty message endpoint".to_string()));
+    }
+    let origin = origin_of(endpoint)
+        .ok_or_else(|| refuse(format!("{endpoint} is not an address with an origin")))?;
+
+    let resolved = if named.contains("://") {
+        let theirs = origin_of(named)
+            .ok_or_else(|| refuse(format!("its event stream named {named}, which is not a URL")))?;
+        if theirs != origin {
+            return Err(refuse(format!(
+                "its event stream named {named} for messages, which is a different server; a \
+                 crew's credential is not sent to an address the operator did not name"
+            )));
+        }
+        named.to_string()
+    } else if let Some(path) = named.strip_prefix('/') {
+        format!("{origin}/{path}")
+    } else {
+        // Relative to the directory the stream itself was opened in, which is
+        // what a browser would do with it.
+        let path = endpoint.strip_prefix(&origin).unwrap_or("");
+        let base = path.rsplit_once('/').map(|(before, _)| before).unwrap_or("");
+        format!("{origin}{base}/{named}")
+    };
+    Ok(resolved)
+}
+
+/// Scheme and authority, which is what "the same server" means here.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!("{}://{}", scheme.to_ascii_lowercase(), authority.to_ascii_lowercase()))
 }
 
 fn header(response: &reqwest::Response, name: &str) -> Option<String> {
@@ -1025,6 +1662,81 @@ fn decode(content_type: &str, body: &str) -> Option<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_carries_its_name_as_well_as_its_data() {
+        // The whole reason this is not `SseDecoder`: `endpoint` and `message`
+        // arrive on one stream and mean entirely different things.
+        let mut buffer = String::from("event: endpoint\ndata: /messages?s=1\n\n");
+        assert_eq!(take_event(&mut buffer), Some(("endpoint".into(), "/messages?s=1".into())));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn an_unnamed_event_is_a_message() {
+        // The SSE default, and servers rely on it.
+        let mut buffer = String::from("data: {\"id\":1}\n\n");
+        assert_eq!(take_event(&mut buffer), Some(("message".into(), "{\"id\":1}".into())));
+    }
+
+    #[test]
+    fn an_event_split_across_chunks_waits_for_the_rest() {
+        // A JSON payload cut mid-token is the routine case on a socket, and
+        // parsing half of it is a tool call that comes back as a parse error.
+        let mut buffer = String::from("event: message\ndata: {\"id\":2,\"resu");
+        assert_eq!(take_event(&mut buffer), None);
+        buffer.push_str("lt\":{}}\n\n");
+        let (name, data) = take_event(&mut buffer).unwrap();
+        assert_eq!(name, "message");
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&data).unwrap()["id"], 2);
+    }
+
+    #[test]
+    fn crlf_framing_is_the_same_event() {
+        let mut buffer = String::from("event: endpoint\r\ndata: /m\r\n\r\n");
+        assert_eq!(take_event(&mut buffer), Some(("endpoint".into(), "/m".into())));
+    }
+
+    #[test]
+    fn a_message_endpoint_is_resolved_against_the_stream_it_was_named_on() {
+        let at = "https://box.example.com/sse";
+        assert_eq!(
+            same_origin(at, "/messages?s=1").unwrap(),
+            "https://box.example.com/messages?s=1"
+        );
+        assert_eq!(
+            same_origin(at, "messages?s=1").unwrap(),
+            "https://box.example.com/messages?s=1"
+        );
+        assert_eq!(
+            same_origin(at, "https://box.example.com/messages").unwrap(),
+            "https://box.example.com/messages"
+        );
+    }
+
+    #[test]
+    fn a_message_endpoint_on_another_server_is_refused() {
+        // A redirect invented by the far end after the connection was made.
+        // Followed, it puts the crew's credential and every tool argument on a
+        // host the operator never named.
+        let refused = same_origin("https://box.example.com/sse", "https://evil.example/m");
+        let message = refused.unwrap_err().to_string();
+        assert!(message.contains("different server"), "{message}");
+        assert!(message.contains("did not name"), "{message}");
+    }
+
+    #[test]
+    fn every_revision_this_build_speaks_sorts_as_a_date() {
+        // `modern` is a string comparison, which only works because a revision
+        // is `YYYY-MM-DD`. A revision named any other way would silently sort
+        // into the wrong era.
+        let mut sorted = SUPPORTED;
+        sorted.sort_unstable();
+        sorted.reverse();
+        assert_eq!(sorted, SUPPORTED, "SUPPORTED has to be newest first");
+        assert!(modern(SUPPORTED[0]));
+        assert!(!modern("2024-11-05"), "the transport this build falls back to is not modern");
+    }
 
     #[test]
     fn a_json_reply_decodes() {

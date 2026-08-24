@@ -40,6 +40,7 @@ import type {
   GroupId,
   GroupReset,
   GroupUsage,
+  HeaderPair,
   MessageId,
   Plugin,
   PluginAccess,
@@ -54,6 +55,7 @@ import type {
   RunId,
   RunUsage,
   SearchHits,
+  ServerReport,
   Settings,
   SettingsPatch,
   Signin,
@@ -149,9 +151,13 @@ export const api = {
    * The key is for a server with no authorization server behind it, which is
    * most of the ones somebody wrote: left out, the server is asked what it
    * wants exactly as a vendor's is.
+   *
+   * The headers are a third thing and not a third credential: they go on every
+   * request whichever of the other two paid for it, which is what makes an
+   * `X-API-Key` server and a server behind Cloudflare Access both work.
    */
-  addPlugin: (groupId: GroupId, name: string, url: string, key?: string) =>
-    invoke<Plugin>("add_plugin", { groupId, name, url, key: key ?? null }),
+  addPlugin: (groupId: GroupId, name: string, url: string, key?: string, headers?: HeaderPair[]) =>
+    invoke<Plugin>("add_plugin", { groupId, name, url, key: key ?? null, headers }),
 
   /**
    * Points a crew's own server at a different address, or hands it a new key.
@@ -159,9 +165,37 @@ export const api = {
    * A reconnection rather than an edit, because a server at a new address is
    * not the one that published the old tool list. Who may spend it and which of
    * its tools are whose survive, for the reason they survive any reconnection.
+   *
+   * The headers are the whole set every time, and leaving them out removes
+   * them. That is the opposite of the key, whose absence means "ask the
+   * server", and the two differ because the panel can read the header names
+   * back and cannot read a key back at all.
    */
-  readdressPlugin: (groupId: GroupId, id: PluginId, url: string, key?: string) =>
-    invoke<Plugin>("readdress_plugin", { groupId, id, url, key: key ?? null }),
+  readdressPlugin: (
+    groupId: GroupId,
+    id: PluginId,
+    url: string,
+    key?: string,
+    headers?: HeaderPair[],
+  ) => invoke<Plugin>("readdress_plugin", { groupId, id, url, key: key ?? null, headers }),
+
+  /**
+   * Dials a server and says what it found, connecting nothing.
+   *
+   * The whole path a connection runs — both transports, the handshake, the
+   * tool list — with whatever has been typed and not yet saved. It stops one
+   * step short in one place: a server that wants a sign-in is reported as
+   * wanting one rather than sent to a browser.
+   */
+  probeServer: (url: string, key?: string, headers?: HeaderPair[]) =>
+    invoke<ServerReport>("probe_server", { url, key: key ?? null, headers }),
+
+  /**
+   * The same question, asked of a plugin this crew already has, using the grant
+   * in the store. The only way to find out whether a sign-in is still good
+   * without reconnecting, which opens a browser.
+   */
+  checkPlugin: (id: PluginId) => invoke<ServerReport>("check_plugin", { id }),
 
   /**
    * Narrows a plugin to named agents, or opens it back up to the crew.

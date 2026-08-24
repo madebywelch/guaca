@@ -20,16 +20,17 @@
 //!
 //! ## What the agent is never told
 //!
-//! The token. A plugin tool call is made by Guaca, not by the machine: the
-//! agent names a tool and arguments and reads a result, and the grant does not
-//! appear in the prompt, the transcript, an event, or the sandbox's
+//! The token, and the headers beside it. A plugin tool call is made by Guaca,
+//! not by the machine: the agent names a tool and arguments and reads a result,
+//! and neither the grant nor anything [`crate::domain::plugin::Headers`] holds
+//! appears in the prompt, the transcript, an event, or the sandbox's
 //! environment. This is the same boundary a pasted credential has, and it is
 //! stronger, because with a plugin there is no variable for the agent to echo.
 
 use crate::db::store::{PluginReach, Store, StoreError};
 use crate::domain::ids::{AgentId, GroupId, PluginId};
 use crate::domain::now_ms;
-use crate::domain::plugin::{Plugin, PluginKind, PluginTool};
+use crate::domain::plugin::{Headers, Plugin, PluginKind, PluginTool, ServerReport, SigninNeed};
 use crate::mcp::{self, McpError};
 use crate::oauth::{self, Grant, OauthError};
 
@@ -87,6 +88,13 @@ pub enum PluginError {
 /// vendors discover theirs; the operator's own account lends its own; and a
 /// server somebody wrote themselves very often wants a key that was minted by
 /// hand and has no authorization server behind it at all.
+///
+/// [`Headers`] is not a fourth and is passed beside this rather than into it.
+/// It answers a different question — how a request *reaches* the server, not
+/// who is asking — so it composes with all three instead of replacing one. The
+/// server that proves the difference is one behind a gate that also signs in:
+/// the headers get past the gate, and the 401 from behind it is still
+/// `Discover`'s to answer.
 #[derive(Debug, Clone, Copy)]
 pub enum Credential<'a> {
     /// Whatever the server asks for: nothing, or the browser dance.
@@ -131,6 +139,11 @@ pub async fn connect(
     // moved it, and the account's own address for an account-backed kind.
     endpoint: &str,
     credential: Credential<'_>,
+    // What the operator gave this server beyond a credential. Empty for the
+    // catalog, which needs none, and for most added servers. Passed rather than
+    // read back off the row because this is the call that writes the row: a
+    // reconnection is where they change.
+    headers: &Headers,
     open: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<Plugin, PluginError> {
     // An account-backed plugin never runs the browser dance. Its server is the
@@ -141,33 +154,53 @@ pub async fn connect(
         let Credential::Account(used) = credential else {
             return Err(PluginError::NoAccount { label: kind.label().to_string() });
         };
-        let (_session, tools) = ask(endpoint, Some(used.token)).await?;
+        let (_session, tools) =
+            ask(dial(kind.is_custom(), endpoint, headers).with_token(Some(used.token))).await?;
         // No account label. An MCP server's own name is not an account, and for
         // this one it is "Guaca Connectors", which on a card reading "Signed in
         // as ..." looks exactly like an answer to whose mailbox this is and is
         // not. Which identity this row uses is `connection`, and the operator's
         // own name for it lives at the account, where it can change without
         // this row going stale.
-        return Ok(store.save_plugin(group, kind, "", &tools, None, used.connection)?);
+        return Ok(store.save_plugin(group, kind, "", &tools, None, used.connection, headers)?);
     }
 
+    let dialed = dial(kind.is_custom(), endpoint, headers);
     let (session, tools, grant) = match credential {
         // A pasted key is a grant with nothing to renew it. Everything after
         // this line — where it is stored, how it is spent, what happens when the
         // server stops accepting it — is the OAuth path's, unchanged.
         Credential::Key(key) => {
-            let (session, tools) = ask(endpoint, Some(key)).await?;
+            let (session, tools) = ask(dialed.with_token(Some(key))).await?;
             (session, tools, Some(Grant::key(key)))
         }
-        _ => match ask(endpoint, None).await {
+        // Headers the operator wrote are not a second credential path and do
+        // not skip this. A server they authenticate answers the first request,
+        // and nothing is discovered because nothing was refused; one that gates
+        // on them *and* signs in — an MCP server behind Cloudflare Access is the
+        // shape — answers 401 from behind the gate, and the browser dance runs
+        // with the headers on every request it makes from here on.
+        _ => match ask(dialed).await {
             Ok((session, tools)) => (session, tools, None),
             Err(err) if err.is_unauthorized() => {
                 let challenge = match &err {
                     McpError::Unauthorized { challenge, .. } => challenge.clone(),
                     _ => None,
                 };
-                let grant = oauth::authorize(endpoint, challenge.as_deref(), open, now_ms).await?;
-                let (session, tools) = ask(endpoint, Some(&grant.access_token)).await?;
+                // The operator's own headers go with it. A gate in front of
+                // a self-hosted server refuses the metadata document a
+                // sign-in has to read first, so without them this composition
+                // fails at discovery with a 403 nobody can act on. `Gate` is
+                // what keeps them off the authorization server's own host.
+                let grant = oauth::authorize(
+                    endpoint,
+                    challenge.as_deref(),
+                    &oauth::Gate::on(endpoint, headers.wire()),
+                    open,
+                    now_ms,
+                )
+                .await?;
+                let (session, tools) = ask(dialed.with_token(Some(&grant.access_token))).await?;
                 (session, tools, Some(grant))
             }
             Err(err) => return Err(err.into()),
@@ -178,7 +211,115 @@ pub async fn connect(
 
     // Only an account-backed kind carries one; the others sign in per group and
     // their grant already names the identity it was issued to.
-    Ok(store.save_plugin(group, kind, &account_label, &tools, grant.as_ref(), "")?)
+    Ok(store.save_plugin(group, kind, &account_label, &tools, grant.as_ref(), "", headers)?)
+}
+
+/// How this server is reached, before anything is presented to it.
+///
+/// The one place the transport question is answered, and it is answered off
+/// the kind: a server the operator added may be spoken to over the transport
+/// streamable HTTP replaced, and one on the catalog may not. `mcp.rs` has the
+/// argument; this is where it is applied, because the kind is a plugin concept
+/// and that file has never heard of one.
+fn dial<'a>(custom: bool, endpoint: &'a str, headers: &'a Headers) -> mcp::Dial<'a> {
+    mcp::Dial { endpoint, token: None, headers: headers.wire(), legacy_transport: custom }
+}
+
+/// Dials a server and says what it found, without connecting or authorizing it.
+///
+/// The whole of "test this". It runs the same probe, the same handshake and the
+/// same `tools/list` a connection runs, over the same two transports, with
+/// whatever credential and headers it was given — and then throws the answer
+/// away instead of writing a row. Anything less than the real path is a test
+/// that passes for a server the crew cannot use.
+///
+/// A 401 is a finding rather than a failure, and it is the one place this
+/// deliberately stops short of `connect`: the browser dance is not run. An
+/// operator testing an address is asking whether it is the right address, and
+/// answering that by sending them to a consent screen is a question they did
+/// not ask.
+pub async fn inspect(
+    custom: bool,
+    endpoint: &str,
+    token: Option<&str>,
+    headers: &Headers,
+) -> Result<ServerReport, PluginError> {
+    let started = std::time::Instant::now();
+    let dialed = dial(custom, endpoint, headers).with_token(token);
+    let report =
+        |session: &mcp::Session, server: String, tools: Vec<PluginTool>, signin| ServerReport {
+            endpoint: endpoint.to_string(),
+            transport: if session.sse() {
+                "HTTP+SSE (2024-11-05)".to_string()
+            } else {
+                "streamable HTTP".to_string()
+            },
+            protocol: session.protocol().to_string(),
+            handshake: !session.modern(),
+            signin,
+            server,
+            tools: tools.into_iter().map(|tool| tool.name).collect(),
+            ms: started.elapsed().as_millis() as u64,
+        };
+
+    match ask(dialed).await {
+        Ok((session, tools)) => {
+            let server = mcp::describe(&session).await.unwrap_or_default();
+            let signin = if token.is_some() { SigninNeed::Accepted } else { SigninNeed::None };
+            Ok(report(&session, server, tools, signin))
+        }
+        // Reachable, and it wants something. Which of the two it is turns on
+        // what was presented, and the difference is the whole value of asking:
+        // with nothing presented this is a server that signs in, and with a key
+        // presented it is a key the server does not accept. Those have nothing
+        // in common except the status code.
+        Err(err) if err.is_unauthorized() => Ok(ServerReport {
+            endpoint: endpoint.to_string(),
+            // Unknown, and said as nothing rather than guessed at: the refusal
+            // arrived before either question was settled.
+            transport: String::new(),
+            protocol: String::new(),
+            handshake: false,
+            signin: if token.is_some() { SigninNeed::Refused } else { SigninNeed::Wanted },
+            server: String::new(),
+            tools: Vec::new(),
+            ms: started.elapsed().as_millis() as u64,
+        }),
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// The same question, asked of a plugin the crew has already connected.
+///
+/// Not a narrower `connect`: connecting replaces the row, re-reads the tool
+/// list and can open a browser, which is a lot to do to somebody who asked
+/// whether their server was up. This spends the grant that is already there and
+/// writes nothing but a renewal.
+///
+/// The renewal is not a side effect to avoid. A stale token is what the next
+/// real call would refresh, so a check that skipped it would report "the
+/// sign-in was refused" about a plugin that works.
+pub async fn check(
+    store: &Store,
+    id: PluginId,
+    dialed: crate::db::store::Dialed,
+    endpoint: &str,
+    account: Option<AccountUse<'_>>,
+) -> Result<ServerReport, PluginError> {
+    let crate::db::store::Dialed { kind, grant, headers, .. } = dialed;
+    if kind.account_backed() {
+        let used =
+            account.ok_or_else(|| PluginError::NoAccount { label: kind.label().to_string() })?;
+        return inspect(kind.is_custom(), endpoint, Some(used.token), &headers).await;
+    }
+    let grant = match grant {
+        Some(held) if held.stale(now_ms()) => {
+            Some(renew(store, id, &held, &kind, endpoint, &headers).await?)
+        }
+        other => other,
+    };
+    inspect(kind.is_custom(), endpoint, grant.as_ref().map(|g| g.access_token.as_str()), &headers)
+        .await
 }
 
 /// Opens a session and asks for the tool list, as one question.
@@ -193,11 +334,8 @@ pub async fn connect(
 /// the first connect probes and gets the 401, and every connect after it finds
 /// the era remembered, makes no request at all, and reports a raw 401 out of
 /// the tool list instead of starting the sign-in.
-async fn ask(
-    endpoint: &str,
-    token: Option<&str>,
-) -> Result<(mcp::Session, Vec<PluginTool>), McpError> {
-    let session = mcp::open(endpoint, token).await?;
+async fn ask(dial: mcp::Dial<'_>) -> Result<(mcp::Session, Vec<PluginTool>), McpError> {
+    let session = mcp::open(dial).await?;
     let tools = read_tools(&session).await?;
     Ok((session, tools))
 }
@@ -308,8 +446,10 @@ pub async fn call(
 ) -> Result<String, PluginError> {
     let Target { group, agent, kind, endpoint, account } = target;
     let label = || kind.label().to_string();
-    let (id, grant, schema) = match store.plugin_reach(group, agent, kind, tool)? {
-        PluginReach::Granted { id, grant, schema } => (id, grant, schema),
+    let (id, grant, headers, schema) = match store.plugin_reach(group, agent, kind, tool)? {
+        PluginReach::Granted(reached) => {
+            (reached.id, reached.grant, reached.headers, reached.schema)
+        }
         PluginReach::NotConnected => return Err(PluginError::NotConnected { label: label() }),
         PluginReach::NotChosen => return Err(PluginError::NotChosen { label: label() }),
         PluginReach::ToolDenied => {
@@ -329,16 +469,21 @@ pub async fn call(
     // rather than failing on the wire.
     if kind.account_backed() {
         let used = account.ok_or_else(|| PluginError::NoAccount { label: label() })?;
-        let session = mcp::open(endpoint, Some(used.token)).await?;
+        let session =
+            mcp::open(dial(kind.is_custom(), endpoint, &headers).with_token(Some(used.token)))
+                .await?;
         return Ok(mcp::call_tool(&session, tool, arguments, schema.as_ref()).await?);
     }
 
     let grant = match grant {
-        Some(held) if held.stale(now_ms()) => Some(renew(store, id, &held, kind).await?),
+        Some(held) if held.stale(now_ms()) => {
+            Some(renew(store, id, &held, kind, endpoint, &headers).await?)
+        }
         other => other,
     };
 
-    let attempt = run(endpoint, grant.as_ref(), tool, arguments, schema.as_ref()).await;
+    let dialed = dial(kind.is_custom(), endpoint, &headers);
+    let attempt = run(dialed, grant.as_ref(), tool, arguments, schema.as_ref()).await;
     match attempt {
         Err(McpError::Unauthorized { .. }) => {
             // One retry, and only for a grant there is something to renew. A
@@ -348,34 +493,40 @@ pub async fn call(
             let Some(held) = grant else {
                 return Err(PluginError::SigninExpired { label: label() });
             };
-            let renewed = renew(store, id, &held, kind).await?;
-            run(endpoint, Some(&renewed), tool, arguments, schema.as_ref())
-                .await
-                .map_err(Into::into)
+            let renewed = renew(store, id, &held, kind, endpoint, &headers).await?;
+            run(dialed, Some(&renewed), tool, arguments, schema.as_ref()).await.map_err(Into::into)
         }
         other => other.map_err(Into::into),
     }
 }
 
 async fn run(
-    endpoint: &str,
+    dial: mcp::Dial<'_>,
     grant: Option<&Grant>,
     tool: &str,
     arguments: &serde_json::Value,
     schema: Option<&serde_json::Value>,
 ) -> Result<String, McpError> {
-    let session = mcp::open(endpoint, grant.map(|g| g.access_token.as_str())).await?;
+    let session = mcp::open(dial.with_token(grant.map(|g| g.access_token.as_str()))).await?;
     mcp::call_tool(&session, tool, arguments, schema).await
 }
 
 /// Renews a grant and writes it back, so the next turn does not renew it again.
+///
+/// Takes the operator's headers for the same reason the sign-in does: when the
+/// token endpoint is on their own server — a self-hosted MCP server that is its
+/// own issuer, behind a gate — a refresh without them is a `403` a day after
+/// everything worked. `Gate` is what keeps them off a vendor's token endpoint,
+/// which is a different origin and none of its business.
 async fn renew(
     store: &Store,
     id: PluginId,
     grant: &Grant,
     kind: &PluginKind,
+    endpoint: &str,
+    headers: &Headers,
 ) -> Result<Grant, PluginError> {
-    let renewed = oauth::refresh(grant, now_ms)
+    let renewed = oauth::refresh(grant, &oauth::Gate::on(endpoint, headers.wire()), now_ms)
         .await
         .map_err(|_| PluginError::SigninExpired { label: kind.label().to_string() })?;
     store.refresh_plugin_grant(id, &renewed)?;

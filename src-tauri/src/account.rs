@@ -434,6 +434,7 @@ impl Account {
                 ("client_id".to_string(), CLIENT_ID.to_string()),
                 ("code_verifier".to_string(), verifier),
             ],
+            &oauth::Gate::none(),
         )
         .await?;
 
@@ -516,6 +517,7 @@ impl Account {
                 ("refresh_token".to_string(), refresh_token.to_string()),
                 ("client_id".to_string(), CLIENT_ID.to_string()),
             ],
+            &oauth::Gate::none(),
         )
         .await?;
 
@@ -560,7 +562,8 @@ impl Account {
             return Err(AccountError::UnsafeOrigin { origin: self.origin.clone() });
         }
 
-        let mut server = oauth::server_metadata(&self.http, &self.origin).await?;
+        let mut server =
+            oauth::server_metadata(&self.http, &self.origin, &oauth::Gate::none()).await?;
         if server.issuer.is_empty() {
             server.issuer = self.origin.clone();
         }
