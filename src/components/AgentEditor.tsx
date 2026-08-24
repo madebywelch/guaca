@@ -12,6 +12,7 @@ import { api } from "../lib/ipc";
 import { onOpenRouter } from "../lib/providers";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentDraft, errorMessage } from "../lib/types";
+import { AgentRepositories } from "./AgentRepositories";
 import { GrantList } from "./GrantList";
 import { ModelSuggestions } from "./ModelSuggestions";
 import { SigninList } from "./SigninList";
@@ -302,6 +303,8 @@ export function AgentEditor({ agent, onClose }: Props) {
         )}
 
         {agent && <SigninList agent={agent} />}
+
+        {agent && <AgentRepositories agent={agent} />}
 
         {agent && <GrantList agent={agent} />}
 

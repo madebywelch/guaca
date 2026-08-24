@@ -73,10 +73,10 @@ describe("RepositoryList", () => {
   });
 
   it("offers no way to make every agent an engineer", async () => {
-    // The refusal the whole panel is built on. Plugins have an "Every agent"
+    // The refusal the whole feature is built on. Plugins have an "Every agent"
     // button because a crew's Linear account is usually the crew's; a working
     // tree is not, and an agent hired next week must not inherit one. If a
-    // control like that ever appears here, it appears with this test failing.
+    // control like that ever appears, it appears with this test failing.
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
     groupRepositories.mockResolvedValue([repository()]);
 
@@ -93,32 +93,19 @@ describe("RepositoryList", () => {
     groupRepositories.mockResolvedValue([repository()]);
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
-    expect(await screen.findByText("Handed to nobody yet.")).toBeTruthy();
+    expect(await screen.findByText(/Handed to nobody yet\./)).toBeTruthy();
   });
 
-  it("hands one to a single agent, by name", async () => {
-    groupRepositories.mockResolvedValue([repository()]);
-    setRepositoryAccess.mockResolvedValue(repository({ reach: ["a1"] }));
-    render(<RepositoryList groupId={GROUP} crew={CREW} />);
-
-    fireEvent.click(await screen.findByText("Ada"));
-
-    // The change, not the list the panel believes in: a panel one tick behind
-    // must not be able to revoke Grace while granting Ada.
-    await waitFor(() => expect(setRepositoryAccess).toHaveBeenCalledWith("r1", "a1", true));
-    expect(setRepositoryAccess).toHaveBeenCalledTimes(1);
-  });
-
-  it("takes one back from an agent that has it", async () => {
+  it("names who has one without offering to change it here", async () => {
+    // The read stays, because auditing is a real question and answering it
+    // should not mean opening six agents. The control does not, because the
+    // operator asking "what can Ada work on" is on Ada's panel, not this one.
     groupRepositories.mockResolvedValue([repository({ reach: ["a1"] })]);
-    setRepositoryAccess.mockResolvedValue(repository());
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
-    const ada = await screen.findByText("Ada");
-    expect(ada.getAttribute("aria-pressed")).toBe("true");
-    fireEvent.click(ada);
-
-    await waitFor(() => expect(setRepositoryAccess).toHaveBeenCalledWith("r1", "a1", false));
+    expect(await screen.findByText(/Handed to Ada/)).toBeTruthy();
+    expect(screen.queryByText("Grace")).toBeNull();
+    expect(setRepositoryAccess).not.toHaveBeenCalled();
   });
 
   it("sends the path as typed and lets the backend say whether it is a repository", async () => {
@@ -198,12 +185,5 @@ describe("RepositoryList", () => {
     // disk, and "Delete" beside a path is a promise about their files.
     fireEvent.click(await screen.findByText("Unlink"));
     await waitFor(() => expect(deleteRepository).toHaveBeenCalledWith("r1"));
-  });
-
-  it("says a crew with no agents has nobody to hand one to", async () => {
-    groupRepositories.mockResolvedValue([repository()]);
-    render(<RepositoryList groupId={GROUP} crew={[]} />);
-
-    expect(await screen.findByText("This group has no agents yet.")).toBeTruthy();
   });
 });

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/ipc";
 import {
   type AgentCard,
-  type AgentId,
   errorMessage,
   type GroupId,
   type Repository,
@@ -41,17 +40,27 @@ function handedTo(repository: Repository, crew: AgentCard[]): string {
  * an agent whose words read that way. Designating an engineer is hiring one and
  * giving it a directory. Nothing under here has to know the word.
  *
- * ## Two decisions, and only the second one is on this panel twice
+ * ## Linking is here; handing out is on the agent
  *
- * Linking a directory and handing it out are separate, exactly as connecting a
- * plugin and choosing who may spend it are. A newly linked repository reaches
- * nobody. That is a state to pass through rather than one to hide: a crew's
- * source handed to every agent at the moment it was linked is the accident this
- * feature most has to avoid.
+ * Two decisions, and they are split across two panels rather than stacked in
+ * one, because they are asked at different moments. "What codebases does this
+ * crew have" is a crew fact, set up once and edited when a directory moves.
+ * "What can this agent work on" is asked every time somebody hires an engineer,
+ * and it is answered where an agent is decided, beside its model and its
+ * instructions. `AgentRepositories` is that panel.
  *
- * Which is also why there is no "every agent" button here and there is one on
- * the plugins above. An agent hired next week must not inherit the operator's
- * own source. Names, always.
+ * A newly linked repository therefore reaches nobody, and the line under each
+ * row says so. That is a state to pass through rather than one to hide: a
+ * crew's source handed to every agent at the moment it was linked is the
+ * accident this feature most has to avoid.
+ *
+ * Who has what stays here as a read, and only as a read. Auditing is a real
+ * question, and answering it should not mean opening six agents one at a time.
+ * The same reason the plugin panel says who a sign-in is offered to.
+ *
+ * There is no "every agent" button here and there is one on the plugins above.
+ * An agent hired next week must not inherit the operator's own source. Names,
+ * always, and only on the agent.
  */
 export function RepositoryList({ groupId, crew }: Props) {
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
@@ -112,11 +121,6 @@ export function RepositoryList({ groupId, crew }: Props) {
         note: draft.note,
       } satisfies RepositoryDraft),
     ).then((ok) => ok && reset());
-
-  const toggle = (repository: Repository, agent: AgentId) =>
-    void run(`${repository.id}-${agent}`, () =>
-      api.setRepositoryAccess(repository.id, agent, !repository.reach.includes(agent)),
-    );
 
   if (repositories === null) return <p className="field__hint">Loading repositories…</p>;
 
@@ -197,26 +201,9 @@ export function RepositoryList({ groupId, crew }: Props) {
             repository.note && <p className="field__hint">{repository.note}</p>
           )}
 
-          <span className="field__label">Who can work in it</span>
-          <div className="choices">
-            {crew.length === 0 ? (
-              <span className="field__hint">This group has no agents yet.</span>
-            ) : (
-              crew.map((agent) => (
-                <button
-                  key={agent.id}
-                  type="button"
-                  className="choice"
-                  aria-pressed={repository.reach.includes(agent.id)}
-                  disabled={busy !== null}
-                  onClick={() => toggle(repository, agent.id)}
-                >
-                  {agent.name}
-                </button>
-              ))
-            )}
-          </div>
-          <p className="field__hint">Handed to {handedTo(repository, crew)}.</p>
+          <p className="field__hint">
+            Handed to {handedTo(repository, crew)}. Give it to an agent from that agent's own panel.
+          </p>
         </div>
       ))}
 
@@ -266,8 +253,8 @@ export function RepositoryList({ groupId, crew }: Props) {
         <>
           <p className="field__hint">
             A directory on this machine that this crew may write code in. Linking one gives it to
-            nobody: you hand it to agents by name, one at a time, and an agent you hire later does
-            not inherit it.
+            nobody. You hand it to an agent from that agent's own panel, one at a time, and an agent
+            you hire later does not inherit it.
           </p>
           <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
             Link a repository
