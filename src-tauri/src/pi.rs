@@ -123,6 +123,67 @@ pub async fn installed() -> bool {
         .unwrap_or(false)
 }
 
+/// Folds one event from the harness's stream into the outcome.
+///
+/// Its own function so the tests drive the real thing. It was written inline
+/// and the tests kept a copy of the match beside it, which is how a missing
+/// arm passed CI and shipped: the copy captured `stopReason` and the parser
+/// never did, so every failed job in a live workspace was reported as a job
+/// with nothing to do. A test that mirrors the code under test asserts that
+/// the mirror is correct.
+fn absorb(outcome: &mut Outcome, event: &serde_json::Value, watching: &mut impl FnMut(Progress)) {
+    match event["type"].as_str().unwrap_or_default() {
+        "tool_execution_start" => {
+            outcome.tool_calls += 1;
+            if let Some(name) = event["toolName"].as_str() {
+                watching(Progress::Using(name.to_string()));
+            }
+        }
+        // The authoritative message, as opposed to the deltas: pi's own
+        // documentation says `message_end` is the final one, and reassembling
+        // the text from `text_delta` would be a second copy of the same string
+        // that could disagree with it.
+        "message_end" if event["message"]["role"] == "assistant" => {
+            let said = text_of(&event["message"]);
+            if !said.trim().is_empty() {
+                watching(Progress::Said(said.clone()));
+                // Kept rather than appended. Every assistant message is a round
+                // of one turn, and the last one is the answer; joined, a job
+                // that narrated its work would report the narration as its
+                // result.
+                outcome.said = said;
+            }
+            if let Some(model) = event["message"]["model"].as_str() {
+                outcome.model = model.to_string();
+            }
+            // A turn that ended on an error, which `pi` reports here and then
+            // exits zero about. Taken from the last message rather than the
+            // first, so a turn that failed and was retried successfully is not
+            // a failed job.
+            outcome.failed = match event["message"]["stopReason"].as_str() {
+                Some("error") => Some(
+                    event["message"]["errorMessage"]
+                        .as_str()
+                        .unwrap_or("the harness did not say why")
+                        .to_string(),
+                ),
+                _ => None,
+            };
+        }
+        "message_update" => {
+            // Cumulative rather than additive: pi reports the running total on
+            // every update, so adding them up multiplies the bill by the number
+            // of updates.
+            if let Some(total) = event["usage"]["cost"]["total"].as_f64() {
+                if total > 0.0 {
+                    outcome.cost = Some(total);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Runs one task to completion in one repository.
 ///
 /// `--mode json` rather than `--mode rpc`. RPC is the richer protocol and buys
@@ -167,43 +228,7 @@ pub async fn run(
             let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
-            match event["type"].as_str().unwrap_or_default() {
-                "tool_execution_start" => {
-                    outcome.tool_calls += 1;
-                    if let Some(name) = event["toolName"].as_str() {
-                        watching(Progress::Using(name.to_string()));
-                    }
-                }
-                // The authoritative message, as opposed to the deltas: pi's
-                // own documentation says `message_end` is the final one, and
-                // reassembling the text from `text_delta` would be a second
-                // copy of the same string that could disagree with it.
-                "message_end" if event["message"]["role"] == "assistant" => {
-                    let said = text_of(&event["message"]);
-                    if !said.trim().is_empty() {
-                        watching(Progress::Said(said.clone()));
-                        // Kept rather than appended. Every assistant message is
-                        // a round of one turn, and the last one is the answer;
-                        // joined, a job that narrated its work would report the
-                        // narration as its result.
-                        outcome.said = said;
-                    }
-                    if let Some(model) = event["message"]["model"].as_str() {
-                        outcome.model = model.to_string();
-                    }
-                }
-                "message_update" => {
-                    // Cumulative rather than additive: pi reports the running
-                    // total on every update, so adding them up multiplies the
-                    // bill by the number of updates.
-                    if let Some(total) = event["usage"]["cost"]["total"].as_f64() {
-                        if total > 0.0 {
-                            outcome.cost = Some(total);
-                        }
-                    }
-                }
-                _ => {}
-            }
+            absorb(&mut outcome, &event, &mut watching);
         }
     };
 
@@ -265,41 +290,13 @@ fn text_of(message: &serde_json::Value) -> String {
 mod tests {
     use super::*;
 
+    /// Drives the real parser, not a copy of it.
     fn drive(lines: &[&str]) -> Outcome {
-        // The parser, without a process. What this covers is the shape of pi's
-        // stream, which is the thing that goes stale when pi ships.
         let mut outcome = Outcome::default();
+        let mut seen = Vec::new();
         for line in lines {
             let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-            match event["type"].as_str().unwrap_or_default() {
-                "tool_execution_start" => outcome.tool_calls += 1,
-                "message_end" if event["message"]["role"] == "assistant" => {
-                    let said = text_of(&event["message"]);
-                    if !said.trim().is_empty() {
-                        outcome.said = said;
-                    }
-                    if let Some(model) = event["message"]["model"].as_str() {
-                        outcome.model = model.to_string();
-                    }
-                    outcome.failed = match event["message"]["stopReason"].as_str() {
-                        Some("error") => Some(
-                            event["message"]["errorMessage"]
-                                .as_str()
-                                .unwrap_or("the harness did not say why")
-                                .to_string(),
-                        ),
-                        _ => None,
-                    };
-                }
-                "message_update" => {
-                    if let Some(total) = event["usage"]["cost"]["total"].as_f64() {
-                        if total > 0.0 {
-                            outcome.cost = Some(total);
-                        }
-                    }
-                }
-                _ => {}
-            }
+            absorb(&mut outcome, &event, &mut |p| seen.push(p));
         }
         outcome
     }
@@ -316,6 +313,24 @@ mod tests {
         assert_eq!(outcome.said, "Fixed and pushed.");
         assert_eq!(outcome.tool_calls, 1);
         assert_eq!(outcome.model, "gpt-5.6");
+    }
+
+    #[test]
+    fn the_tests_drive_the_parser_the_runtime_uses() {
+        // The guard on the whole file. `drive` used to keep its own copy of the
+        // match, so an arm the parser was missing passed here against the copy:
+        // `stopReason` was read by the test and by nothing else, and every
+        // failed coding job in a live workspace came back as a job that found
+        // nothing to do. If `absorb` is ever inlined again, this is the test
+        // that stops being about anything.
+        let progress = std::cell::RefCell::new(Vec::new());
+        let mut outcome = Outcome::default();
+        let event: serde_json::Value =
+            serde_json::from_str(r#"{"type":"tool_execution_start","toolName":"bash"}"#).unwrap();
+        absorb(&mut outcome, &event, &mut |p| progress.borrow_mut().push(p));
+
+        assert_eq!(outcome.tool_calls, 1);
+        assert_eq!(progress.borrow().as_slice(), [Progress::Using("bash".into())]);
     }
 
     #[test]
