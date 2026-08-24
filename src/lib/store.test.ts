@@ -14,6 +14,7 @@ vi.mock("./ipc", () => ({
     conversationFlow: vi.fn(async () => [] as Envelope[]),
     usageSummary: vi.fn(async () => []),
     listGroups: vi.fn(async () => []),
+    listRepositories: vi.fn(async () => []),
     moveAgent: vi.fn(async () => null),
     setAgentPinned: vi.fn(async () => null),
   },

@@ -513,6 +513,16 @@ pub fn group_repositories(state: State<'_, AppState>, group_id: GroupId) -> Repl
     Ok(state.runtime.store().group_repositories(group_id)?)
 }
 
+/// Every repository in the workspace, with who may work in each.
+///
+/// One read for the whole rail. The crews column and the rail inside a crew are
+/// drawn from one roster, and a call per crew would make the round trips the
+/// number of crews.
+#[tauri::command]
+pub fn list_repositories(state: State<'_, AppState>) -> Reply<Vec<Repository>> {
+    Ok(state.runtime.store().repositories()?)
+}
+
 /// Links a directory to a crew, after checking that it is one.
 ///
 /// The check is the point of the command being async: it runs git, and it is

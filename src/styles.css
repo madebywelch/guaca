@@ -904,8 +904,64 @@ button {
   box-shadow: 0 0 6px color-mix(in oklab, var(--flesh) 55%, transparent);
 }
 
+/* The codebases a crew works in, above the crew.
+
+   Drawn as its own furniture rather than as more rows, and that is the whole
+   point of the block: dropping an agent on a crew moves it, because an agent is
+   in one crew, and dropping it on a repository grants, because an agent can
+   work in several. Two drops that looked the same would be how an operator
+   loses an agent while trying to give it a codebase. */
+.rail__repos {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.15rem 0.6rem 0.35rem 1rem;
+}
+
+.rail__repo {
+  border-radius: 0.4rem;
+  padding: 0.3rem 0.45rem;
+  /* A left edge rather than a full border. The rail is a column of rows and a
+     boxed item in it reads as a control; a rule down one side reads as a
+     heading with things under it, which is what this is. */
+  border-left: 2px solid color-mix(in oklab, var(--flesh) 40%, transparent);
+  background: color-mix(in oklab, var(--flesh-soft) 22%, transparent);
+}
+
+.rail__repo-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.rail__repo-name {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--rail-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__repo-who {
+  margin: 0.1rem 0 0;
+  font-size: 0.64rem;
+  line-height: 1.3;
+  color: var(--rail-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail__repo-nobody {
+  font-style: italic;
+}
+
 /* A whole crew as the target, which is what dropping anywhere but on a row
    means: this group, no particular place in it. */
+.rail__repo[data-over="true"],
 .rail__group[data-over="true"],
 .orb[data-over="true"] .orb__ring {
   background: color-mix(in oklab, var(--flesh) 12%, transparent);

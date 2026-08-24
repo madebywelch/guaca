@@ -9,6 +9,7 @@ import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
+import { RailRepositories } from "./RailRepositories";
 import { TokenMeter } from "./TokenMeter";
 
 interface Props {
@@ -62,6 +63,7 @@ export function Sidebar({
 }: Props) {
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
+  const repositories = useStore((s) => s.repositories);
   const activity = useStore((s) => s.activity);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
@@ -480,6 +482,22 @@ export function Sidebar({
                   <span className="rail__open-name">{focused.name}</span>
                   {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
                 </div>
+                {/* Above the crew, because "what are we working on" is read
+                    before "who is here", and because a drop target that sits
+                    under a list of rows is one the hand has to travel past
+                    every row to reach. */}
+                <RailRepositories
+                  repositories={repositories.filter((r) => r.groupId === focused.id)}
+                  crew={agents.filter((a) => a.groupId === focused.id)}
+                  isOver={isOver}
+                  onDragOver={hover}
+                  // Back to the crew rather than to nothing. Leaving a
+                  // repository for the whitespace around it never re-enters the
+                  // crew, which never left, so clearing here would make a drop
+                  // in that whitespace do nothing at all.
+                  onDragLeave={() => hover({ kind: "group", id: focused.id })}
+                  dragging={drag !== null}
+                />
                 {railOrder(
                   agents.filter((a) => a.groupId === focused.id),
                   shape,
@@ -518,6 +536,14 @@ export function Sidebar({
                         <span className="rail__group-name">{group.name}</span>
                         {groupTail(group, members.length)}
                       </div>
+                      <RailRepositories
+                        repositories={repositories.filter((r) => r.groupId === group.id)}
+                        crew={members}
+                        isOver={isOver}
+                        onDragOver={hover}
+                        onDragLeave={() => hover({ kind: "group", id: group.id })}
+                        dragging={drag !== null}
+                      />
                       {here.map(row)}
                       {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
                     </div>

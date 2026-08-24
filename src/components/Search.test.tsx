@@ -24,6 +24,7 @@ vi.mock("../lib/ipc", () => ({
     search: (query: string, limit?: number) => search(query, limit),
     listAgents: async () => [],
     listGroups: async () => [],
+    listRepositories: async () => [],
     channelMessages: async () => [],
     conversationFlow: async () => [],
   },

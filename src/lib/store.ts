@@ -28,6 +28,7 @@ import type {
   GroupUsage,
   MessageId,
   Participant,
+  Repository,
   RoutineId,
   RunId,
   Settings,
@@ -71,6 +72,14 @@ export interface Placement {
 interface State {
   agents: AgentCard[];
   groups: Group[];
+  /**
+   * Every repository in the workspace, filtered per crew where it is drawn.
+   *
+   * Beside the roster rather than fetched by whoever draws it, for the reason
+   * groups are: an agent given a repository changes what two panels say, and
+   * one refresh keeps them consistent.
+   */
+  repositories: Repository[];
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -343,6 +352,7 @@ function keptChannel(state: State, group: GroupId | null): boolean {
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
+  repositories: [],
   activity: {},
   lastActive: {},
   settings: null,
@@ -365,23 +375,34 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, groups, activity, lastActive, settings, usage, approvals, pending] =
-      await Promise.all([
-        api.listAgents(),
-        api.listGroups(),
-        api.agentActivity(),
-        api.agentLastActive(),
-        api.getSettings(),
-        api.usageSummary(),
-        api.approvalStates(),
-        // A turn parked before the window was opened is still parked. The desk
-        // has to be right on the first paint, or the operator's first read of
-        // it says nobody is waiting.
-        api.pendingApprovals(),
-      ]);
+    const [
+      agents,
+      groups,
+      repositories,
+      activity,
+      lastActive,
+      settings,
+      usage,
+      approvals,
+      pending,
+    ] = await Promise.all([
+      api.listAgents(),
+      api.listGroups(),
+      api.listRepositories(),
+      api.agentActivity(),
+      api.agentLastActive(),
+      api.getSettings(),
+      api.usageSummary(),
+      api.approvalStates(),
+      // A turn parked before the window was opened is still parked. The desk
+      // has to be right on the first paint, or the operator's first read of
+      // it says nobody is waiting.
+      api.pendingApprovals(),
+    ]);
     set({
       agents,
       groups,
+      repositories,
       activity,
       lastActive,
       settings,
@@ -400,12 +421,17 @@ export const useStore = create<State>((set, get) => ({
   async refreshAgents() {
     // Groups come back with the roster because an agent moving between them
     // changes both counts, and one refresh keeps the two consistent on screen.
-    const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
+    const [agents, groups, repositories] = await Promise.all([
+      api.listAgents(),
+      api.listGroups(),
+      api.listRepositories(),
+    ]);
     // A group the rail was looking inside can be deleted from the group editor,
     // and a focus on one that is gone draws an empty rail with no way out of it.
     set((state) => ({
       agents,
       groups,
+      repositories,
       railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
     }));
 
@@ -503,6 +529,20 @@ export const useStore = create<State>((set, get) => ({
 
     if (target.kind === "group") {
       await get().moveAgent(id, { groupId: target.id, before: null });
+      return;
+    }
+
+    // Not a move. An agent is in one crew and can work in several
+    // repositories, so this adds rather than relocates, and an agent dropped on
+    // one it already has is a gesture that changes nothing rather than one that
+    // takes it away: a drag is how you give, and the panel on the agent is
+    // where you take back.
+    if (target.kind === "repository") {
+      const repository = state.repositories.find((r) => r.id === target.id);
+      if (!repository || repository.reach.includes(id)) return;
+      if (repository.groupId !== dragged.groupId) return;
+      await api.setRepositoryAccess(target.id, id, true);
+      await get().refreshAgents();
       return;
     }
 

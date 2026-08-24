@@ -136,6 +136,12 @@ export const api = {
    * No disk is touched: a repository moved or deleted since it was linked still
    * comes back, because this panel is where the operator fixes that.
    */
+  /**
+   * Every repository in the workspace. One read for the whole rail, which draws
+   * crews and their contents from one roster.
+   */
+  listRepositories: () => invoke<Repository[]>("list_repositories"),
+
   groupRepositories: (groupId: GroupId) => invoke<Repository[]>("group_repositories", { groupId }),
 
   /**

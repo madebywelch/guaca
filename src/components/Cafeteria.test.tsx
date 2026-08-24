@@ -25,6 +25,7 @@ vi.mock("../lib/ipc", () => ({
     hireAgents: (groupId: string, drafts: AgentDraft[]) => hireAgents(groupId, drafts),
     listAgents: async () => [],
     listGroups: async () => [],
+    listRepositories: async () => [],
     channelMessages: async () => [],
     conversationFlow: async () => [],
   },

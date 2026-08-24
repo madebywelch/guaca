@@ -1255,6 +1255,40 @@ impl Store {
         Ok(out)
     }
 
+    /// Every repository in the workspace, with who may work in each.
+    ///
+    /// Workspace-wide rather than per group because the rail is: it draws
+    /// crews and their contents from one roster, and a second read per crew
+    /// would make the number of round trips the number of crews. The caller
+    /// filters by group exactly as it already does for agents.
+    pub fn repositories(&self) -> Result<Vec<Repository>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} ORDER BY name, rowid"))?;
+        let rows = stmt.query_map([], row_to_repository)?;
+
+        let mut reach: HashMap<RepositoryId, Vec<AgentId>> = HashMap::new();
+        let mut names =
+            conn.prepare("SELECT repository_id, agent_id FROM repository_access ORDER BY rowid")?;
+        let pairs =
+            names.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+        for pair in pairs {
+            let (repo, agent) = pair?;
+            let (Ok(repo), Ok(agent)) = (repo.parse::<RepositoryId>(), agent.parse::<AgentId>())
+            else {
+                continue;
+            };
+            reach.entry(repo).or_default().push(agent);
+        }
+
+        let mut out = Vec::new();
+        for row in rows {
+            let mut repo = row??;
+            repo.reach = reach.remove(&repo.id).unwrap_or_default();
+            out.push(repo);
+        }
+        Ok(out)
+    }
+
     /// The repositories one agent may actually work in.
     ///
     /// Read on the hot path: it decides what the turn is offered and what the
