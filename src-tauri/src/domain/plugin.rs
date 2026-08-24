@@ -48,13 +48,22 @@ use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, GroupId, PluginId};
 
-/// One of the servers Guaca knows how to sign in to.
+/// Which server a plugin is, and where the runtime dials it.
 ///
-/// A closed set, and it has to stay closed: the endpoint is what the runtime
-/// dials, so "any MCP server" would mean an operator typing a URL that Guaca
-/// then sends the crew's tokens to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+/// Six Guaca ships the address of, and whatever the operator added. The six are
+/// a catalog rather than a limit: each one is on the list because somebody
+/// checked that it publishes its own tools, acts on the operator's account and
+/// lets an application register itself, and what that check buys is a tile with
+/// a name, a sentence and a working sign-in behind one click.
+///
+/// [`PluginKind::Custom`] is the same mechanism with none of that checking
+/// done. The operator supplies the two things the catalog was supplying — a
+/// name and an address — and everything after that is identical: the same
+/// probe, the same sign-in, the same tool list, the same per-agent and per-tool
+/// answers, the same grant that never reaches a model. What is different is
+/// that nobody vouched for the server, which is a sentence in the UI rather
+/// than a different code path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum PluginKind {
     Neon,
     Cloudflare,
@@ -63,9 +72,79 @@ pub enum PluginKind {
     Agentmail,
     /// The operator's own Guaca account, as a server. See [`PluginKind::account_backed`].
     Google,
+    /// An MCP server the operator named and addressed themselves.
+    ///
+    /// The name is one word and it is the *only* name: it is what the panel
+    /// shows, what the prompt says, and the prefix every one of its tools is
+    /// called by. A display name beside it would be a second name that drifts
+    /// from the one the agent types, and there is nowhere for the drift to
+    /// show up except in a turn that cannot find a tool.
+    ///
+    /// The address is on the variant rather than looked up, because for this
+    /// one there is nothing to look it up in: it is the row, and a row that has
+    /// lost it is a row nothing can dial. See [`PluginKind::from_row`].
+    Custom {
+        slug: String,
+        endpoint: String,
+    },
 }
 
+/// Why a server an operator typed cannot be added.
+///
+/// Each says what to change rather than what was wrong. An operator adding a
+/// server has a URL in their hand and no idea what shape Guaca wants it in.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CustomError {
+    #[error(
+        "a server needs a name. One word, letters and digits, which is what its tools will be \
+         called by: `linear__create_issue` is what the crew sees."
+    )]
+    NoName,
+    #[error(
+        "{0} is not a name a tool can be called by. Use letters and digits, starting with a \
+         letter: it becomes the first half of every tool name this server offers."
+    )]
+    BadName(String),
+    #[error(
+        "{0} is the name of a server Guaca already ships. Pick another name, or connect that one \
+         from the list above."
+    )]
+    TakenName(String),
+    #[error(
+        "{0} is longer than {max} characters. Its name is the first half of every tool name this \
+         server offers, and a provider refuses a function name past 64.",
+        max = MAX_CUSTOM_NAME
+    )]
+    LongName(String),
+    #[error("a server needs an address: the URL its MCP endpoint answers on, such as https://example.com/mcp.")]
+    NoUrl,
+    #[error(
+        "{0} is not a URL Guaca can dial. It needs a scheme and a host, such as \
+         https://example.com/mcp."
+    )]
+    BadUrl(String),
+    #[error(
+        "{0} is not https. A crew's sign-in and everything its agents send would cross the \
+         network in the open. Use https, or a loopback address if the server is on this machine."
+    )]
+    Insecure(String),
+    #[error(
+        "{0} has a fragment on it. An MCP endpoint is the address a token is issued for, and a \
+         fragment is never sent to a server: drop everything from the # onward."
+    )]
+    Fragment(String),
+}
+
+/// The longest name a custom server may have.
+///
+/// A provider refuses a function name past 64 characters, and a plugin's tool
+/// is `name__tool`. Half is a name long enough for anything an operator would
+/// type and short enough to leave a real tool name room on the other side.
+pub const MAX_CUSTOM_NAME: usize = 32;
+
 impl PluginKind {
+    /// The servers Guaca ships the address of. Not every kind: a custom one is
+    /// not offered, it is added.
     pub const ALL: [PluginKind; 6] = [
         PluginKind::Neon,
         PluginKind::Cloudflare,
@@ -75,11 +154,42 @@ impl PluginKind {
         PluginKind::Google,
     ];
 
+    /// One the operator typed, if both halves of it hold up.
+    ///
+    /// The name is normalized rather than demanded in a particular shape:
+    /// "Home Assistant" becomes `home_assistant`, because an operator naming a
+    /// server is thinking about the server and not about what a provider
+    /// accepts in a function name. What comes back is shown to them
+    /// immediately, so the name they end up with is one they saw before they
+    /// pressed the button.
+    ///
+    /// The address is normalized the other way, to the canonical form RFC 8707
+    /// asks for: the trailing slash goes, because that string is not only the
+    /// URL a POST goes to but the resource identifier the sign-in is scoped to,
+    /// and a server that publishes itself without one refuses a token issued
+    /// for the other.
+    pub fn custom(name: &str, url: &str) -> Result<PluginKind, CustomError> {
+        let slug = normalize_name(name);
+        if slug.is_empty() {
+            return Err(CustomError::NoName);
+        }
+        if !slug.starts_with(|c: char| c.is_ascii_lowercase()) {
+            return Err(CustomError::BadName(name.trim().to_string()));
+        }
+        if slug.len() > MAX_CUSTOM_NAME {
+            return Err(CustomError::LongName(slug));
+        }
+        if PluginKind::from_slug(&slug).is_some() {
+            return Err(CustomError::TakenName(slug));
+        }
+        Ok(PluginKind::Custom { slug, endpoint: canonical_url(url)? })
+    }
+
     /// The stored form, and the prefix every one of its tools is offered under.
     ///
     /// Lowercase and one word, because it is half of a tool name and a model
     /// reads `neon__run_sql` before it reads anything else about the call.
-    pub const fn slug(self) -> &'static str {
+    pub fn slug(&self) -> &str {
         match self {
             PluginKind::Neon => "neon",
             PluginKind::Cloudflare => "cloudflare",
@@ -87,14 +197,44 @@ impl PluginKind {
             PluginKind::Stripe => "stripe",
             PluginKind::Agentmail => "agentmail",
             PluginKind::Google => "google",
+            PluginKind::Custom { slug, .. } => slug,
         }
     }
 
+    /// One of the six, by the name it is stored under. Never a custom one:
+    /// those carry an address a slug alone cannot supply, and the caller that
+    /// has one is reading a row. See [`PluginKind::from_row`].
     pub fn from_slug(slug: &str) -> Option<PluginKind> {
         PluginKind::ALL.into_iter().find(|kind| kind.slug() == slug)
     }
 
-    pub const fn label(self) -> &'static str {
+    /// A stored row's two columns, as the kind they describe.
+    ///
+    /// `None` is a row this build cannot dial, and there is exactly one way to
+    /// be one: a slug that is not in the catalog and no address beside it,
+    /// which is what a newer build's plugin looks like after a downgrade. A row
+    /// that carries its own address needs no build knowledge at all, which is
+    /// the whole point of a custom server and the reason this is not the same
+    /// question as `from_slug`.
+    ///
+    /// The address is ignored for a catalog kind. Where its server lives is a
+    /// decision this build makes and re-makes on every release: a vendor that
+    /// moves is a new version of Guaca, not a stale string in an old row.
+    pub fn from_row(slug: &str, endpoint: &str) -> Option<PluginKind> {
+        if let Some(known) = PluginKind::from_slug(slug) {
+            return Some(known);
+        }
+        if endpoint.is_empty() || normalize_name(slug) != slug {
+            return None;
+        }
+        Some(PluginKind::Custom { slug: slug.to_string(), endpoint: endpoint.to_string() })
+    }
+
+    /// What a person and a model call it.
+    ///
+    /// For a custom server that is its name, which is also its slug: one string
+    /// rather than two that can disagree. See [`PluginKind::Custom`].
+    pub fn label(&self) -> &str {
         match self {
             PluginKind::Neon => "Neon",
             PluginKind::Cloudflare => "Cloudflare",
@@ -102,7 +242,17 @@ impl PluginKind {
             PluginKind::Stripe => "Stripe",
             PluginKind::Agentmail => "AgentMail",
             PluginKind::Google => "Google",
+            PluginKind::Custom { slug, .. } => slug,
         }
+    }
+
+    /// Whether this is a server the operator added rather than one on the list.
+    ///
+    /// Read by the panel, which has to say that nobody vouched for it, and by
+    /// nothing on the call path: a custom server is dialled, signed in to and
+    /// narrowed by exactly the code the other six are.
+    pub fn is_custom(&self) -> bool {
+        matches!(self, PluginKind::Custom { .. })
     }
 
     /// The MCP server this plugin is.
@@ -123,7 +273,7 @@ impl PluginKind {
     /// API behind `search` and `execute`: the model writes JavaScript against
     /// the OpenAPI document, Cloudflare runs it, and 2,500 endpoints cost about
     /// a thousand tokens of context instead of a million.
-    pub const fn endpoint(self) -> &'static str {
+    pub fn endpoint(&self) -> &str {
         match self {
             PluginKind::Neon => "https://mcp.neon.tech/mcp",
             PluginKind::Cloudflare => "https://mcp.cloudflare.com/mcp",
@@ -135,6 +285,20 @@ impl PluginKind {
             // this is the address a bundled build talks to and the one the tile
             // shows before anything is connected.
             PluginKind::Google => "https://guaca.bot/mcp",
+            PluginKind::Custom { endpoint, .. } => endpoint,
+        }
+    }
+
+    /// What the row stores in its `endpoint` column.
+    ///
+    /// Empty for a catalog kind, whose address belongs to the build rather than
+    /// to the row: a vendor that moves ships as a new Guaca, and a stored copy
+    /// would keep a crew dialling the old host until somebody reconnected it.
+    /// A custom server has nowhere else to keep it.
+    pub fn stored_endpoint(&self) -> &str {
+        match self {
+            PluginKind::Custom { endpoint, .. } => endpoint,
+            _ => "",
         }
     }
 
@@ -154,12 +318,17 @@ impl PluginKind {
     /// crew's agents, and `PluginAccess` still decides which of them. Nothing
     /// else about a plugin changes: the call still goes out of Guaca, the token
     /// still never reaches a model, and the tool list is still read once.
-    pub const fn account_backed(self) -> bool {
+    ///
+    /// Never a custom server. An operator can point one at `guaca.bot` and it
+    /// signs in to it the ordinary way, which is the honest outcome: the
+    /// account's credential is the account's to lend, and lending it to an
+    /// address somebody typed is not a decision a slug should be able to make.
+    pub fn account_backed(&self) -> bool {
         matches!(self, PluginKind::Google)
     }
 
     /// One line on the tile, in terms of what the crew gets.
-    pub const fn blurb(self) -> &'static str {
+    pub fn blurb(&self) -> &str {
         match self {
             PluginKind::Neon => "Postgres databases: branch one, run SQL, migrate it.",
             PluginKind::Cloudflare => "The whole API: Workers, DNS, R2, D1, Zero Trust.",
@@ -169,11 +338,14 @@ impl PluginKind {
             PluginKind::Google => {
                 "Your Gmail, Calendar and Drive, through the Guaca account you signed in to."
             }
+            PluginKind::Custom { .. } => {
+                "A server you added. Whatever it publishes, this crew has."
+            }
         }
     }
 
     /// Where the operator can read what they are about to authorize.
-    pub const fn docs(self) -> &'static str {
+    pub fn docs(&self) -> &str {
         match self {
             PluginKind::Neon => "https://neon.com/docs/ai/neon-mcp-server",
             PluginKind::Cloudflare => {
@@ -183,7 +355,126 @@ impl PluginKind {
             PluginKind::Stripe => "https://docs.stripe.com/mcp",
             PluginKind::Agentmail => "https://www.agentmail.to/docs/integrations/mcp",
             PluginKind::Google => "https://guaca.bot/app",
+            // Nobody wrote a page about this one. The protocol it has to speak
+            // is the nearest thing to documentation Guaca can point at, and it
+            // is what an operator debugging their own server wants.
+            PluginKind::Custom { .. } => "https://modelcontextprotocol.io/specification",
         }
+    }
+}
+
+/// A name as it will be stored, called and typed by a model.
+///
+/// Everything that is not a letter or a digit becomes one underscore, and runs
+/// collapse. That is what makes "Home Assistant" and "home-assistant" the same
+/// server rather than two, and it is also what guarantees no `__` survives,
+/// which matters more than it looks: two underscores are what separate a plugin
+/// from its tool, so a name containing them would split in the wrong place and
+/// send a call to a plugin that does not exist.
+fn normalize_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.trim().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('_') && !out.is_empty() {
+            out.push('_');
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// An address as RFC 8707 wants a resource identifier written.
+///
+/// Loopback is the one place plain HTTP is allowed, and it is not a loosening:
+/// a server on this machine is the commonest thing an operator has written
+/// themselves, and nothing on that connection leaves the machine. Everything
+/// else carries a crew's grant, so it is https or it is refused here rather
+/// than in a packet capture.
+fn canonical_url(url: &str) -> Result<String, CustomError> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err(CustomError::NoUrl);
+    }
+    if url.contains('#') {
+        return Err(CustomError::Fragment(url.to_string()));
+    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Err(CustomError::BadUrl(url.to_string()));
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    let (authority, path) = match rest.find(['/', '?']) {
+        Some(at) => rest.split_at(at),
+        None => (rest, ""),
+    };
+    if authority.is_empty() {
+        return Err(CustomError::BadUrl(url.to_string()));
+    }
+    // Credentials in the authority, which are refused rather than parsed
+    // around. `http://localhost:80@evil.com/mcp` has a host of `evil.com` and a
+    // *user* of `localhost:80`, so anything that reads the front of the
+    // authority as the host takes it for a loopback address and lets a crew's
+    // grant cross the open network to somebody else's server. An RFC 8707
+    // resource identifier has no userinfo either, so there is nothing to keep.
+    if authority.contains('@') {
+        return Err(CustomError::BadUrl(url.to_string()));
+    }
+    let host = authority;
+    // An IPv6 host is bracketed, so the port cannot be split off at the first
+    // colon: `[::1]:8080` would come apart as `[` and the address would read as
+    // some other host entirely — one that is not loopback, and would therefore
+    // be refused for being plain HTTP while looking exactly like the case this
+    // allows.
+    let bare = match host.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or_default().to_ascii_lowercase(),
+        None => host.split(':').next().unwrap_or_default().to_ascii_lowercase(),
+    };
+    // Asked of the parsed address rather than matched against a list of three
+    // spellings: the whole of 127.0.0.0/8 is loopback, and a prefix test would
+    // take `127.evil.com` for one of them.
+    let loopback =
+        bare == "localhost" || bare.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    match scheme.as_str() {
+        "https" => {}
+        "http" if loopback => {}
+        "http" => return Err(CustomError::Insecure(url.to_string())),
+        _ => return Err(CustomError::BadUrl(url.to_string())),
+    }
+    // Scheme and host lowercased, path left exactly as it was. The canonical
+    // form of a resource identifier is lowercase in both of the first two and
+    // case-sensitive in the third, and this string is compared against what the
+    // server published: `HTTPS://Example.com/mcp` asks for a token scoped to a
+    // resource the server does not have, and the refusal is `invalid_target` in
+    // the operator's browser. A path folded with it would be a different
+    // mistake in the other direction, since `/MCP` and `/mcp` are two
+    // endpoints.
+    let host = host.to_ascii_lowercase();
+    Ok(format!("{scheme}://{host}{path}").trim_end_matches('/').to_string())
+}
+
+/// The slug, in both directions, and only the catalog on the way in.
+///
+/// Serializing is the whole story going out: the webview draws a row from the
+/// name it was handed, and every command that acts on a connected plugin takes
+/// its id. Coming in is narrower on purpose. The two commands that take a kind
+/// — connecting one of the six, and pointing an account-backed one at another
+/// identity — are both about servers this build ships the address of, and a
+/// slug alone cannot rebuild a custom server anyway: its address is the half
+/// that makes it dialable. Adding one is its own command, which takes both.
+impl Serialize for PluginKind {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.slug())
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let slug = String::deserialize(deserializer)?;
+        PluginKind::from_slug(&slug).ok_or_else(|| {
+            serde::de::Error::custom(format!(
+                "{slug:?} is not one of the servers Guaca ships the address of; a server you \
+                 added is reached by its own id"
+            ))
+        })
     }
 }
 
@@ -192,12 +483,12 @@ impl PluginKind {
 #[serde(rename_all = "camelCase")]
 pub struct PluginOffer {
     pub kind: PluginKind,
-    pub name: &'static str,
-    pub blurb: &'static str,
-    pub docs: &'static str,
+    pub name: String,
+    pub blurb: String,
+    pub docs: String,
     /// The host the sign-in and every later call goes to, so an operator can
     /// see where their account is being handed to before they click.
-    pub endpoint: &'static str,
+    pub endpoint: String,
     /// Whether this one's credential is the operator's Guaca account, and
     /// therefore whether there is an identity to choose before connecting.
     ///
@@ -212,12 +503,12 @@ pub fn catalog() -> Vec<PluginOffer> {
     PluginKind::ALL
         .into_iter()
         .map(|kind| PluginOffer {
-            kind,
-            name: kind.label(),
-            blurb: kind.blurb(),
-            docs: kind.docs(),
-            endpoint: kind.endpoint(),
+            name: kind.label().to_string(),
+            blurb: kind.blurb().to_string(),
+            docs: kind.docs().to_string(),
+            endpoint: kind.endpoint().to_string(),
             account_backed: kind.account_backed(),
+            kind,
         })
         .collect()
 }
@@ -389,6 +680,23 @@ pub struct Plugin {
     /// Scoped to a group, like everything else an agent can see.
     pub group_id: GroupId,
     pub kind: PluginKind,
+    /// What this server is called, and where it is.
+    ///
+    /// On the row rather than looked up from the kind, because for a server the
+    /// operator added there is nothing to look it up in: the panel draws a
+    /// connected plugin from what it read back, and one it cannot name is one
+    /// with no way to disconnect it. For a catalog kind these are the same two
+    /// strings the offer carries, which is what lets the panel draw both kinds
+    /// of row with one piece of code.
+    pub name: String,
+    pub endpoint: String,
+    /// Whether nobody vouched for this server.
+    ///
+    /// Reported rather than worked out in the webview by checking the slug
+    /// against the catalog, for the reason the rest of this struct is: the
+    /// runtime is what decides what a plugin is, and a second copy of that
+    /// decision in the front end is a second place for it to be wrong.
+    pub custom: bool,
     /// Who the grant turned out to be for, when the server said. Often blank:
     /// an MCP server is under no obligation to name the account it authorized,
     /// and inventing a label would be worse than an empty one.
@@ -494,5 +802,157 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", kind.slug()));
             assert_eq!(serde_json::from_str::<PluginKind>(&json).unwrap(), kind);
         }
+    }
+
+    #[test]
+    fn a_custom_kind_serializes_as_its_name_and_does_not_come_back() {
+        // Going out it is a name a row is drawn under. Coming in it is refused,
+        // because the two commands that take a kind are both about servers this
+        // build ships the address of, and a name on its own cannot rebuild a
+        // custom server: the address is the half that makes it dialable.
+        let mine = PluginKind::custom("Home Assistant", "https://ha.example.com/mcp").unwrap();
+        assert_eq!(serde_json::to_string(&mine).unwrap(), "\"home_assistant\"");
+        let back = serde_json::from_str::<PluginKind>("\"home_assistant\"");
+        assert!(back.is_err(), "a custom name must not deserialize into a kind with no address");
+    }
+
+    #[test]
+    fn a_name_becomes_the_word_its_tools_will_be_called_by() {
+        // An operator naming a server is thinking about the server, not about
+        // what a provider accepts in a function name. What comes back is shown
+        // to them before they press the button, so the name they end up with is
+        // one they saw.
+        for (typed, want) in [
+            ("Home Assistant", "home_assistant"),
+            ("home-assistant", "home_assistant"),
+            ("  Obsidian  ", "obsidian"),
+            ("my.server v2", "my_server_v2"),
+            // Two underscores are what separate a plugin from its tool, so a
+            // name carrying a pair would split a call in the wrong place. Runs
+            // collapse, which makes that impossible rather than checked for.
+            ("a__b", "a_b"),
+            ("weird!!!name!!!", "weird_name"),
+        ] {
+            let kind = PluginKind::custom(typed, "https://example.com/mcp").unwrap();
+            assert_eq!(kind.slug(), want, "{typed}");
+            assert_eq!(kind.label(), want, "a custom server has one name, not two");
+        }
+    }
+
+    #[test]
+    fn a_name_nothing_could_call_is_refused_with_the_fix_in_it() {
+        use CustomError::*;
+        let url = "https://example.com/mcp";
+        assert_eq!(PluginKind::custom("", url), Err(NoName));
+        assert_eq!(PluginKind::custom("   ", url), Err(NoName));
+        assert_eq!(PluginKind::custom("!!!", url), Err(NoName));
+        // A digit first is a function name some providers refuse and every
+        // reader misreads. The message says to start with a letter.
+        assert!(matches!(PluginKind::custom("2fast", url), Err(BadName(_))));
+        // The catalog's own names, which would collide in `plugins_kind_unique`
+        // and put two tool lists under one prefix.
+        assert_eq!(PluginKind::custom("Neon", url), Err(TakenName("neon".into())));
+        assert!(matches!(PluginKind::custom(&"x".repeat(40), url), Err(LongName(_))));
+    }
+
+    #[test]
+    fn an_address_a_grant_would_cross_the_open_network_to_reach_is_refused() {
+        use CustomError::*;
+        assert!(matches!(PluginKind::custom("a", "http://example.com/mcp"), Err(Insecure(_))));
+        assert!(matches!(PluginKind::custom("a", "ftp://example.com/mcp"), Err(BadUrl(_))));
+        assert!(matches!(PluginKind::custom("a", "example.com/mcp"), Err(BadUrl(_))));
+        assert!(matches!(PluginKind::custom("a", "https:///mcp"), Err(BadUrl(_))));
+        assert_eq!(PluginKind::custom("a", ""), Err(NoUrl));
+        // A fragment is never sent to a server, so a resource identifier that
+        // carries one is a token issued for an address nothing will present.
+        assert!(matches!(PluginKind::custom("a", "https://e.com/mcp#x"), Err(Fragment(_))));
+    }
+
+    #[test]
+    fn a_server_on_this_machine_may_be_plain_http_and_nothing_else_may() {
+        // The commonest server an operator wrote themselves, and the one case
+        // where nothing on the connection leaves the machine.
+        for local in [
+            "http://localhost:8080/mcp",
+            "http://127.0.0.1:3000/mcp",
+            // The whole of 127.0.0.0/8 is loopback, not just the .1.
+            "http://127.0.0.2/mcp",
+            // Bracketed, so the port cannot be split off at the first colon.
+            "http://[::1]/mcp",
+            "http://[::1]:8080/mcp",
+        ] {
+            assert!(PluginKind::custom("local", local).is_ok(), "{local}");
+        }
+        // Not a host that merely reads like one.
+        for pretender in [
+            "http://localhost.evil.com/mcp",
+            "http://127.evil.com/mcp",
+            "http://127.0.0.1.evil.com/mcp",
+            // And not one wearing a loopback address as a username. The host
+            // here is `evil.com`, so accepting this would send a crew's grant
+            // across the open network to somebody else's server while the
+            // address read as local.
+            "http://localhost:80@evil.com/mcp",
+            "http://127.0.0.1@evil.com/mcp",
+            "http://[::1]@evil.com/mcp",
+            // Refused over https too: a resource identifier has no userinfo,
+            // and one sent as the `resource` parameter is a token scoped to
+            // something the server never published.
+            "https://user:pass@example.com/mcp",
+        ] {
+            assert!(PluginKind::custom("a", pretender).is_err(), "{pretender}");
+        }
+    }
+
+    #[test]
+    fn an_address_is_canonical_because_it_is_also_the_resource_it_signs_in_for() {
+        // The same string is the URL a POST goes to and the RFC 8707 resource
+        // indicator the grant is scoped to. A server publishing itself without
+        // the trailing slash refuses a token issued for the version with one.
+        // Scheme and host folded down, path left alone: `/MCP` and `/mcp` are
+        // two endpoints, and a server publishing one refuses a token issued for
+        // the other exactly as it refuses one issued for `Example.com`.
+        let kind = PluginKind::custom("a", "HTTPS://Example.com/MCP/").unwrap();
+        assert_eq!(kind.endpoint(), "https://example.com/MCP");
+        assert_eq!(kind.stored_endpoint(), kind.endpoint());
+    }
+
+    #[test]
+    fn a_catalog_row_keeps_its_address_in_the_build_and_a_custom_one_in_the_row() {
+        // A vendor that moves ships as a new Guaca. A stored copy of a catalog
+        // endpoint would keep a crew dialling the old host until somebody
+        // reconnected it, which is how migration 26 came to exist.
+        assert_eq!(PluginKind::Neon.stored_endpoint(), "");
+        assert_eq!(
+            PluginKind::from_row("neon", "https://elsewhere.test/mcp"),
+            Some(PluginKind::Neon)
+        );
+
+        // And a row that carries its own address needs no build knowledge.
+        let mine = PluginKind::from_row("obsidian", "https://vault.test/mcp").unwrap();
+        assert_eq!(mine, PluginKind::custom("obsidian", "https://vault.test/mcp").unwrap());
+        assert!(mine.is_custom());
+        assert!(!PluginKind::Neon.is_custom());
+    }
+
+    #[test]
+    fn a_row_this_build_cannot_dial_is_not_a_plugin() {
+        // A slug the catalog does not have and no address beside it, which is
+        // what a newer build's plugin looks like after a downgrade. Skipping it
+        // is what keeps one crew's unreadable row from failing every turn.
+        assert_eq!(PluginKind::from_row("github", ""), None);
+        // And a slug nothing could call, whatever address is beside it.
+        assert_eq!(PluginKind::from_row("Bad Name", "https://x.test/mcp"), None);
+        assert_eq!(PluginKind::from_row("a__b", "https://x.test/mcp"), None);
+    }
+
+    #[test]
+    fn a_custom_server_is_never_paid_for_with_the_operator_s_account() {
+        // An operator can point one at guaca.bot, and it signs in to it the
+        // ordinary way. Lending the account's own credential to an address
+        // somebody typed is not a decision a name should be able to make.
+        let pretender = PluginKind::custom("google2", "https://guaca.bot/mcp").unwrap();
+        assert!(!pretender.account_backed());
+        assert!(PluginKind::Google.account_backed());
     }
 }

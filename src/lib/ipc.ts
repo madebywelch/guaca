@@ -27,6 +27,7 @@ import type {
   ApprovalState,
   Attachment,
   Browser,
+  CatalogKind,
   Computer,
   Connector,
   ConnectorDraft,
@@ -43,7 +44,6 @@ import type {
   Plugin,
   PluginAccess,
   PluginId,
-  PluginKind,
   PluginOffer,
   ProtectedAction,
   RankedModel,
@@ -138,8 +138,30 @@ export const api = {
    * one. Resolves only once they have finished there, which can be minutes, so
    * whatever calls this has to show that it is waiting on a person.
    */
-  connectPlugin: (groupId: GroupId, kind: PluginKind, connection?: string) =>
+  connectPlugin: (groupId: GroupId, kind: CatalogKind, connection?: string) =>
     invoke<Plugin>("connect_plugin", { groupId, kind, connection: connection ?? null }),
+
+  /**
+   * Adds a server the operator addressed themselves, and connects it.
+   *
+   * The name becomes the prefix every one of its tools is called by, so what
+   * comes back on the row is the normalized form rather than what was typed.
+   * The key is for a server with no authorization server behind it, which is
+   * most of the ones somebody wrote: left out, the server is asked what it
+   * wants exactly as a vendor's is.
+   */
+  addPlugin: (groupId: GroupId, name: string, url: string, key?: string) =>
+    invoke<Plugin>("add_plugin", { groupId, name, url, key: key ?? null }),
+
+  /**
+   * Points a crew's own server at a different address, or hands it a new key.
+   *
+   * A reconnection rather than an edit, because a server at a new address is
+   * not the one that published the old tool list. Who may spend it and which of
+   * its tools are whose survive, for the reason they survive any reconnection.
+   */
+  readdressPlugin: (groupId: GroupId, id: PluginId, url: string, key?: string) =>
+    invoke<Plugin>("readdress_plugin", { groupId, id, url, key: key ?? null }),
 
   /**
    * Narrows a plugin to named agents, or opens it back up to the crew.
@@ -447,7 +469,7 @@ export const api = {
    * existing row to another mailbox and keeps the per-tool switches, where
    * reconnecting would replace the row and lose them.
    */
-  setPluginConnection: (groupId: GroupId, kind: PluginKind, connection: string) =>
+  setPluginConnection: (groupId: GroupId, kind: CatalogKind, connection: string) =>
     invoke<Plugin>("set_plugin_connection", { groupId, kind, connection }),
 };
 

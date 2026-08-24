@@ -745,10 +745,14 @@ pub enum ToolInvocation {
     /// A tool belonging to one of the group's connected plugins.
     ///
     /// Unlike every other variant, what this can be is not known at compile
-    /// time: the server said, when the plugin was connected. Parsing only
-    /// splits the name, so an agent that calls a plugin its crew has not
+    /// time: the server said, when the plugin was connected. Parsing splits the
+    /// name and resolves the half in front of it, and the two halves of that
+    /// resolution answer to different things. One of the six is recognized
+    /// whether or not the crew has it, so an agent that calls a plugin nobody
     /// connected is refused by the runtime with a reason rather than here with
     /// "unknown tool", which is a different and less useful thing to be told.
+    /// A server the operator added is recognized only if this crew has it,
+    /// because there is nowhere else its name or its address could come from.
     Plugin {
         kind: PluginKind,
         tool: String,
@@ -1106,7 +1110,21 @@ fn as_chord(value: &serde_json::Value) -> Option<String> {
     (!named.is_empty()).then(|| named.join("+"))
 }
 
-pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
+/// What a model called, as something the runtime can act on.
+///
+/// `connected` is the *crew's* servers, not this agent's, and it is here for
+/// one arm: a server the operator added is named and addressed by its row, so a
+/// call to one can only be resolved against what this group actually has.
+/// Everything else in this function is a fixed name and ignores it.
+///
+/// The crew's rather than the agent's, because resolving a name and being
+/// allowed to call it are two questions and this is the first one. An agent the
+/// operator did not choose for a plugin has to be told "connected, but not for
+/// you, ask a peer", which is what the runtime says when the name resolves and
+/// the reach check refuses it. Given only its own plugins, the name would not
+/// resolve at all and the answer would be "unknown tool", which names no way
+/// forward and is a different answer from the one the six give.
+pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation, ToolParseError> {
     match call.name.as_str() {
         DIRECTORY => Ok(ToolInvocation::Directory),
         SCHEDULE => {
@@ -1459,7 +1477,7 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
             }
             Ok(ToolInvocation::AttachFile { files })
         }
-        other => match split_plugin_tool(other) {
+        other => match split_plugin_tool(other, connected) {
             Some((kind, tool)) => {
                 let arguments = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                     name: other.to_string(),
@@ -1475,13 +1493,25 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
 /// Splits `neon__run_sql` into the plugin and the tool it belongs to.
 ///
 /// The separator is two underscores because MCP servers use one inside tool
-/// names constantly and none of the three uses two. Split on the first
+/// names constantly and none of the six uses two. Split on the first
 /// occurrence, not the last: a server with `run__sql` would otherwise have its
-/// own name torn in half.
-fn split_plugin_tool(name: &str) -> Option<(PluginKind, String)> {
+/// own name torn in half. A custom server's name cannot contain a pair at all,
+/// because runs of them collapse when it is normalized.
+///
+/// The catalog is tried first and this crew's own servers second, and the order
+/// is not an optimization: it is what keeps "Neon is not connected" reachable
+/// for a crew that has not connected Neon. A name that is neither is not a
+/// plugin call, which is what stops a model composing `use_screen__click` from
+/// being reported as a plugin nobody has ever heard of rather than as a tool
+/// that does not exist.
+fn split_plugin_tool(name: &str, connected: &[PluginKind]) -> Option<(PluginKind, String)> {
     let (prefix, tool) = name.split_once(PLUGIN_SEPARATOR)?;
-    let kind = PluginKind::from_slug(prefix)?;
-    (!tool.is_empty()).then(|| (kind, tool.to_string()))
+    if tool.is_empty() {
+        return None;
+    }
+    let kind = PluginKind::from_slug(prefix)
+        .or_else(|| connected.iter().find(|kind| kind.slug() == prefix).cloned())?;
+    Some((kind, tool.to_string()))
 }
 
 /// Coerces the several shapes models actually emit into a list of strings.
@@ -1598,6 +1628,16 @@ mod tests {
 
     fn call(name: &str, arguments: &str) -> ToolCall {
         ToolCall { id: "call_1".into(), name: name.into(), arguments: arguments.into() }
+    }
+
+    /// The parser, for an agent whose crew has connected nothing.
+    ///
+    /// Which is what every test below is about but three. The crew's own list
+    /// only decides one thing — whether a name it has never heard of is a
+    /// server the operator added — so the tests that care pass one and the rest
+    /// are not made to say they do not.
+    fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
+        super::parse(call, &[])
     }
 
     #[test]
