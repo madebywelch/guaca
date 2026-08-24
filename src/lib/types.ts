@@ -758,6 +758,14 @@ export interface Routine {
   /** Set up but not running. Everything else about it survives being off. */
   active: boolean;
   /**
+   * Whether a firing that comes due while the agent is already working is
+   * dropped rather than queued behind what it is doing.
+   *
+   * Only ever true on a routine that repeats: skipping moves the slot on, and
+   * the slot a one-off holds is the only one it has.
+   */
+  skipIfWorking: boolean;
+  /**
    * When it next fires, for a routine that waits on the clock.
    *
    * Null for one that does not: an event trigger fires when its event arrives
@@ -769,15 +777,22 @@ export interface Routine {
   createdAt: number;
 }
 
-/** Why a routine ran. A test is the operator's button, not the clock. */
-export type RunKind = "scheduled" | "test";
+/**
+ * What happened at one firing. A test is the operator's button, not the clock;
+ * a skip is a firing the routine dropped because the agent was already working.
+ */
+export type RunKind = "scheduled" | "test" | "skipped";
 
 /**
  * One firing. `runId` threads back to everything it produced: the messages in
  * the channel and the model calls on the bill are both filed under it.
+ *
+ * Null on a skip, which produced neither. An id there would read back exactly
+ * like a delivery that spent nothing, and those are the two this row exists to
+ * tell apart.
  */
 export interface RoutineRun {
-  runId: RunId;
+  runId: RunId | null;
   kind: RunKind;
   at: number;
   /**
@@ -796,6 +811,8 @@ export interface RoutineDraft {
   what: string;
   trigger: TriggerSpec;
   inSecs: number | null;
+  /** Refused on a trigger that does not repeat, so the panel never sends it. */
+  skipIfWorking: boolean;
 }
 
 /**

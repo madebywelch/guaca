@@ -11,6 +11,7 @@ import {
   ordinal,
   parseTrigger,
   repeatLabel,
+  repeats,
   routineTitle,
   TRIGGER_CHOICES,
   WEEKDAYS,
@@ -40,6 +41,8 @@ interface Editing {
   trigger: string;
   /** When it should fire. Only the parts the trigger asks for are read. */
   moment: Moment;
+  /** Drop a firing that lands on an agent already working. Repeats only. */
+  skipIfWorking: boolean;
 }
 
 const DEFAULT_TRIGGER = "daily";
@@ -52,11 +55,20 @@ function editingFor(routine: Routine): Editing {
     // A routine holding no moment still needs something in the fields, in case
     // the operator switches it to a trigger that has one.
     moment: routine.nextRunAt === null ? nextRoundMoment() : momentOf(routine.nextRunAt),
+    skipIfWorking: routine.skipIfWorking,
   };
 }
 
 function blank(): Editing {
-  return { name: "", what: "", trigger: DEFAULT_TRIGGER, moment: nextRoundMoment() };
+  return {
+    name: "",
+    what: "",
+    trigger: DEFAULT_TRIGGER,
+    moment: nextRoundMoment(),
+    // Off unless it is asked for: a routine that has to happen even if it has
+    // to wait is the ordinary one.
+    skipIfWorking: false,
+  };
 }
 
 /**
@@ -73,6 +85,11 @@ function draftOf(editing: Editing, moved: boolean): RoutineDraft {
     what: editing.what.trim(),
     trigger: editing.trigger,
     inSecs: moved ? firstRunDelay(editing.trigger, editing.moment) : null,
+    // Dropped rather than sent on a trigger that does not repeat, where the
+    // backend refuses the pair. The tick is hidden there, so a routine ticked
+    // as a repeat and then switched to Once would otherwise fail to save with
+    // its reason on a control nobody can see.
+    skipIfWorking: repeats(editing.trigger) && editing.skipIfWorking,
   };
 }
 
@@ -169,7 +186,8 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
     moved ||
     draft.name.trim() !== routine.name ||
     draft.what.trim() !== routine.what ||
-    draft.trigger !== routine.trigger;
+    draft.trigger !== routine.trigger ||
+    draftOf(draft, moved).skipIfWorking !== routine.skipIfWorking;
 
   const problem = momentProblem(draft);
 
@@ -420,6 +438,28 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
         )}
       </div>
 
+      {/* Only where there is a next firing to fall back on. A one-off that
+          skipped would be a one-off that never happened, and the backend
+          refuses the pair rather than storing it. */}
+      {repeats(draft.trigger) && (
+        <label className="field field--row">
+          <input
+            type="checkbox"
+            checked={draft.skipIfWorking}
+            onChange={(event) => patch({ skipIfWorking: event.target.checked })}
+          />
+          <span>
+            <span className="field__label">Skip it if the agent is already working</span>
+            <span className="field__hint">
+              A firing that comes due while this agent is mid-turn or has work waiting is dropped
+              rather than queued behind it, and the next one comes at its usual time. For a sweep
+              there is no point doing twice over. Leave it off for anything that has to happen even
+              if it has to wait.
+            </span>
+          </span>
+        </label>
+      )}
+
       {error && (
         <div className="banner banner--error" style={{ margin: "0 0 0.7rem" }}>
           <span>{error}</span>
@@ -474,8 +514,11 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
         <p className="routines__note">No runs yet.</p>
       ) : (
         <ul className="history">
-          {runs.map((entry) => (
-            <li key={entry.runId} className="history__row">
+          {runs.map((entry, index) => (
+            // A skipped firing has no run to be keyed by, and two of them in
+            // one second are two rows. The list is read-only and redrawn whole,
+            // so its position is as good an identity as it has.
+            <li key={entry.runId ?? `${entry.kind}-${entry.at}-${index}`} className="history__row">
               <span className="history__when">
                 {new Date(entry.at).toLocaleDateString(undefined, {
                   month: "short",
@@ -486,7 +529,17 @@ function History({ runs, now }: { runs: RoutineRun[] | null; now: number }) {
               {/* A button press and a real firing look the same in the
                   transcript, so which one this was is said here. */}
               {entry.kind === "test" && <span className="history__kind">test run</span>}
-              {entry.spent.calls === 0 ? (
+              {/* Recorded because the alternative is a gap, and a gap in this
+                  list is what a scheduler that has stopped working looks
+                  like. */}
+              {entry.kind === "skipped" ? (
+                <span
+                  className="history__quiet"
+                  title="This routine skips a firing that lands while the agent is already working, so nothing was delivered"
+                >
+                  skipped, already working
+                </span>
+              ) : entry.spent.calls === 0 ? (
                 <span
                   className="history__quiet"
                   title="Delivered, but no model call was made under it"

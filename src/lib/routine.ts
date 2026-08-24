@@ -146,6 +146,17 @@ export function repeatLabel(spec: TriggerSpec): string {
   }
 }
 
+/**
+ * Whether a trigger fires more than once. Mirrors `Trigger::repeats` in Rust.
+ *
+ * An event repeats: it happens every time the thing it names does. An unknown
+ * spec comes from a build that knows more than this one, and the safe reading
+ * is the common one, since every trigger but `once` repeats.
+ */
+export function repeats(spec: TriggerSpec): boolean {
+  return parseTrigger(spec).kind !== "once";
+}
+
 /** Whole units where they divide evenly. Mirrors `human_gap` in Rust. */
 export function humanGap(secs: number): string {
   const units: [number, string][] = [

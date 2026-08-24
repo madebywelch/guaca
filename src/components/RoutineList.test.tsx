@@ -22,6 +22,7 @@ function routine(over: Partial<Routine> = {}): Routine {
     what: "check what I promised and remind me",
     trigger: "weekdays",
     active: true,
+    skipIfWorking: false,
     nextRunAt: MORNING,
     lastRunAt: null,
     createdAt: 0,

@@ -350,6 +350,7 @@ describe("App", () => {
         what: "check what I promised",
         trigger: "weekdays",
         active: true,
+        skipIfWorking: false,
         nextRunAt: new Date(2025, 5, 10, 9, 28).getTime(),
         lastRunAt: null,
         createdAt: 0,

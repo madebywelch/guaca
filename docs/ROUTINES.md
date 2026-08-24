@@ -88,6 +88,57 @@ reason: a time on its own can only ever mean the next 24 hours.
 holding, and the scheduler fires an overdue slot once. Parking it behind a Save
 the operator has not pressed means a routine they think they stopped still runs.
 
+## A firing can be skipped, which is not the same as deferred
+
+`skip_if_working` is one column and one question, asked at the moment a routine
+comes due: is this agent already working? If it is, nothing is delivered, the
+slot moves on exactly as it would have if the firing had happened, and the
+history records a skip. The next one comes at its usual time.
+
+The alternative reading is deferral, and it is the wrong one. An hourly sweep
+held until the agent goes quiet fires the moment it does, which is the pile-up
+the option exists to prevent, only later and in a bunch. Skipping is the
+operator saying this particular firing was not worth queueing.
+
+Which is also why it is refused on anything that does not repeat. Skipping
+moves the slot on, and the slot a one-off holds is the only one it has: the row
+would be deleted having done nothing, and the operator would find an empty list
+where their alarm used to be. `validate` refuses the pair where somebody asks
+for it outright, and the panel does not draw the tick on a one-off at all,
+which is why `draftOf` drops the flag rather than sending it: a routine ticked
+as a repeat and then switched to Once would otherwise fail to save with its
+reason attached to a control nobody can see.
+
+"Already working" is `Activity::is_working`, read off the same map the dot
+beside the agent's name is drawn from, so what the operator sees and what the
+scheduler decided are one fact rather than two that agree. Idle is the only
+state that is not working: a queue that is not empty is work already waiting, a
+permission request is a turn parked mid-flight, and a paused agent takes
+nothing off its inbox at all. An agent with no entry in the map has no actor
+and is not working, because a routine that does not run is invisible in a way
+one that runs is not, and the failure worth having is the noisy one.
+
+Two paths deliberately do not consult it. Test run is the operator pressing a
+button, and a test that quietly did nothing would read as the button being
+broken. And an event trigger fires from wherever an event arrives, which is a
+path that does not exist yet: whatever builds it has to ask the same question
+the sweep does, or the column will be true on those rows and mean nothing.
+
+## A skipped firing is in the history, and has no run behind it
+
+`RunKind` has a third value and `routine_runs.run_id` is nullable since
+migration 34. Both halves are the same argument. A firing that leaves no trace
+is a gap in the history, and a gap is also what a scheduler that has stopped
+working looks like; but a skip recorded under an invented run id reads back as
+a delivery that bought no model calls, which is the *other* failure this
+history exists to name, and it has a different fix. So the row says which of
+the two it was, and the panel draws "skipped, already working" where it would
+otherwise draw "nothing ran".
+
+A fast cadence on a busy agent fills the list with skips. That is the news
+rather than noise: a sweep being passed over ten times running is worth seeing,
+and the operator's move is to change the cadence.
+
 ## An agent reads its own schedule before it decides to write another one
 
 Every routine an agent has standing is in its system prompt, with the id of
