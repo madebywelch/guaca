@@ -986,6 +986,31 @@ ALTER TABLE routine_runs_new RENAME TO routine_runs;
 CREATE INDEX routine_runs_routine ON routine_runs (routine_id, at DESC);
 "#,
     ),
+    (
+        35,
+        r#"
+-- Until now `kind` was a slug out of a closed enum, and the address the runtime
+-- dialled was derived from it. That is still true of the six servers Guaca
+-- ships, and it stays true of them: where a vendor's server lives is a decision
+-- this build makes and re-makes on every release, so a stored copy would keep a
+-- crew dialling the old host after the vendor moved — which is the failure
+-- migration 26 exists to clean up after.
+--
+-- A server the operator added has nowhere else to keep it. `kind` holds the
+-- name they gave it, which is also the prefix its tools are called by, and this
+-- column holds the address. Empty means "the catalog knows where this is", so
+-- every row written before today keeps meaning exactly what it meant, and a row
+-- with neither a catalog slug nor an address is a row nothing can dial — which
+-- is what a newer build's plugin looks like after a downgrade, and is skipped
+-- rather than raised.
+--
+-- `plugins_kind_unique` needs no change and is doing more work than it was: it
+-- was one row per vendor per crew, and it is now also what stops two servers in
+-- one crew sharing a name, which would put two tool lists under one prefix and
+-- make which one a call landed on depend on row order.
+ALTER TABLE plugins ADD COLUMN endpoint TEXT NOT NULL DEFAULT '';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1259,6 +1284,34 @@ mod tests {
             .query_row("SELECT count(*) FROM plugin_tool_access", [], |row| row.get(0))
             .unwrap();
         assert_eq!(off, 0, "a migration that switched anything off would break a working crew");
+    }
+
+    #[test]
+    fn a_plugin_connected_before_a_server_could_be_added_keeps_dialling_the_vendor() {
+        // Empty means "the catalog knows where this is", which is what every
+        // row written before today meant and has to go on meaning. A migration
+        // that backfilled the vendor's address into the column would freeze it
+        // there, and the next time a vendor moved, every crew connected before
+        // the move would keep dialling the old host with nothing on screen
+        // saying why their plugin had stopped working.
+        let mut conn = memory();
+        for (version, sql) in MIGRATIONS.iter().filter(|(v, _)| *v < 35) {
+            conn.execute_batch(sql).unwrap();
+            conn.pragma_update(None, "user_version", *version).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO plugins (id,group_id,kind,account,tools,connected_at)
+             VALUES ('p1',?1,'neon','','[]',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let endpoint: String = conn
+            .query_row("SELECT endpoint FROM plugins WHERE id='p1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(endpoint, "", "an address in the row is one the build can no longer change");
     }
 
     #[test]

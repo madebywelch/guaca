@@ -274,12 +274,29 @@ export interface ConnectorDraft {
 
 export type PluginId = string;
 
-/** The servers Guaca knows how to sign in to. Closed, and the same everywhere. */
-export type PluginKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
+/**
+ * The servers Guaca ships the address of.
+ *
+ * Closed, and the same everywhere: each of these is on the list because
+ * somebody checked that it publishes its own tools, acts on the operator's
+ * account and lets an application register itself.
+ */
+export type CatalogKind = "neon" | "cloudflare" | "linear" | "stripe" | "agentmail" | "google";
+
+/**
+ * What a connected plugin is called, which is also the prefix its tools are
+ * called by.
+ *
+ * One of the six, or the name an operator gave a server they added. Not a union
+ * of the six, because the whole point of a custom server is that this side does
+ * not know the set: what a plugin is called comes back from Rust with the row,
+ * along with a `custom` flag saying whether anybody vouched for it.
+ */
+export type PluginKind = CatalogKind | (string & {});
 
 /** A plugin on offer, before anybody has connected it. */
 export interface PluginOffer {
-  kind: PluginKind;
+  kind: CatalogKind;
   name: string;
   /** One line about what the crew gets. */
   blurb: string;
@@ -339,6 +356,18 @@ export interface Plugin {
   id: PluginId;
   groupId: GroupId;
   kind: PluginKind;
+  /**
+   * What it is called, and where it is.
+   *
+   * Read off the row rather than paired with a catalog entry, because a server
+   * the operator added has no catalog entry: a connected plugin has to be
+   * drawable from what came back, or a row the panel cannot name is a row with
+   * no way to disconnect it.
+   */
+  name: string;
+  endpoint: string;
+  /** Whether nobody vouched for this server: the operator added it. */
+  custom: boolean;
   /** Whose account, when the server said. Usually blank. */
   account: string;
   /**

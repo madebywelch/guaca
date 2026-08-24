@@ -1,45 +1,125 @@
 //! The client end of the Model Context Protocol, over streamable HTTP.
 //!
-//! Small on purpose. Guaca is not a general MCP host: it dials the handful of
-//! servers it ships the addresses of, asks each what it can do, and calls those
-//! tools on behalf of an agent. Three methods cover all of that — `initialize`,
-//! `tools/list`, `tools/call` — and the transport is one POST each.
+//! Small on purpose. Guaca is not a general MCP host: it dials a server, asks
+//! what it can do, and calls those tools on behalf of an agent. Three methods
+//! cover all of that — `tools/list`, `tools/call`, and whichever handshake the
+//! server's protocol era wants — and the transport is one POST each.
+//!
+//! ## Two eras, and which one a server is
+//!
+//! Revision `2026-07-28` deleted the handshake. Before it, a session was
+//! established with `initialize`, the agreed version came back in the reply,
+//! and the server could mint a session id every later request had to carry.
+//! After it there is no session at all: every POST stands alone and declares
+//! its own protocol version, in `_meta` in the body and in a header beside it.
+//!
+//! Both are in the field and will be for years, so this client speaks both. It
+//! finds out which by trying the modern one first, exactly as the spec's
+//! backward-compatibility section says to: `server/discover` is mandatory for a
+//! modern server, so an answer to it — or a refusal in one of the shapes only a
+//! modern server produces — identifies the era. Anything else is a server that
+//! wants `initialize`.
+//!
+//! The answer is remembered per endpoint for the life of the process. That is
+//! not the session cache this file argues against below: an era is a property
+//! of the deployed server rather than of a grant, it cannot expire, and a
+//! server upgraded underneath a running Guaca fails once and re-probes. Without
+//! it every plugin call on a legacy server would pay for a probe it already
+//! knows the answer to, which is one internet round trip in front of every tool
+//! call in the crew.
 //!
 //! ## Two content types, one request
 //!
 //! A streamable-HTTP server may answer a POST with `application/json` or with
 //! `text/event-stream`, and it chooses per request. Both are in use across the
-//! servers on the list: one answers every call as an event stream including
-//! `initialize`, and Neon's answers in JSON. Neither is wrong and the spec
-//! requires a client to accept both, which is why the reply is parsed by
-//! sniffing the content type rather than by trusting the one a server used
-//! last. This is not the streaming case `llm/sse.rs` handles: nothing here is
-//! shown as it arrives, so the body is read whole and the one JSON-RPC object
-//! in it is pulled out.
+//! servers on the list: one answers every call as an event stream including the
+//! handshake, and Neon's answers in JSON. Neither is wrong and the spec requires
+//! a client to accept both, which is why the reply is parsed by sniffing the
+//! content type rather than by trusting the one a server used last. This is not
+//! the streaming case `llm/sse.rs` handles: nothing here is shown as it arrives,
+//! so the body is read whole and the one JSON-RPC object in it is pulled out.
 //!
 //! ## The session header
 //!
-//! A server may hand back `Mcp-Session-Id` on `initialize` and then require it
-//! on every later request. It may also not, and then requires that the header
-//! is absent. Both are legal, so the id is whatever the server said and nothing
-//! is invented.
+//! Legacy only. A server may hand back `Mcp-Session-Id` on `initialize` and then
+//! require it on every later request. It may also not, and then requires that
+//! the header is absent. Both are legal, so the id is whatever the server said
+//! and nothing is invented. A modern server is told to ignore the header and
+//! mints none, so a modern session never carries one.
 //!
 //! ## What a 401 means here
 //!
-//! It is the start of the sign-in, not a failure. An unauthenticated
-//! `initialize` is how Guaca discovers whether a server needs a grant at all,
-//! and `WWW-Authenticate` on the refusal is where the spec puts the address of
-//! the metadata that says who can issue one. `oauth.rs` reads it.
+//! It is the start of the sign-in, not a failure, and it is answered before the
+//! era is even known. An unauthenticated first request is how Guaca discovers
+//! whether a server needs a grant at all, and `WWW-Authenticate` on the refusal
+//! is where the spec puts the address of the metadata that says who can issue
+//! one. `oauth.rs` reads it.
+//!
+//! ## What is deliberately not here
+//!
+//! The 2024-11-05 HTTP+SSE transport, which has been deprecated since
+//! `2025-03-26` and is scheduled for removal: a client that falls back to it
+//! keeps servers alive that should be migrating. Resources, prompts,
+//! `subscriptions/listen` and the server-to-client input requests a modern
+//! server can embed in a result: an agent here is offered tools and nothing
+//! else, and a half-implemented capability is worse than an absent one.
 
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::Deserialize;
 
-/// The revision Guaca speaks, sent on every request.
+/// The revisions Guaca speaks, newest first.
 ///
-/// Servers use it to decide what to offer, and one that does not know this
-/// revision says so rather than guessing.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// Order is the preference order: the first is what a modern request declares,
+/// and a server that refuses it names what it has instead, out of which the
+/// first of these that appears is taken.
+pub const SUPPORTED: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-06-18"];
+
+/// What a modern request declares, and the newest revision this build knows.
+pub const PROTOCOL_VERSION: &str = SUPPORTED[0];
+
+/// What `initialize` asks for on a server that turned out to be legacy.
+///
+/// The newest revision that still has a handshake. A legacy server negotiates
+/// down from it and says in its reply what it settled on, and that answer is
+/// what every later request carries.
+pub const LEGACY_VERSION: &str = "2025-11-25";
+
+/// The first revision with no handshake. At or after it a request stands alone.
+///
+/// A revision is a date, and a date in `YYYY-MM-DD` sorts as a string exactly
+/// as it sorts as a date, so "is this one modern" is a comparison rather than a
+/// second list to keep in step with the first.
+const FIRST_MODERN: &str = "2026-07-28";
+
+/// Whether a revision is one with no handshake.
+///
+/// Load-bearing in one place that is easy to miss: a modern-shaped refusal can
+/// name a version that is *not* modern. A dual-era server asked for something
+/// it lacks may answer `UnsupportedProtocolVersionError` listing `2025-11-25`,
+/// and that is not an invitation to ask again in the modern shape — it is the
+/// server saying to shake hands. Retrying modernly there is refused all over
+/// again, and the plugin never connects.
+fn modern(version: &str) -> bool {
+    version >= FIRST_MODERN
+}
+
+/// The `_meta` keys a modern request carries, spelled as the spec spells them.
+const META_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const META_CLIENT: &str = "io.modelcontextprotocol/clientInfo";
+const META_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER: &str = "io.modelcontextprotocol/serverInfo";
+
+/// The two JSON-RPC error codes the modern revision defines for itself.
+///
+/// Recognizing them is what tells a modern server apart from a legacy one, so
+/// they are load-bearing rather than decoration: the spec's fallback rule is
+/// that a `400` carrying one of these is a modern server to retry against, and
+/// a `400` carrying anything else is a legacy server to hand `initialize` to.
+const UNSUPPORTED_VERSION: i64 = -32022;
+const HEADER_MISMATCH: i64 = -32020;
 
 /// Long enough for a server that is waking up, short enough that a turn does
 /// not sit on a dead endpoint. Tool calls get their own, longer, budget.
@@ -59,7 +139,8 @@ pub enum McpError {
     Unauthorized {
         endpoint: String,
         /// The challenge, verbatim. It carries the address of the metadata that
-        /// says which authorization server can issue a grant for this resource.
+        /// says which authorization server can issue a grant for this resource,
+        /// and the scopes this resource wants asked for.
         challenge: Option<String>,
     },
     #[error("{endpoint} returned HTTP {status}: {body}")]
@@ -71,6 +152,21 @@ pub enum McpError {
     /// try something else.
     #[error("{message}")]
     Rejected { message: String },
+    /// A modern server that shares no protocol revision with this build.
+    ///
+    /// Its own sentence because nothing but a new Guaca fixes it, and the
+    /// operator has no way to tell that from the endpoint being wrong.
+    #[error(
+        "{endpoint} speaks MCP {}, and this build speaks {}. Nothing here will connect it; \
+         update Guaca.",
+        .supported.join(" or "),
+        SUPPORTED.join(", ")
+    )]
+    NoSharedVersion { endpoint: String, supported: Vec<String> },
+    /// Guaca sent a header that disagreed with its own request body. A bug
+    /// here rather than anything the operator did, and it says so.
+    #[error("{endpoint} refused the request as malformed ({detail}); this is a bug in Guaca")]
+    HeaderMismatch { endpoint: String, detail: String },
 }
 
 impl McpError {
@@ -78,6 +174,22 @@ impl McpError {
     pub fn is_unauthorized(&self) -> bool {
         matches!(self, McpError::Unauthorized { .. })
     }
+}
+
+/// Which shape of the protocol a server turned out to speak.
+///
+/// Remembered per endpoint rather than per session: see the module docs for why
+/// this is not the cached session the file argues against.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Era {
+    /// `2026-07-28` and later. No handshake and no session: every POST declares
+    /// its own version, in `_meta` and in the header beside it. The version is
+    /// carried because it is negotiated once, when the server is first probed,
+    /// and a later request has nothing else to read it from.
+    Modern { version: String },
+    /// `2025-11-25` and earlier. `initialize` first, the agreed version in its
+    /// reply, and a session id on every later request if the server minted one.
+    Legacy,
 }
 
 /// A tool as the server describes it.
@@ -92,76 +204,144 @@ pub struct ToolDescriptor {
     pub input_schema: Option<serde_json::Value>,
 }
 
-/// What `initialize` established, and what every later call has to carry.
+/// What a request needs to carry, and what the handshake established.
+///
+/// A modern session is established by nothing at all — it is the era, the
+/// negotiated version and the credential, which is everything a standalone POST
+/// needs. A legacy one is the same plus whatever `initialize` said.
 #[derive(Debug, Clone)]
 pub struct Session {
     pub endpoint: String,
     pub token: Option<String>,
+    pub era: Era,
     /// Whatever the server said, or nothing. Never invented: a server that
-    /// issued no session id rejects a request that carries one.
+    /// issued no session id rejects a request that carries one, and a modern
+    /// server never issues one.
     pub session_id: Option<String>,
-    /// How the server names itself. The nearest thing to an account label an
-    /// MCP server offers, and used as one only when it says something better
-    /// than its own product name.
+    /// How the server names itself, when the handshake was the thing that
+    /// asked. Empty on a modern session, where nothing has asked yet:
+    /// [`describe`] is what asks, and only the connect path needs it.
     pub server_name: String,
+    /// What `initialize` settled on, for a legacy session.
+    ///
+    /// Not on [`Era`] and not merged into it, because the era is what is
+    /// remembered per endpoint and this is not: a modern server negotiates once
+    /// and every later POST declares the answer, while a legacy one negotiates
+    /// inside every handshake and would have a remembered version overwritten
+    /// on the next one anyway.
+    negotiated: Option<String>,
 }
 
-/// Opens a session, which is how Guaca finds out whether a grant is needed.
+impl Session {
+    /// The revision every request on this session declares.
+    fn version(&self) -> &str {
+        match &self.era {
+            Era::Modern { version } => version,
+            // A legacy session carries the revision `initialize` settled on,
+            // and there is exactly one place it could have come from.
+            Era::Legacy => self.negotiated.as_deref().unwrap_or(LEGACY_VERSION),
+        }
+    }
+
+    fn modern(&self) -> bool {
+        matches!(self.era, Era::Modern { .. })
+    }
+}
+
+/// Opens a session, which is also how Guaca finds out whether a grant is needed.
 ///
 /// Called with no token first, on purpose. A server that authorizes everybody
 /// answers, and the operator is never sent to a browser to authorize something
 /// that was already open; one that does not answers 401 and says where its
-/// authorization server is.
+/// authorization server is. That happens before the era is known, because a 401
+/// is the same answer in both.
 pub async fn open(endpoint: &str, token: Option<&str>) -> Result<Session, McpError> {
     let http = client()?;
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "Guaca", "version": env!("CARGO_PKG_VERSION") },
-        },
-    });
 
-    let (value, session_id) = post(&http, endpoint, token, None, &body, CONNECT_TIMEOUT).await?;
-    let server_name = value
-        .get("serverInfo")
-        .and_then(|info| info.get("name"))
-        .and_then(|name| name.as_str())
-        .unwrap_or_default()
-        .to_string();
+    // What this endpoint was last time. A remembered era that turns out to be
+    // wrong is a server upgraded underneath a running Guaca: the handshake it
+    // wanted yesterday is a `400` today. One failure, then the truth.
+    //
+    // Only a protocol-level failure means that. A 401 is the sign-in and says
+    // nothing about the era, and a transport failure says nothing about
+    // anything, so both are handed back rather than spent on a second probe of
+    // a server that is not answering.
+    if let Some(era) = remembered(endpoint) {
+        match establish(&http, endpoint, token, era, String::new()).await {
+            Ok(session) => return Ok(session),
+            Err(err) if err.is_unauthorized() || matches!(err, McpError::Transport { .. }) => {
+                return Err(err)
+            }
+            Err(_) => forget(endpoint),
+        }
+    }
 
-    let session = Session {
-        endpoint: endpoint.to_string(),
-        token: token.map(str::to_string),
-        session_id,
-        server_name,
-    };
-
-    // A notification, not a request: no id, and the server answers 202 with no
-    // body. Skipping it leaves servers that gate on it refusing every later
-    // call with "not initialized", which reads as an auth failure and is not.
-    let ready = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
-    let _ = notify(&http, &session, &ready).await;
-
-    Ok(session)
+    let probed = probe(&http, endpoint, token).await?;
+    remember(endpoint, &probed.era);
+    establish(&http, endpoint, token, probed.era, probed.server_name).await
 }
 
-/// Everything this server offers, once.
-pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpError> {
+/// A session for an era that has already been decided.
+///
+/// Free for a modern server, which is the whole of what that revision changed:
+/// there is nothing to establish, because every POST carries what it needs. A
+/// legacy one still has to shake hands.
+async fn establish(
+    http: &reqwest::Client,
+    endpoint: &str,
+    token: Option<&str>,
+    era: Era,
+    server_name: String,
+) -> Result<Session, McpError> {
+    match era {
+        Era::Modern { .. } => Ok(Session {
+            endpoint: endpoint.to_string(),
+            token: token.map(str::to_string),
+            era,
+            session_id: None,
+            server_name,
+            negotiated: None,
+        }),
+        Era::Legacy => initialize(http, endpoint, token).await,
+    }
+}
+
+/// How the server names itself.
+///
+/// Free on a legacy session, because the handshake it already paid for said so.
+/// A round trip on a modern one, where nothing has asked: this is the only
+/// caller of `server/discover` outside the era probe, and only the connect path
+/// calls it. A tool call must never pay for a label nobody reads.
+pub async fn describe(session: &Session) -> Result<String, McpError> {
+    if !session.server_name.is_empty() || !session.modern() {
+        return Ok(session.server_name.clone());
+    }
     let http = client()?;
-    let body = serde_json::json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
-    let (value, _) = post(
+    let (result, _) = post(
         &http,
-        &session.endpoint,
-        session.token.as_deref(),
-        session.session_id.as_deref(),
-        &body,
+        Wire::of(session),
+        "server/discover",
+        None,
+        serde_json::json!({}),
         CONNECT_TIMEOUT,
     )
     .await?;
+    Ok(server_name(&result))
+}
+
+/// Everything this server offers, once.
+///
+/// A tool whose `x-mcp-header` annotations a modern server could not honor is
+/// dropped rather than offered, because the spec makes the client responsible
+/// for mirroring them and a call that cannot be built correctly is refused by
+/// the server with an error no model can act on. Only on a modern session: on a
+/// legacy one the annotation means nothing, and dropping the tool would take a
+/// working capability away over a field nobody reads.
+pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpError> {
+    let http = client()?;
+    let (value, _) =
+        post(&http, Wire::of(session), "tools/list", None, serde_json::json!({}), CONNECT_TIMEOUT)
+            .await?;
 
     #[derive(Deserialize)]
     struct Listed {
@@ -169,12 +349,32 @@ pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpErr
         tools: Vec<ToolDescriptor>,
     }
 
-    serde_json::from_value::<Listed>(value).map(|listed| listed.tools).map_err(|err| {
-        McpError::Malformed {
-            endpoint: session.endpoint.clone(),
-            detail: format!("its tool list did not parse: {err}"),
-        }
-    })
+    let listed = serde_json::from_value::<Listed>(value).map_err(|err| McpError::Malformed {
+        endpoint: session.endpoint.clone(),
+        detail: format!("its tool list did not parse: {err}"),
+    })?;
+
+    if !session.modern() {
+        return Ok(listed.tools);
+    }
+    Ok(listed
+        .tools
+        .into_iter()
+        .filter(|tool| {
+            let schema = tool.input_schema.as_ref();
+            match schema.map(mirrored_params).unwrap_or_else(|| Ok(Vec::new())) {
+                Ok(_) => true,
+                Err(why) => {
+                    tracing::warn!(
+                        tool = tool.name,
+                        endpoint = session.endpoint,
+                        "dropping a tool whose x-mcp-header annotation cannot be honored: {why}"
+                    );
+                    false
+                }
+            }
+        })
+        .collect())
 }
 
 /// Runs one tool and renders its answer as the text an agent reads.
@@ -183,24 +383,33 @@ pub async fn list_tools(session: &Session) -> Result<Vec<ToolDescriptor>, McpErr
 /// error on the transport, because those are different things to an agent: one
 /// is "that call was wrong, here is why", the other is "the plugin is not
 /// reachable". Only the first is worth rewording and trying again.
+///
+/// `schema` is the tool's own `inputSchema`, as the server published it and the
+/// store kept it. It is passed rather than looked up because a modern server
+/// may ask for some of a call's arguments to be mirrored into HTTP headers, and
+/// the schema is where it says which: a call built without it is refused as a
+/// header mismatch. `None` is a tool with no schema, which takes no arguments
+/// and therefore mirrors nothing.
 pub async fn call_tool(
     session: &Session,
     tool: &str,
     arguments: &serde_json::Value,
+    schema: Option<&serde_json::Value>,
 ) -> Result<String, McpError> {
     let http = client()?;
-    let body = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 3,
-        "method": "tools/call",
-        "params": { "name": tool, "arguments": arguments },
-    });
+    let mut wire = Wire::of(session);
+    let mirrored = match schema {
+        Some(schema) if session.modern() => mirror(schema, arguments),
+        _ => Vec::new(),
+    };
+    wire.headers = mirrored;
+
     let (value, _) = post(
         &http,
-        &session.endpoint,
-        session.token.as_deref(),
-        session.session_id.as_deref(),
-        &body,
+        wire,
+        "tools/call",
+        Some(tool),
+        serde_json::json!({ "name": tool, "arguments": arguments }),
         CALL_TIMEOUT,
     )
     .await?;
@@ -218,6 +427,537 @@ pub async fn call_tool(
 
     Ok(if rendered.is_empty() { format!("{tool} returned nothing.") } else { rendered })
 }
+
+// ---- era ------------------------------------------------------------------
+
+/// What a server turned out to be, and what it called itself while saying so.
+struct Probed {
+    era: Era,
+    server_name: String,
+}
+
+/// Which era this endpoint speaks, by asking it something only a modern server
+/// answers.
+///
+/// `server/discover` is mandatory for a modern server, so its answer is the
+/// probe. The refusals are what carry the information, and each is a different
+/// server:
+///
+/// - A result: modern, at the revision that was asked for.
+/// - `UnsupportedProtocolVersionError`: modern, at a revision it names. The
+///   spec says to retry with a mutually supported one rather than fall back,
+///   because a modern error can only come from a modern server.
+/// - `HeaderMismatch`: also modern, and a bug here. Raised rather than fallen
+///   back from: falling back would hide it behind a legacy handshake that
+///   happens to work.
+/// - A transport failure or a 401: neither says anything about the era, so
+///   both are the caller's to handle exactly as they were.
+/// - Anything else — a `400`, a `404`, an unknown-method JSON-RPC error, a body
+///   that is not MCP at all: a server that has never heard of `server/discover`,
+///   which is a legacy server.
+async fn probe(
+    http: &reqwest::Client,
+    endpoint: &str,
+    token: Option<&str>,
+) -> Result<Probed, McpError> {
+    let wire = Wire {
+        endpoint,
+        token,
+        version: PROTOCOL_VERSION.to_string(),
+        modern: true,
+        session_id: None,
+        headers: Vec::new(),
+    };
+    match post(http, wire, "server/discover", None, serde_json::json!({}), CONNECT_TIMEOUT).await {
+        Ok((result, _)) => Ok(Probed {
+            era: Era::Modern { version: PROTOCOL_VERSION.to_string() },
+            server_name: server_name(&result),
+        }),
+        Err(McpError::NoSharedVersion { endpoint, supported }) => {
+            // Named `NoSharedVersion` by `post` because it has no list of ours
+            // to compare against; here there is one, and one of three things is
+            // true. None overlaps, and the error stands as raised. One does and
+            // it is modern, and the retry is the whole negotiation. Or the best
+            // one shared is a revision with a handshake, which is a dual-era
+            // server saying so in the only vocabulary a modern request gave it.
+            let Some(version) = agreed(&supported) else {
+                return Err(McpError::NoSharedVersion { endpoint, supported });
+            };
+            if !modern(&version) {
+                return Ok(Probed { era: Era::Legacy, server_name: String::new() });
+            }
+            let wire = Wire {
+                endpoint: &endpoint,
+                token,
+                version: version.clone(),
+                modern: true,
+                session_id: None,
+                headers: Vec::new(),
+            };
+            let (result, _) =
+                post(http, wire, "server/discover", None, serde_json::json!({}), CONNECT_TIMEOUT)
+                    .await?;
+            Ok(Probed { era: Era::Modern { version }, server_name: server_name(&result) })
+        }
+        Err(err @ (McpError::Transport { .. } | McpError::Unauthorized { .. })) => Err(err),
+        Err(err @ McpError::HeaderMismatch { .. }) => Err(err),
+        // Everything else identifies a server that wants a handshake.
+        Err(_) => Ok(Probed { era: Era::Legacy, server_name: String::new() }),
+    }
+}
+
+/// The newest revision this build and that server both have.
+fn agreed(theirs: &[String]) -> Option<String> {
+    SUPPORTED.iter().find(|ours| theirs.iter().any(|t| t == *ours)).map(|ours| ours.to_string())
+}
+
+/// The legacy handshake, and the revision it settled on.
+///
+/// The reply's `protocolVersion` is the agreement, not a formality: a server
+/// that only knows an older revision answers with that one, and every later
+/// request has to declare it. A revision this build has never heard of is
+/// refused here rather than by sending it back and being refused there.
+async fn initialize(
+    http: &reqwest::Client,
+    endpoint: &str,
+    token: Option<&str>,
+) -> Result<Session, McpError> {
+    let wire = Wire {
+        endpoint,
+        token,
+        version: LEGACY_VERSION.to_string(),
+        modern: false,
+        session_id: None,
+        headers: Vec::new(),
+    };
+    let params = serde_json::json!({
+        "protocolVersion": LEGACY_VERSION,
+        "capabilities": {},
+        "clientInfo": client_info(),
+    });
+    let (value, session_id) = post(http, wire, "initialize", None, params, CONNECT_TIMEOUT).await?;
+
+    let agreed = value
+        .get("protocolVersion")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(LEGACY_VERSION)
+        .to_string();
+    // A revision this build does not have, or a modern one, which a handshake
+    // cannot produce: this server has already been established as one that
+    // wants `initialize`, so agreeing to a revision that has none would have
+    // every later request declare a version its own shape contradicts.
+    if !SUPPORTED.contains(&agreed.as_str()) || modern(&agreed) {
+        return Err(McpError::NoSharedVersion {
+            endpoint: endpoint.to_string(),
+            supported: vec![agreed],
+        });
+    }
+
+    let session = Session {
+        endpoint: endpoint.to_string(),
+        token: token.map(str::to_string),
+        era: Era::Legacy,
+        session_id,
+        server_name: value
+            .get("serverInfo")
+            .and_then(|info| info.get("name"))
+            .and_then(|name| name.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        negotiated: Some(agreed),
+    };
+
+    // A notification, not a request: no id, and the server answers 202 with no
+    // body. Skipping it leaves servers that gate on it refusing every later
+    // call with "not initialized", which reads as an auth failure and is not.
+    // Modern has no equivalent, because it has nothing to be initialized.
+    let ready = serde_json::json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+    let _ = notify(http, &session, &ready).await;
+
+    Ok(session)
+}
+
+/// What every endpoint turned out to speak, for the life of the process.
+fn eras() -> &'static Mutex<HashMap<String, Era>> {
+    static ERAS: OnceLock<Mutex<HashMap<String, Era>>> = OnceLock::new();
+    ERAS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remembered(endpoint: &str) -> Option<Era> {
+    eras().lock().ok()?.get(endpoint).cloned()
+}
+
+fn remember(endpoint: &str, era: &Era) {
+    if let Ok(mut map) = eras().lock() {
+        map.insert(endpoint.to_string(), era.clone());
+    }
+}
+
+/// Forgets what an endpoint was, so the next call probes again.
+///
+/// Called when a remembered era turns out to be wrong, which is what a server
+/// upgraded underneath a running Guaca looks like: the handshake it wanted
+/// yesterday is a `400` today. One failure, then the truth.
+pub fn forget(endpoint: &str) {
+    if let Ok(mut map) = eras().lock() {
+        map.remove(endpoint);
+    }
+}
+
+fn server_name(discovered: &serde_json::Value) -> String {
+    discovered
+        .get("_meta")
+        .and_then(|meta| meta.get(META_SERVER))
+        .and_then(|info| info.get("name"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn client_info() -> serde_json::Value {
+    serde_json::json!({ "name": "Guaca", "version": env!("CARGO_PKG_VERSION") })
+}
+
+// ---- transport ------------------------------------------------------------
+
+/// Everything one POST needs that is not its method and its params.
+struct Wire<'a> {
+    endpoint: &'a str,
+    token: Option<&'a str>,
+    version: String,
+    modern: bool,
+    session_id: Option<&'a str>,
+    /// `Mcp-Param-*`, mirrored out of a modern call's own arguments.
+    headers: Vec<(String, String)>,
+}
+
+impl<'a> Wire<'a> {
+    fn of(session: &'a Session) -> Wire<'a> {
+        Wire {
+            endpoint: &session.endpoint,
+            token: session.token.as_deref(),
+            version: session.version().to_string(),
+            modern: session.modern(),
+            session_id: session.session_id.as_deref(),
+            headers: Vec::new(),
+        }
+    }
+}
+
+fn client() -> Result<reqwest::Client, McpError> {
+    reqwest::Client::builder()
+        .build()
+        .map_err(|source| McpError::Transport { endpoint: "the http client".to_string(), source })
+}
+
+/// One JSON-RPC request, and the `result` out of the answer.
+///
+/// Returns the session id alongside, because a legacy `initialize` is the one
+/// call that establishes it and the caller has nowhere else to read it from.
+///
+/// The body is parsed whatever the status is, and that ordering is what makes
+/// the era probe work: a modern server reports an unsupported version, an
+/// unknown method and a bad header as `400` and `404` with a JSON-RPC error in
+/// the body, and treating a non-2xx as opaque would throw away the one thing
+/// that tells those apart from a legacy server refusing a method it has never
+/// heard of.
+async fn post(
+    http: &reqwest::Client,
+    wire: Wire<'_>,
+    method: &str,
+    name: Option<&str>,
+    params: serde_json::Value,
+    timeout: Duration,
+) -> Result<(serde_json::Value, Option<String>), McpError> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": method,
+        "params": if wire.modern { with_meta(params, &wire.version) } else { params },
+    });
+
+    let mut request = http
+        .post(wire.endpoint)
+        .timeout(timeout)
+        .header("content-type", "application/json")
+        // Both, always. Which one comes back is the server's choice and it may
+        // make a different one per request.
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", &wire.version);
+    if let Some(token) = wire.token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    if wire.modern {
+        // Mirrored from the body so an intermediary can route on them without
+        // parsing it. The server compares them against the body and refuses the
+        // request if they disagree, which is why they are built here from the
+        // same values rather than passed in beside them.
+        request = request.header("mcp-method", method);
+        if let Some(name) = name {
+            request = request.header("mcp-name", header_value(name));
+        }
+        for (header, value) in &wire.headers {
+            request = request.header(format!("mcp-param-{header}"), value.as_str());
+        }
+    } else if let Some(id) = wire.session_id {
+        request = request.header("mcp-session-id", id);
+    }
+
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|source| McpError::Transport { endpoint: wire.endpoint.to_string(), source })?;
+
+    let status = response.status();
+    let issued = header(&response, "mcp-session-id");
+    let challenge = header(&response, "www-authenticate");
+    let content_type = header(&response, "content-type").unwrap_or_default();
+    let text = response
+        .text()
+        .await
+        .map_err(|source| McpError::Transport { endpoint: wire.endpoint.to_string(), source })?;
+
+    if status.as_u16() == 401 {
+        return Err(McpError::Unauthorized { endpoint: wire.endpoint.to_string(), challenge });
+    }
+
+    let envelope = decode(&content_type, &text);
+
+    if let Some(error) = envelope.as_ref().and_then(|value| value.get("error")) {
+        let code = error.get("code").and_then(serde_json::Value::as_i64).unwrap_or_default();
+        let message = error
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("it refused and gave no reason");
+        return Err(match code {
+            UNSUPPORTED_VERSION => McpError::NoSharedVersion {
+                endpoint: wire.endpoint.to_string(),
+                supported: error
+                    .get("data")
+                    .and_then(|data| data.get("supported"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|all| {
+                        all.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            },
+            HEADER_MISMATCH => McpError::HeaderMismatch {
+                endpoint: wire.endpoint.to_string(),
+                detail: message.to_string(),
+            },
+            _ => McpError::Rejected { message: message.to_string() },
+        });
+    }
+
+    if !status.is_success() {
+        return Err(McpError::Status {
+            endpoint: wire.endpoint.to_string(),
+            status: status.as_u16(),
+            body: text.chars().take(400).collect(),
+        });
+    }
+
+    let envelope = envelope.ok_or_else(|| McpError::Malformed {
+        endpoint: wire.endpoint.to_string(),
+        detail: format!("no JSON-RPC message in a {content_type} body"),
+    })?;
+
+    let result = envelope.get("result").cloned().ok_or_else(|| McpError::Malformed {
+        endpoint: wire.endpoint.to_string(),
+        detail: "a reply with neither a result nor an error".to_string(),
+    })?;
+
+    Ok((result, issued))
+}
+
+/// A modern request's `params`, with the metadata every one of them carries.
+///
+/// The version in here has to equal the one in the header beside it, or the
+/// server refuses the request with a header mismatch. One value builds both.
+fn with_meta(params: serde_json::Value, version: &str) -> serde_json::Value {
+    let mut params = match params {
+        serde_json::Value::Object(map) => map,
+        _ => serde_json::Map::new(),
+    };
+    params.insert(
+        "_meta".to_string(),
+        serde_json::json!({
+            META_VERSION: version,
+            META_CLIENT: client_info(),
+            META_CAPABILITIES: {},
+        }),
+    );
+    serde_json::Value::Object(params)
+}
+
+/// A notification: sent, and not waited on for anything but delivery.
+async fn notify(
+    http: &reqwest::Client,
+    session: &Session,
+    body: &serde_json::Value,
+) -> Result<(), McpError> {
+    let mut request = http
+        .post(&session.endpoint)
+        .timeout(CONNECT_TIMEOUT)
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-protocol-version", session.version());
+    if let Some(token) = &session.token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    if let Some(id) = &session.session_id {
+        request = request.header("mcp-session-id", id.as_str());
+    }
+    request
+        .json(body)
+        .send()
+        .await
+        .map(|_| ())
+        .map_err(|source| McpError::Transport { endpoint: session.endpoint.clone(), source })
+}
+
+fn header(response: &reqwest::Response, name: &str) -> Option<String> {
+    response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
+}
+
+// ---- x-mcp-header ---------------------------------------------------------
+
+/// The characters RFC 9110 allows unquoted in a header field name.
+const TCHAR: &str = "!#$%&'*+-.^_`|~";
+
+/// Which of a tool's arguments the server asked to see in headers, and where
+/// each one lives in the call.
+///
+/// The path is a chain of `properties` keys and nothing else. The spec is
+/// explicit that an annotation reachable only through `items`, `oneOf`,
+/// `allOf`, `if`/`then`, or a `$ref` makes the whole tool definition invalid
+/// rather than being ignored: the value there has no single place in a call, so
+/// there is nothing a client could mirror. Counting every annotation in the
+/// document and comparing it with what was reachable is how one hiding in those
+/// is caught, and an unreachable one is an error rather than a warning because
+/// the alternative is calls that the server refuses with a header mismatch.
+fn mirrored_params(schema: &serde_json::Value) -> Result<Vec<(String, Vec<String>)>, String> {
+    let mut found: Vec<(String, Vec<String>)> = Vec::new();
+    let mut path = Vec::new();
+    reachable(schema, &mut path, &mut found)?;
+    let annotated = annotations(schema);
+    if annotated != found.len() {
+        return Err(format!(
+            "{} of its {annotated} x-mcp-header annotations are not reachable through `properties`",
+            annotated - found.len()
+        ));
+    }
+    Ok(found)
+}
+
+fn reachable(
+    node: &serde_json::Value,
+    path: &mut Vec<String>,
+    out: &mut Vec<(String, Vec<String>)>,
+) -> Result<(), String> {
+    let Some(properties) = node.get("properties").and_then(serde_json::Value::as_object) else {
+        return Ok(());
+    };
+    for (key, sub) in properties {
+        if let Some(named) = sub.get("x-mcp-header") {
+            let named =
+                named.as_str().ok_or_else(|| format!("{key}'s x-mcp-header is not text"))?;
+            if named.is_empty()
+                || !named.chars().all(|c| c.is_ascii_alphanumeric() || TCHAR.contains(c))
+            {
+                return Err(format!("{key}'s x-mcp-header {named:?} is not a header name"));
+            }
+            if out.iter().any(|(taken, _)| taken.eq_ignore_ascii_case(named)) {
+                return Err(format!("two parameters both mirror into {named:?}"));
+            }
+            // `number` is excluded by the spec along with every non-primitive:
+            // a float has no one decimal spelling, so a header and a body
+            // carrying the same value could still fail to compare equal.
+            match sub.get("type").and_then(serde_json::Value::as_str) {
+                Some("string" | "integer" | "boolean") => {}
+                other => {
+                    return Err(format!(
+                        "{key} mirrors into {named:?} and is {}, which cannot be a header",
+                        other.unwrap_or("untyped")
+                    ))
+                }
+            }
+            path.push(key.clone());
+            out.push((named.to_string(), path.clone()));
+            path.pop();
+        }
+        path.push(key.clone());
+        reachable(sub, path, out)?;
+        path.pop();
+    }
+    Ok(())
+}
+
+/// Every `x-mcp-header` in the document, wherever it is.
+fn annotations(node: &serde_json::Value) -> usize {
+    match node {
+        serde_json::Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| usize::from(key == "x-mcp-header") + annotations(value))
+            .sum(),
+        serde_json::Value::Array(all) => all.iter().map(annotations).sum(),
+        _ => 0,
+    }
+}
+
+/// The headers one call carries, out of its own arguments.
+///
+/// A parameter with no value in this call is omitted rather than sent empty:
+/// the server expects the header only when the body has the value, and one sent
+/// anyway is a mismatch. A schema that could not be read at all mirrors nothing,
+/// because `list_tools` already dropped the tools that would need it — this is
+/// the same read a second time and it cannot disagree.
+fn mirror(schema: &serde_json::Value, arguments: &serde_json::Value) -> Vec<(String, String)> {
+    let Ok(wanted) = mirrored_params(schema) else { return Vec::new() };
+    let mut out = Vec::new();
+    for (name, path) in wanted {
+        let mut at = arguments;
+        for key in &path {
+            let Some(next) = at.get(key) else {
+                at = &serde_json::Value::Null;
+                break;
+            };
+            at = next;
+        }
+        let rendered = match at {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Bool(yes) => yes.to_string(),
+            serde_json::Value::Number(n) if n.is_i64() || n.is_u64() => n.to_string(),
+            _ => continue,
+        };
+        out.push((name, header_value(&rendered)));
+    }
+    out
+}
+
+/// A value as a header may carry it.
+///
+/// Anything outside printable ASCII, anything padded, and anything that would
+/// read as the encoding marker itself is base64 behind that marker. The last
+/// case is the one that looks paranoid and is not: a value that legitimately
+/// starts `=?base64?` and ends `?=` would otherwise be decoded by the server as
+/// something it is not.
+fn header_value(raw: &str) -> String {
+    let plain = raw.chars().all(|c| c == '\t' || ('\u{20}'..='\u{7e}').contains(&c))
+        && raw.trim() == raw
+        && !(raw.starts_with("=?base64?") && raw.ends_with("?="));
+    if plain {
+        raw.to_string()
+    } else {
+        format!("=?base64?{}?=", crate::e2b::encode(raw.as_bytes()))
+    }
+}
+
+// ---- results --------------------------------------------------------------
 
 /// The parts of a result an agent can read, joined.
 ///
@@ -248,116 +988,6 @@ fn render_content(result: &serde_json::Value) -> String {
         }
     }
     out.join("\n")
-}
-
-fn client() -> Result<reqwest::Client, McpError> {
-    reqwest::Client::builder()
-        .build()
-        .map_err(|source| McpError::Transport { endpoint: "the http client".to_string(), source })
-}
-
-/// One JSON-RPC request, and the `result` out of the answer.
-///
-/// Returns the session id alongside, because `initialize` is the one call that
-/// establishes it and the caller has nowhere else to read it from.
-async fn post(
-    http: &reqwest::Client,
-    endpoint: &str,
-    token: Option<&str>,
-    session_id: Option<&str>,
-    body: &serde_json::Value,
-    timeout: Duration,
-) -> Result<(serde_json::Value, Option<String>), McpError> {
-    let mut request = http
-        .post(endpoint)
-        .timeout(timeout)
-        .header("content-type", "application/json")
-        // Both, always. Which one comes back is the server's choice and it may
-        // make a different one per request.
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-protocol-version", PROTOCOL_VERSION);
-    if let Some(token) = token {
-        request = request.header("authorization", format!("Bearer {token}"));
-    }
-    if let Some(id) = session_id {
-        request = request.header("mcp-session-id", id);
-    }
-
-    let response = request
-        .json(body)
-        .send()
-        .await
-        .map_err(|source| McpError::Transport { endpoint: endpoint.to_string(), source })?;
-
-    let status = response.status();
-    let issued = header(&response, "mcp-session-id");
-    let challenge = header(&response, "www-authenticate");
-    let content_type = header(&response, "content-type").unwrap_or_default();
-    let text = response
-        .text()
-        .await
-        .map_err(|source| McpError::Transport { endpoint: endpoint.to_string(), source })?;
-
-    if status.as_u16() == 401 {
-        return Err(McpError::Unauthorized { endpoint: endpoint.to_string(), challenge });
-    }
-    if !status.is_success() {
-        return Err(McpError::Status {
-            endpoint: endpoint.to_string(),
-            status: status.as_u16(),
-            body: text.chars().take(400).collect(),
-        });
-    }
-
-    let envelope = decode(&content_type, &text).ok_or_else(|| McpError::Malformed {
-        endpoint: endpoint.to_string(),
-        detail: format!("no JSON-RPC message in a {content_type} body"),
-    })?;
-
-    if let Some(error) = envelope.get("error") {
-        let message = error
-            .get("message")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("it refused and gave no reason");
-        return Err(McpError::Rejected { message: message.to_string() });
-    }
-
-    let result = envelope.get("result").cloned().ok_or_else(|| McpError::Malformed {
-        endpoint: endpoint.to_string(),
-        detail: "a reply with neither a result nor an error".to_string(),
-    })?;
-
-    Ok((result, issued))
-}
-
-/// A notification: sent, and not waited on for anything but delivery.
-async fn notify(
-    http: &reqwest::Client,
-    session: &Session,
-    body: &serde_json::Value,
-) -> Result<(), McpError> {
-    let mut request = http
-        .post(&session.endpoint)
-        .timeout(CONNECT_TIMEOUT)
-        .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
-        .header("mcp-protocol-version", PROTOCOL_VERSION);
-    if let Some(token) = &session.token {
-        request = request.header("authorization", format!("Bearer {token}"));
-    }
-    if let Some(id) = &session.session_id {
-        request = request.header("mcp-session-id", id.as_str());
-    }
-    request
-        .json(body)
-        .send()
-        .await
-        .map(|_| ())
-        .map_err(|source| McpError::Transport { endpoint: session.endpoint.clone(), source })
-}
-
-fn header(response: &reqwest::Response, name: &str) -> Option<String> {
-    response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string)
 }
 
 /// The JSON-RPC envelope out of a body that is either JSON or an event stream.
@@ -404,7 +1034,7 @@ mod tests {
 
     #[test]
     fn an_event_stream_reply_decodes() {
-        // A real server answers every call this way, `initialize` included.
+        // A real server answers every call this way, the handshake included.
         // Parsing only JSON made a working server look like a broken one.
         let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"ok\":1}}\n\n";
         let value = decode("text/event-stream; charset=utf-8", body);
@@ -459,5 +1089,212 @@ mod tests {
         let refused = McpError::Rejected { message: "no such tool".into() };
         assert!(unauthorized.is_unauthorized());
         assert!(!refused.is_unauthorized());
+    }
+
+    #[test]
+    fn the_newest_revision_is_the_one_a_modern_request_declares() {
+        // The order in `SUPPORTED` is the preference order, and `agreed` walks
+        // it rather than the server's list: a server that offers three takes
+        // the best of them rather than the first one it happened to name.
+        assert_eq!(PROTOCOL_VERSION, "2026-07-28");
+        assert_eq!(
+            agreed(&["2025-06-18".into(), "2025-11-25".into()]),
+            Some("2025-11-25".to_string())
+        );
+        assert_eq!(agreed(&["2026-07-28".into()]), Some("2026-07-28".to_string()));
+        assert_eq!(agreed(&["1999-01-01".into()]), None);
+        assert_eq!(agreed(&[]), None);
+    }
+
+    #[test]
+    fn a_revision_sorts_as_a_date_because_it_is_one() {
+        // Which is what lets "is this one modern" be a comparison rather than a
+        // second list beside `SUPPORTED` for somebody to forget to update.
+        assert!(modern(PROTOCOL_VERSION));
+        assert!(modern("2030-01-01"));
+        assert!(!modern(LEGACY_VERSION));
+        assert!(!modern("2025-06-18"));
+        assert!(!modern("2024-11-05"));
+    }
+
+    #[test]
+    fn the_handshake_revision_is_one_this_build_speaks() {
+        // `initialize` asks for the newest revision that still has a handshake,
+        // and every request after it declares whatever came back. A value here
+        // that is not in `SUPPORTED` would have this client refuse a server
+        // that agreed to exactly what it asked for.
+        assert!(SUPPORTED.contains(&LEGACY_VERSION));
+        assert_ne!(LEGACY_VERSION, PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn a_modern_request_carries_its_version_where_the_server_compares_it() {
+        // The header and the `_meta` field have to agree or the server refuses
+        // the request. One value builds both, and this is what says so.
+        let params = with_meta(serde_json::json!({ "name": "run_sql" }), "2026-07-28");
+        assert_eq!(params["name"], serde_json::json!("run_sql"));
+        assert_eq!(params["_meta"][META_VERSION], serde_json::json!("2026-07-28"));
+        assert_eq!(params["_meta"][META_CLIENT]["name"], serde_json::json!("Guaca"));
+        assert!(params["_meta"][META_CAPABILITIES].is_object());
+    }
+
+    #[test]
+    fn a_modern_server_names_itself_under_the_meta_key_rather_than_beside_it() {
+        // The handshake put `serverInfo` at the top of the result; the modern
+        // revision moved it into `_meta` under a namespaced key. Reading the
+        // old place would leave every modern plugin unlabelled.
+        let discovered = serde_json::json!({
+            "supportedVersions": ["2026-07-28"],
+            "_meta": { META_SERVER: { "name": "Scripted", "version": "1" } },
+        });
+        assert_eq!(server_name(&discovered), "Scripted");
+        assert_eq!(server_name(&serde_json::json!({})), "");
+    }
+
+    #[test]
+    fn a_header_carries_a_plain_value_and_hides_the_rest_behind_the_marker() {
+        assert_eq!(header_value("us-west1"), "us-west1");
+        assert_eq!(header_value(""), "");
+        // Non-ASCII, padded, and the marker itself, which is the case that
+        // looks paranoid: a value shaped like the encoding would be decoded by
+        // the server into something it never was.
+        assert_eq!(header_value("Hello, 世界"), "=?base64?SGVsbG8sIOS4lueVjA==?=");
+        assert_eq!(header_value(" padded "), "=?base64?IHBhZGRlZCA=?=");
+        assert_eq!(header_value("line1\nline2"), "=?base64?bGluZTEKbGluZTI=?=");
+        assert_eq!(header_value("=?base64?literal?="), "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?=");
+    }
+
+    #[test]
+    fn a_nested_parameter_is_mirrored_from_where_it_actually_lives() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "region": { "type": "string", "x-mcp-header": "Region" },
+                "query": { "type": "string" },
+                "opts": {
+                    "type": "object",
+                    "properties": { "dry": { "type": "boolean", "x-mcp-header": "Dry" } },
+                },
+            },
+        });
+        // Compared as a set: these are headers, and the order they are added in
+        // is the order a JSON object's keys happen to come out in.
+        let mut wanted = mirrored_params(&schema).expect("a reachable annotation");
+        wanted.sort();
+        assert_eq!(
+            wanted,
+            vec![
+                ("Dry".to_string(), vec!["opts".to_string(), "dry".to_string()]),
+                ("Region".to_string(), vec!["region".to_string()]),
+            ]
+        );
+
+        let sent = serde_json::json!({ "region": "us-west1", "opts": { "dry": true } });
+        let mut sent = mirror(&schema, &sent);
+        sent.sort();
+        assert_eq!(
+            sent,
+            vec![
+                ("Dry".to_string(), "true".to_string()),
+                ("Region".to_string(), "us-west1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_parameter_this_call_did_not_send_is_left_out_rather_than_sent_empty() {
+        // The server expects the header exactly when the body has the value, so
+        // an empty one is a mismatch and the whole call is refused.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "region": { "type": "string", "x-mcp-header": "Region" } },
+        });
+        assert!(mirror(&schema, &serde_json::json!({})).is_empty());
+        assert!(mirror(&schema, &serde_json::json!({ "region": null })).is_empty());
+    }
+
+    #[test]
+    fn an_annotation_that_is_not_reachable_through_properties_invalidates_the_tool() {
+        // The spec's rule, and the reason it is a rule: a value inside an array
+        // or behind a `oneOf` has no single place in a call, so there is nothing
+        // to mirror and a client that guessed would be refused on every call.
+        for hidden in [
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "rows": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "x-mcp-header": "Id" },
+                            },
+                        },
+                    },
+                },
+            }),
+            serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "who": { "oneOf": [{ "type": "string", "x-mcp-header": "Who" }] },
+                },
+            }),
+        ] {
+            assert!(mirrored_params(&hidden).is_err(), "{hidden}");
+        }
+    }
+
+    #[test]
+    fn a_header_name_a_server_could_not_send_is_refused_rather_than_sanitized() {
+        for bad in ["", "with space", "with\r\n", "semi;colon"] {
+            let schema = serde_json::json!({
+                "type": "object",
+                "properties": { "a": { "type": "string", "x-mcp-header": bad } },
+            });
+            assert!(mirrored_params(&schema).is_err(), "{bad:?}");
+        }
+        // A float has no one decimal spelling, so the header and the body
+        // carrying the same value could still fail to compare equal.
+        let float = serde_json::json!({
+            "type": "object",
+            "properties": { "a": { "type": "number", "x-mcp-header": "A" } },
+        });
+        assert!(mirrored_params(&float).is_err());
+        // And two parameters cannot both claim one header name.
+        let clash = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "a": { "type": "string", "x-mcp-header": "Region" },
+                "b": { "type": "string", "x-mcp-header": "region" },
+            },
+        });
+        assert!(mirrored_params(&clash).is_err());
+    }
+
+    #[test]
+    fn a_schema_with_no_annotations_mirrors_nothing_and_is_not_an_error() {
+        // Which is every tool every server on the list publishes today. A
+        // stricter reading here would drop all of them.
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "sql": { "type": "string" } },
+        });
+        assert_eq!(mirrored_params(&schema), Ok(Vec::new()));
+        assert!(mirror(&schema, &serde_json::json!({ "sql": "select 1" })).is_empty());
+        assert_eq!(mirrored_params(&serde_json::json!({})), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_server_that_shares_no_revision_says_so_in_terms_of_both_lists() {
+        // Nothing the operator can do fixes this one, and the sentence has to
+        // say that rather than reading like a bad address.
+        let refusal = McpError::NoSharedVersion {
+            endpoint: "https://example.test/mcp".into(),
+            supported: vec!["2030-01-01".into()],
+        }
+        .to_string();
+        assert!(refusal.contains("2030-01-01"), "{refusal}");
+        assert!(refusal.contains(PROTOCOL_VERSION), "{refusal}");
+        assert!(refusal.contains("update Guaca"), "{refusal}");
     }
 }

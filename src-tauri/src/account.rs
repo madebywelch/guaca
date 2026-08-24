@@ -370,7 +370,10 @@ impl Account {
 
         open(&url).map_err(|detail| AccountError::NoBrowser { detail })?;
 
-        let code = oauth::wait_for_redirect(listener, &state).await?;
+        // The issuer is this one origin, and it is known before the browser
+        // opens rather than discovered from the answer: RFC 9207's check is
+        // only worth anything against a value recorded in advance.
+        let code = oauth::wait_for_redirect(listener, &state, &self.origin).await?;
 
         let issued = oauth::post_token(
             &oauth::http()?,
