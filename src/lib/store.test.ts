@@ -482,10 +482,14 @@ describe("the group the rail is inside", () => {
     expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 
-  it("is let go when the channel being opened belongs to another crew", async () => {
-    // A search hit or a click on the flow board can land anywhere. A rail still
-    // showing one crew while the pane shows a member of another has the open
-    // channel nowhere on it.
+  it("follows the channel being opened into the crew it belongs to", async () => {
+    // A search hit or a click on the flow board can land anywhere, and a rail
+    // still showing one crew while the pane shows a member of another has the
+    // open channel nowhere on it. It used to drop out to the overview, which
+    // was the only view that could draw every row while the crews lived in a
+    // strip inside the rail. They have a column of their own now, so the crew
+    // the operator has landed in is on screen either way and following it moves
+    // one lit circle instead of rebuilding the rail.
     reset({ chef: [] });
     useStore.setState({
       agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
@@ -493,10 +497,10 @@ describe("the group the rail is inside", () => {
     await useStore.getState().focusGroup(RESEARCH);
 
     await useStore.getState().select("manager");
-    expect(useStore.getState().railGroup).toBeNull();
+    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 
-  it("is let go by a jump to a message in another crew's channel", async () => {
+  it("follows a jump to a message in another crew's channel", async () => {
     reset({ chef: [] });
     useStore.setState({
       agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
@@ -504,7 +508,30 @@ describe("the group the rail is inside", () => {
     await useStore.getState().focusGroup(RESEARCH);
 
     await useStore.getState().openMessage("manager", "m-old");
+    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
+  });
+
+  // The overview draws everybody, so there is nothing to repair and no reason
+  // to narrow the rail to one crew behind a click that did not ask for one.
+  it("stays on the overview when a channel is opened from it", async () => {
+    reset({ chef: [] });
+    useStore.setState({
+      agents: [AGENTS[0]!, { ...AGENTS[1]!, groupId: RESEARCH }],
+      railGroup: null,
+    });
+
+    await useStore.getState().select("manager");
     expect(useStore.getState().railGroup).toBeNull();
+  });
+
+  // An agent the roster no longer has says nothing about which crew to be in,
+  // and guessing at one would move the rail away from a crew that is fine.
+  it("stays where it is when the channel belongs to nobody", async () => {
+    reset({ chef: [] });
+    await useStore.getState().focusGroup(AGENTS[0]!.groupId);
+
+    await useStore.getState().select("ghost");
+    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 });
 

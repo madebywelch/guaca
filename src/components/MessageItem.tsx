@@ -20,6 +20,7 @@ import {
 import { ApprovalRequest } from "./ApprovalRequest";
 import { FileCard } from "./FileCard";
 import { Markdown } from "./Markdown";
+import { QuestionRequest } from "./QuestionRequest";
 import { TrailRow } from "./Trail";
 import { AsideRow, NoticeRow, RoutineRow } from "./WireRow";
 
@@ -134,6 +135,14 @@ export const MessageItem = memo(function MessageItem({
   if (asking) {
     const askerId = to.kind === "agent" ? to.id : message.channelId;
     return <ApprovalRequest part={asking} agent={lookups.byId(askerId)} />;
+  }
+
+  // The other thing an agent stops to ask, and its own card because it is a
+  // different question: this one is not asking to be allowed anything.
+  const wondering = message.parts.find((part) => part.type === "question");
+  if (wondering) {
+    const askerId = to.kind === "agent" ? to.id : message.channelId;
+    return <QuestionRequest part={wondering} agent={lookups.byId(askerId)} />;
   }
 
   // A schedule firing. Drawn as one line rather than as the several sentences

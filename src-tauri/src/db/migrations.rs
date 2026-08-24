@@ -916,6 +916,41 @@ DROP TABLE plugin_denied_tools;
 ALTER TABLE signins RENAME COLUMN recognised TO recognized;
 "#,
     ),
+    (
+        33,
+        r#"
+-- An agent could stop and ask the operator two things, and both of them were
+-- "may I". There was no way to ask "which of these", so an agent that needed a
+-- judgment call wrote a message into a channel nobody was watching and then
+-- either guessed or stalled. In a workspace with a dozen crews that is the
+-- common case and it is invisible: nothing parks, nothing is counted, and the
+-- operator finds out when the work comes back wrong.
+--
+-- The machinery for stopping a turn on a person already exists in this table,
+-- so a question is a row in it rather than a second table with the same
+-- lifecycle. Two columns, and no third to say which kind a row is: `action`
+-- already discriminates, because a question stores the literal 'question'
+-- there and that is not one of the two protected actions. A separate `kind`
+-- column would be a second value that has to agree with the first, with
+-- nothing keeping them in step.
+--
+-- Neither index needs touching. `approvals_pending` is on `created_at` and a
+-- question waits exactly as a permission does; `approvals_granted` is
+-- `WHERE state = 'alwaysAllow'`, which a question can never reach, because
+-- there is no standing yes to a question and nothing to be let off asking.
+
+-- What the operator may pick, as a JSON array. NULL is a question that takes a
+-- written answer, and it is also every permission ever recorded, which is why
+-- this cannot be NOT NULL with a default of '[]': an empty list already means
+-- something on a question.
+ALTER TABLE approvals ADD COLUMN options TEXT;
+
+-- What they picked or wrote. Only ever set on a question: a verdict is a state
+-- and lives in `state`, so filling this in for one would be recording the same
+-- fact twice in two shapes.
+ALTER TABLE approvals ADD COLUMN answer TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -1007,6 +1042,50 @@ mod tests {
 
     fn memory() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn a_permission_recorded_before_questions_existed_is_still_a_permission() {
+        // The upgrade path, which no test that starts from a blank database can
+        // reach. Every request ever recorded has a NULL `options`, and NULL is
+        // also what a question that takes a written answer would store if the
+        // two were not told apart by `action`. Read as a question, every
+        // historical row would come back with no choices and no way to answer
+        // it, and `standing_grants` would refuse to parse the ones that were
+        // granted.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 33) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,
+                                 version,created_at,updated_at,group_id)
+             VALUES ('a','A','avocado','#000','m','','[]','active',1,0,0,?1)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO approvals (id,agent_id,group_id,run_id,action,summary,detail,state,
+                                    created_at)
+             VALUES ('ap','a',?1,'run','createAgent','Wants to hire','[]','alwaysAllow',0)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let (action, options, answer): (String, Option<String>, Option<String>) = conn
+            .query_row("SELECT action,options,answer FROM approvals WHERE id='ap'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(action, "createAgent", "an upgrade must not restate what was asked");
+        assert_eq!(options, None);
+        assert_eq!(answer, None, "nobody wrote an answer, so there must not be one");
     }
 
     #[test]

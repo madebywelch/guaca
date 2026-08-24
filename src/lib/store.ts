@@ -18,8 +18,10 @@ import type {
   Activity,
   AgentCard,
   AgentId,
+  Approval,
   ApprovalId,
   ApprovalState,
+  Decision,
   Envelope,
   Group,
   GroupId,
@@ -32,6 +34,7 @@ import type {
   Tokens,
   UiEvent,
 } from "./types";
+import { errorMessage } from "./types";
 
 /** The activity feed is addressed like a channel but is not an agent. */
 export const ACTIVITY_CHANNEL = "activity" as const;
@@ -106,17 +109,32 @@ interface State {
    */
   approvals: Record<ApprovalId, ApprovalState | undefined>;
 
+  /**
+   * Every request still waiting on the operator, oldest first, whole.
+   *
+   * The queue the desk draws. Held as what the runtime last said rather than
+   * accumulated from events, which is the same discipline the menu bar's
+   * presence is built on and for the same reason: a list added to on
+   * `approvalRequested` and removed from on `approvalSettled` is one dropped
+   * event away from offering a decision that reaches nobody, and the operator
+   * has no way to tell that card from a live one. Both events invalidate this
+   * and the answer comes back from the runtime.
+   *
+   * Whole rather than by id because the desk exists to be answered from: an
+   * entry that carried only an id would send the operator to find the channel,
+   * which is the walk the desk is for.
+   */
+  pending: Approval[];
+
   selected: ChannelKey | null;
   /**
    * The group the rail is looking inside, or `null` for all of them.
    *
-   * Here rather than in the sidebar because it and the open channel invalidate
-   * each other, and both are here. An agent reached from search or from the flow
-   * board may live in another crew, and a rail that keeps showing the group you
-   * were in has the open channel nowhere on it; going inside a crew while
-   * somebody else's channel is open is the same mismatch from the other end.
-   * Whichever of the two was just asked for wins: `select` lets the focus go,
-   * and `focusGroup` closes the channel.
+   * Here rather than in the sidebar because it and the open channel have to
+   * agree, and both are here. One rule holds them together: the rail draws the
+   * row of the channel the pane is showing. `select` repairs it by following the
+   * agent into its crew, and `focusGroup` repairs it from the other end, by
+   * letting go of a channel the crew being opened does not contain.
    */
   railGroup: GroupId | null;
   messages: Record<ChannelKey, Envelope[] | undefined>;
@@ -207,6 +225,35 @@ interface State {
   /** Asks the panel beside the transcript to open one routine. */
   openRoutine: (id: RoutineId) => void;
   routineOpened: () => void;
+  /**
+   * Answers one request, from wherever it was seen.
+   *
+   * In the store rather than in the card because there are two cards: the one
+   * in the transcript and the one on the desk, and the same request is live on
+   * both at once. A refusal here is the runtime saying this was already
+   * answered, or that it lapsed while the operator was reading it, and the
+   * runtime's copy is the truth: it is taken rather than argued with, and both
+   * readings of it are corrected together.
+   */
+  decideApproval: (id: ApprovalId, decision: Decision) => Promise<void>;
+  /**
+   * Answers a question with what the operator picked or wrote.
+   *
+   * Beside the verdict rather than folded into it, because a question is
+   * settled with a value and a permission with one of three tokens. Everything
+   * after the call is the same, which is why both go through one refresh.
+   */
+  answerQuestion: (id: ApprovalId, answer: string) => Promise<void>;
+  /**
+   * One request answered, however it was answered.
+   *
+   * Both ways in do the same two things afterward, and this is the one place
+   * that knows what they are: a refusal is the runtime saying this was already
+   * settled or lapsed while it was being read, and its copy is the truth, so it
+   * is taken rather than argued with and both readings of it are corrected
+   * together. Private in spirit; on the store because the two callers are.
+   */
+  settle: (answer: () => Promise<unknown>) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
@@ -249,17 +296,28 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
 }
 
 /**
- * Whether the rail can stay inside the group it is inside.
+ * Which crew the rail is inside once a channel has been opened.
  *
- * It can, unless the channel being opened belongs to an agent in another one. A
- * search hit or a click on the flow board can land anywhere, and a rail still
- * showing one crew while the pane shows a member of another has the open channel
- * nowhere on it. The activity feed belongs to no group and changes nothing.
+ * One invariant, from this end: the rail has to be drawing the row of whatever
+ * the pane is showing. A search hit or a click on the flow board can land on a
+ * member of any crew, and a rail still showing the one you were in has the open
+ * channel nowhere on it.
+ *
+ * It follows the agent rather than dropping out to the overview, which is what
+ * it used to do. Dropping out was the only honest answer while the crews lived
+ * in a strip inside the rail: going to the overview was the one state where
+ * every row was drawable, and which crew you had ended up in was a heading you
+ * had to read. The crews now have a column of their own that is on screen
+ * whichever one you are in, so following is both possible and less: one lit
+ * circle moves, instead of the whole rail changing shape.
+ *
+ * The overview stays the overview. It draws everybody, so a channel opened from
+ * it is already on screen and there is nothing to repair.
  */
 function keptFocus(state: State, key: ChannelKey): GroupId | null {
   if (state.railGroup === null || key === ACTIVITY_CHANNEL) return state.railGroup;
   const agent = state.agents.find((a) => a.id === key);
-  return agent && agent.groupId !== state.railGroup ? null : state.railGroup;
+  return agent ? agent.groupId : state.railGroup;
 }
 
 /**
@@ -269,6 +327,11 @@ function keptFocus(state: State, key: ChannelKey): GroupId | null {
  * able to draw the channel that is open. Going back out to the overview keeps
  * whatever was open, because the overview draws everybody. The activity feed
  * belongs to no group and is never closed.
+ *
+ * This end still lets go rather than following, and the asymmetry is the point.
+ * `select` is the operator naming an agent, so taking them to that agent's crew
+ * is what they asked for. `focusGroup` is the operator naming a crew, and
+ * following the channel out of it would undo the click.
  */
 function keptChannel(state: State, group: GroupId | null): boolean {
   const key = state.selected;
@@ -288,6 +351,7 @@ export const useStore = create<State>((set, get) => ({
   usage: {},
   pulse: {},
   approvals: {},
+  pending: [],
   selected: null,
   railGroup: null,
   messages: {},
@@ -301,16 +365,30 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, groups, activity, lastActive, settings, usage, approvals] = await Promise.all([
-      api.listAgents(),
-      api.listGroups(),
-      api.agentActivity(),
-      api.agentLastActive(),
-      api.getSettings(),
-      api.usageSummary(),
-      api.approvalStates(),
-    ]);
-    set({ agents, groups, activity, lastActive, settings, usage: byGroup(usage), approvals });
+    const [agents, groups, activity, lastActive, settings, usage, approvals, pending] =
+      await Promise.all([
+        api.listAgents(),
+        api.listGroups(),
+        api.agentActivity(),
+        api.agentLastActive(),
+        api.getSettings(),
+        api.usageSummary(),
+        api.approvalStates(),
+        // A turn parked before the window was opened is still parked. The desk
+        // has to be right on the first paint, or the operator's first read of
+        // it says nobody is waiting.
+        api.pendingApprovals(),
+      ]);
+    set({
+      agents,
+      groups,
+      activity,
+      lastActive,
+      settings,
+      usage: byGroup(usage),
+      approvals,
+      pending,
+    });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
     const current = get().selected;
@@ -347,7 +425,7 @@ export const useStore = create<State>((set, get) => ({
   async select(key) {
     // A pending routine request goes with the channel it was asked from, for
     // the same reason `focused` does: it is about a row on the screen the
-    // operator is leaving, and honouring it later would open something they
+    // operator is leaving, and honoring it later would open something they
     // asked for somewhere else.
     set((state) => ({
       selected: key,
@@ -513,11 +591,37 @@ export const useStore = create<State>((set, get) => ({
   },
 
   /**
-   * Re-reads what every request came to. Used when a decision is refused,
-   * which means this side is holding a stale answer.
+   * Re-reads both halves of what is being asked: what every request came to,
+   * and which are still waiting.
+   *
+   * One call for the two, because they are two views of one table and a refresh
+   * that took only one leaves the transcript's buttons and the desk's queue
+   * disagreeing about the same request.
    */
   async refreshApprovals() {
-    set({ approvals: await api.approvalStates() });
+    const [approvals, pending] = await Promise.all([api.approvalStates(), api.pendingApprovals()]);
+    set({ approvals, pending });
+  },
+
+  async decideApproval(id, decision) {
+    await get().settle(() => api.decideApproval(id, decision));
+  },
+
+  async answerQuestion(id, answer) {
+    await get().settle(() => api.answerQuestion(id, answer));
+  },
+
+  async settle(answer) {
+    try {
+      await answer();
+    } catch (error) {
+      get().setBanner({ tone: "error", text: errorMessage(error) });
+    }
+    // Read back whether it was taken or refused. A refusal means this side was
+    // holding a stale answer; a success is confirmed by the same read rather
+    // than assumed, so one path corrects the queue and there is no state where
+    // the desk has dropped a card the runtime still has.
+    await get().refreshApprovals();
   },
 
   applyEvent(event) {
@@ -789,10 +893,18 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      // Both of these patch the state map and then re-read the queue, which
+      // looks like one thing done twice and is not. The map is what the buttons
+      // on a request already drawn in a transcript are keyed on, and patching it
+      // is what makes them go live or go dead in the same frame as the event.
+      // The queue is the wording of every request still waiting, which no event
+      // carries: `approvalRequested` says an id and an agent, deliberately, so
+      // the read is where the desk's card comes from.
       case "approvalRequested": {
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: "pending" },
         }));
+        void get().refreshApprovals();
         break;
       }
 
@@ -800,6 +912,7 @@ export const useStore = create<State>((set, get) => ({
         set((state) => ({
           approvals: { ...state.approvals, [event.approvalId]: event.state },
         }));
+        void get().refreshApprovals();
         break;
       }
 

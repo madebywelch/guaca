@@ -85,7 +85,9 @@ pub enum Script {
     /// the whole of what it should do when asked to change one.
     Retime { id: String, repeat: String },
     /// Emit a `request_permission` tool call.
-    AskOperator { action: String, because: String },
+    AskPermission { action: String, because: String },
+    /// Emit an `ask_operator` tool call. Empty options is a written answer.
+    AskQuestion { question: String, options: Vec<String> },
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
     Shell(String),
@@ -208,11 +210,25 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::AskOperator { action, because } => {
+        Script::AskPermission { action, because } => {
             let args = serde_json::json!({ "action": action, "because": because }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_ask","type":"function",
                  "function":{"name":"request_permission","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::AskQuestion { question, options } => {
+            let mut args = serde_json::json!({ "question": question });
+            if !options.is_empty() {
+                args["options"] = serde_json::json!(options);
+            }
+            let args = args.to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_question","type":"function",
+                 "function":{"name":"ask_operator","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
@@ -625,6 +641,9 @@ fn parts_of(envelope: &Envelope) -> String {
             Part::ToolCall { name, outcome, .. } => format!("[{name} -> {outcome:?}]"),
             Part::File(file) => format!("[file {}]", file.name),
             Part::Approval { summary, .. } => format!("[asks: {summary}]"),
+            Part::Question { question, options, .. } => {
+                format!("[asks the operator: {question} ({})]", options.join(" | "))
+            }
             Part::Routine { name, what, .. } => format!("[routine {name:?}] {what}"),
             Part::Json { name, .. } => format!("[{name}]"),
         })

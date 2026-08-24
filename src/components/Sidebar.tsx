@@ -7,7 +7,7 @@ import { type DropTarget, railOrder } from "../lib/rail";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
-import { GroupOrb } from "./GroupOrb";
+import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
 import { TokenMeter } from "./TokenMeter";
 
@@ -387,134 +387,112 @@ export function Sidebar({
   const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
 
   return (
-    <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
-      {/* The plus rides the drag region rather than sitting under it: a button
-          inside one is still a button, and this is the row an operator reads
-          first. */}
-      <div className="rail__brand" data-tauri-drag-region>
-        <span className="rail__wordmark">Guaca</span>
-        <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
-      </div>
+    // Two columns, one gesture. The crews and the crew are separate surfaces on
+    // screen and one drag reaches across both, so they are drawn together
+    // rather than made siblings in `App`: a drop onto a circle would otherwise
+    // need the whole pointer machinery lifted into a context to be shared with
+    // it.
+    <>
+      <GroupRail
+        groups={groups}
+        agents={agents}
+        activity={activity}
+        focused={railGroup}
+        onFocus={(id) => void focusGroup(id)}
+        isOver={isOver}
+        onDragOver={hover}
+        onDragOut={() => hover(null)}
+      />
 
-      {/* Looks like a field and behaves like a button, because the field it
+      <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
+        {/* The plus rides the drag region rather than sitting under it: a button
+            inside one is still a button, and this is the row an operator reads
+            first. */}
+        <div className="rail__brand" data-tauri-drag-region>
+          <span className="rail__wordmark">Guaca</span>
+          <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
+        </div>
+
+        {/* Looks like a field and behaves like a button, because the field it
           opens onto is the one that does the searching. Two inputs would mean
           deciding which of them holds the query. */}
-      <button type="button" className="rail__search" onClick={onOpenSearch}>
-        <span aria-hidden="true" className="rail__glass">
-          ⌕
-        </span>
-        <span className="rail__search-label">Search</span>
-        <kbd className="rail__key">{FIND_KEY}</kbd>
-      </button>
+        <button type="button" className="rail__search" onClick={onOpenSearch}>
+          <span aria-hidden="true" className="rail__glass">
+            ⌕
+          </span>
+          <span className="rail__search-label">Search</span>
+          <kbd className="rail__key">{FIND_KEY}</kbd>
+        </button>
 
-      <button
-        type="button"
-        className="btn btn--rail"
-        data-current={selected === ACTIVITY_CHANNEL}
-        onClick={() => void select(ACTIVITY_CHANNEL)}
-      >
-        <span aria-hidden="true" className="rail__hash">
-          #
-        </span>
-        activity
-      </button>
+        <button
+          type="button"
+          className="btn btn--rail"
+          data-current={selected === ACTIVITY_CHANNEL}
+          onClick={() => void select(ACTIVITY_CHANNEL)}
+        >
+          <span aria-hidden="true" className="rail__hash">
+            #
+          </span>
+          activity
+        </button>
 
-      {/* The crews, as things you can go inside and drop somebody into. Absent
-          while there is one group, which is the state most workspaces are in:
-          a strip offering a choice of one is a row of chrome that never changes
-          and a drop target that cannot move anybody anywhere. */}
-      {groups.length > 1 && (
-        <nav className="rail__strip" aria-label="Groups">
-          <button
-            type="button"
-            className="orb orb--all"
-            aria-current={focused === null}
-            aria-label={`All groups, ${agents.length} agents`}
-            onClick={() => void focusGroup(null)}
-          >
-            <span className="orb__ring">
-              {/* The count, because the word is already under it and a circle
-                  that says "all" above a label that says "All" says one thing
-                  twice. A group's name can be anything, including "everyone",
-                  so this one must not be a name at all. */}
-              <span className="orb__all-count">{agents.length}</span>
-            </span>
-            <span className="orb__name">All</span>
-          </button>
-
-          {groups.map((group) => (
-            <GroupOrb
-              key={group.id}
-              group={group}
-              members={agents.filter((a) => a.groupId === group.id)}
-              activity={activity}
-              current={focused?.id === group.id}
-              over={isOver({ kind: "group", id: group.id })}
-              onOpen={() => void focusGroup(focused?.id === group.id ? null : group.id)}
-              onDragOver={() => hover({ kind: "group", id: group.id })}
-              onDragOut={() => hover(null)}
-            />
-          ))}
-        </nav>
-      )}
-
-      {/* The wire lives on this wrapper rather than on the scroll container, so
+        {/* The wire lives on this wrapper rather than on the scroll container, so
           it runs the full height of the rail down to the footer instead of
           stopping wherever the list happens to end. It is only drawn while a
           message is on it; see the rule in styles.css. */}
-      <div className="rail__body" data-live={inFlight.length > 0 ? "true" : undefined}>
-        <div className="rail__list" ref={listRef}>
-          {inFlight.map((pulse) => {
-            const from = rowCenters.get(pulse.from);
-            const to = rowCenters.get(pulse.to);
-            if (from === undefined || to === undefined) return null;
-            return (
-              <span
-                key={pulse.id}
-                className="pulse"
-                style={
-                  {
-                    "--pulse-from": `${from}px`,
-                    "--pulse-to": `${to}px`,
-                    "--pulse-color": pulse.color,
-                    "--pulse-duration": `${FLIGHT_MS}ms`,
-                  } as React.CSSProperties
-                }
-              />
-            );
-          })}
+        <div className="rail__body" data-live={inFlight.length > 0 ? "true" : undefined}>
+          <div className="rail__list" ref={listRef}>
+            {inFlight.map((pulse) => {
+              const from = rowCenters.get(pulse.from);
+              const to = rowCenters.get(pulse.to);
+              if (from === undefined || to === undefined) return null;
+              return (
+                <span
+                  key={pulse.id}
+                  className="pulse"
+                  style={
+                    {
+                      "--pulse-from": `${from}px`,
+                      "--pulse-to": `${to}px`,
+                      "--pulse-color": pulse.color,
+                      "--pulse-duration": `${FLIGHT_MS}ms`,
+                    } as React.CSSProperties
+                  }
+                />
+              );
+            })}
 
-          {focused ? (
-            // Inside one group. The heading carries the name and the controls
-            // that were squeezed onto a 0.6rem label in the overview, because
-            // here there is one group on screen and room to say so. The pins
-            // head the list rather than sitting in a section of their own:
-            // everybody drawn here is in this crew already, so a heading over
-            // one or two rows would divide nothing, and the mark on the row is
-            // what says which rows those are.
-            <div
-              className="rail__group rail__group--open"
-              data-over={isOver({ kind: "group", id: focused.id }) ? "true" : undefined}
-              onPointerEnter={() => hover({ kind: "group", id: focused.id })}
-              onPointerLeave={() => hover(null)}
-            >
-              <div className="rail__open-head">
-                <span className="rail__open-name">{focused.name}</span>
-                {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
+            {focused ? (
+              // Inside one group. The heading carries the name and the controls
+              // that were squeezed onto a 0.6rem label in the overview, because
+              // here there is one group on screen and room to say so. The pins
+              // head the list rather than sitting in a section of their own:
+              // everybody drawn here is in this crew already, so a heading over
+              // one or two rows would divide nothing, and the mark on the row is
+              // what says which rows those are.
+              <div
+                className="rail__group rail__group--open"
+                data-over={isOver({ kind: "group", id: focused.id }) ? "true" : undefined}
+                onPointerEnter={() => hover({ kind: "group", id: focused.id })}
+                onPointerLeave={() => hover(null)}
+              >
+                <div className="rail__open-head">
+                  <span className="rail__open-name">{focused.name}</span>
+                  {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
+                </div>
+                {railOrder(
+                  agents.filter((a) => a.groupId === focused.id),
+                  shape,
+                ).map(row)}
+                {agents.every((a) => a.groupId !== focused.id) && (
+                  <p className="rail__empty">
+                    Nobody is in here yet. Drag an agent onto this group, or make one.
+                  </p>
+                )}
               </div>
-              {railOrder(
-                agents.filter((a) => a.groupId === focused.id),
-                shape,
-              ).map(row)}
-              {agents.every((a) => a.groupId !== focused.id) && (
-                <p className="rail__empty">
-                  Nobody is in here yet. Drag an agent onto this group, or make one.
-                </p>
-              )}
-            </div>
-          ) : (
-            <>
-              {/* Every group gets a header, including the only one, because the
+            ) : (
+              <>
+                {/* Every group gets a header, including the only one, because the
                   gear on it is where that group's model and endpoint live. A
                   crew's pins are at the head of it and nowhere else. They had a
                   section of their own above the groups, which made a pin the one
@@ -522,77 +500,78 @@ export function Sidebar({
                   arranging: the list on screen was the group's, and the row the
                   operator had just pinned was in a section that was not being
                   drawn. */}
-              {groups.map((group) => {
-                const members = agents.filter((a) => a.groupId === group.id);
-                const here = railOrder(members, shape);
-                return (
-                  // The whole block catches a drop, not just the heading:
-                  // anywhere in a group that is not a row means the group and no
-                  // particular place in it, which is all an empty one can offer.
-                  <div
-                    key={group.id}
-                    className="rail__group"
-                    data-over={isOver({ kind: "group", id: group.id }) ? "true" : undefined}
-                    onPointerEnter={() => hover({ kind: "group", id: group.id })}
-                    onPointerLeave={() => hover(null)}
-                  >
-                    <div className="rail__group-head">
-                      <span className="rail__group-name">{group.name}</span>
-                      {groupTail(group, members.length)}
+                {groups.map((group) => {
+                  const members = agents.filter((a) => a.groupId === group.id);
+                  const here = railOrder(members, shape);
+                  return (
+                    // The whole block catches a drop, not just the heading:
+                    // anywhere in a group that is not a row means the group and no
+                    // particular place in it, which is all an empty one can offer.
+                    <div
+                      key={group.id}
+                      className="rail__group"
+                      data-over={isOver({ kind: "group", id: group.id }) ? "true" : undefined}
+                      onPointerEnter={() => hover({ kind: "group", id: group.id })}
+                      onPointerLeave={() => hover(null)}
+                    >
+                      <div className="rail__group-head">
+                        <span className="rail__group-name">{group.name}</span>
+                        {groupTail(group, members.length)}
+                      </div>
+                      {here.map(row)}
+                      {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
                     </div>
-                    {here.map(row)}
-                    {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
-                  </div>
-                );
-              })}
+                  );
+                })}
 
-              {/* Anything whose group did not come back still gets drawn. The
+                {/* Anything whose group did not come back still gets drawn. The
                   rail hiding an agent is worse than the rail looking untidy,
                   and an empty group list used to hide every agent at once. */}
-              {railOrder(
-                agents.filter((a) => !groups.some((g) => g.id === a.groupId)),
-                shape,
-              ).map(row)}
-            </>
-          )}
+                {railOrder(
+                  agents.filter((a) => !groups.some((g) => g.id === a.groupId)),
+                  shape,
+                ).map(row)}
+              </>
+            )}
 
-          {agents.length === 0 && <p className="rail__empty">No agents yet.</p>}
+            {agents.length === 0 && <p className="rail__empty">No agents yet.</p>}
+          </div>
         </div>
-      </div>
 
-      {/* Two rows, not four. Making somebody moved to the plus at the top of
-          this rail; what is left down here is the two places you go rather than
-          the two things you make. */}
-      <div className="rail__foot">
-        <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
-          <span aria-hidden="true" className="rail__hash">
-            ☰
-          </span>
-          Cafeteria
-        </button>
-        <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
-          <span aria-hidden="true" className="rail__hash">
-            ⚙
-          </span>
-          App settings
-        </button>
-      </div>
+        {/* Two rows, not four. Making somebody moved to the plus at the top of
+            this rail; what is left down here is the two places you go rather
+            than the two things you make. */}
+        <div className="rail__foot">
+          <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
+            <span aria-hidden="true" className="rail__hash">
+              ☰
+            </span>
+            Cafeteria
+          </button>
+          <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
+            <span aria-hidden="true" className="rail__hash">
+              ⚙
+            </span>
+            App settings
+          </button>
+        </div>
 
-      {/* What the hand is holding. Drawn at the pointer and outside the list so
+        {/* What the hand is holding. Drawn at the pointer and outside the list so
           nothing it passes over can clip it, and transparent to the pointer so
           the row underneath is still the row being aimed at. */}
-      {drag && held && (
-        <div className="rail__held" aria-hidden="true" ref={heldRef}>
-          <AgentAvatar
-            avatar={held.avatar}
-            color={held.color}
-            size="sm"
-            seed={held.id}
-            lifecycle={held.lifecycle}
-          />
-          <span className="rail__held-name">{held.name}</span>
-        </div>
-      )}
-    </nav>
+        {drag && held && (
+          <div className="rail__held" aria-hidden="true" ref={heldRef}>
+            <AgentAvatar
+              avatar={held.avatar}
+              color={held.color}
+              size="sm"
+              seed={held.id}
+              lifecycle={held.lifecycle}
+            />
+            <span className="rail__held-name">{held.name}</span>
+          </div>
+        )}
+      </nav>
+    </>
   );
 }

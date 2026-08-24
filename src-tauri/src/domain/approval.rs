@@ -16,6 +16,66 @@ use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, ApprovalId, GroupId, RunId};
 
+/// What an agent has stopped mid-turn to put to the operator.
+///
+/// Two kinds, and the line between them is what a yes does. A permission
+/// authorizes: the agent could not do the thing, and the operator's answer is
+/// what lets it. A question informs: the agent could act either way and does
+/// not know which the operator wants, so the answer is a value it carries into
+/// the rest of its turn, and whatever it then does with it passes through every
+/// guard it already had.
+///
+/// That distinction is why the two are separate variants rather than one shape
+/// with a flag, and it is what makes a question safe to draw as buttons with
+/// the model's own words on them. Nothing a question can be answered with
+/// grants anything, so no wording on it can talk the operator into granting
+/// something. A permission is the opposite case, which is why every word on one
+/// is Guaca's: see the note on this module.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Request {
+    Permission {
+        action: ProtectedAction,
+    },
+    Question {
+        /// What the operator may pick, or empty for a written answer.
+        ///
+        /// The agent's own words, which is the one place in this module that is
+        /// true. They are shown as the labels of buttons and they are capped
+        /// and drawn as text, never as markup.
+        options: Vec<String>,
+    },
+}
+
+impl Request {
+    /// The stored discriminator, which for a permission is the action itself.
+    ///
+    /// One column rather than two, because a second `kind` column would be a
+    /// value that has to agree with this one and nothing would make it. The
+    /// three tokens cannot collide: `QUESTION` is not a `ProtectedAction` and
+    /// `ProtectedAction::parse` refuses it.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Request::Permission { action } => action.as_str(),
+            Request::Question { .. } => QUESTION,
+        }
+    }
+
+    /// The action this asks to be let off, if it asks to be let off anything.
+    ///
+    /// A question never grants, so it never has one, and every caller that
+    /// reaches for a standing grant has to say so by unwrapping this.
+    pub fn action(&self) -> Option<ProtectedAction> {
+        match self {
+            Request::Permission { action } => Some(*action),
+            Request::Question { .. } => None,
+        }
+    }
+}
+
+/// The stored `action` of a question. Not a [`ProtectedAction`], on purpose.
+pub const QUESTION: &str = "question";
+
 /// Something an agent may not do on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,8 +115,17 @@ impl ProtectedAction {
     }
 }
 
-/// What the operator can answer. Separate from [`ApprovalState`] so that the
-/// two states nobody can choose, pending and expired, cannot arrive over IPC.
+/// What the operator can answer a *permission* with. Separate from
+/// [`ApprovalState`] so that the two states nobody can choose, pending and
+/// expired, cannot arrive over IPC.
+///
+/// A question is answered through its own command with its own text, rather
+/// than by a fourth variant here. Two reasons, and the second is the one that
+/// matters. A verdict is three tokens on a wire and an answer is arbitrary text
+/// from a person, so folding them together turns a plain string into a tagged
+/// object everywhere this is already spoken, including the menu bar, which can
+/// take a verdict and can never take an answer. And the split is the same one
+/// [`Request`] draws: these three authorize, and an answer does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Decision {
@@ -82,6 +151,9 @@ pub enum ApprovalState {
     Allow,
     AlwaysAllow,
     Deny,
+    /// A question, answered. What was said is on the row rather than in here,
+    /// because it is a value and this is a state.
+    Answered,
     /// Nobody answered in time, or the app restarted while it was waiting. A
     /// request that outlives the turn it belongs to can never be granted: the
     /// agent it would have unblocked is gone.
@@ -95,6 +167,7 @@ impl ApprovalState {
             ApprovalState::Allow => "allow",
             ApprovalState::AlwaysAllow => "alwaysAllow",
             ApprovalState::Deny => "deny",
+            ApprovalState::Answered => "answered",
             ApprovalState::Expired => "expired",
         }
     }
@@ -105,6 +178,7 @@ impl ApprovalState {
             "allow" => Some(ApprovalState::Allow),
             "alwaysAllow" => Some(ApprovalState::AlwaysAllow),
             "deny" => Some(ApprovalState::Deny),
+            "answered" => Some(ApprovalState::Answered),
             "expired" => Some(ApprovalState::Expired),
             _ => None,
         }
@@ -151,11 +225,14 @@ pub struct Approval {
     /// The run the asking turn belongs to, so a request can be traced back to
     /// the operator action that set it off.
     pub run_id: RunId,
-    pub action: ProtectedAction,
+    pub request: Request,
     /// Guaca's own one-line description of what was asked for.
     pub summary: String,
     pub detail: Vec<DetailField>,
     pub state: ApprovalState,
+    /// What the operator picked or wrote, once they have. Only ever set on a
+    /// question: a verdict is a state, not a value.
+    pub answer: Option<String>,
     pub created_at: i64,
     pub decided_at: Option<i64>,
 }

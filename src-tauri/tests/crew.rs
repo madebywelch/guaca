@@ -636,6 +636,12 @@ fn render(messages: &[Envelope], names: &HashMap<AgentId, String>, report: &RunR
                 }
                 Part::File(file) => format!("\n[file: {}]\n", file.name),
                 Part::Approval { summary, .. } => format!("\n[asks the operator: {summary}]\n"),
+                Part::Question { question, options, .. } => {
+                    format!(
+                        "\n[asks the operator: {question}]\n[options: {}]\n",
+                        options.join(" | ")
+                    )
+                }
                 Part::Routine { name, what, .. } => format!("\n[routine {name:?}] {what}\n"),
                 Part::Json { name, value } => format!("\n[{name}]\n\n```json\n{value}\n```\n"),
             });

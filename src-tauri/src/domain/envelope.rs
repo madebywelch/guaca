@@ -215,6 +215,24 @@ pub enum Part {
         summary: String,
         detail: Vec<DetailField>,
     },
+    /// An agent asking the operator *what* rather than *whether*.
+    ///
+    /// Its own variant rather than a field on the one above, because the two
+    /// are read differently by everything that draws them: one is a request to
+    /// be allowed to act, and the operator's answer is what permits it; this is
+    /// a turn that could have gone either way stopping to find out which the
+    /// operator wanted, and the answer is a value it carries on with. Nothing
+    /// answered here grants anything.
+    ///
+    /// `options` empty is a question that takes a written answer. Both it and
+    /// `question` are the agent's own words, which no other part in this list
+    /// can say, so both are drawn as text and never as markup: see
+    /// `domain::approval`.
+    Question {
+        id: ApprovalId,
+        question: String,
+        options: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
