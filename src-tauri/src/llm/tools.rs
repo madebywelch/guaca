@@ -201,7 +201,15 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // The description is the whole design. It has to make selective
             // writing and consolidation the obvious reading, because the model
             // has no other signal about what belongs in a durable file.
-            description: "Replace your memory. Your memory is a short markdown file, also called \
+            // The cap is named rather than hinted at. "Space is limited, so
+            // choose" is not a number a model can write against: one tracking a
+            // board of eight agents wrote four thousand characters over, was
+            // cut, rewrote, was cut again, and spent four calls of one turn on
+            // it. Every truncation takes the end, which is where a model puts
+            // the state it just changed, so the loop was also eating exactly
+            // the facts it had opened the turn to record.
+            description: format!(
+                "Replace your memory. Your memory is a short markdown file, also called \
                           your notes, shown to you at the start of every turn, so anything kept \
                           there you will always know. This is the tool for anything asked of your \
                           memory, in whatever words: remember this, update your memory, make a \
@@ -212,8 +220,12 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
                           already in the messages above. This REPLACES the file entirely, so write \
                           out everything you want to keep and leave behind what no longer holds; \
                           if something you believed turned out to be wrong, correct it here rather \
-                          than adding a contradiction. Space is limited, so choose."
-                .to_string(),
+                          than adding a contradiction. It has to fit in {} characters, and \
+                          anything past that is cut off the end, so put what matters most \
+                          first and choose what to keep before you write rather than \
+                          afterwards.",
+                crate::workspace::MAX_NOTES
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -2723,7 +2735,17 @@ mod tests {
         assert!(text.contains("still matter in a week"));
         assert!(text.contains("do not record the conversation"));
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
-        assert!(text.contains("space is limited"));
+        // The number, not a hint at one. "Space is limited, so choose" is not
+        // something a model can write against: one tracking eight agents went
+        // four thousand characters over, was cut, rewrote, was cut again, and
+        // spent four calls of one turn on it.
+        assert!(
+            text.contains(&crate::workspace::MAX_NOTES.to_string()),
+            "the cap has to be a number it can budget against: {text}"
+        );
+        // And which end goes, because that is where a model puts what it has
+        // just decided, so the loop above was eating the newest facts each time.
+        assert!(text.contains("cut off the end"), "{text}");
     }
 
     #[test]

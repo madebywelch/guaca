@@ -2696,10 +2696,20 @@ impl Runtime {
                 match self.inner.workspace.write(card.id, &card.name, &content) {
                     Ok(stored) => {
                         let summary = if stored.truncated {
+                            // Names the ceiling, not just where the cut landed.
+                            // Told only how much was kept, a model cannot tell
+                            // a limit from an accident and guesses again: one
+                            // spent four calls of a single turn overshooting.
+                            // And it is told which end goes, because the end is
+                            // where a model puts what it has just changed, so
+                            // an unlucky rewrite drops the very state the turn
+                            // was spent working out.
                             format!(
-                                "Memory saved, but it was too long and the end was cut. {} \
-                                 characters kept. Write it again shorter, keeping only what will \
-                                 still matter next week.",
+                                "Memory saved, but it was over the {} character limit and the \
+                                 end was cut off, so whatever you wrote last is gone. {} \
+                                 characters kept. Write it again inside the limit, most \
+                                 important first, keeping only what will still matter next week.",
+                                crate::workspace::MAX_NOTES,
                                 stored.characters
                             )
                         } else if stored.characters == 0 {
