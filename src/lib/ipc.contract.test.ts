@@ -95,6 +95,29 @@ describe("IPC contract", () => {
     expect(ids).toEqual(quoted(rust![1]!));
   });
 
+  it("knows the same activity states on both sides", () => {
+    // The group column folds this enum into two marks: a count of the agents a
+    // person has to unblock, and whether anybody is working. `presenceOf` names
+    // every state rather than defaulting, so once the union here matches the
+    // enum there, a variant nobody weighed fails the typecheck. This is the
+    // half the typechecker cannot see: a variant added in Rust and never
+    // written down in TypeScript at all.
+    const rust = read("src-tauri/src/runtime/events.rs");
+    const block = rust.match(/pub enum Activity \{([\s\S]*?)\n\}/);
+    if (!block) throw new Error("could not find enum Activity in events.rs");
+    const variants = [...block[1]!.matchAll(/^\s{4}([A-Z][A-Za-z]*)/gm)].map(
+      (found) => found[1]![0]!.toLowerCase() + found[1]!.slice(1),
+    );
+    expect(variants.length).toBeGreaterThan(3);
+
+    const ours = read("src/lib/types.ts");
+    const union = ours.match(/export type Activity =([\s\S]*?);\n/);
+    if (!union) throw new Error("could not find the Activity union in types.ts");
+    const known = [...union[1]!.matchAll(/state: "([a-zA-Z]+)"/g)].map((found) => found[1]!);
+
+    expect([...variants].sort()).toEqual([...known].sort());
+  });
+
   it("draws the same floor under a price on both sides", () => {
     // The rail's meters and the menu bar are two readings of one number, and
     // each decides on its own whether a cost is worth the width it takes. A

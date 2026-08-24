@@ -127,7 +127,7 @@ the sweep does, or the column will be true on those rows and mean nothing.
 ## A skipped firing is in the history, and has no run behind it
 
 `RunKind` has a third value and `routine_runs.run_id` is nullable since
-migration 33. Both halves are the same argument. A firing that leaves no trace
+migration 34. Both halves are the same argument. A firing that leaves no trace
 is a gap in the history, and a gap is also what a scheduler that has stopped
 working looks like; but a skip recorded under an invented run id reads back as
 a delivery that bought no model calls, which is the *other* failure this

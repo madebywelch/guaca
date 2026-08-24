@@ -115,6 +115,13 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
+            // All three are this side answering a request with the wrong shape
+            // of answer, which is a defect here rather than something the
+            // operator did. Reported as an ordinary failure so it lands in the
+            // banner with the sentence that says which shape was expected.
+            RuntimeError::NotAVerdict | RuntimeError::NotAQuestion | RuntimeError::EmptyAnswer => {
+                CommandError::new("badRequest", err.to_string())
+            }
         }
     }
 }
@@ -642,6 +649,13 @@ pub fn agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signi
 
 // ---- permission requests -------------------------------------------------
 
+/// The most requests the desk is handed at once.
+///
+/// Well above what a workspace can have parked at one time, since a turn parks
+/// on one request and an agent runs one turn: this is a bound on a query, not a
+/// policy about how many the operator is shown.
+const MAX_PENDING: u32 = 200;
+
 /// What every recent request came to, keyed by id.
 ///
 /// The requests themselves travel in the transcript, so this is only the half
@@ -650,6 +664,20 @@ pub fn agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signi
 #[tauri::command]
 pub fn approval_states(state: State<'_, AppState>) -> Reply<HashMap<ApprovalId, ApprovalState>> {
     Ok(state.runtime.store().approval_states(500)?)
+}
+
+/// Every request still waiting on the operator, oldest first.
+///
+/// Whole rather than as ids, because the caller is the desk and what it needs
+/// is the wording: a queue that says only that something is pending is a queue
+/// that cannot be answered without going and finding each channel, which is the
+/// walk it exists to save. Same read the menu bar makes, and it is a read rather
+/// than an accumulation for the same reason: a list assembled from events drifts
+/// the moment one is missed, and what drifts is the count the operator is using
+/// to decide whether anyone is waiting.
+#[tauri::command]
+pub fn pending_approvals(state: State<'_, AppState>) -> Reply<Vec<Approval>> {
+    Ok(state.runtime.store().pending_approvals(MAX_PENDING)?)
 }
 
 /// What this agent no longer has to ask about.
@@ -679,6 +707,20 @@ pub fn decide_approval(
     decision: Decision,
 ) -> Reply<Approval> {
     Ok(state.runtime.decide_approval(id, decision)?)
+}
+
+/// Answers a question with what the operator picked or wrote.
+///
+/// Its own command rather than a fourth `Decision`, for the reason on that
+/// enum: three tokens and arbitrary text are different things on a wire, and
+/// only one of them can come from a menu item.
+#[tauri::command]
+pub fn answer_question(
+    state: State<'_, AppState>,
+    id: ApprovalId,
+    answer: String,
+) -> Reply<Approval> {
+    Ok(state.runtime.answer_question(id, &answer)?)
 }
 
 // ---- groups --------------------------------------------------------------

@@ -28,6 +28,7 @@ pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
+pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ATTACH_FILE: &str = "attach_file";
 
 /// Which of the two places an agent has been given, which decides which tools
@@ -102,6 +103,16 @@ impl Surfaces {
 /// names constantly. `/` and `.` would read better and are both refused by
 /// providers, which validate a function name against `[A-Za-z0-9_-]{1,64}`.
 pub const PLUGIN_SEPARATOR: &str = "__";
+
+/// The most choices a question may offer, and how long each may be.
+///
+/// Six because the operator is reading them in a card in the corner of a
+/// window: past that it is a form and the agent should be narrowing the
+/// question rather than widening the list. The length cap is what keeps a
+/// button a button; an option is a label, not the argument for it, which is
+/// what the question itself is for.
+pub const MAX_OPTIONS: usize = 6;
+pub const MAX_OPTION_CHARS: usize = 60;
 
 /// The longest name a provider will accept for a function.
 const MAX_TOOL_NAME: usize = 64;
@@ -557,6 +568,36 @@ fn all_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: ASK_OPERATOR.to_string(),
+            // The whole job of this description is to separate it from the two
+            // things an agent already does when it is unsure: ask a peer, or
+            // pick one and say so in the reply. Both are usually right, which
+            // is why the cost of stopping a person has to be stated here rather
+            // than left to judgment. It also has to be told apart from
+            // `request_permission`, and the line is what a yes does: that one
+            // authorizes an action, and this one does not authorize anything.
+            description: "Ask the operator a question you cannot answer yourself, and wait for                           their answer. Use this when the work genuinely forks on something only                           they can settle: which of two directions they want, a number or a name                           you cannot look up, a call between options that are all defensible.                           This stops your turn and puts the question in front of them, so the                           cost of asking is their attention: do not use it for anything you could                           find out, work out, or reasonably decide and report. If a colleague                           would know, use send_message instead. If you can proceed and say what                           you assumed, do that instead. This is not how you ask to be allowed to                           do something: use request_permission for that, and note that an answer                           here permits nothing. Ask one question at a time and make it answerable                           without the conversation around it, because they are reading it in a                           panel and not in your channel. Nobody may answer, and if nobody does                           you are told so and have to carry on without them."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The question, in one or two sentences, including whatever                                         the operator needs to answer it. Assume they have not                                         read your channel."
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "maxItems": 6,
+                        "description": "Optional. Two to six answers to choose between, each a                                         short label. Offer these whenever the answer really is a                                         choice: a button is far cheaper for them than a sentence.                                         Leave it out when the answer is a value they have to                                         write."
+                    }
+                },
+                "required": ["question"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to the other agents a piece of work belongs to. Choose \
                           them by fit: the agents whose skills cover this task, and no others. \
@@ -672,6 +713,12 @@ pub enum ToolInvocation {
     RequestPermission {
         action: String,
         because: String,
+    },
+    /// Stop and ask the operator which way to go. Grants nothing.
+    AskOperator {
+        question: String,
+        /// What they may pick. Empty is a written answer.
+        options: Vec<String>,
     },
     UpdateNotes {
         content: String,
@@ -1321,6 +1368,36 @@ pub fn parse(call: &ToolCall) -> Result<ToolInvocation, ToolParseError> {
                 because: field(&["because", "why", "reason", "context"]).unwrap_or_default(),
             })
         }
+        ASK_OPERATOR => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: ASK_OPERATOR.to_string(),
+                detail: e.to_string(),
+            })?;
+            let question = ["question", "ask", "text", "prompt"]
+                .iter()
+                .find_map(|key| value.get(*key).and_then(|v| v.as_str()))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                // A question with nothing in it is the one thing that cannot be
+                // put to a person: they would be answering a blank line.
+                .ok_or(ToolParseError::MissingText)?;
+
+            // Cut here rather than refused. A seventh option or a paragraph on
+            // a button is a model being expansive, not a model being wrong, and
+            // turning that into a failed turn costs the operator an answer they
+            // were about to be asked for. One option left standing is not a
+            // choice, so it is dropped and the question takes a written answer.
+            let mut options: Vec<String> = normalize_list(value.get("options"))
+                .into_iter()
+                .map(|option| as_label(&option, MAX_OPTION_CHARS))
+                .take(MAX_OPTIONS)
+                .collect();
+            if options.len() < 2 {
+                options.clear();
+            }
+
+            Ok(ToolInvocation::AskOperator { question, options })
+        }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
                 name: SEND_MESSAGE.to_string(),
@@ -1412,6 +1489,20 @@ fn split_plugin_tool(name: &str) -> Option<(PluginKind, String)> {
 /// Specified as an array of strings. Observed in the wild: a bare string, a
 /// comma-separated string, an array containing objects with a `name` field.
 /// Each is unambiguous, so rejecting them buys nothing but a retry.
+/// One line, at most `max` characters, for something that will be a button.
+///
+/// A label is drawn on one line whatever it is given, so a newline in it draws
+/// as far as the newline and silently loses the rest. This is a model's own
+/// text, so the whitespace is collapsed rather than trusted.
+fn as_label(text: &str, max: usize) -> String {
+    let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let kept: String = flat.chars().take(max.saturating_sub(1)).collect();
+    format!("{}…", kept.trim_end())
+}
+
 fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
     let mut out = Vec::new();
     match value {
@@ -2077,13 +2168,91 @@ mod tests {
     }
 
     #[test]
+    fn a_question_keeps_its_choices_and_a_lone_choice_becomes_a_written_answer() {
+        // One option is not a choice. Drawn as a single button it is a request
+        // to press the only thing on screen, which tells the agent nothing it
+        // did not already assume, so the question falls back to being written.
+        let one = parse(&call(ASK_OPERATOR, r#"{"question":"Which?","options":["A"]}"#));
+        assert!(matches!(
+            one,
+            Ok(ToolInvocation::AskOperator { ref options, .. }) if options.is_empty()
+        ));
+
+        let two = parse(&call(ASK_OPERATOR, r#"{"question":"Which?","options":["A","B"]}"#));
+        assert!(matches!(
+            two,
+            Ok(ToolInvocation::AskOperator { ref options, .. }) if options.len() == 2
+        ));
+    }
+
+    #[test]
+    fn a_question_with_too_many_choices_is_cut_rather_than_refused() {
+        // A seventh option is a model being expansive, not a model being wrong.
+        // Failing the turn over it costs the operator the answer they were
+        // about to be asked for.
+        let args = serde_json::json!({
+            "question": "Which?",
+            "options": ["A", "B", "C", "D", "E", "F", "G", "H"],
+        })
+        .to_string();
+        let parsed = parse(&call(ASK_OPERATOR, &args));
+        let ToolInvocation::AskOperator { options, .. } = parsed.unwrap() else {
+            panic!("not a question");
+        };
+        assert_eq!(options.len(), MAX_OPTIONS);
+    }
+
+    #[test]
+    fn a_choice_is_cut_to_a_label_and_never_carries_a_newline() {
+        // These are drawn on buttons. A label with a newline in it draws as far
+        // as the newline and silently loses the rest, and a paragraph on a
+        // button is not a label.
+        let args = serde_json::json!({
+            "question": "Which?",
+            "options": ["short", format!("line one\nline two {}", "x".repeat(100))],
+        })
+        .to_string();
+        let ToolInvocation::AskOperator { options, .. } =
+            parse(&call(ASK_OPERATOR, &args)).unwrap()
+        else {
+            panic!("not a question");
+        };
+        assert!(!options[1].contains('\n'), "{:?}", options[1]);
+        assert!(options[1].chars().count() <= MAX_OPTION_CHARS, "{:?}", options[1]);
+    }
+
+    #[test]
+    fn a_question_with_nothing_in_it_is_refused_rather_than_put_to_a_person() {
+        assert!(matches!(
+            parse(&call(ASK_OPERATOR, r#"{"question":"   "}"#)),
+            Err(ToolParseError::MissingText)
+        ));
+    }
+
+    #[test]
+    fn the_question_tool_says_that_an_answer_permits_nothing() {
+        // Two tools stop the operator mid-turn and they are answered by
+        // different surfaces for different reasons. An agent that reached for
+        // this one to be allowed to send mail would be asking for a yes that
+        // authorizes nothing, and would send anyway.
+        let spec = spec(ASK_OPERATOR);
+        assert!(spec.description.contains("permits nothing"), "{}", spec.description);
+        assert!(
+            spec.description.contains("send_message"),
+            "an agent that could ask a colleague should: {}",
+            spec.description
+        );
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
-            11,
+            12,
             "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
-             create_agent, request_permission, send_message, attach_file, update_notes"
+             create_agent, request_permission, ask_operator, send_message, attach_file, \
+             update_notes"
         );
         for spec in &specs {
             assert_eq!(

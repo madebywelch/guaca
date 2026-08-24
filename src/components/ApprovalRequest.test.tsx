@@ -12,6 +12,7 @@ vi.mock("../lib/ipc", () => ({
   api: {
     decideApproval: (id: string, decision: string) => decideApproval(id, decision),
     approvalStates: () => approvalStates(),
+    pendingApprovals: async () => [],
   },
 }));
 
