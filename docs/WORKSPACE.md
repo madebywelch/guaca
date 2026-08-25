@@ -640,14 +640,35 @@ matches by reference, so two arrows leave a listener behind on every open.
 
 ## The cafeteria is a copy machine, not a registry
 
-Sixteen agents written out once, well, so that a new workspace is a few clicks
-rather than an hour of typing. They are named after jobs rather than functions:
-"Chief of Staff" and "Paralegal", not "Manager" and "Reviewer". A role carries
-duties and refusals a function label does not, so the operator does not have to
-supply them in the prompt, which is the work this removes. Titles are capped at
-three words because peers resolve each other by whole name and the composer's
-`@` typeahead gives up after two spaces, so a longer title is an agent nobody
-can delegate to.
+Twenty-one agents written out once, well, so that a new workspace is a few
+clicks rather than an afternoon of typing. They are named after jobs rather than
+functions: "Chief of Staff" and "Paralegal", not "Manager" and "Reviewer". A
+role carries duties and refusals a function label does not, so the operator does
+not have to supply them in the prompt, which is the work this removes. Titles
+are capped at three words because peers resolve each other by whole name and the
+composer's `@` typeahead gives up after two spaces, so a longer title is an
+agent nobody can delegate to.
+
+The six counters are the departments of a small software company, and the set is
+chosen against one test: a crew assembled from it can take a change the whole
+way without the operator writing a prompt. Somebody decides what to build,
+somebody draws it, somebody writes it, somebody reviews it, somebody ships it
+and watches it, somebody documents it, somebody tells the market. A gap in that
+chain is exactly the prompt an operator ends up writing by hand. That is why
+design, reliability, security and growth are hires of their own rather than
+duties folded into the engineer and the marketer: an agent doing five jobs has
+no refusals, and the refusals are most of what a role is.
+
+Product and engineering used to be one counter, and nine cards under one heading
+is a wall rather than a menu. They are two now, because they answer different
+questions: what to build is decided at the first and settled at the second.
+
+The catalog cannot grow past the character cast, and that is a rule rather than
+an accident. A crew is whatever subset the operator ticked, so two presets
+sharing a silhouette are two agents that look the same in one rail, and the
+silhouette is the only thing that separates them at 22px. A new preset is a new
+ingredient in `avatars/catalog.tsx` or it is not a preset. `lib/cafeteria.test.ts`
+is where that is enforced.
 
 A hire copies the preset's fields into an ordinary `AgentDraft` and forgets
 where they came from: there is no preset id on

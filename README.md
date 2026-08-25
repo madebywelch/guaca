@@ -83,8 +83,8 @@ they are what OpenRouter serves by default. `docs/PROTOCOL.md` has the detail.
 
 1. On first run, open the **cafeteria** and press **Pick a starter crew**: Chief
    of Staff, Executive Assistant, Market Researcher and Content Marketer.
-   Sixteen agents are set up in there, from Paralegal to QA Tester, and each one
-   arrives as an ordinary agent you can rename, rewrite or delete.
+   Twenty-one agents are set up in there, from Product Designer to Paralegal,
+   and each one arrives as an ordinary agent you can rename, rewrite or delete.
 2. Open **Chief of Staff** and send `Introduce yourself to your team.`
 3. Watch the rail. Each message between agents draws a pulse traveling between
    them in the sender's color.

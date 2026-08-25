@@ -53,14 +53,19 @@ describe("the cafeteria catalog", () => {
     expect(strays.map((preset) => `${preset.id}: ${preset.color}`)).toEqual([]);
   });
 
-  it("gives each station a distinct silhouette", () => {
-    // Two agents side by side at one counter have to be tellable apart at the
-    // 22px the rail draws them at, and color is not what does that.
-    for (const station of STATIONS) {
-      const here = HIREABLE.filter((preset) => preset.station === station);
-      const faces = here.map((preset) => lookupCharacter(preset.avatar).key);
-      expect(new Set(faces).size, `${station} draws two agents the same way`).toBe(here.length);
-    }
+  it("gives every preset a silhouette nothing else in the catalog has", () => {
+    // Across the whole catalog, not per station. A crew is whatever subset the
+    // operator ticked, so two presets sharing a character are two agents that
+    // look the same in one rail, and the silhouette is the only thing that
+    // tells them apart at the 22px it is drawn at. Color does not: the set
+    // before this one was a single body in twelve accents.
+    //
+    // The consequence is the point. The catalog cannot grow past the cast, so
+    // a new preset is a new ingredient in `avatars/catalog.tsx` or it is not a
+    // preset.
+    const faces = HIREABLE.map((preset) => lookupCharacter(preset.avatar).key);
+    const twice = faces.filter((face, i) => faces.indexOf(face) !== i);
+    expect([...new Set(twice)], "two presets draw the same way").toEqual([]);
   });
 
   it("puts every preset at a station that is drawn", () => {
