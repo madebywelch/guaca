@@ -80,6 +80,78 @@ pub const MAX_NOTE_LEN: usize = 240;
 /// as a path rather than stored as one.
 pub const MAX_PATH_LEN: usize = 1024;
 
+/// Which program does the writing.
+///
+/// Two, and there is not meant to be a general one. A harness is a coding agent
+/// with its own loop, its own context and its own sign-in, and the operator
+/// already has whichever ones they have: the choice here is which of them Guaca
+/// starts, not how it is configured. Everything else about it (the model, the
+/// thinking level, the extensions, the rules file) belongs to the harness and
+/// stays there. A second place to say it is a second place for it to be wrong.
+///
+/// ## Why this is a choice at all
+///
+/// Because a subscription is spent by the program it was issued to, and by no
+/// other. `pi` can hold an Anthropic OAuth credential and dial the Messages API
+/// with it, and what comes back is *You're out of extra usage* while `claude`
+/// on the same machine, signed in to the same account, runs the same work off
+/// the plan. That is the fact `docs/PROTOCOL.md` already states from the other
+/// end, where it is why Guaca's own turns cannot be paid for with a Claude
+/// sign-in.
+///
+/// So an operator whose ChatGPT plan is spent and whose Claude plan is not
+/// cannot be helped by any amount of configuration on one harness. They need
+/// the other program. That is the whole requirement, and two variants are the
+/// whole of the answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Harness {
+    /// `pi`, and the default because it is what every repository linked before
+    /// this column existed was already running.
+    #[default]
+    Pi,
+    /// Claude Code, run headless in the repository.
+    Claude,
+}
+
+impl Harness {
+    /// What the column holds, and what crosses IPC. One spelling for both, or
+    /// the two drift and only one of them is the one a job is started with.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Harness::Pi => "pi",
+            Harness::Claude => "claude",
+        }
+    }
+
+    /// What an operator is shown. `pi` is spelled the way its own binary is.
+    pub fn label(self) -> &'static str {
+        match self {
+            Harness::Pi => "pi",
+            Harness::Claude => "Claude Code",
+        }
+    }
+
+    /// Every one this build knows, in the order the panel offers them.
+    pub const ALL: [Harness; 2] = [Harness::Pi, Harness::Claude];
+
+    /// What a stored row means.
+    ///
+    /// Anything unrecognized is [`Harness::Pi`], which is the default the column
+    /// was added with and the harness every earlier row ran. The only way to
+    /// write an unrecognized one is a newer build and then a downgrade, and the
+    /// alternative, refusing to read the row, would take the repository off the
+    /// one panel where the operator could fix it. Same reason
+    /// `group_repositories` still returns a directory that has been moved on
+    /// disk.
+    pub fn parse(raw: &str) -> Harness {
+        match raw {
+            "claude" => Harness::Claude,
+            _ => Harness::Pi,
+        }
+    }
+}
+
 /// A directory a crew may work in.
 ///
 /// Who is in it is not on this type. An agent carries the repository it works
@@ -104,6 +176,16 @@ pub struct Repository {
     /// One line for the agents that have it, in the operator's words: `run
     /// ./scripts/ci.sh before you say you are done`, `never touch migrations`.
     pub note: String,
+    /// Which coding harness a job in this directory starts.
+    ///
+    /// Per repository rather than per workspace, because it is the same shape
+    /// as the note: a fact about how work happens *here*. One codebase can be
+    /// the one the operator has a plan left on and another can be the one they
+    /// run on an API key, and a single global answer cannot say that. It is not
+    /// on the agent, because two agents in one directory running two different
+    /// programs is two coding agents in one work tree, which is the thing
+    /// `Runtime::start_job` takes a lock to prevent.
+    pub harness: Harness,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -134,6 +216,10 @@ pub struct RepositoryDraft {
     pub path: String,
     #[serde(default)]
     pub note: String,
+    /// Absent is `pi`, which is what a caller that has never heard of this field
+    /// means and what every repository linked before it existed ran.
+    #[serde(default)]
+    pub harness: Harness,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -143,6 +229,7 @@ pub struct CleanRepository {
     pub name: String,
     pub path: String,
     pub note: String,
+    pub harness: Harness,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -196,7 +283,13 @@ impl RepositoryDraft {
             return Err(RepositoryError::NoteTooLong);
         }
 
-        Ok(CleanRepository { group_id: self.group_id, name, path: path.to_string(), note })
+        Ok(CleanRepository {
+            group_id: self.group_id,
+            name,
+            path: path.to_string(),
+            note,
+            harness: self.harness,
+        })
     }
 }
 
@@ -210,6 +303,7 @@ mod tests {
             name: String::new(),
             path: path.to_string(),
             note: String::new(),
+            harness: Harness::default(),
         }
     }
 
@@ -263,6 +357,7 @@ mod tests {
             name: "guaca".into(),
             path: "/dev/guaca".into(),
             note: "run ./scripts/ci.sh before you finish".into(),
+            harness: Harness::Pi,
             created_at: 0,
             updated_at: 0,
         };

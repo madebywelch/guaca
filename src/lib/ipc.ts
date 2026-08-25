@@ -40,6 +40,8 @@ import type {
   GroupId,
   GroupReset,
   GroupUsage,
+  Harness,
+  HarnessOnMachine,
   HeaderPair,
   MessageId,
   Plugin,
@@ -165,15 +167,23 @@ export const api = {
   createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
 
   /**
-   * Renames one, or rewrites the line its agents read. The path is not among
-   * them: a different directory is a different repository, because reach was
-   * granted for that one.
+   * Renames one, rewrites the line its agents read, or changes which program
+   * does the writing. The path is not among them: a different directory is a
+   * different repository, because reach was granted for that one.
    */
-  updateRepository: (id: RepositoryId, name: string, note: string) =>
-    invoke<Repository>("update_repository", { id, name, note }),
+  updateRepository: (id: RepositoryId, name: string, note: string, harness: Harness) =>
+    invoke<Repository>("update_repository", { id, name, note, harness }),
 
   /** Unlinks it. Nothing on disk is touched. */
   deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
+
+  /**
+   * Which coding harnesses are on this machine, and how to get the ones that
+   * are not. Everything else about a job is discovered when it runs; this
+   * cannot be, because the refusal would reach an agent minutes later rather
+   * than the person choosing.
+   */
+  codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
 
   /**
    * Gives one agent a repository, or takes it back. One agent per call, so a

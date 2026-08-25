@@ -337,6 +337,7 @@ use crate::domain::envelope::{
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
+use crate::domain::repository::Harness;
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
 use crate::domain::worknote;
@@ -1445,6 +1446,7 @@ impl Runtime {
         let task = task.to_string();
         let note = repository.note.clone();
         let repository_id = repository.id;
+        let harness = repository.harness;
 
         self.emit(UiEvent::CodingJobStarted {
             agent_id: card.id,
@@ -1464,10 +1466,10 @@ impl Runtime {
             };
 
             let watcher = runtime.clone();
-            let outcome = crate::pi::run(&path, &brief, move |progress| {
+            let outcome = crate::coding::run(harness, &path, &brief, move |progress| {
                 let (tool, detail) = match progress {
-                    crate::pi::Progress::Using { tool, detail } => (tool, detail),
-                    crate::pi::Progress::Said(said) => (String::new(), said),
+                    crate::coding::Progress::Using { tool, detail } => (tool, detail),
+                    crate::coding::Progress::Said(said) => (String::new(), said),
                 };
                 watcher.emit(UiEvent::CodingProgress {
                     agent_id: agent,
@@ -1482,7 +1484,7 @@ impl Runtime {
             // other order is a lane that has to wait a turn to carry on.
             runtime.inner.coding.lock().remove(&repository_id);
             runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
-            runtime.job_finished(agent, &name, outcome);
+            runtime.job_finished(agent, &name, harness, outcome);
         });
 
         Ok(repository.name)
@@ -1503,7 +1505,8 @@ impl Runtime {
         &self,
         agent: AgentId,
         repository: &str,
-        outcome: Result<crate::pi::Outcome, crate::pi::PiError>,
+        harness: Harness,
+        outcome: Result<crate::coding::Outcome, crate::coding::CodingError>,
     ) {
         // What the operator is told, separately from what the agent is told.
         // Set only where the harness itself failed: a job that ran and did the
@@ -1563,6 +1566,7 @@ impl Runtime {
             self.emit(UiEvent::CodingJobFailed {
                 agent_id: agent,
                 repository: repository.to_string(),
+                harness: harness.label().to_string(),
                 reason,
             });
         }

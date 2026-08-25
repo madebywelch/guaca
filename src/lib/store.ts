@@ -1065,9 +1065,13 @@ export const useStore = create<State>((set, get) => ({
       }
 
       case "codingJobFailed": {
+        // The harness is named, because the way out of the commonest failure
+        // here is the other one: a spent plan is not something the operator can
+        // fix from inside this app, and a banner that does not say what was
+        // running leaves them guessing which sign-in to go and look at.
         get().setBanner({
           tone: "error",
-          text: `A coding job in ${event.repository} could not run: ${event.reason}`,
+          text: `A coding job in ${event.repository} could not run on ${event.harness}: ${event.reason}`,
         });
         break;
       }

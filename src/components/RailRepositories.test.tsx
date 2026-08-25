@@ -37,6 +37,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     name: "guaca",
     path: "/Users/you/dev/guaca",
     note: "",
+    harness: "pi",
     createdAt: 0,
     updatedAt: 0,
     ...over,

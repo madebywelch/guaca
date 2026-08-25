@@ -26,7 +26,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
-use crate::domain::repository::{CleanRepository, Repository};
+use crate::domain::repository::{CleanRepository, Harness, Repository};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -1359,14 +1359,15 @@ impl Store {
         let id = RepositoryId::new();
 
         conn.execute(
-            "INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            "INSERT INTO repositories (id,group_id,name,path,note,harness,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
             params![
                 id.to_string(),
                 clean.group_id.to_string(),
                 clean.name,
                 clean.path,
                 clean.note,
+                clean.harness.as_str(),
                 now,
             ],
         )
@@ -1452,11 +1453,12 @@ impl Store {
         id: RepositoryId,
         name: &str,
         note: &str,
+        harness: Harness,
     ) -> Result<Repository, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE repositories SET name=?2, note=?3, updated_at=?4 WHERE id=?1",
-            params![id.to_string(), name, note, now_ms()],
+            "UPDATE repositories SET name=?2, note=?3, harness=?4, updated_at=?5 WHERE id=?1",
+            params![id.to_string(), name, note, harness.as_str(), now_ms()],
         )?;
         if changed == 0 {
             return Err(StoreError::RepositoryNotFound(id));
@@ -3494,7 +3496,7 @@ pub enum PluginReach {
 }
 
 const REPOSITORY_COLUMNS: &str =
-    "SELECT id,group_id,name,path,note,created_at,updated_at FROM repositories";
+    "SELECT id,group_id,name,path,note,harness,created_at,updated_at FROM repositories";
 
 /// A unique-index failure here is one directory linked twice, and the operator
 /// wants to be told which rather than told the database said no.
@@ -3522,8 +3524,9 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             name: row.get(2)?,
             path: row.get(3)?,
             note: row.get(4)?,
-            created_at: row.get(5)?,
-            updated_at: row.get(6)?,
+            harness: Harness::parse(&row.get::<_, String>(5)?),
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
         })
     })())
 }
@@ -3879,6 +3882,7 @@ mod tests {
             name: path.rsplit('/').next().unwrap_or(path).into(),
             path: path.into(),
             note: String::new(),
+            harness: Harness::default(),
         }
     }
 
@@ -7518,7 +7522,8 @@ mod tests {
         let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
         f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
 
-        let renamed = f.store.update_repository(repo.id, "guac", "run ./scripts/ci.sh").unwrap();
+        let renamed =
+            f.store.update_repository(repo.id, "guac", "run ./scripts/ci.sh", Harness::Pi).unwrap();
         assert_eq!(renamed.name, "guac");
         assert_eq!(renamed.note, "run ./scripts/ci.sh");
         assert_eq!(
@@ -7526,6 +7531,40 @@ mod tests {
             repo.id,
             "a rename is not a decision about the crew"
         );
+    }
+
+    #[test]
+    fn which_program_writes_the_code_is_stored_and_read_back() {
+        // The day this exists for: one plan is spent, and the operator moves a
+        // directory to the other program without touching anything else about
+        // it. A default that quietly won here is a repository that keeps
+        // starting the harness that has stopped paying.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let mut clean = repo_at(group.id, "/dev/guaca");
+        clean.harness = Harness::Claude;
+        let made = f.store.create_repository(&clean).unwrap();
+        assert_eq!(made.harness, Harness::Claude);
+        assert_eq!(f.store.get_repository(made.id).unwrap().unwrap().harness, Harness::Claude);
+
+        let moved = f.store.update_repository(made.id, "guaca", "", Harness::Pi).unwrap();
+        assert_eq!(moved.harness, Harness::Pi);
+        // Read back through the path a turn takes, which is a different query
+        // and its own column list.
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(made.id)).unwrap();
+        assert_eq!(f.store.agent_repository(ada.id).unwrap().unwrap().harness, Harness::Pi);
+    }
+
+    #[test]
+    fn a_draft_that_names_no_harness_gets_the_one_every_repository_had() {
+        // A caller that has never heard of the field, which is what the upgrade
+        // case looks like from above. The row it stores has to be the harness
+        // every directory was already running, not whichever is listed first.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let made = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        assert_eq!(made.harness, Harness::Pi);
     }
 
     #[test]

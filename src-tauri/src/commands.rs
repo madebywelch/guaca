@@ -28,7 +28,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{Repository, RepositoryDraft};
+use crate::domain::repository::{Harness, Repository, RepositoryDraft};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -583,17 +583,26 @@ pub async fn create_repository(
     Ok(repository)
 }
 
-/// Renames one, or rewrites the line its agents read on every turn.
+/// Renames one, rewrites the line its agents read on every turn, or changes
+/// which program does the writing.
 ///
 /// The path is not editable and is not a parameter. A different directory is a
 /// different repository: editing the path in place would move every named
-/// agent's boundary with nothing on screen saying so.
+/// agent's boundary with nothing on screen saying so. The harness is the
+/// opposite case and is editable for the same reason the note is: it says how
+/// work happens in a directory the operator already chose, and the day it needs
+/// changing is the day one of the two sign-ins stops paying.
+///
+/// A job already running is not affected. It is a process that was started with
+/// the old answer, and reaching into it would be a second way to stop a job that
+/// `Runtime::start_job` does not have.
 #[tauri::command]
 pub fn update_repository(
     state: State<'_, AppState>,
     id: RepositoryId,
     name: String,
     note: String,
+    harness: Harness,
 ) -> Reply<Repository> {
     let clean = RepositoryDraft {
         group_id: GroupId::new(),
@@ -602,11 +611,50 @@ pub fn update_repository(
         // and the row's own is what stays.
         path: "/".to_string(),
         note,
+        harness,
     }
     .clean()?;
-    let repository = state.runtime.store().update_repository(id, &clean.name, &clean.note)?;
+    let repository =
+        state.runtime.store().update_repository(id, &clean.name, &clean.note, clean.harness)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(repository)
+}
+
+/// One coding harness, as the panel that offers the choice needs it.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessOnMachine {
+    pub harness: Harness,
+    /// Whether the program is on this app's `PATH`.
+    pub installed: bool,
+    /// How to get it if it is not. Sent from here rather than spelled in the
+    /// webview, because it is the same string a refused job quotes at an agent,
+    /// and two copies of an install command drift the day a vendor renames a
+    /// package.
+    pub install: &'static str,
+}
+
+/// Which coding harnesses are on this machine, and how to get the ones that are
+/// not.
+///
+/// Asked by the panel that offers the choice, so picking one the operator does
+/// not have is answered at the moment they pick. Everything else about a job is
+/// discovered when it runs; this one cannot be, because a job runs minutes after
+/// the tool call that started it and its refusal reaches an agent rather than
+/// the person who set the repository up.
+///
+/// Every harness comes back, installed or not, and they are asked concurrently:
+/// each is a process spawn, and asked in series a panel waits once per harness.
+#[tauri::command]
+pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
+    let asked = Harness::ALL.map(|harness| async move {
+        HarnessOnMachine {
+            harness,
+            installed: crate::coding::installed(harness).await,
+            install: crate::coding::install(harness),
+        }
+    });
+    Ok(futures_util::future::join_all(asked).await.into_iter().collect())
 }
 
 /// Unlinks a repository. Nothing on the operator's disk is touched.
