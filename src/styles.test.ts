@@ -209,6 +209,132 @@ describe("a message's clock", () => {
   });
 });
 
+describe("the composer's mention layer", () => {
+  /**
+   * The pill is painted on a copy of the draft, under the operator's own text.
+   *
+   * Which only works while the copy wraps and spaces its characters exactly as
+   * the textarea does. One extra pixel of padding on either and every pill in
+   * the box sits beside the name it belongs to rather than behind it, on a
+   * surface where nothing renders in review and nothing lays out in a test.
+   * So the properties that decide where a glyph lands are read back off both
+   * elements and compared to each other.
+   */
+  const PLACES_A_GLYPH = [
+    "fontSize",
+    "fontFamily",
+    "fontWeight",
+    "lineHeight",
+    "letterSpacing",
+    "wordSpacing",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderLeftWidth",
+    "whiteSpace",
+    "overflowWrap",
+  ] as const;
+
+  function drawn(): { mirror: CSSStyleDeclaration; input: CSSStyleDeclaration } {
+    const field = document.createElement("div");
+    field.className = "composer__field";
+    const mirror = document.createElement("div");
+    mirror.className = "composer__mirror";
+    const input = document.createElement("textarea");
+    input.className = "composer__input";
+    field.append(mirror, input);
+    document.body.append(field);
+    return { mirror: getComputedStyle(mirror), input: getComputedStyle(input) };
+  }
+
+  it("wraps the copy exactly as the box wraps the original", () => {
+    const { mirror, input } = drawn();
+
+    // Vacuous if the rule stopped reaching either element. Read off a property
+    // that is a keyword rather than a length: jsdom substitutes no custom
+    // property, so everything on a scale reads back as the empty string here
+    // and would pass this on both elements while proving nothing. The check
+    // below is what holds the tokenized half.
+    expect(mirror.whiteSpace).toBeTruthy();
+    expect(mirror.overflowWrap).toBeTruthy();
+
+    for (const property of PLACES_A_GLYPH) {
+      expect(mirror[property], `${property} differs from the box's`).toBe(input[property]);
+    }
+  });
+
+  /**
+   * The same invariant, read off the rules instead of off the cascade.
+   *
+   * The comparison above is the original check and still catches a UA default
+   * coming apart on the two keywords. It stopped being able to catch a *value*
+   * the moment the composer moved onto the scale, because jsdom resolves no
+   * `var()`: every tokenized property reads back as the empty string on both
+   * elements and compares equal to it. Its own vacuity guard said so, which is
+   * the guard working rather than the rule breaking.
+   *
+   * What survives is the structure the equality was standing in for. Every
+   * property that decides where a glyph lands is declared once, in the rule the
+   * two elements share, and neither of them says one of those again underneath
+   * it. A value cannot drift between two elements that never had two values.
+   */
+  it("declares what places a glyph once, in the rule they share", () => {
+    const MOVES_A_GLYPH =
+      /^(font|line-height|letter-spacing|word-spacing|padding|border(?!-radius)|white-space|overflow-wrap|text-indent|tab-size)/;
+    const shared = declarations()
+      .filter((d) => d.selector === ".composer__mirror, .composer__input")
+      .filter((d) => MOVES_A_GLYPH.test(d.property));
+
+    // Vacuous if the shared rule was split or renamed.
+    expect(shared.map((d) => d.property)).toContain("padding");
+    expect(shared.length).toBeGreaterThan(6);
+
+    for (const selector of [".composer__mirror", ".composer__input"]) {
+      const own = declarations()
+        .filter((d) => d.selector === selector)
+        .filter((d) => MOVES_A_GLYPH.test(d.property));
+      expect(
+        own.map((d) => `${selector} { ${d.property}: ${d.value} }`),
+        `${selector} moves its own characters and leaves the other's where they were`,
+      ).toEqual([]);
+    }
+  });
+
+  it("keeps the copy out of the flow and out of the way", () => {
+    const { mirror } = drawn();
+
+    // The textarea is what gives the row its height and grows as the draft
+    // does. A copy in the flow would double both.
+    expect(mirror.position).toBe("absolute");
+    // And it is under the box: a click that landed on it would take the caret.
+    expect(mirror.pointerEvents).toBe("none");
+  });
+
+  /**
+   * The chip is one class, drawn in a sent message and under the composer, and
+   * the second of those is why it may not change a metric. Padding, a weight or
+   * a letter-spacing on it moves the characters in the copy and leaves the ones
+   * in the textarea where they were, which is the same drift by another route.
+   * The room around a name is a spread shadow, which takes up none.
+   */
+  it("draws the chip without moving a character", () => {
+    const rule = css.match(/^\.mention \{\n([\s\S]*?)^\}/m);
+    expect(rule).toBeTruthy();
+
+    const declared = [...rule![1]!.matchAll(/^\s{2}([a-z-]+):/gm)].map((found) => found[1]!);
+    const moves = declared.filter((property) =>
+      /^(padding|margin|border(?!-radius)|font|letter-spacing|word-spacing|display|line-height|vertical-align)/.test(
+        property,
+      ),
+    );
+    expect(moves, `.mention declares ${moves.join(", ")}, which moves the text under it`).toEqual(
+      [],
+    );
+  });
+});
+
 /**
  * Every declaration in the file, with the rule it belongs to.
  *
@@ -278,7 +404,11 @@ describe("every length is named, not spelled", () => {
     // and the only thing it is used for; `--ui-scale` is the root anchor every
     // rem in the file is measured against, so it cannot be a rem itself.
     ["font-size", /^--type-/, /^[0-9.]+em$|--ui-scale/, /^$/],
-    ["letter-spacing", /^--track-/, /^$/, /^$/],
+    // `inherit` is the composer's mention layer saying out loud what a textarea
+    // does not inherit, so the copy under it cannot come apart from the box on
+    // a UA default. It is a value taken from somewhere else rather than one
+    // this rule picked, which is the one thing no scale can hold.
+    ["letter-spacing", /^--track-/, /^inherit$/, /^$/],
     // `0` is the inline-descender reset a few SVG wrappers want. It is a
     // layout fix rather than leading, and there is no leading it could mean.
     ["line-height", /^--(lead-|badge)/, /^0$/, /^$/],

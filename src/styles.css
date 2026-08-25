@@ -3889,23 +3889,71 @@ button {
   padding: var(--space-2) var(--space-3) var(--space-2) 0;
 }
 
-.composer__input {
+/* The box and the layer that paints its mentions, stacked. The layer is out of
+   flow, so the textarea is still what gives the row its height and still what
+   grows as the draft does. */
+.composer__field {
+  position: relative;
   flex: 1;
   min-width: 0;
-  resize: none;
-  border: 0;
-  background: none;
-  color: var(--text);
+}
+
+/* Every property that decides where a character lands, declared once for both.
+   They have to wrap identically to the pixel or a pill sits beside the name it
+   belongs to instead of behind it, and that is a mismatch no assertion in a
+   window with no layout can see. `styles.test.ts` holds the two together. */
+.composer__mirror,
+.composer__input {
   font: inherit;
   font-size: var(--type-body);
   line-height: var(--lead-read);
+  /* A textarea does not inherit these; the layer under it does. Both are said
+     out loud so the two cannot come apart on a UA default. */
+  letter-spacing: inherit;
+  word-spacing: inherit;
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  border: 0;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.composer__mirror {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  /* The text is here to place the pill, not to be read: the operator reads the
+     textarea's own characters, directly on top of these. */
+  color: transparent;
+  user-select: none;
+  pointer-events: none;
+}
+
+.composer__input {
+  display: block;
+  width: 100%;
+  position: relative;
+  resize: none;
+  background: none;
+  color: var(--text);
   outline: none;
   max-height: 12rem;
 }
 
 .composer__input::placeholder {
   color: var(--faint);
+}
+
+/* A name that resolved, drawn as one thing rather than as punctuation and a
+   word. The same class does the job in a sent message and under the composer,
+   which is why it changes no metric: no padding, no weight, no letter-spacing,
+   nothing that moves a glyph by half a pixel. The room around the name is a
+   spread shadow, which takes up none. */
+.mention {
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklab, var(--flesh) 26%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--flesh) 26%, transparent);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 /* Round, in the accent, and the size of the line it sits beside. A word-width

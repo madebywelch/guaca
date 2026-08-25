@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Attachment, Staged } from "../lib/types";
+import type { AgentCard, Attachment, Staged } from "../lib/types";
 import { Composer } from "./Composer";
 
 /** The drop handlers the component registered, so a test can fire one. */
@@ -39,12 +39,40 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-vi.mock("../lib/store", () => ({ useLiveAgents: () => [] }));
+/** The crew the box can complete against. Set per test where it matters. */
+let roster: AgentCard[] = [];
+
+vi.mock("../lib/store", () => ({ useLiveAgents: () => roster }));
+
+/** An agent as the rail hands one over: only the fields the composer draws. */
+function anAgent(name: string): AgentCard {
+  return {
+    id: `00000000-0000-4000-8000-${name.length.toString().padStart(12, "0")}`,
+    groupId: "00000000-0000-4000-8000-000000000001",
+    name,
+    avatar: "plain",
+    color: "#c7d96b",
+    model: "",
+    systemPrompt: "",
+    skills: [],
+    lifecycle: "active",
+    pinned: false,
+    railOrder: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    sandboxId: null,
+    browserId: null,
+    hasComputer: false,
+    hasBrowser: false,
+    version: 1,
+  };
+}
 
 describe("Composer", () => {
   beforeEach(() => {
     dropped = null;
     over = null;
+    roster = [];
     staging = async (paths) => ({ attached: paths.map(stored), refused: [] });
   });
 
@@ -169,6 +197,79 @@ describe("Composer", () => {
       over?.(true);
     });
     expect(screen.getByText("Drop to attach")).toBeTruthy();
+  });
+});
+
+describe("a mention in the box", () => {
+  /** The layer under the textarea, which is where a draft's mentions are drawn. */
+  const painted = () => document.querySelector(".composer__mirror");
+
+  async function draw() {
+    render(<Composer placeholder="Message Manager" onSend={vi.fn(async () => {})} />);
+    await waitFor(() => expect(dropped).not.toBeNull());
+  }
+
+  it("marks a name the crew has, as it is typed", async () => {
+    roster = [anAgent("Critic"), anAgent("Head Chef")];
+    await draw();
+    await type("ask @Critic and @Head Chef about @lunch");
+
+    const chips = [...(painted()?.querySelectorAll(".mention") ?? [])];
+    expect(chips.map((chip) => chip.getAttribute("data-mention"))).toEqual(["Critic", "Head Chef"]);
+  });
+
+  it("paints exactly the characters the box holds, and no others", async () => {
+    // The layer sits under the operator's own text, so a copy that is one
+    // character out is a pill beside the name instead of behind it. Nothing in
+    // a window with no layout can see that; that the two strings agree is what
+    // can be checked here, and `styles.test.ts` holds the metrics.
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("ask @Critic to review\nand say so");
+
+    const box = screen.getByRole("combobox") as HTMLTextAreaElement;
+    expect(painted()?.textContent).toBe(box.value);
+  });
+
+  it("is the same text twice, so only one of them is read out", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("@Critic");
+
+    expect(painted()?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("marks nothing when the name is nobody's", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("mail bob@example.com about @lunch");
+
+    expect(painted()?.querySelectorAll(".mention")).toHaveLength(0);
+  });
+
+  it("marks the name the typeahead just completed", async () => {
+    // The two have to agree: a completion the operator accepted that then drew
+    // as prose reads as the app having refused it.
+    roster = [anAgent("Head Chef")];
+    await draw();
+    await type("ask @Head");
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("combobox"), { key: "Enter" });
+    });
+
+    await waitFor(() =>
+      expect(painted()?.querySelector(".mention")?.getAttribute("data-mention")).toBe("Head Chef"),
+    );
+  });
+
+  it("lets go of a mention that stops being one", async () => {
+    roster = [anAgent("Critic")];
+    await draw();
+    await type("@Critic");
+    expect(painted()?.querySelectorAll(".mention")).toHaveLength(1);
+
+    await type("@Critical");
+    expect(painted()?.querySelectorAll(".mention")).toHaveLength(0);
   });
 });
 
