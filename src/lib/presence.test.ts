@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { presenceLabel, presenceOf, QUIET } from "./presence";
+import { presenceLabel, presenceNote, presenceOf, QUIET } from "./presence";
 import type { Activity, AgentCard, AgentId } from "./types";
 
 function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
@@ -17,6 +17,7 @@ function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
     railOrder: 0,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     createdAt: 0,
     ...over,
   } as AgentCard;
@@ -80,6 +81,32 @@ describe("presenceOf", () => {
   it("ignores an agent that is not in the crew", () => {
     const presence = presenceOf([anAgent("a")], states({ z: { state: "awaitingApproval" } }));
     expect(presence).toEqual(QUIET);
+  });
+});
+
+describe("presenceNote", () => {
+  // The tag beside a circle and the label a screen reader hears are the same
+  // sentence minus the name. Two functions here is two descriptions of one
+  // circle, and only one of them can be right.
+  it.each([
+    [3, QUIET, "3 agents"],
+    [1, QUIET, "1 agent"],
+    [2, { blocked: 0, working: true }, "2 agents, working"],
+    [2, { blocked: 1, working: false }, "2 agents, 1 turn waiting on you"],
+    [4, { blocked: 3, working: false }, "4 agents, 3 turns waiting on you"],
+  ])("says a crew of %i as words", (count, presence, said) => {
+    expect(presenceNote(count, presence)).toBe(said);
+  });
+
+  // The one place the two marks are ranked. A sentence is one channel, and
+  // "waiting on you, and working" buries the half that needs a person.
+  it("says waiting rather than working when both are true", () => {
+    expect(presenceNote(2, { blocked: 1, working: true })).toBe("2 agents, 1 turn waiting on you");
+  });
+
+  it("is what the label says under the name", () => {
+    const presence = { blocked: 2, working: true };
+    expect(presenceLabel("Sales", 5, presence)).toBe(`Sales, ${presenceNote(5, presence)}`);
   });
 });
 

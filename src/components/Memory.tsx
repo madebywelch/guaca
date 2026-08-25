@@ -18,7 +18,7 @@ import { type AgentId, errorMessage } from "../lib/types";
  * because a warning is read as a fact about what the runtime is going to do.
  * The number is only worth drawing while it is the runtime's number.
  */
-export const CAP = 4_000;
+export const CAP = 16_000;
 
 /** How near the cap is near enough to say so. */
 const ROOM = 400;

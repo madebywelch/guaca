@@ -9,6 +9,7 @@ import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
+import { RailRepositories } from "./RailRepositories";
 import { TokenMeter } from "./TokenMeter";
 
 interface Props {
@@ -62,6 +63,10 @@ export function Sidebar({
 }: Props) {
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
+  const repositories = useStore((s) => s.repositories);
+  const building = useStore((s) => s.building);
+  const repoStatus = useStore((s) => s.repoStatus);
+  const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
@@ -164,6 +169,23 @@ export function Sidebar({
   }, [agents, activity, lastActive, dragging, railGroup]);
 
   /** Moves the thing in hand to where the pointer is, without a render. */
+  // Asked on a timer, because nothing that changes a branch or opens a pull
+  // request goes through Guaca: there is no event to listen for, and the only
+  // honest options are asking again or being wrong. Thirty seconds is the
+  // slowest interval at which "I just committed" still reads as immediate, and
+  // it is the git half that runs at this rate; the `gh` half rides along
+  // because two calls on two timers is two things to keep in step.
+  //
+  // Only while there is something to ask about. A workspace with no
+  // repositories linked runs no processes at all.
+  const watching = repositories.length > 0;
+  useEffect(() => {
+    if (!watching) return;
+    void refreshRepoStatuses();
+    const timer = setInterval(() => void refreshRepoStatuses(), 30_000);
+    return () => clearInterval(timer);
+  }, [watching, refreshRepoStatuses]);
+
   const place = useCallback(() => {
     const node = heldRef.current;
     if (!node) return;
@@ -278,6 +300,15 @@ export function Sidebar({
     id: AgentId,
     state: Activity | undefined,
   ): { text: string; kind: string | undefined } => {
+    // Before the turn states, because a coding job outlives the turn that
+    // started it: the agent goes idle the moment `code` returns and stays that
+    // way while a coding agent works in its repository for twenty minutes.
+    // Read off `building` rather than off `Activity` for the same reason —
+    // `Activity` is cleared when a turn ends, and this is not a turn.
+    if (Object.values(building).includes(id)) {
+      return { text: "writing code", kind: "thinking" };
+    }
+
     switch (state?.state) {
       case "thinking":
         return { text: "typing", kind: "thinking" };
@@ -477,11 +508,43 @@ export function Sidebar({
                 onPointerLeave={() => hover(null)}
               >
                 <div className="rail__open-head">
-                  <span className="rail__open-name">{focused.name}</span>
+                  {/* Both headings ellipse a name that does not fit the rail,
+                      and the crew column has no room to say it either, so the
+                      full one is on the heading as well as beside the circle.
+                      A crew called "Customer research, EMEA" is otherwise two
+                      words and a hyphen wherever it is drawn. */}
+                  <span className="rail__open-name" title={focused.name}>
+                    {focused.name}
+                  </span>
                   {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
                 </div>
+                {/* Above the crew, because "what are we working on" is read
+                    before "who is here", and because a drop target that sits
+                    under a list of rows is one the hand has to travel past
+                    every row to reach. */}
+                <RailRepositories
+                  repositories={repositories.filter((r) => r.groupId === focused.id)}
+                  crew={railOrder(
+                    agents.filter((a) => a.groupId === focused.id),
+                    shape,
+                  )}
+                  status={repoStatus}
+                  row={row}
+                  building={building}
+                  isOver={isOver}
+                  onDragOver={hover}
+                  // Back to the crew rather than to nothing. Leaving a
+                  // repository for the whitespace around it never re-enters the
+                  // crew, which never left, so clearing here would make a drop
+                  // in that whitespace do nothing at all.
+                  onDragLeave={() => hover({ kind: "group", id: focused.id })}
+                  dragging={drag !== null}
+                />
+                {/* Whoever is in no repository. Every agent is drawn once,
+                    which is the whole reason an agent works in at most one:
+                    the rail is a tree and a name has one place in it. */}
                 {railOrder(
-                  agents.filter((a) => a.groupId === focused.id),
+                  agents.filter((a) => a.groupId === focused.id && !a.repositoryId),
                   shape,
                 ).map(row)}
                 {agents.every((a) => a.groupId !== focused.id) && (
@@ -515,10 +578,23 @@ export function Sidebar({
                       onPointerLeave={() => hover(null)}
                     >
                       <div className="rail__group-head">
-                        <span className="rail__group-name">{group.name}</span>
+                        <span className="rail__group-name" title={group.name}>
+                          {group.name}
+                        </span>
                         {groupTail(group, members.length)}
                       </div>
-                      {here.map(row)}
+                      <RailRepositories
+                        repositories={repositories.filter((r) => r.groupId === group.id)}
+                        crew={here}
+                        status={repoStatus}
+                        row={row}
+                        building={building}
+                        isOver={isOver}
+                        onDragOver={hover}
+                        onDragLeave={() => hover({ kind: "group", id: group.id })}
+                        dragging={drag !== null}
+                      />
+                      {here.filter((a) => !a.repositoryId).map(row)}
                       {members.length === 0 && <p className="rail__empty">No agents in here.</p>}
                     </div>
                   );

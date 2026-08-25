@@ -31,6 +31,8 @@ pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ATTACH_FILE: &str = "attach_file";
+pub const WRITE_DOCUMENT: &str = "write_document";
+pub const CODE: &str = "code";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -44,15 +46,26 @@ pub const ATTACH_FILE: &str = "attach_file";
 pub struct Surfaces {
     pub computer: bool,
     pub browser: bool,
+    /// Whether this agent has been put in a repository.
+    ///
+    /// Beside the other two rather than folded into `computer`, because it is
+    /// not one of them: a computer and a browser are places an agent works, and
+    /// this is a directory on the operator's own machine that a coding harness
+    /// is pointed at. An agent can have a repository and no computer, which is
+    /// the ordinary case, and every agent that has one has exactly one.
+    ///
+    /// Not a [`crate::domain::signin::Surface`] and deliberately absent from
+    /// [`Surfaces::has`]: nothing is ever signed in to a directory.
+    pub repository: bool,
 }
 
 impl Surfaces {
     pub fn both() -> Self {
-        Surfaces { computer: true, browser: true }
+        Surfaces { computer: true, browser: true, repository: true }
     }
 
     pub fn none() -> Self {
-        Surfaces { computer: false, browser: false }
+        Surfaces { computer: false, browser: false, repository: false }
     }
 
     /// What one agent has, out of what the workspace could hand out.
@@ -68,6 +81,7 @@ impl Surfaces {
         Surfaces {
             computer: self.computer && card.has_computer,
             browser: self.browser && card.has_browser,
+            repository: self.repository && card.repository_id.is_some(),
         }
     }
 
@@ -167,18 +181,19 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
 }
 
 pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
-    all_specs()
+    all_specs(surfaces)
         .into_iter()
         .filter(|spec| match spec.name.as_str() {
             RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN => surfaces.computer,
             BROWSE => surfaces.browser,
+            CODE => surfaces.repository,
             REQUEST_PERMISSION => surfaces.computer || surfaces.browser,
             _ => true,
         })
         .collect()
 }
 
-fn all_specs() -> Vec<ToolSpec> {
+fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
     vec![
         ToolSpec {
             name: DIRECTORY.to_string(),
@@ -201,24 +216,33 @@ fn all_specs() -> Vec<ToolSpec> {
             // The description is the whole design. It has to make selective
             // writing and consolidation the obvious reading, because the model
             // has no other signal about what belongs in a durable file.
-            description: "Replace your memory. Your memory is a short markdown file shown to you \
-                          at the start of every turn, so anything kept there you will always \
-                          know. This is the tool for anything asked of it, in whatever words: \
-                          remember this, update your memory, forget that. Keep what you could \
-                          not look up again: who you are and how you work, the operator's \
-                          standing preferences, decisions that hold across conversations, what \
-                          you have learned about the people and agents you work with. If you \
-                          could open it, do not copy it: record where it is and when it is worth \
-                          opening, in one line. A memory that restates a document you already \
-                          have is spending the only space you keep on the one thing you can get \
-                          back. Progress, status and what you are waiting on do NOT belong here \
-                          and have their own tool, `note_progress`; a memory holding last \
-                          week's task state will have you act on it as though it were still \
-                          true. This REPLACES the file entirely, so write out everything you \
-                          want to keep and leave behind what no longer holds; if something you \
-                          believed turned out to be wrong, correct it here rather than adding a \
-                          contradiction. Space is limited, so choose."
-                .to_string(),
+            // The cap is named rather than hinted at. "Space is limited, so
+            // choose" is not a number a model can write against: one tracking a
+            // board of eight agents wrote four thousand characters over, was
+            // cut, rewrote, was cut again, and spent four calls of one turn on
+            // it. Every truncation takes the end, which is where a model puts
+            // the state it just changed, so the loop was also eating exactly
+            // the facts it had opened the turn to record.
+            description: format!(
+                "Replace your memory. Your memory is a short markdown file shown to you at the \
+                 start of every turn, so anything kept there you will always know. This is the \
+                 tool for anything asked of it, in whatever words: remember this, update your \
+                 memory, forget that. Keep what you could not look up again: who you are and how \
+                 you work, the operator's standing preferences, decisions that hold across \
+                 conversations, what you have learned about the people and agents you work with. \
+                 If you could open it, do not copy it: record where it is and when it is worth \
+                 opening, in one line. A memory that restates a document you already have is \
+                 spending the only space you keep on the one thing you can get back. Progress, \
+                 status and what you are waiting on do NOT belong here and have their own tool, \
+                 `note_progress`; a memory holding last week's task state will have you act on \
+                 it as though it were still true. This REPLACES the file entirely, so write out \
+                 everything you want to keep and leave behind what no longer holds; if something \
+                 you believed turned out to be wrong, correct it here rather than adding a \
+                 contradiction. It has to fit in {} characters, and anything past that is cut \
+                 off the end, so put what matters most first and choose what to keep before you \
+                 write rather than afterwards.",
+                crate::workspace::MAX_MEMORY
+            ),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -699,6 +723,102 @@ fn all_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: CODE.to_string(),
+            // Offered only to an agent that has been put in a repository, which
+            // is the operator's decision and the only way this appears at all.
+            //
+            // The description has to make two things unmistakable, because both
+            // are ways this gets used wrongly and neither is obvious from the
+            // name. It does not block: an agent that waits for the answer here
+            // is an agent whose inbox backs up and whose routines are skipped
+            // for the length of a change to a codebase. And the instruction is
+            // the whole brief: the harness cannot see this conversation, so a
+            // task saying "do what we discussed" is a task nobody can do.
+            description: "Hand a piece of work to a coding agent running in your repository. It \
+                          reads the code, edits files, runs the tests, and can commit, push and \
+                          open a pull request. Use it for anything that changes the codebase, \
+                          and for anything you would need to read the code to answer.\n\
+                          This returns as soon as the work has started, not when it is done. You \
+                          get a message back when it finishes, which may be many minutes later, \
+                          so end your turn after calling this and say you have started it. Do \
+                          not wait, do not call it again for the same work, and do not schedule \
+                          anything to check on it.\n\
+                          The coding agent cannot see this conversation and cannot ask you \
+                          anything. Everything it needs is in `task`: what to change, how you \
+                          will know it worked, and whether to commit, push or open a pull \
+                          request. Write it as you would write a ticket for somebody competent \
+                          who has never spoken to you."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The whole brief, in full. What to change, how to check \
+                                        it worked, and what to do with the result: leave it on a \
+                                        branch, push it, or open a pull request."
+                    }
+                },
+                "required": ["task"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: WRITE_DOCUMENT.to_string(),
+            // The twelfth, and it exists because the eleventh had a hole under
+            // it. `attach_file` hands over a file; until this, the only way an
+            // agent could *make* one was to write it on a sandbox with
+            // `run_command`. So an agent with no computer could never produce a
+            // document at all, which is most agents: it had the whole report in
+            // hand, in the turn, and no way to turn it into something the
+            // operator could open. One spent four turns trying, twice invented
+            // a `/home/user` path for a machine it did not have, and delivered
+            // eight pages as chat text.
+            //
+            // Nothing about writing a document needs a machine. The bytes are
+            // already in the model's own output, and `Files::put` addresses
+            // them by digest like every other attachment. So this is offered to
+            // every agent, with a computer or without one: an agent that has a
+            // sandbox should still not be spending a shell command and a round
+            // trip on `cat > brief.md`.
+            //
+            // It attaches rather than only writing, and the two are one call on
+            // purpose. The failure `attach_file` was built to fix was an agent
+            // writing a document and then typing its path instead of handing it
+            // over; a `write` that had to be followed by an `attach` is the
+            // same forgetting with an extra step in front of it.
+            description: "Write a document and hand it over, attached to your answer. Use this \
+                          whenever you are asked to produce something that should arrive as a \
+                          file rather than as chat: a brief, a report, a spec, a runbook, a \
+                          table, a draft. The content is the whole document, written out here in \
+                          full. It needs no machine and no shell command. Once written it is \
+                          attached to the answer you are about to give, and you can also name it \
+                          in `send_message` in this same turn to hand it to a colleague. Then say \
+                          what it is in your answer rather than repeating what is in it, because \
+                          the reader has the document itself."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "A file name with an extension, e.g. `readiness.md`. \
+                                        Markdown unless something else is called for."
+                    },
+                    "content": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The document itself, complete. Not a summary of it and \
+                                        not a plan to write it."
+                    }
+                },
+                "required": ["name", "content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: ATTACH_FILE.to_string(),
             // The eleventh tool, and it earns its place because without it a
             // document an agent produces has no way to reach the operator at
@@ -707,16 +827,33 @@ fn all_specs() -> Vec<ToolSpec> {
             // for a brief wrote one and then typed the path to it. The operator
             // read `/home/user/brief.md`, which is a path on a machine that is
             // not theirs, in an app with no way to open it.
-            description: "Attach a file to your answer, so whoever reads it can open it. The \
-                          file you made is on your own computer and nobody else can reach that \
-                          machine, so writing its path into your answer hands over nothing: this \
-                          is what actually delivers it. Name it by its path, for example \
-                          `/home/user/brief.md`, or by the name of a file already attached to \
-                          something in your channel. Attach anything you were asked to produce as \
-                          a document and anything easier read as one: a brief, a report, a table, \
-                          a draft. Then say what it is in your answer rather than repeating its \
-                          contents, because the reader has the file itself."
-                .to_string(),
+            //
+            // Offered with no computer as well, and the description is the
+            // reason it has to be two. A file already in the channel is
+            // attachable with no machine anywhere, so the tool is genuinely
+            // useful without one; a path is not, because `pull_file` reads it
+            // off a sandbox. Told the version below about a computer it has
+            // not been given, an agent invents `/home/user/…`, is refused, and
+            // spends the rest of the turn finding that out. That is the one
+            // failure this whole surfaces mechanism exists to prevent, and it
+            // reached the operator through a tool nobody thought to gate.
+            description: if surfaces.computer {
+                "Attach a file to your answer, so whoever reads it can open it. The file you \
+                 made is on your own computer and nobody else can reach that machine, so \
+                 writing its path into your answer hands over nothing: this is what actually \
+                 delivers it. Name it by its path, for example `/home/user/brief.md`, or by \
+                 the name of a file already attached to something in your channel. Attach \
+                 anything you were asked to produce as a document and anything easier read as \
+                 one: a brief, a report, a table, a draft. Then say what it is in your answer \
+                 rather than repeating its contents, because the reader has the file itself."
+            } else {
+                "Attach a file to your answer, so whoever reads it can open it. You have no \
+                 computer, so there is no filesystem and no path that will resolve: this hands \
+                 on a file that is already in this conversation, named by its file name. To \
+                 hand over a document you are writing yourself, use `write_document` instead, \
+                 which needs no machine."
+            }
+            .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -724,8 +861,13 @@ fn all_specs() -> Vec<ToolSpec> {
                         "type": "array",
                         "items": { "type": "string" },
                         "minItems": 1,
-                        "description": "The files to attach: a path on your computer, or the \
-                                        name of one already in your channel."
+                        "description": if surfaces.computer {
+                            "The files to attach: a path on your computer, or the name of one \
+                             already in your channel."
+                        } else {
+                            "The files to attach, by the name each already has in this \
+                             conversation."
+                        }
                     }
                 },
                 "required": ["files"],
@@ -747,6 +889,24 @@ pub enum ToolInvocation {
     /// Hand files to whoever this turn is answering, on the answer itself.
     AttachFile {
         files: Vec<String>,
+    },
+    /// Hand a piece of work to a coding harness in this agent's repository.
+    ///
+    /// The one tool that starts something and does not wait for it. What comes
+    /// back is a job id; the result arrives later as a message, on the path a
+    /// routine firing already uses.
+    Code {
+        task: String,
+    },
+    /// Write a document out of the turn's own words and hand it over.
+    ///
+    /// The one way to produce a file that needs no machine, which is why it is
+    /// its own invocation rather than a shape of [`ToolInvocation::AttachFile`]:
+    /// that one resolves a name against things that already exist, and this one
+    /// is where a thing starts existing.
+    WriteDocument {
+        name: String,
+        content: String,
     },
     /// Stop and ask the operator whether to go ahead.
     RequestPermission {
@@ -882,6 +1042,12 @@ pub enum ToolParseError {
     MissingText,
     #[error("attach_file needs a non-empty `files` list")]
     MissingFiles,
+    #[error("code needs a non-empty `task`")]
+    MissingTask,
+    #[error("write_document needs a `name`")]
+    MissingDocumentName,
+    #[error("write_document was called for {name} with nothing in it")]
+    EmptyDocument { name: String },
     #[error("update_memory needs a `content` string")]
     MissingContent,
     #[error("note_progress needs a non-empty `note` string")]
@@ -973,6 +1139,26 @@ impl ToolParseError {
                  {\"files\": [\"/home/user/brief.md\"]}."
                     .to_string()
             }
+            ToolParseError::MissingTask => {
+                "Error: `task` must be the whole brief for the coding agent, which cannot see \
+                 this conversation. Say what to change, how to tell it worked, and whether to \
+                 commit, push or open a pull request."
+                    .to_string()
+            }
+            ToolParseError::MissingDocumentName => {
+                "Error: `name` must be a file name with an extension, for example \
+                 {\"name\": \"readiness.md\", \"content\": \"# Readiness\\n…\"}."
+                    .to_string()
+            }
+            // Named rather than generic, because the mistake it catches is a
+            // model that called the tool intending to fill it in on a later
+            // round. There is no later round: the document is whatever is in
+            // this call.
+            ToolParseError::EmptyDocument { name } => format!(
+                "Error: `content` must be the whole of {name}, written out here. Nothing was \
+                 written and nothing is attached. There is no second call that fills it in: \
+                 call this again with the complete document in `content`."
+            ),
             ToolParseError::IncompleteAgent { needs } => format!(
                 "Error: to create an agent you need {needs}. For example {{\"name\": \"Chief of \
                  Product\", \"instructions\": \"You own the product roadmap. Decide what gets \
@@ -1555,6 +1741,39 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             }
             Ok(ToolInvocation::AttachFile { files })
         }
+        CODE | "write_code" | "run_coding_agent" | "delegate_code" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: CODE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let task = first_string(&value, &["task", "instruction", "prompt", "brief", "text"])
+                .unwrap_or_default();
+            if task.trim().is_empty() {
+                return Err(ToolParseError::MissingTask);
+            }
+            Ok(ToolInvocation::Code { task })
+        }
+        // The aliases are the words a model reaches for when it has been asked
+        // for a document and has one written. `create_file` and `write_file`
+        // both describe a filesystem this may not have, and both are what a
+        // model says anyway.
+        WRITE_DOCUMENT | "write_file" | "create_file" | "make_file" | "create_document"
+        | "save_file" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: WRITE_DOCUMENT.to_string(),
+                detail: e.to_string(),
+            })?;
+            let name = first_string(&value, &["name", "filename", "file_name", "path", "title"]);
+            let content =
+                first_string(&value, &["content", "text", "body", "document", "contents"]);
+            let Some(name) = name.filter(|n| !n.trim().is_empty()) else {
+                return Err(ToolParseError::MissingDocumentName);
+            };
+            let Some(content) = content.filter(|c| !c.trim().is_empty()) else {
+                return Err(ToolParseError::EmptyDocument { name });
+            };
+            Ok(ToolInvocation::WriteDocument { name, content })
+        }
         other => match split_plugin_tool(other, connected) {
             Some((kind, tool)) => {
                 let arguments = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -1609,6 +1828,15 @@ fn as_label(text: &str, max: usize) -> String {
     }
     let kept: String = flat.chars().take(max.saturating_sub(1)).collect();
     format!("{}…", kept.trim_end())
+}
+
+/// The first of several keys that carries a string.
+///
+/// Models spell one field several ways and each spelling names this and nothing
+/// else, so refusing one buys a retry and a turn spent on vocabulary. The same
+/// argument [`normalize_list`] is built on.
+fn first_string(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| value.get(*key).and_then(|v| v.as_str()).map(str::to_string))
 }
 
 fn normalize_list(value: Option<&serde_json::Value>) -> Vec<String> {
@@ -2151,12 +2379,12 @@ mod tests {
             specs(surfaces).into_iter().map(|spec| spec.name).collect()
         };
 
-        let computer_only = names(Surfaces { computer: true, browser: false });
+        let computer_only = names(Surfaces { computer: true, browser: false, repository: false });
         assert!(computer_only.contains(&USE_SCREEN.to_string()));
         assert!(computer_only.contains(&RUN_COMMAND.to_string()));
         assert!(!computer_only.contains(&BROWSE.to_string()));
 
-        let browser_only = names(Surfaces { computer: false, browser: true });
+        let browser_only = names(Surfaces { computer: false, browser: true, repository: false });
         assert!(browser_only.contains(&BROWSE.to_string()));
         assert!(!browser_only.contains(&USE_SCREEN.to_string()));
         assert!(!browser_only.contains(&OPEN_ON_DESKTOP.to_string()));
@@ -2178,7 +2406,84 @@ mod tests {
             "nothing it could do needs authorizing: {neither:?}"
         );
 
-        assert_eq!(names(Surfaces::both()).len(), all_specs().len());
+        // A repository is the third thing an agent is given, and `code` is the
+        // only tool that reaches one. An agent in no repository must not be
+        // offered it: it costs a model call and a turn to discover, and the
+        // agent reports the capability as broken rather than as absent.
+        let coder = names(Surfaces { computer: false, browser: false, repository: true });
+        assert!(coder.contains(&CODE.to_string()), "a repository needs no machine: {coder:?}");
+        assert!(!neither.contains(&CODE.to_string()), "nowhere to write code: {neither:?}");
+        assert!(!computer_only.contains(&CODE.to_string()), "a sandbox is not a repository");
+
+        assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
+    }
+
+    #[test]
+    fn the_code_tool_says_it_does_not_block_and_that_the_brief_is_everything() {
+        // Two ways this gets used wrongly, and neither is obvious from the
+        // name. An agent that waits for the answer is an agent whose inbox
+        // backs up and whose routines are skipped for the length of a change to
+        // a codebase. And the harness cannot see the conversation, so a task
+        // saying "do what we discussed" is a task nobody can do.
+        let spec = specs(Surfaces { computer: false, browser: false, repository: true })
+            .into_iter()
+            .find(|spec| spec.name == CODE)
+            .unwrap();
+        let text = spec.description.to_lowercase();
+
+        assert!(text.contains("not when it is done"), "{text}");
+        assert!(text.contains("do not wait"), "{text}");
+        assert!(text.contains("end your turn"), "{text}");
+        assert!(text.contains("cannot see this conversation"), "{text}");
+        // And what it is actually for, in the words an operator would use.
+        assert!(text.contains("pull request"), "{text}");
+    }
+
+    #[test]
+    fn a_coding_task_with_nothing_in_it_is_refused_with_what_is_missing() {
+        let err = parse(&call(CODE, r#"{"task": "  "}"#)).unwrap_err();
+        assert!(matches!(err, ToolParseError::MissingTask));
+        let said = err.guidance();
+        assert!(said.contains("cannot see"), "{said}");
+        assert!(said.contains("pull request"), "{said}");
+    }
+
+    #[test]
+    fn a_coding_task_arrives_in_whatever_word_the_model_used() {
+        // Each of these names this and nothing else, so refusing one buys a
+        // retry and a turn spent on vocabulary.
+        for key in ["task", "instruction", "prompt", "brief"] {
+            let parsed = parse(&call(CODE, &format!(r#"{{"{key}": "fix the test"}}"#))).unwrap();
+            assert_eq!(parsed, ToolInvocation::Code { task: "fix the test".into() }, "{key}");
+        }
+        let aliased = parse(&call("write_code", r#"{"task": "fix the test"}"#)).unwrap();
+        assert_eq!(aliased, ToolInvocation::Code { task: "fix the test".into() });
+    }
+
+    #[test]
+    fn attaching_is_offered_with_no_computer_and_stops_describing_one() {
+        // The tool stays, because a file already in the channel is attachable
+        // with no machine anywhere. What has to go is the half of its
+        // description that is about a machine this agent does not have.
+        let without = specs(Surfaces::none())
+            .into_iter()
+            .find(|spec| spec.name == ATTACH_FILE)
+            .expect("a channel file needs no computer, so the tool stays");
+        let words = format!("{} {}", without.description, without.parameters);
+
+        // The exact sentence and the exact example that sent one agent to
+        // `/home/user/vision_backend_coreloop_monitor.md`, twice, on a machine
+        // it had never been given.
+        assert!(!words.contains("/home/user"), "an invented path is what this teaches: {words}");
+        assert!(!words.contains("your own computer"), "it has no computer: {words}");
+        assert!(
+            words.contains("no computer"),
+            "and it has to be told so, or it will go looking: {words}"
+        );
+
+        // With one, the path half is the whole point and stays.
+        let with = description(ATTACH_FILE);
+        assert!(with.contains("/home/user/brief.md"), "{with}");
     }
 
     #[test]
@@ -2367,10 +2672,10 @@ mod tests {
         let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
-            13,
-            "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
-             create_agent, request_permission, ask_operator, send_message, attach_file, \
-             update_memory, note_progress"
+            15,
+            "directory, run_command, open_on_desktop, use_screen, browse, code, schedule, \
+             create_agent, request_permission, ask_operator, send_message, write_document, \
+             attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -2672,11 +2977,21 @@ mod tests {
         let text = spec(UPDATE_MEMORY).description.to_lowercase();
         assert!(text.contains("memory"), "{text}");
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
-        assert!(text.contains("space is limited"));
+        // The number, not a hint at one. "Space is limited, so choose" is not
+        // something a model can write against: one tracking eight agents went
+        // four thousand characters over, was cut, rewrote, was cut again, and
+        // spent four calls of one turn on it.
+        assert!(
+            text.contains(&crate::workspace::MAX_MEMORY.to_string()),
+            "the cap has to be a number it can budget against: {text}"
+        );
+        // And which end goes, because that is where a model puts what it has
+        // just decided, so the loop above was eating the newest facts each time.
+        assert!(text.contains("cut off the end"), "{text}");
 
         // The index rule, which is what stops a memory becoming a second copy
         // of documents the agent can already open. Without it an assistant
-        // spent 900 characters of a 4,000 character file summarizing a report
+        // spent 900 characters of a five-thousand character memory summarizing a report
         // whose filename was three lines further up.
         assert!(text.contains("do not copy it"), "the index rule has gone: {text}");
 

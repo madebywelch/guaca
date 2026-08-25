@@ -100,7 +100,7 @@ repo: the frontend renders state and forwards intent.
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
-| The crews' column, its badges, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts` and `src/components/GroupRail.tsx` |
+| The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
@@ -292,6 +292,12 @@ the model takes a screenshot to see what `browse` did.
   that learned Guaca from an older transcript reaches for it, and what is
   recorded is the current name either way. `lib/trail.ts` answers to both,
   because rows written before the rename cannot be migrated into a new spelling.
+- **Two sections answer "what am I waiting on", and they are arrived at from
+  opposite ends.** *What you are waiting on* is derived from the agent's own
+  unanswered sent messages and cannot go stale; the working notes are written
+  and cover everything off that path. Each names the other, because nothing else
+  would catch them collapsing: both would render, both suites would pass, and
+  the cost is an agent spending a bounded list restating one it gets for free.
 - **The panel's cap is pinned to `MAX_MEMORY` by a test that reads both
   sources.** It was advisory, on the reasoning that the runtime is what cuts and
   a drifted mirror cannot cost the operator their text. It drifted to 4,000

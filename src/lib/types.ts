@@ -272,6 +272,73 @@ export interface ConnectorDraft {
   secret: string;
 }
 
+export type RepositoryId = string;
+
+/**
+ * A directory on this machine that a crew may write code in.
+ *
+ * There is no engineer flag beside this and there is not meant to be. An agent
+ * in no repository is offered nothing that reaches a working tree, so a second
+ * mark saying the same thing would be a second place for the answer to be
+ * wrong. Designating an engineer is hiring one and putting it in one of these.
+ *
+ * Who is in it is not on this type. An agent carries `repositoryId`, so the
+ * roster is the answer, and a list here would be the same fact in two places.
+ */
+export interface Repository {
+  id: RepositoryId;
+  groupId: GroupId;
+  /** What the operator calls it. Defaults to the directory's own name. */
+  name: string;
+  /** Absolute, canonical, and the root of a git work tree. */
+  path: string;
+  /** One line the agents that have it read on every turn. */
+  note: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What a repository is doing right now.
+ *
+ * Read, never stored. Every one of these changes when the operator commits,
+ * pulls or opens a pull request, and none of those go through Guaca, so a
+ * cached copy would be wrong exactly when somebody looked at it.
+ */
+export interface RepoStatus {
+  /** The branch, or a short sha when HEAD is detached. */
+  branch: string;
+  /** At a commit rather than on a branch: a state to get out of, not one to
+   *  work from, so it is drawn differently. */
+  detached: boolean;
+  /** Paths differing from HEAD: modified, staged, untracked, unmerged. */
+  dirty: number;
+  ahead: number;
+  behind: number;
+  /** Whether the branch tracks anything. Without it `ahead` and `behind` are
+   *  both zero, which is not the same as being in sync. */
+  upstream: boolean;
+  /**
+   * Open pull requests, when `gh` is installed and signed in.
+   *
+   * `null` is not zero and must never be drawn as one. It means the question
+   * could not be asked. Zero means somebody asked and there are none.
+   */
+  pullRequests: number | null;
+}
+
+/**
+ * `path` is checked against git before anything is stored, so what comes back
+ * is the canonical path git agreed to and not always the one that was typed.
+ * A blank `name` takes the directory's own.
+ */
+export interface RepositoryDraft {
+  groupId: GroupId;
+  name: string;
+  path: string;
+  note: string;
+}
+
 export type PluginId = string;
 
 /**
@@ -522,6 +589,8 @@ export interface AgentCard {
   hasComputer: boolean;
   /** The same decision about the browser, and separately. */
   hasBrowser: boolean;
+  /** The one repository this agent works in, if it has been put in one. */
+  repositoryId: RepositoryId | null;
   name: string;
   avatar: string;
   color: string;
@@ -791,7 +860,53 @@ export type UiEvent =
    * event carries none of it.
    */
   | { type: "memoryChanged"; agentId: AgentId }
-  | { type: "workingNotesChanged"; agentId: AgentId };
+  /**
+   * One agent appended a working note. Its own event rather than a second
+   * meaning for `memoryChanged`: notes are written far more often, and folding
+   * them together would have every note refetch a memory that has not moved.
+   */
+  | { type: "workingNotesChanged"; agentId: AgentId }
+  /**
+   * A coding job could not run, for a reason only the operator can fix.
+   *
+   * The agent that asked is told in its own channel, and that is not enough: a
+   * sentence inside one transcript is a sentence nobody reads. This is the same
+   * thing said where somebody setting up is looking.
+   */
+  | { type: "codingJobFailed"; agentId: AgentId; repository: string; reason: string }
+  /**
+   * A coding job started or ended, and the repository it works in is busy or
+   * free.
+   *
+   * The rail draws this because nothing else would: `code` returns as soon as
+   * the harness is up and the turn ends, so an agent sits idle while a coding
+   * agent works in its repository for twenty minutes, and the crew reads as
+   * stopped at exactly the moment it is building.
+   */
+  | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
+  | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId }
+  /**
+   * One line of what a running coding job is doing.
+   *
+   * Ephemeral, exactly as a turn's thinking is: held while the job runs and
+   * dropped when it ends. The record of what a job did is the message it
+   * delivers at the end; this is what that looks like before it exists.
+   */
+  | {
+      type: "codingProgress";
+      agentId: AgentId;
+      repositoryId: RepositoryId;
+      /** A tool name, or empty when the coding agent is talking. */
+      tool: string;
+      /** The command, the path, or the sentence. */
+      detail: string;
+    };
+
+/** One line of a running coding job, as the panel draws it. */
+export interface CodingLine {
+  tool: string;
+  detail: string;
+}
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

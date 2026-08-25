@@ -213,28 +213,33 @@ describe("arrived", () => {
 });
 
 describe("crowding", () => {
+  // Written against `CAP` rather than against the number it currently holds.
+  // These were spelled 3_900 and 4_050 and had to be rewritten the day the
+  // runtime went to four pages, which is the same drift the pinning test below
+  // exists to stop: a suite that hardcodes somebody else's constant is one more
+  // copy of it.
   it("says nothing about a memory with room in it", () => {
     expect(crowding("")).toBeNull();
-    expect(crowding("a".repeat(3_000))).toBeNull();
+    expect(crowding("a".repeat(CAP - 1_000))).toBeNull();
   });
 
   it("counts down the last of the room as a fact", () => {
-    const room = crowding("a".repeat(3_900));
+    const room = crowding("a".repeat(CAP - 100));
     expect(room?.over).toBe(false);
     expect(room?.text).toBe("100 characters left.");
   });
 
   it("calls going over what it is, which is a loss", () => {
-    const room = crowding("a".repeat(4_050));
+    const room = crowding("a".repeat(CAP + 50));
     expect(room?.over).toBe(true);
     expect(room?.text).toBe("50 characters over. The end is cut on save.");
   });
 
   it("counts what the runtime counts, not what `length` counts", () => {
     // `Workspace::write` cuts on Unicode scalar values. A page of emoji is half
-    // the characters JavaScript reports, and warning at 2,000 of them would be
-    // a warning about nothing.
-    expect(crowding("🥑".repeat(3_000))).toBeNull();
+    // the characters JavaScript reports, and warning at half the cap would be a
+    // warning about nothing.
+    expect(crowding("🥑".repeat(CAP - 1_000))).toBeNull();
   });
 
   it("warns against the cap the runtime actually enforces", () => {

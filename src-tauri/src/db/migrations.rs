@@ -1036,6 +1036,71 @@ ALTER TABLE plugins ADD COLUMN headers TEXT NOT NULL DEFAULT '[]';
     (
         37,
         r#"
+-- A directory on this machine that a crew may write code in. Scoped to the
+-- group like everything else an agent can see, and holding no secret: a path is
+-- not a credential, which is why it is a plain column and not the shape
+-- `connectors` uses.
+--
+-- `path` is stored canonical and without a trailing separator, so the index
+-- below can hold. Two spellings of one directory would be two repositories over
+-- one tree, each with its own reach, and the operator would fix one and wonder
+-- why nothing changed.
+CREATE TABLE repositories (
+    id         TEXT    PRIMARY KEY,
+    group_id   TEXT    NOT NULL REFERENCES groups(id),
+    name       TEXT    NOT NULL,
+    path       TEXT    NOT NULL,
+    note       TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX repositories_group_path ON repositories (group_id, path);
+
+-- Which agents may work in one. Named, always: there is no row shape here that
+-- means everybody, because an agent hired next week must not inherit a working
+-- tree the operator handed to somebody in particular. `domain/repository.rs`
+-- argues it against the plugin tables next door, which do have an everybody and
+-- have a different reason to.
+CREATE TABLE repository_access (
+    repository_id TEXT NOT NULL REFERENCES repositories(id),
+    agent_id      TEXT NOT NULL REFERENCES agents(id),
+    PRIMARY KEY (repository_id, agent_id)
+);
+
+-- Retiring an agent takes its repositories with it, and that read is by agent.
+CREATE INDEX repository_access_agent ON repository_access (agent_id);
+"#,
+    ),
+    (
+        38,
+        r#"
+-- An agent works in at most one repository. That is a decision about
+-- coordination rather than about permissions: two agents on one codebase settle
+-- it between themselves in the crew they share, and one agent quietly holding
+-- two is a change whose shape nobody can see until it lands in both.
+--
+-- A column rather than the junction table it replaces, because the rule is
+-- "at most one" and a column is the only shape that cannot represent anything
+-- else. It also makes the rail a tree: the repository is a heading and its
+-- agents are under it, each drawn once, which a many-to-many cannot be.
+ALTER TABLE agents ADD COLUMN repository_id TEXT REFERENCES repositories(id);
+
+-- Whoever was named on one keeps it. An agent named on more than one keeps the
+-- first it was given: the rows are in the order the operator ticked them, so
+-- the first is the one they chose before there was a rule about it.
+UPDATE agents SET repository_id = (
+    SELECT repository_id FROM repository_access
+     WHERE repository_access.agent_id = agents.id
+     ORDER BY rowid LIMIT 1
+);
+
+DROP TABLE repository_access;
+"#,
+    ),
+    (
+        39,
+        r#"
 -- Working notes: what an agent is in the middle of, as against what it knows.
 --
 -- Memory is a file the agent rewrites, and that shape is right for what memory

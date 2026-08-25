@@ -43,15 +43,35 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::ids::AgentId;
 
-/// Memory longer than this is cut. Roughly a page: enough for a persona,
-/// standing preferences, a handful of durable facts, and pointers to the
-/// documents worth reopening.
+/// Memory longer than this is cut. Four pages: enough for a persona, standing
+/// preferences, durable facts, and pointers to the documents worth reopening.
+///
+/// It was 4,000, which is one page, and every agent doing real work was jammed
+/// against it. Measured across a workspace of twenty-one: the ten busiest were
+/// all above 3,800, four were within a hundred characters of the ceiling, and
+/// **more than half of every turn that wrote to memory had to write twice**,
+/// because the first attempt came back cut. That is a whole extra model call,
+/// paid on half of the memory writes in the workspace, and memory was the most
+/// used tool in it.
+///
+/// Naming the number in the tool description did not help, which is the
+/// evidence that mattered: the models were not guessing the cap, they had more
+/// state than the cap held.
+///
+/// That measurement predates the split, and some of what it measured was
+/// pressure this file should never have been under. A fifth of the same
+/// workspace's memory was progress, which now goes to `domain::worknote`, and
+/// more again was documents restated rather than pointed at. Whether four pages
+/// is still the right size is a question for the next measurement rather than
+/// this one, and it is deliberately not lowered on a prediction: being wrong
+/// upward costs prompt tokens, and being wrong downward costs back the extra
+/// model call on half of all writes that this bought.
 ///
 /// Mirrored in `Memory.tsx` as `CAP`, which the suite pins to this by reading
 /// this file. The two drifted to 4,000 against 16,000 once, and the panel spent
 /// that release telling operators their memory was about to be cut by a runtime
 /// that was storing it whole.
-pub const MAX_MEMORY: usize = 4_000;
+pub const MAX_MEMORY: usize = 16_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -302,7 +322,10 @@ mod tests {
         // recorded something it had not.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        let huge = "a line of notes\n".repeat(1_000);
+        // Sized off the cap rather than a fixed repeat count, so this still
+        // tests truncation the next time the ceiling moves. It did not, and a
+        // raise turned it into a test that the input happened to fit.
+        let huge = "a line of notes\n".repeat(MAX_MEMORY / 8);
 
         let stored = ws.write(id, "Manager", &huge).unwrap();
         assert!(stored.truncated);
@@ -314,7 +337,7 @@ mod tests {
     fn truncation_lands_on_a_line_boundary() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        ws.write(id, "Manager", &"a line of notes\n".repeat(1_000)).unwrap();
+        ws.write(id, "Manager", &"a line of notes\n".repeat(MAX_MEMORY / 8)).unwrap();
         assert!(ws.read(id).ends_with("a line of notes"), "cut mid-sentence");
     }
 

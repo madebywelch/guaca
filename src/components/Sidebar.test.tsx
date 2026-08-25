@@ -14,6 +14,7 @@ vi.mock("../lib/ipc", () => ({
   api: {
     listAgents: async () => [],
     listGroups: async () => [],
+    listRepositories: async () => [],
     // Clicking a row opens a channel, and going inside a crew can close one:
     // both read what they are about to draw.
     channelMessages: async () => [],
@@ -37,6 +38,7 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",
@@ -422,6 +424,124 @@ describe("groups as places", () => {
     const orb = screen.getByLabelText("research, 1 agent, working");
     expect(orb.querySelector(".orb__waiting")).toBeNull();
     expect(orb.dataset.state).toBe("working");
+  });
+
+  // Faces do not identify a crew. The cafeteria is a copy machine with a fixed
+  // avatar and color per preset, so two crews hired from the same counters draw
+  // the same faces, and above six every crew draws six and a count. Reading a
+  // name meant clicking, which is the navigation the column replaced.
+  it("names a crew beside its circle while the circle is pointed at", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+
+    const orb = screen.getByLabelText("research, 1 agent");
+    expect(orb.querySelector(".orb__tag")).toBeNull();
+
+    fireEvent.pointerEnter(orb);
+    expect(orb.querySelector(".orb__tag-name")?.textContent).toBe("research");
+
+    fireEvent.pointerLeave(orb);
+    expect(orb.querySelector(".orb__tag")).toBeNull();
+  });
+
+  // A column reachable only with a pointer is a column a keyboard operator has
+  // to click through, which is the complaint this answers for everyone else.
+  it("names it on a keyboard focus too, and lets go on blur", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+
+    const orb = screen.getByLabelText("research, 1 agent");
+    fireEvent.focus(orb);
+    expect(orb.querySelector(".orb__tag-name")?.textContent).toBe("research");
+
+    fireEvent.blur(orb);
+    expect(orb.querySelector(".orb__tag")).toBeNull();
+  });
+
+  // The full name, not the one the heading has room for. A tag that ellipsed
+  // would move where the name is cut off rather than stop cutting it.
+  it("draws the whole name, however long it is", () => {
+    const long = "Customer research and competitive intelligence, EMEA";
+    draw([group("everyone"), group(long, null, RESEARCH)], [agent("Manager")]);
+
+    const orb = screen.getByLabelText(`${long}, 0 agents`);
+    fireEvent.pointerEnter(orb);
+    expect(orb.querySelector(".orb__tag-name")?.textContent).toBe(long);
+  });
+
+  // The circle carries the ring and the corner count on two channels. The tag
+  // is where they are put into words, so triage does not need the crew opened.
+  it("says what the crew is doing under its name, in the label's own words", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+      { Reader: { state: "awaitingApproval" } },
+    );
+
+    const orb = screen.getByLabelText("research, 1 agent, 1 turn waiting on you");
+    fireEvent.pointerEnter(orb);
+    expect(orb.querySelector(".orb__tag-note")?.textContent).toBe("1 agent, 1 turn waiting on you");
+  });
+
+  // Said once, as the button's own label. Drawn into the tree a second time it
+  // is the crew announced twice, the second time as text nobody can reach.
+  it("keeps the tag out of the accessibility tree", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+
+    const orb = screen.getByLabelText("research, 1 agent");
+    fireEvent.pointerEnter(orb);
+    expect(orb.querySelector(".orb__tag")?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  // A bare number in a circle is as opaque as an unnamed crew, and it is the
+  // first thing in the column.
+  it("names the everybody circle as well", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+
+    const all = screen.getByLabelText("All groups, 2 agents");
+    fireEvent.pointerEnter(all);
+    expect(all.querySelector(".orb__tag-name")?.textContent).toBe("All groups");
+    expect(all.querySelector(".orb__tag-note")?.textContent).toBe("2 agents");
+  });
+
+  // Aiming a drag at a crew is when the circle most has to say which crew it
+  // is, and it is the one moment the native tooltip is suppressed.
+  it("names the crew a dragged agent is being aimed at", () => {
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+
+    fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 100, clientY: 250 });
+
+    const orb = screen.getByLabelText("research, 1 agent");
+    fireEvent.pointerEnter(orb, { clientX: 60, clientY: 200 });
+
+    expect(orb.dataset.over).toBe("true");
+    expect(orb.querySelector(".orb__tag-name")?.textContent).toBe("research");
+  });
+
+  // The heading ellipses whatever does not fit the rail, and after clicking a
+  // circle it is the only place the name is drawn at all.
+  it("keeps the whole name on the heading the rail cuts short", () => {
+    const long = "Customer research and competitive intelligence, EMEA";
+    draw([group("everyone"), group(long, null, RESEARCH)], [agent("Manager")]);
+
+    expect(document.querySelector(".rail__group-name")?.getAttribute("title")).toBe("everyone");
+
+    fireEvent.click(screen.getByLabelText(`${long}, 0 agents`));
+    expect(document.querySelector(".rail__open-name")?.getAttribute("title")).toBe(long);
   });
 
   it("draws only that group after clicking into it, and everyone again after leaving", () => {

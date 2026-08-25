@@ -13,6 +13,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name: "Manager",
     avatar: "avocado",
     color: "#c7d96b",
@@ -138,7 +139,10 @@ describe("AgentMenu", () => {
     expect(handlers.onClearHistory).not.toHaveBeenCalled();
     expect(handlers.onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Delete this history" }));
+    // And the second wording says which of an agent's two kinds of state this
+    // touches. An operator who is not sure whether it also wipes the memory
+    // the agent spent turns writing does not click it at all.
+    fireEvent.click(screen.getByRole("button", { name: "Delete history, keep memory" }));
     expect(handlers.onClearHistory).toHaveBeenCalledTimes(1);
     expect(handlers.onClose).toHaveBeenCalledTimes(1);
   });

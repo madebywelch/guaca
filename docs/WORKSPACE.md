@@ -211,6 +211,14 @@ opening. An assistant here spent 900 characters summarizing an engineering
 report whose filename was three lines further up its own memory, and the summary
 is the copy that goes stale.
 
+**Working notes are not the same list as *What you are waiting on*.** That
+section is derived: computed from the agent's own unanswered sent messages, so
+it cannot go stale and costs the agent nothing to maintain. Working notes are
+written, and cover everything off that path: what the operator owes the agent,
+what it handed over, what it decided, what is still open. Each section says so,
+because an agent reading both without being told would spend half a bounded list
+restating one it is given for free, and the restatement is the copy that rots.
+
 **Working notes hold where the work stands, and expire.** One line per note,
 appended with `note_progress`, never revised. The agent is shown them with an
 age against each, which is what turns *waiting on the legal read* into something
@@ -603,10 +611,40 @@ which is what lets a circle carry a permanent statement about the crews nobody i
 looking at. And "which crew am I in" stops being something the rail has to
 answer, because the answer is a lit circle in a fixed place.
 
-The circles are faces, not names. A crew is recognized by who is in it long
-before its name is read. The name is not drawn under the circle at all: the
-column is four rem wide, a name cut to fit that is a name nobody can read, and
-it heads the crew column the moment the circle is clicked.
+The circles are faces, and the name is beside them. A crew is recognized by who
+is in it long before its name is read, which is true and was never enough on its
+own. The cafeteria is a copy machine with a fixed avatar and a fixed color per
+preset, so two crews hired from the same counters draw the same faces in the
+same colors, differing only by the few degrees of lean `lib/orb.ts` takes off an
+agent id; and above six members every crew draws the same six and a count. The
+operator's way out was to click through the column reading names, which is the
+navigation the column exists to replace.
+
+So pointing at a circle names it, and says the two marks in words underneath.
+The name is still not drawn *under* the circle: the column is four rem wide and
+a name cut to fit that is a name nobody can read. It is laid over the app beside
+the circle instead, which costs the column no width, the layout no reflow, and
+can hold a name long enough to wrap rather than ellipse. `src/components/OrbTag.tsx`.
+
+This is what `title` was already trying to do and could not. The native tooltip
+waits about a second, so sweeping a column of twelve shows nothing; it never
+appears on a keyboard focus, so the column was reachable by pointer only; and it
+is suppressed for the whole of a drag, which is the one moment the circle is most
+load-bearing, because dropping an agent onto an unnamed circle is how somebody
+ends up in the wrong crew. The tag opens on hover, on focus and during a drag.
+`title` is kept for the operator who has stopped and is waiting for it.
+
+The words under the name are `presenceNote`, which `presenceLabel` also composes
+its sentence from. Two functions would be one circle described two ways, and a
+tag saying "3 agents" under a label saying "working" is the version where only
+one of them is right. The tag itself is out of the accessibility tree: the button
+already says the same words as its own label, and drawn into the tree twice a
+crew is announced twice, the second time as text nobody can reach.
+
+Both rail headings carry the full name on a `title` too. They ellipse whatever
+does not fit, and after clicking a circle the heading is the only place the name
+is drawn at all, so a crew called "Customer research, EMEA" was two words and a
+hyphen wherever the operator looked.
 
 How the faces stand is the size of the crew. One is a portrait, two stand side
 by side, and three to six stand on a ring, so a strip of crews is a strip of
