@@ -771,17 +771,27 @@ It is sectioned on the Settings shell for the same reason Settings is: a group
 now decides who pays for its turns, which model answers them, how long a call may
 take and how far a conversation may run, and one scroll put the name and the
 delete button a page apart. The state lives in the shell, so changing section
-cannot discard a half-typed endpoint. Plugins is disabled until the group
-exists, because a sign-in and a credential both have to belong to something.
+cannot discard a half-typed endpoint. Plugins and Repositories are both disabled
+until the group exists, because a sign-in, a credential and a linked directory
+all have to belong to something.
 
-That section holds two decisions, not one. Connecting is the crew's sign-in;
-under each connected row is who in the crew may use it, which is every agent
-until an operator says otherwise. It is written the moment it is clicked, like
-the Connect and Disconnect buttons above it: a draft nobody submitted would be a
-permission the operator believes they granted. The reasoning is in
+Repositories is a section rather than a third block under Plugins, and the two
+are near-neighbors on purpose rather than by accident: both are a thing given to
+the crew and then handed to named agents, which is the only shape they share. A
+plugin is a server somewhere that this crew signs in to. A repository is a
+directory on this machine that it writes in, and it is the one place in the app
+where the operator hands over their own source. Stacked under Plugins it was
+reached by scrolling past two sign-in panels, and the panel had to draw its own
+heading to be findable at all, which is how a section earns itself.
+
+The plugins section holds two decisions, not one. Connecting is the crew's
+sign-in; under each connected row is who in the crew may use it, which is every
+agent until an operator says otherwise. It is written the moment it is clicked,
+like the Connect and Disconnect buttons above it: a draft nobody submitted
+would be a permission the operator believes they granted. The reasoning is in
 `docs/PLUGINS.md`; what the panel owes the operator is the sentence saying who
-a plugin is currently offered to, including the honest one for a plugin narrowed
-to nobody, which is otherwise indistinguishable from a working row.
+a plugin is currently offered to, including the honest one for a plugin
+narrowed to nobody, which is otherwise indistinguishable from a working row.
 
 Three rows say who pays, and the first is "follow the app settings", which is
 where every group starts. The second is the ChatGPT subscription, and the group
