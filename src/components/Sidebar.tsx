@@ -477,7 +477,14 @@ export function Sidebar({
                 onPointerLeave={() => hover(null)}
               >
                 <div className="rail__open-head">
-                  <span className="rail__open-name">{focused.name}</span>
+                  {/* Both headings ellipse a name that does not fit the rail,
+                      and the crew column has no room to say it either, so the
+                      full one is on the heading as well as beside the circle.
+                      A crew called "Customer research, EMEA" is otherwise two
+                      words and a hyphen wherever it is drawn. */}
+                  <span className="rail__open-name" title={focused.name}>
+                    {focused.name}
+                  </span>
                   {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
                 </div>
                 {railOrder(
@@ -515,7 +522,9 @@ export function Sidebar({
                       onPointerLeave={() => hover(null)}
                     >
                       <div className="rail__group-head">
-                        <span className="rail__group-name">{group.name}</span>
+                        <span className="rail__group-name" title={group.name}>
+                          {group.name}
+                        </span>
                         {groupTail(group, members.length)}
                       </div>
                       {here.map(row)}
