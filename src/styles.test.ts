@@ -200,3 +200,88 @@ describe("a message's clock", () => {
     expect(getComputedStyle(at).gridColumn).not.toBe(getComputedStyle(body).gridColumn);
   });
 });
+
+describe("the composer's mention layer", () => {
+  /**
+   * The pill is painted on a copy of the draft, under the operator's own text.
+   *
+   * Which only works while the copy wraps and spaces its characters exactly as
+   * the textarea does. One extra pixel of padding on either and every pill in
+   * the box sits beside the name it belongs to rather than behind it, on a
+   * surface where nothing renders in review and nothing lays out in a test.
+   * So the properties that decide where a glyph lands are read back off both
+   * elements and compared to each other.
+   */
+  const PLACES_A_GLYPH = [
+    "fontSize",
+    "fontFamily",
+    "fontWeight",
+    "lineHeight",
+    "letterSpacing",
+    "wordSpacing",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "borderTopWidth",
+    "borderLeftWidth",
+    "whiteSpace",
+    "overflowWrap",
+  ] as const;
+
+  function drawn(): { mirror: CSSStyleDeclaration; input: CSSStyleDeclaration } {
+    const field = document.createElement("div");
+    field.className = "composer__field";
+    const mirror = document.createElement("div");
+    mirror.className = "composer__mirror";
+    const input = document.createElement("textarea");
+    input.className = "composer__input";
+    field.append(mirror, input);
+    document.body.append(field);
+    return { mirror: getComputedStyle(mirror), input: getComputedStyle(input) };
+  }
+
+  it("wraps the copy exactly as the box wraps the original", () => {
+    const { mirror, input } = drawn();
+
+    // Vacuous if the rule stopped reaching either element.
+    expect(mirror.fontSize).toBeTruthy();
+    expect(mirror.paddingLeft).toBeTruthy();
+
+    for (const property of PLACES_A_GLYPH) {
+      expect(mirror[property], `${property} differs from the box's`).toBe(input[property]);
+    }
+  });
+
+  it("keeps the copy out of the flow and out of the way", () => {
+    const { mirror } = drawn();
+
+    // The textarea is what gives the row its height and grows as the draft
+    // does. A copy in the flow would double both.
+    expect(mirror.position).toBe("absolute");
+    // And it is under the box: a click that landed on it would take the caret.
+    expect(mirror.pointerEvents).toBe("none");
+  });
+
+  /**
+   * The chip is one class, drawn in a sent message and under the composer, and
+   * the second of those is why it may not change a metric. Padding, a weight or
+   * a letter-spacing on it moves the characters in the copy and leaves the ones
+   * in the textarea where they were, which is the same drift by another route.
+   * The room around a name is a spread shadow, which takes up none.
+   */
+  it("draws the chip without moving a character", () => {
+    const rule = css.match(/^\.mention \{\n([\s\S]*?)^\}/m);
+    expect(rule).toBeTruthy();
+
+    const declared = [...rule![1]!.matchAll(/^\s{2}([a-z-]+):/gm)].map((found) => found[1]!);
+    const moves = declared.filter((property) =>
+      /^(padding|margin|border(?!-radius)|font|letter-spacing|word-spacing|display|line-height|vertical-align)/.test(
+        property,
+      ),
+    );
+    expect(moves, `.mention declares ${moves.join(", ")}, which moves the text under it`).toEqual(
+      [],
+    );
+  });
+});

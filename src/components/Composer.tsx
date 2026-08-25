@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
-import { applyMention, matchMentions, mentionAt } from "../lib/mentions";
+import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents } from "../lib/store";
 import { type Attachment, errorMessage } from "../lib/types";
 
@@ -25,6 +25,7 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
   const [refused, setRefused] = useState<string[]>([]);
   const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
 
   // Dropping anywhere on the window attaches to whatever channel is open,
   // because the alternative is a small target the operator has to aim at while
@@ -61,22 +62,22 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
   }, [disabled]);
 
   const agents = useLiveAgents();
+  const names = useMemo(() => agents.map((a) => a.name), [agents]);
   const query = dismissed ? null : mentionAt(text, caret);
-  const matches = query
-    ? matchMentions(
-        agents.map((a) => a.name),
-        query.term,
-      )
-    : [];
+  const matches = query ? matchMentions(names, query.term) : [];
   const showing = query !== null && matches.length > 0;
   const selected = matches.length > 0 ? Math.min(highlighted, matches.length - 1) : 0;
 
-  // Grow with the content instead of scrolling a three-line box.
+  // Grow with the content instead of scrolling a three-line box. Past the cap
+  // it does scroll, which is why the layer under it is re-aligned here as well
+  // as on a scroll event: typing at the bottom of a full box moves the view
+  // without the operator having scrolled anything.
   useEffect(() => {
     const node = ref.current;
     if (!node) return;
     node.style.height = "auto";
     node.style.height = `${node.scrollHeight}px`;
+    if (mirror.current) mirror.current.scrollTop = node.scrollTop;
   }, [text]);
 
   const choose = (name: string) => {
@@ -245,28 +246,50 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
       )}
 
       <div className="composer__row">
-        <textarea
-          ref={ref}
-          className="composer__input"
-          rows={1}
-          value={text}
-          placeholder={disabled ? (disabledReason ?? placeholder) : placeholder}
-          disabled={disabled}
-          onChange={(event) => {
-            setText(event.target.value);
-            setCaret(event.target.selectionStart ?? 0);
-            setDismissed(false);
-            setHighlighted(0);
-          }}
-          onKeyUp={track}
-          onClick={track}
-          onKeyDown={onKeyDown}
-          role="combobox"
-          aria-expanded={showing}
-          aria-controls={showing ? "mention-list" : undefined}
-          aria-activedescendant={showing ? `mention-${selected}` : undefined}
-          aria-autocomplete="list"
-        />
+        <div className="composer__field">
+          {/* The draft, with its mentions drawn, under the box it belongs to.
+              The operator's own characters are still the textarea's: this
+              paints the pill behind them and nothing else, so the caret, a
+              selection, undo and an input method are all left as they were.
+              `aria-hidden` because it is the same text twice, and the copy a
+              screen reader should read is the field. */}
+          <div className="composer__mirror" aria-hidden="true" ref={mirror}>
+            {splitMentions(text, names).map((run) =>
+              run.kind === "mention" ? (
+                <span key={run.at} className="mention" data-mention={run.name}>
+                  {run.text}
+                </span>
+              ) : (
+                <Fragment key={run.at}>{run.text}</Fragment>
+              ),
+            )}
+          </div>
+          <textarea
+            ref={ref}
+            className="composer__input"
+            rows={1}
+            value={text}
+            placeholder={disabled ? (disabledReason ?? placeholder) : placeholder}
+            disabled={disabled}
+            onChange={(event) => {
+              setText(event.target.value);
+              setCaret(event.target.selectionStart ?? 0);
+              setDismissed(false);
+              setHighlighted(0);
+            }}
+            onKeyUp={track}
+            onClick={track}
+            onKeyDown={onKeyDown}
+            onScroll={(event) => {
+              if (mirror.current) mirror.current.scrollTop = event.currentTarget.scrollTop;
+            }}
+            role="combobox"
+            aria-expanded={showing}
+            aria-controls={showing ? "mention-list" : undefined}
+            aria-activedescendant={showing ? `mention-${selected}` : undefined}
+            aria-autocomplete="list"
+          />
+        </div>
         <button
           type="button"
           className="composer__send"
