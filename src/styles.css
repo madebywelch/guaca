@@ -66,6 +66,70 @@
      than a size, because it is also what a script would read back. */
   --ui-scale: 1;
 
+  /* ---- Type ---------------------------------------------------------------
+     Ten roles, whole pixels at scale 1, no two closer than 1px.
+
+     This was 41 sizes, 38 of them between 8px and 18px: one every 0.27px.
+     Nobody chose those. They accreted, one rule at a time, each picked to sit
+     a little under the rule beside it, and the result is an interface where
+     nothing lines up with anything and no two people writing a new panel would
+     land on the same number. The set is small because the app multiplies every
+     rem by `--ui-scale`: 41 sizes is 41 rounding errors at every scale an
+     operator can pick, and gaps of a quarter pixel do not survive one.
+
+     A step is named for the job, not for its rank, because the job is what a
+     rule knows about itself. */
+  --type-mark: 0.5625rem; /* 9px.  Uppercase mono: eyebrows, states, counts. */
+  --type-fine: 0.625rem; /* 10px. Timestamps, keycaps, field labels. */
+  --type-meta: 0.6875rem; /* 11px. Chips, routes, hop lines. */
+  --type-small: 0.75rem; /* 12px. Hints, captions, dense secondary text. */
+  --type-aside: 0.8125rem; /* 13px. Second lines, notes, previews. */
+  --type-ui: 0.875rem; /* 14px. Every control, and names in a list. */
+  --type-body: 0.9375rem; /* 15px. Messages and markdown. The anchor. */
+  --type-lede: 1.0625rem; /* 17px. Dialog and pane titles. */
+  --type-title: 1.25rem; /* 20px. A name standing on its own. */
+  --type-display: 1.5rem; /* 24px. The rare big thing. */
+
+  /* Tracking is a function of the step and the case, never a free parameter.
+     It was 18 values, six of them the same uppercase-label job at 0.1, 0.11,
+     0.12, 0.14, 0.16 and 0.18em. */
+  --track-tight: -0.005em; /* Display face at title sizes, and agent names. */
+  --track-flat: 0; /* Anything read as words. */
+  --track-caps: 0.08em; /* Uppercase labels. The default for caps. */
+  --track-caps-wide: 0.14em; /* Section heads, the wordmark, a typed code. */
+
+  /* Leading, four steps. `--lead-flush` is a glyph or a single line in a box
+     already the right height; it is not typography and it is not 0, which is
+     the inline-descender reset a few SVG wrappers still want. */
+  --lead-flush: 1;
+  --lead-tight: 1.3; /* Headings and names. */
+  --lead-ui: 1.45; /* Short text that may wrap to a second line. */
+  --lead-read: 1.6; /* Paragraphs, code blocks, anything read at length. */
+
+  /* ---- Space --------------------------------------------------------------
+     Eight steps on a 2px base. This was 41 padding lengths, 32 pairs of them
+     within a pixel of each other, plus 20 gaps: 0.28, 0.32, 0.34, 0.36, 0.38,
+     0.42, 0.45 and 0.48rem all existed, and no one of them is a decision
+     anybody could defend against the step above or below it. */
+  --space-1: 0.125rem; /* 2px */
+  --space-2: 0.25rem; /* 4px */
+  --space-3: 0.375rem; /* 6px */
+  --space-4: 0.5rem; /* 8px */
+  --space-5: 0.75rem; /* 12px */
+  --space-6: 1rem; /* 16px */
+  --space-7: 1.5rem; /* 24px */
+  --space-8: 2.25rem; /* 36px */
+
+  /* The reading column's own rhythm, which is not spacing and does not belong
+     on the step scale: these are the lanes a transcript is drawn in, and every
+     row in it has to agree with every other or the column visibly wanders.
+     The indent is derived rather than written, because it was 2.85rem in four
+     places and is the one number that cannot be allowed to drift from the
+     portrait lane it sits behind. */
+  --column-inset: 1.15rem;
+  --column-face: 1.7rem;
+  --column-indent: calc(var(--column-inset) + var(--column-face));
+
   /* Capped against the viewport as well as scaled, because both of these grow
      with the scale and the window's own minimum does not. At the largest scale
      in the smallest window they would otherwise leave the reading column
@@ -74,19 +138,93 @@
   /* The crews' own column, which holds one circle across and nothing else, so
      it is capped in the same proportion as the rail beside it. */
   --grail-w: min(4rem, 8vw);
-  --radius: 0.7rem;
-  --radius-sm: 0.4rem;
+
+  /* ---- Radius -------------------------------------------------------------
+     Radius says what a box *is*, not how big it happens to be: a thing inside
+     a control, a control, a surface. The two existing values are kept exactly,
+     because 47 rules already read them and changing a value under a name is
+     the one migration nobody can review. */
+  --radius-xs: 0.25rem; /* Inside a control: menu row, chip, keycap, tag. */
+  --radius-sm: 0.4rem; /* The control: button, input, select, search. */
+  --radius: 0.7rem; /* A surface: card, dialog, bubble, panel. */
+  --radius-pill: 999px; /* One spelling. `99px` was not a second one. */
+
+  /* ---- Controls -----------------------------------------------------------
+     One height ladder, so a button beside an input lines up without anybody
+     measuring padding. `.btn` was ~30px and the `.input` next to it ~34px,
+     because one was given 0.38rem of vertical padding and the other 0.48rem.
+     Height is the token; vertical padding falls out of it, which is why no
+     control below sets any. */
+  --control-h: 2rem; /* 32px. The default. */
+  --control-h-sm: 1.625rem; /* 26px. Dense rows, inline controls, the send. */
+
+  /* ---- Motion -------------------------------------------------------------
+     One curve, three tempos. Cohesion is mostly this: every surface in the app
+     arriving on the same curve, at a speed set by how far it travelled. There
+     were 8 durations and 5 curves and no token; `--ease` is promoted from the
+     one already used most rather than invented.
+
+     The second curve is not a second opinion. Guaca has two motion registers
+     and until now distinguished them only by accident: surfaces arrive, and
+     characters react. `wind-up` and `knock-back` are a vegetable having a
+     physical response to something and they *should* overshoot, because that
+     is what reads as a character rather than as an icon. Nothing that is a
+     panel, a menu or a dialog may touch it.
+
+     The third is for anything that loops or travels: an orb breathing, a dot
+     running down a wire, a face glancing about. Those want to leave as fast as
+     they arrive, which is the one thing a decelerating curve cannot do, and a
+     loop built on `--ease` visibly stalls at the top of every cycle.
+
+     Every easing in this file is one of these three, `linear`, or `steps()`.
+     There is no fourth opinion, and a new one has to argue it is a register
+     rather than a preference. */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-spring: cubic-bezier(0.34, 0.9, 0.3, 1);
+  --ease-loop: cubic-bezier(0.35, 0, 0.3, 1);
+
+  --tempo-tap: 120ms; /* Nothing moves: color, background, border, opacity. */
+  --tempo-move: 200ms; /* Something changes position or size in place. */
+  --tempo-enter: 280ms; /* A surface arrives. */
+
+  /* How far a surface travels before it lands. One distance, so a menu and a
+     dialog are one gesture at two sizes rather than two gestures. */
+  --pop-rise: 0.5rem;
+  /* Set by whatever is popping. A menu pins this to the corner nearest the
+     button that opened it, so it grows out of the thing that was pressed; a
+     dialog leaves it centered. This is the difference between an app that
+     feels like one mechanism and one where every surface arrives from
+     nowhere. */
+  --pop-origin: center;
 
   /* What a dialog is separated from the page by. A token because the answer is
      different on dark paper, where a near-black wash over a near-black page
      separates nothing. */
   --scrim: rgb(11 17 13 / 0.55);
 
-  --shadow-pop: 0 1.5rem 3rem -1rem rgb(24 33 27 / 0.22), 0 0 0 1px var(--edge);
+  /* ---- Elevation ----------------------------------------------------------
+     Three levels, and both halves of each are load-bearing: the ring is what
+     separates a surface on ink, the drop is what separates it on paper. A
+     shadow written for one surface is invisible on the other, which is what
+     `0 1px 2px rgb(24 33 27 / 0.3)` was. In rem, because the app scales, and a
+     24px blur at 1.4x interface scale is still a 24px blur.
+
+     `--lift-1` carries no ring, because everything at that level already has a
+     border of its own and a ring beside one draws a two-pixel line. The two
+     above it are for surfaces that float free and have nothing else holding
+     their edge. */
+  --lift-1: 0 0.25rem 0.75rem -0.375rem rgb(24 33 27 / 0.16);
+  --lift-2: 0 0.5rem 1.25rem -0.5rem rgb(24 33 27 / 0.18), 0 0 0 1px var(--edge);
+  --lift-3: 0 1.5rem 3rem -1rem rgb(24 33 27 / 0.22), 0 0 0 1px var(--edge);
+  /* For the things that are dark whatever the operator picked: the rail, and
+     anything sitting on top of a scrim. They cannot read `--lift-*`, because
+     those resolve against the reading column and would put a paper-weight ring
+     on a black surface. Same argument as `--rail-ground`, one level up. */
+  --lift-dark: 0 0.5rem 1.5rem -0.375rem rgb(0 0 0 / 0.45);
 }
 
 /* Ink instead of paper.
-   Seven neutrals, four accents, a scrim and a shadow. Nothing else, and in
+   Seven neutrals, four accents, a scrim and three lifts. Nothing else, and in
    particular not one `--rail-*` name: the rail is dark in both surfaces and
    redefining an accent it drew with would repaint it silently, which no test
    would catch. `.rail` pins the two accents it does read.
@@ -116,8 +254,12 @@
   --alarm: #e8705c;
 
   --scrim: rgb(0 0 0 / 0.62);
-  /* The drop layer does nothing over a dark page, so the ring does the work. */
-  --shadow-pop: 0 1.5rem 3rem -1rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--edge);
+  /* The drop layer does almost nothing over a dark page, so the ring carries
+     the separation and the drop only deepens the well underneath. Same three
+     names, so nothing above this line knows which surface it is drawing on. */
+  --lift-1: 0 0.25rem 0.75rem -0.375rem rgb(0 0 0 / 0.4);
+  --lift-2: 0 0.5rem 1.25rem -0.5rem rgb(0 0 0 / 0.5), 0 0 0 1px var(--edge);
+  --lift-3: 0 1.5rem 3rem -1rem rgb(0 0 0 / 0.55), 0 0 0 1px var(--edge);
 }
 
 * {
@@ -161,7 +303,7 @@ body {
      that resets with `font: inherit` and names no size of its own falls back to
      this, so leaving it absolute would freeze them while everything around them
      grew. */
-  font-size: 0.9375rem;
+  font-size: var(--type-body);
   background: var(--ground);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
@@ -187,7 +329,7 @@ button {
 }
 ::-webkit-scrollbar-thumb {
   background: color-mix(in oklab, var(--muted) 32%, transparent);
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   border: 0.19rem solid transparent;
   background-clip: content-box;
 }
@@ -263,22 +405,22 @@ button {
   flex-direction: column;
   border-radius: var(--radius);
   background: var(--raised);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--lift-2);
   overflow: hidden;
 }
 
 .desk__head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-4);
   width: 100%;
-  padding: 0.55rem 0.7rem;
+  padding: var(--space-4) var(--space-5);
   background: none;
   border: 0;
   text-align: left;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
 }
 
 .desk[data-open] .desk__head {
@@ -290,15 +432,18 @@ button {
    circle and the menu bar's attention glyph: one statement, three places. */
 .desk__count {
   flex: none;
-  min-width: 1.15rem;
-  padding: 0 0.25rem;
-  border-radius: 0.6rem;
+  /* A badge is a circle when its leading is its width, so the two are one
+     number rather than two that happen to agree. */
+  --badge: 1.15rem;
+  min-width: var(--badge);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius);
   background: var(--alarm);
   color: #fff;
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: var(--type-meta);
   font-weight: 600;
-  line-height: 1.15rem;
+  line-height: var(--badge);
   text-align: center;
 }
 
@@ -313,7 +458,7 @@ button {
 .desk__chevron {
   flex: none;
   color: var(--faint);
-  font-size: 0.7rem;
+  font-size: var(--type-meta);
 }
 
 /* Capped and scrolling rather than growing. A queue of nine must not become a
@@ -331,16 +476,16 @@ button {
 }
 
 .desk__card {
-  padding: 0.7rem;
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 .desk__who {
   display: flex;
   align-items: flex-start;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 .desk__whotext {
@@ -349,14 +494,14 @@ button {
 
 .desk__asker {
   font-family: var(--font-display);
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
   font-weight: 600;
   color: var(--text);
 }
 
 .desk__summary {
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: var(--type-aside);
+  line-height: var(--lead-tight);
   color: var(--text);
 }
 
@@ -365,23 +510,23 @@ button {
 .desk__detail {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.45rem 0.5rem;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4);
   border-radius: var(--radius-sm);
   background: var(--sunken);
 }
 
 .desk__detail dt {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.06em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
 }
 
 .desk__detail dd {
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: var(--type-small);
+  line-height: var(--lead-tight);
   color: var(--text);
   /* A field can be an entire system prompt, and it is shown because a decision
      made without it is made blind. Wrapped rather than cut, inside a box that
@@ -393,7 +538,7 @@ button {
 .desk__actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--space-3);
   align-items: center;
 }
 
@@ -433,8 +578,8 @@ button {
   color: var(--rail-text);
   /* The window's own buttons float over the top left corner, which is now this
      column rather than the rail. The first circle starts under them. */
-  padding: 2.25rem 0 0.5rem;
-  gap: 0.3rem;
+  padding: var(--space-8) 0 var(--space-4);
+  gap: var(--space-2);
 }
 
 .grail__rule {
@@ -442,7 +587,7 @@ button {
   width: 1.5rem;
   height: 1px;
   background: var(--rail-edge);
-  margin: 0.1rem 0 0.2rem;
+  margin: var(--space-1) 0 var(--space-2);
 }
 
 /* Scrolls rather than wraps, which is the whole reason this is a column. The
@@ -458,7 +603,7 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-2);
 }
 
 .grail__list::-webkit-scrollbar {
@@ -491,17 +636,17 @@ button {
 }
 
 .rail__brand {
-  padding: 2.25rem 1rem 0.75rem;
+  padding: var(--space-8) var(--space-6) var(--space-5);
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 .rail__wordmark {
   font-family: var(--font-display);
-  font-size: 1.05rem;
+  font-size: var(--type-lede);
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: var(--track-caps-wide);
   text-transform: uppercase;
   color: var(--rail-text);
 }
@@ -521,13 +666,12 @@ button {
   border: 1px solid var(--rail-edge);
   background: var(--rail-raised);
   color: var(--rail-text);
-  font-size: 1.05rem;
-  line-height: 1;
+  font-size: var(--type-lede);
+  line-height: var(--lead-flush);
   border-radius: var(--radius-sm);
-  transition:
-    color 120ms ease,
-    background 120ms ease,
-    border-color 120ms ease;
+  transition: color var(--tempo-tap) var(--ease),
+    background var(--tempo-tap) var(--ease),
+    border-color var(--tempo-tap) var(--ease);
 }
 
 .rail__new:hover,
@@ -539,12 +683,12 @@ button {
 
 .rail__section {
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--track-caps-wide);
   text-transform: uppercase;
   color: var(--rail-muted);
-  padding: 0.7rem 1rem 0.35rem;
+  padding: var(--space-5) var(--space-6) var(--space-3);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -554,15 +698,15 @@ button {
    rail is still the agent. The gear is the only part that acts. */
 .rail__group-head {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: 0.14em;
+  letter-spacing: var(--track-caps-wide);
   text-transform: uppercase;
   color: var(--rail-muted);
-  padding: 0.75rem 0.6rem 0.3rem 1rem;
+  padding: var(--space-5) var(--space-4) var(--space-2) var(--space-6);
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--space-4);
 }
 
 /* The only part of the header that gives up space. Everything to its right is
@@ -579,7 +723,7 @@ button {
 .rail__group-tail {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--space-4);
   margin-left: auto;
   flex: none;
   /* Sized here rather than inherited from the heading. The same tail hangs off
@@ -587,8 +731,8 @@ button {
      is inside it, and inheriting made the member count twice the size in one of
      them. */
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.14em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps-wide);
   color: var(--rail-muted);
 }
 
@@ -599,19 +743,19 @@ button {
 .rail__gear {
   background: none;
   border: 0;
-  padding: 0 0.15rem;
-  font-size: 0.78rem;
-  line-height: 1;
+  padding: 0 var(--space-1);
+  font-size: var(--type-small);
+  line-height: var(--lead-flush);
   color: var(--rail-muted);
   opacity: 0.55;
-  transition: opacity 120ms ease, color 120ms ease;
+  transition: opacity var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 /* What a group is spending, and whether it is spending it right now. */
 .meter {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-2);
   flex: none;
 }
 
@@ -627,10 +771,10 @@ button {
   flex: 1;
   min-height: 0;
   background: var(--rail-edge);
-  border-radius: 0.5px;
+  border-radius: 1px;
   /* Only the height animates, and only upward from nothing, so a quiet meter
      is flat rather than a row of stubs pretending to be activity. */
-  transition: height 220ms ease-out;
+  transition: height var(--tempo-move) var(--ease);
 }
 
 .meter[data-busy] .meter__bar {
@@ -640,8 +784,8 @@ button {
 .meter__count,
 .meter__cost {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.04em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   color: var(--rail-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -659,7 +803,7 @@ button {
 }
 
 .run__cost {
-  margin-left: 0.35rem;
+  margin-left: var(--space-3);
 }
 
 .rail__group-head:hover .rail__gear,
@@ -671,7 +815,7 @@ button {
 /* The wall between groups, drawn once between them rather than around each, so
    the rail reads as a list with divisions and not a stack of cards. */
 .rail__group + .rail__group {
-  margin-top: 0.15rem;
+  margin-top: var(--space-1);
   border-top: 1px solid var(--rail-edge);
 }
 
@@ -704,12 +848,13 @@ button {
   background: linear-gradient(to bottom, var(--rail-wire) 0%, var(--rail-wire) 88%, transparent);
   pointer-events: none;
   opacity: 0;
-  transition: opacity 200ms ease;
+  transition: opacity var(--tempo-move) var(--ease);
 }
 
 .rail__body[data-live="true"]::before {
   opacity: 1;
-  transition-duration: 90ms;
+  /* On faster than it goes off: the wire appearing is the news. */
+  transition-duration: var(--tempo-tap);
 }
 
 .rail__list {
@@ -717,36 +862,37 @@ button {
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
-  padding-bottom: 0.5rem;
+  padding-bottom: var(--space-4);
 }
 
 .rail__empty {
-  padding: 0.5rem 1rem;
-  font-size: 0.78rem;
+  padding: var(--space-4) var(--space-6);
+  font-size: var(--type-small);
   color: var(--rail-muted);
-  line-height: 1.5;
+  line-height: var(--lead-ui);
 }
 
 .rail__foot {
   border-top: 1px solid var(--rail-edge);
-  padding: 0.4rem 0;
+  padding: var(--space-3) 0;
   flex: none;
 }
 
 .pulse {
   position: absolute;
   left: 1.72rem;
-  width: 0.58rem;
-  height: 0.58rem;
-  margin-left: -0.29rem;
-  border-radius: 0.19rem;
+  --dot: 0.58rem;
+  width: var(--dot);
+  height: var(--dot);
+  margin-left: calc(var(--dot) / -2);
+  border-radius: var(--radius-xs);
   background: var(--pulse-color, var(--flesh));
   box-shadow:
     0 0 0 0.19rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 22%, transparent),
     0 0 0.64rem color-mix(in oklab, var(--pulse-color, var(--flesh)) 45%, transparent);
   pointer-events: none;
   z-index: 2;
-  animation: pulse-travel var(--pulse-duration, 620ms) cubic-bezier(0.35, 0, 0.3, 1) forwards;
+  animation: pulse-travel var(--pulse-duration, 620ms) var(--ease-loop) forwards;
 }
 
 /* Tumbles as it flies, so it reads as something thrown rather than a dot
@@ -777,8 +923,8 @@ button {
   display: grid;
   grid-template-columns: 2.25rem 1fr auto;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.28rem 0.75rem 0.28rem 0.6rem;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
   background: none;
   border: 0;
   text-align: left;
@@ -798,7 +944,7 @@ button {
   top: 0.25rem;
   bottom: 0.25rem;
   width: 2px;
-  border-radius: 0 2px 2px 0;
+  border-radius: 0 1px 1px 0;
   background: var(--accent, var(--flesh));
 }
 
@@ -808,15 +954,15 @@ button {
 .agent-row__title {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-2);
   min-width: 0;
 }
 
 .agent-row__name {
   font-family: var(--font-display);
-  font-size: 0.88rem;
+  font-size: var(--type-ui);
   font-weight: 500;
-  letter-spacing: 0.005em;
+  letter-spacing: var(--track-flat);
   color: var(--rail-text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -839,8 +985,8 @@ button {
 
 .agent-row__meta {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.02em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
   color: var(--rail-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -856,15 +1002,15 @@ button {
 .agent-row__meta[data-state="asking"] {
   color: var(--rail-ground);
   background: var(--flesh);
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
   font-weight: 600;
 }
 
 /* The rail reorders itself as agents talk. Sliding rows into place is legible;
    snapping them is disorienting, especially when several move at once. */
 .agent-row[data-sliding="true"] {
-  transition: transform 500ms cubic-bezier(0.2, 0.85, 0.25, 1);
+  transition: transform var(--tempo-enter) var(--ease);
 }
 
 /* ==========================================================================
@@ -901,7 +1047,7 @@ button {
   height: 2px;
   border-radius: 1px;
   background: var(--flesh);
-  box-shadow: 0 0 6px color-mix(in oklab, var(--flesh) 55%, transparent);
+  box-shadow: 0 0 0.375rem color-mix(in oklab, var(--flesh) 55%, transparent);
 }
 
 /* A whole crew as the target, which is what dropping anywhere but on a row
@@ -925,18 +1071,18 @@ button {
   pointer-events: none;
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.25rem 0.6rem 0.25rem 0.35rem;
-  border-radius: 0.5rem;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
   background: var(--rail-raised);
   border: 1px solid var(--rail-edge);
-  box-shadow: 0 8px 20px rgb(0 0 0 / 35%);
+  box-shadow: var(--lift-dark);
   opacity: 0.95;
 }
 
 .rail__held-name {
   font-family: var(--font-display);
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
   color: var(--rail-text);
   white-space: nowrap;
 }
@@ -956,7 +1102,7 @@ button {
   width: 100%;
   display: flex;
   justify-content: center;
-  padding: 0.15rem 0;
+  padding: var(--space-1) 0;
   background: none;
   border: 0;
   color: inherit;
@@ -972,9 +1118,8 @@ button {
   justify-content: center;
   background: var(--rail-raised);
   box-shadow: inset 0 0 0 1px var(--rail-edge);
-  transition:
-    box-shadow 160ms ease,
-    background 160ms ease;
+  transition: box-shadow var(--tempo-move) var(--ease),
+    background var(--tempo-move) var(--ease);
 }
 
 .orb:hover .orb__ring {
@@ -993,7 +1138,7 @@ button {
   width: 0.2rem;
   height: 1.6rem;
   transform: translateY(-50%);
-  border-radius: 0 0.2rem 0.2rem 0;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--flesh-soft);
 }
 
@@ -1014,7 +1159,7 @@ button {
   inset: 0;
   /* Opens the ring a little under the pointer. The crew is a drop target as
      well as a place, so it is worth answering before it is clicked. */
-  transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--tempo-move) var(--ease);
 }
 
 .orb:hover .orb__faces {
@@ -1070,10 +1215,10 @@ button {
   right: -0.3rem;
   bottom: -0.2rem;
   font-family: var(--font-mono);
-  font-size: 0.52rem;
-  line-height: 1;
-  padding: 0.12rem 0.2rem;
-  border-radius: 0.35rem;
+  font-size: var(--type-mark);
+  line-height: var(--lead-flush);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
   background: var(--grail-ground);
   box-shadow: inset 0 0 0 1px var(--rail-edge);
   color: var(--rail-muted);
@@ -1081,7 +1226,7 @@ button {
 
 .orb__all-count {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
   font-variant-numeric: tabular-nums;
   color: var(--rail-muted);
 }
@@ -1094,7 +1239,7 @@ button {
    the only place the others are still visible, so it has to carry that. */
 .orb[data-state="working"] .orb__ring {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--flesh) 60%, transparent);
-  animation: orb-breathe 2.6s ease-in-out infinite;
+  animation: orb-breathe 2.6s var(--ease-loop) infinite;
 }
 
 /* And the one state the operator is the fix for, which is a number rather than
@@ -1106,14 +1251,15 @@ button {
   position: absolute;
   right: 0.25rem;
   bottom: 0.05rem;
-  min-width: 0.95rem;
-  padding: 0 0.18rem;
+  --badge: 0.95rem;
+  min-width: var(--badge);
+  padding: 0 var(--space-1);
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   font-weight: 600;
-  line-height: 0.95rem;
+  line-height: var(--badge);
   text-align: center;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-sm);
   background: var(--alarm);
   color: #fff;
   box-shadow: 0 0 0 2px var(--grail-ground);
@@ -1137,15 +1283,15 @@ button {
 .rail__open-head {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.7rem 0.6rem 0.45rem 1rem;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-4) var(--space-4) var(--space-6);
 }
 
 .rail__open-name {
   font-family: var(--font-display);
-  font-size: 0.95rem;
+  font-size: var(--type-body);
   font-weight: 600;
-  letter-spacing: 0.01em;
+  letter-spacing: var(--track-flat);
   color: var(--rail-text);
   flex: 1;
   min-width: 0;
@@ -1187,7 +1333,7 @@ button {
   position: relative;
   line-height: 0;
   /* Slow enough that turning to face a peer reads as a movement. */
-  transition: transform 340ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--tempo-enter) var(--ease);
 }
 
 .avatar--xs { width: 1.35rem; height: 1.35rem; }
@@ -1200,7 +1346,7 @@ button {
   height: 100%;
   overflow: visible;
   transform-origin: center 78%;
-  animation: breathe 4.4s ease-in-out infinite;
+  animation: breathe 4.4s var(--ease-loop) infinite;
   animation-delay: var(--phase, 0s);
 }
 
@@ -1211,7 +1357,7 @@ button {
 
 /* Thinking is a change of behavior, not a spinner bolted on beside the face. */
 .avatar[data-busy="true"] .avatar__body {
-  animation: think 1.9s ease-in-out infinite;
+  animation: think 1.9s var(--ease-loop) infinite;
 }
 
 @keyframes think {
@@ -1232,7 +1378,7 @@ button {
      eyes off the face instead of closing them. */
   transform-box: fill-box;
   transform-origin: center;
-  animation: blink 6.2s ease-in-out infinite;
+  animation: blink 6.2s var(--ease-loop) infinite;
   animation-delay: var(--phase, 0s);
 }
 
@@ -1244,7 +1390,7 @@ button {
 .avatar__pupil {
   transform-box: fill-box;
   transform-origin: center;
-  animation: glance 9s ease-in-out infinite;
+  animation: glance 9s var(--ease-loop) infinite;
   animation-delay: var(--phase, 0s);
 }
 
@@ -1257,7 +1403,7 @@ button {
 }
 
 .avatar[data-busy="true"] .avatar__pupil {
-  animation: glance 2.6s ease-in-out infinite;
+  animation: glance 2.6s var(--ease-loop) infinite;
 }
 
 /* --- aimed look ---------------------------------------------------------- */
@@ -1278,7 +1424,7 @@ button {
 
 /* Matches AIM_MS in lib/choreography.ts: a slow wind-up, then the release. */
 .avatar[data-gesture="send"] {
-  animation: wind-up 650ms cubic-bezier(0.34, 0.9, 0.3, 1);
+  animation: wind-up 650ms var(--ease-spring);
 }
 
 @keyframes wind-up {
@@ -1292,7 +1438,7 @@ button {
 
 /* Matches CATCH_MS: knocked back, then a couple of settling wobbles. */
 .avatar[data-gesture="receive"] {
-  animation: knock-back 700ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  animation: knock-back 700ms var(--ease-spring);
 }
 
 @keyframes knock-back {
@@ -1309,17 +1455,17 @@ button {
   top: -0.4rem;
   right: -0.55rem;
   font-family: var(--font-display);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   font-weight: 700;
-  line-height: 1;
-  padding: 0.18rem 0.32rem;
-  border-radius: 0.55rem 0.55rem 0.55rem 0.12rem;
+  line-height: var(--lead-flush);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius) var(--radius) var(--radius) 1px;
   background: var(--accent, var(--flesh));
   color: #16201a;
   white-space: nowrap;
   pointer-events: none;
   z-index: 3;
-  animation: says 1.4s ease forwards;
+  animation: says 1.4s var(--ease) forwards;
 }
 
 @keyframes says {
@@ -1344,10 +1490,10 @@ button {
 
 .pane__header {
   height: 3.4rem;
-  padding: 0 1rem 0 1.15rem;
+  padding: 0 var(--space-6) 0 var(--column-inset);
   display: flex;
   align-items: center;
-  gap: 0.7rem;
+  gap: var(--space-5);
   border-bottom: 1px solid var(--edge);
   background: var(--ground);
   flex: none;
@@ -1355,14 +1501,14 @@ button {
 
 .pane__title {
   font-family: var(--font-display);
-  font-size: 1.02rem;
+  font-size: var(--type-lede);
   font-weight: 600;
-  letter-spacing: -0.005em;
+  letter-spacing: var(--track-tight);
   margin: 0;
 }
 
 .pane__subtitle {
-  font-size: 0.78rem;
+  font-size: var(--type-small);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1375,13 +1521,13 @@ button {
    control to find out a state. */
 .pane__flag {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.1em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--pit);
   background: var(--pit-soft);
-  border-radius: 99px;
-  padding: 0.14rem 0.45rem;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-4);
   flex: none;
 }
 
@@ -1393,11 +1539,11 @@ button {
   border: 0;
   background: none;
   color: var(--faint);
-  font-size: 1rem;
-  line-height: 1;
-  padding: 0.3rem 0.5rem;
+  font-size: var(--type-lede);
+  line-height: var(--lead-flush);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
-  transition: color 120ms ease, background 120ms ease;
+  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .pane__more:hover,
@@ -1415,7 +1561,7 @@ button {
      sideways: what genuinely cannot wrap, code and tables, carries its own
      scroller. */
   overflow-x: hidden;
-  padding: 1.1rem 0 0.6rem;
+  padding: var(--space-6) 0 var(--space-4);
 }
 
 /* ==========================================================================
@@ -1450,8 +1596,8 @@ button {
      whatever is written there is too small for somebody's locale, and what it
      is too small by is a word of the message underneath it. */
   grid-template-columns: 2.1rem minmax(0, 1fr) minmax(var(--clock), auto);
-  gap: 0.75rem;
-  padding: 0.3rem 0.5rem 0.3rem 1.15rem;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-4) var(--space-2) var(--column-inset);
 }
 
 .msg:hover {
@@ -1484,15 +1630,15 @@ button {
 .msg[data-operator="true"] {
   grid-template-columns: minmax(var(--clock), auto) minmax(0, 1fr);
   justify-items: end;
-  padding-left: 0.5rem;
-  padding-right: 1.5rem;
+  padding-left: var(--space-4);
+  padding-right: var(--space-7);
 }
 
 .msg[data-operator="true"] .msg__body {
   /* Shorter than an agent's. What you type is a question or an instruction,
      and a bubble is the wrong shape for anything longer than a few lines. */
   max-width: min(32rem, 100%);
-  padding: 0.4rem 0.75rem;
+  padding: var(--space-3) var(--space-5);
   border-radius: var(--radius);
   background: var(--flesh-soft);
 }
@@ -1501,22 +1647,22 @@ button {
    either: which one a tail belongs on is a question about the end of a run,
    and a transcript row does not know it is the last of one. */
 .msg--continued[data-operator="true"] .msg__body {
-  margin-top: 0.15rem;
+  margin-top: var(--space-1);
 }
 
 .msg__head {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  margin-bottom: 0.15rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-1);
   flex-wrap: wrap;
 }
 
 .msg__author {
   font-family: var(--font-display);
-  font-size: 0.88rem;
+  font-size: var(--type-ui);
   font-weight: 600;
-  letter-spacing: -0.003em;
+  letter-spacing: var(--track-tight);
 }
 
 /* In its own lane and inked on hover, so revealing it moves nothing and
@@ -1533,15 +1679,15 @@ button {
   justify-self: end;
   align-self: start;
   /* Onto the first line of the message rather than the top of the row. */
-  margin-top: 0.12rem;
+  margin-top: var(--space-1);
   white-space: nowrap;
   font-family: var(--font-mono);
-  font-size: 0.6rem;
+  font-size: var(--type-fine);
   font-variant-numeric: tabular-nums;
   color: var(--faint);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 120ms ease;
+  transition: opacity var(--tempo-tap) var(--ease);
 }
 
 .msg[data-operator="true"] .msg__at {
@@ -1559,10 +1705,10 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.75rem 1.5rem 0.45rem;
+  padding: var(--space-5) var(--space-7) var(--space-4);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.04em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
   color: var(--faint);
 }
 
@@ -1575,8 +1721,8 @@ button {
    ========================================================================== */
 
 .md {
-  font-size: 0.925rem;
-  line-height: 1.62;
+  font-size: var(--type-body);
+  line-height: var(--lead-read);
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -1589,7 +1735,7 @@ button {
 }
 
 .md p {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-4);
 }
 
 .md h1,
@@ -1598,14 +1744,14 @@ button {
 .md h4 {
   font-family: var(--font-display);
   font-weight: 600;
-  line-height: 1.3;
-  margin: 0.9rem 0 0.35rem;
+  line-height: var(--lead-tight);
+  margin: var(--space-6) 0 var(--space-3);
 }
 
-.md h1 { font-size: 1.12rem; }
-.md h2 { font-size: 1.04rem; }
-.md h3 { font-size: 0.96rem; }
-.md h4 { font-size: 0.92rem; }
+.md h1 { font-size: var(--type-lede); }
+.md h2 { font-size: var(--type-lede); }
+.md h3 { font-size: var(--type-body); }
+.md h4 { font-size: var(--type-body); }
 
 /* Markers restored, because Tailwind's preflight takes them off every list on
    the page and nothing here put them back: an agent's numbered steps arrived
@@ -1614,13 +1760,13 @@ button {
    sequence instead of the same mark at every depth. */
 .md ul,
 .md ol {
-  margin: 0 0 0.5rem;
-  padding-left: 1.3rem;
+  margin: 0 0 var(--space-4);
+  padding-left: var(--space-7);
   list-style: revert;
 }
 
 .md li {
-  margin: 0.12rem 0;
+  margin: var(--space-1) 0;
 }
 
 /* Except where the checkbox is the marker. */
@@ -1644,13 +1790,13 @@ button {
   font-size: 0.84em;
   background: var(--sunken);
   border: 1px solid var(--edge);
-  border-radius: 0.3rem;
-  padding: 0.05rem 0.3rem;
+  border-radius: var(--radius-xs);
+  padding: var(--space-1) var(--space-2);
 }
 
 .md__pre {
-  margin: 0.5rem 0;
-  padding: 0.7rem 0.85rem;
+  margin: var(--space-4) 0;
+  padding: var(--space-5) var(--space-5);
   background: var(--sunken);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
@@ -1661,31 +1807,31 @@ button {
   background: none;
   border: 0;
   padding: 0;
-  font-size: 0.82rem;
-  line-height: 1.55;
+  font-size: var(--type-aside);
+  line-height: var(--lead-read);
 }
 
 .md blockquote {
-  margin: 0.5rem 0;
-  padding: 0.1rem 0 0.1rem 0.8rem;
+  margin: var(--space-4) 0;
+  padding: var(--space-1) 0 var(--space-1) var(--space-5);
   border-left: 2px solid var(--edge);
   color: var(--muted);
 }
 
 .md__scroll {
   overflow-x: auto;
-  margin: 0.5rem 0;
+  margin: var(--space-4) 0;
 }
 
 .md table {
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
 }
 
 .md th,
 .md td {
   border: 1px solid var(--edge);
-  padding: 0.3rem 0.55rem;
+  padding: var(--space-2) var(--space-4);
   text-align: left;
 }
 
@@ -1697,7 +1843,7 @@ button {
 .md hr {
   border: 0;
   border-top: 1px solid var(--edge);
-  margin: 0.9rem 0;
+  margin: var(--space-6) 0;
 }
 
 /* The streaming bubble gets a caret so a pause reads as "still typing" rather
@@ -1708,7 +1854,7 @@ button {
   width: 0.45rem;
   height: 0.95em;
   vertical-align: text-bottom;
-  margin-left: 2px;
+  margin-left: var(--space-1);
   background: var(--flesh);
   animation: caret 1.05s steps(2) infinite;
 }
@@ -1734,7 +1880,7 @@ button {
    ========================================================================== */
 
 .figure {
-  margin: 0.65rem 0;
+  margin: var(--space-5) 0;
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--raised);
@@ -1768,18 +1914,18 @@ button {
 }
 
 .figure--waiting {
-  padding: 1.1rem 0.9rem;
+  padding: var(--space-6) var(--space-6);
 }
 
 .figure__body {
-  padding: 0.7rem 0.8rem 0.2rem;
+  padding: var(--space-5) var(--space-5) var(--space-2);
 }
 
 .figure__foot {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
-  padding: 0.3rem 0.55rem 0.5rem;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4) var(--space-4);
 }
 
 /* Takes the row when it is open, so the table lands under both controls rather
@@ -1791,22 +1937,22 @@ button {
 
 .figure__fault {
   margin: 0;
-  padding: 0 0.25rem;
-  font-size: 0.8rem;
+  padding: 0 var(--space-2);
+  font-size: var(--type-aside);
   color: var(--alarm);
 }
 
 .figure__source {
-  margin-top: 0.55rem;
+  margin-top: var(--space-4);
 }
 
 /* --- the chart itself --------------------------------------------------- */
 
 .chart__title {
   font-family: var(--font-display);
-  font-size: 0.92rem;
+  font-size: var(--type-body);
   font-weight: 600;
-  margin: 0 0 0.4rem;
+  margin: 0 0 var(--space-3);
   color: var(--text);
 }
 
@@ -1839,7 +1985,7 @@ button {
 .chart__tick,
 .chart__name {
   font-family: var(--font-ui);
-  font-size: 10.5px;
+  font-size: var(--type-fine);
   fill: var(--faint);
   /* Ticks are a column of numbers, which is the one place equal-width digits
      are worth having. */
@@ -1854,7 +2000,7 @@ button {
    surface, and identity comes from the colored mark beside the words. */
 .chart__value {
   font-family: var(--font-ui);
-  font-size: 10.5px;
+  font-size: var(--type-fine);
   font-weight: 600;
   fill: var(--muted);
 }
@@ -1866,7 +2012,7 @@ button {
 
 .chart__bar,
 .chart__wedge {
-  transition: opacity 120ms ease;
+  transition: opacity var(--tempo-tap) var(--ease);
 }
 
 /* The mark under the pointer lifts, so the reader can see it respond. The
@@ -1918,26 +2064,26 @@ button {
   transform: translate(-50%, 0);
   pointer-events: none;
   min-width: 6rem;
-  padding: 0.35rem 0.5rem;
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--raised);
-  box-shadow: var(--shadow-pop);
-  font-size: 0.76rem;
+  box-shadow: var(--lift-2);
+  font-size: var(--type-small);
   z-index: 2;
 }
 
 .chart__readout-head {
-  margin: 0 0 0.2rem;
+  margin: 0 0 var(--space-2);
   color: var(--muted);
-  font-size: 0.7rem;
+  font-size: var(--type-meta);
 }
 
 .chart__readout-row {
   display: flex;
   align-items: baseline;
-  gap: 0.35rem;
-  margin: 0.1rem 0 0;
+  gap: var(--space-3);
+  margin: var(--space-1) 0 0;
 }
 
 /* The value leads and the name follows, which is the legend's hierarchy
@@ -1968,7 +2114,7 @@ button {
   display: inline-block;
   width: 0.55rem;
   height: 0.55rem;
-  border-radius: 2px;
+  border-radius: 1px;
   flex: none;
 }
 
@@ -1990,20 +2136,20 @@ button {
 .chart__legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.7rem;
+  gap: var(--space-2) var(--space-5);
   list-style: none;
-  margin: 0.5rem 0 0;
+  margin: var(--space-4) 0 0;
   padding: 0;
 }
 
 .chart__legend-item {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-3);
   border: 0;
   background: none;
-  padding: 0.1rem 0;
-  font-size: 0.78rem;
+  padding: var(--space-1) 0;
+  font-size: var(--type-small);
   color: var(--muted);
   cursor: pointer;
 }
@@ -2022,7 +2168,7 @@ button {
 
 .chart__table {
   margin: 0;
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
 }
 
 /* Sized and spaced like the ghost button beside it, because they are two
@@ -2031,8 +2177,8 @@ button {
 .chart__table > summary {
   cursor: pointer;
   color: var(--muted);
-  font-size: 0.78rem;
-  padding: 0.2rem 0.4rem;
+  font-size: var(--type-small);
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
   list-style-position: inside;
 }
@@ -2043,7 +2189,7 @@ button {
 }
 
 .chart__table[open] > summary {
-  margin-bottom: 0.35rem;
+  margin-bottom: var(--space-3);
 }
 
 .chart__table td {
@@ -2094,12 +2240,12 @@ button {
 .route {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: var(--space-2);
   font-family: var(--font-mono);
-  font-size: 0.62rem;
-  letter-spacing: 0.02em;
-  padding: 0.1rem 0.42rem;
-  border-radius: 99px;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
   background: var(--flesh-soft);
   color: color-mix(in oklab, var(--flesh) 82%, var(--text));
   white-space: nowrap;
@@ -2133,8 +2279,8 @@ button {
 .flow__head {
   display: flex;
   align-items: flex-end;
-  gap: 0.75rem;
-  padding: 0.35rem var(--flow-pad) 0.4rem calc(var(--flow-pad) + var(--flow-gutter));
+  gap: var(--space-5);
+  padding: var(--space-3) var(--flow-pad) var(--space-3) calc(var(--flow-pad) + var(--flow-gutter));
   background: var(--ground);
 }
 
@@ -2147,13 +2293,13 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  gap: var(--space-2);
   flex: none;
 }
 
 .flow__name {
   font-family: var(--font-display);
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
   font-weight: 600;
   color: var(--muted);
   max-width: 100%;
@@ -2164,11 +2310,11 @@ button {
 
 .flow__head-note {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
-  letter-spacing: 0.1em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
-  padding-bottom: 0.15rem;
+  padding-bottom: var(--space-1);
 }
 
 .flow__scroll {
@@ -2179,7 +2325,7 @@ button {
 
 .flow__body {
   position: relative;
-  padding: 0.35rem var(--flow-pad) 0.6rem;
+  padding: var(--space-3) var(--flow-pad) var(--space-4);
 }
 
 /* The lifelines. Absolute so they run the whole height behind every row
@@ -2208,13 +2354,13 @@ button {
 .run__head {
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: var(--space-4);
   width: 100%;
-  padding: 0.5rem var(--flow-pad);
+  padding: var(--space-4) var(--flow-pad);
   background: none;
   border: 0;
   text-align: left;
-  font-size: 0.78rem;
+  font-size: var(--type-small);
   color: var(--text);
 }
 
@@ -2227,7 +2373,7 @@ button {
 }
 
 .run__caret {
-  font-size: 0.6rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   width: 0.7rem;
   flex: none;
@@ -2235,11 +2381,11 @@ button {
 
 .run__when {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   flex: none;
   display: flex;
-  gap: 0.3rem;
+  gap: var(--space-2);
 }
 
 .run__day {
@@ -2254,7 +2400,7 @@ button {
 /* Overlapped, so a crowded run still costs a fixed strip of the header rather
    than growing sideways the way the lanes used to. */
 .run__face + .run__face {
-  margin-left: -0.35rem;
+  margin-left: calc(var(--space-3) * -1);
 }
 
 .run__face[data-gone] {
@@ -2273,27 +2419,27 @@ button {
 
 .run__count {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   flex: none;
 }
 
 .run__tokens {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   flex: none;
   font-variant-numeric: tabular-nums;
 }
 
 .run__board {
-  padding-bottom: 0.5rem;
+  padding-bottom: var(--space-4);
 }
 
 .flow__gone {
   font-family: var(--font-mono);
-  font-size: 0.5rem;
-  letter-spacing: 0.06em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -2306,11 +2452,11 @@ button {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: var(--space-4);
   width: 100%;
   background: none;
   border: 0;
-  padding: 0.1rem 0.4rem 0.1rem 0;
+  padding: var(--space-1) var(--space-3) var(--space-1) 0;
   border-radius: var(--radius-sm);
   text-align: left;
 }
@@ -2321,7 +2467,7 @@ button {
 
 .flow__time {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   flex: none;
   width: 3.1rem;
@@ -2331,14 +2477,14 @@ button {
 .flow__excerpt {
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: var(--space-4);
   min-width: 0;
   flex: 1;
 }
 
 .flow__who {
   font-family: var(--font-display);
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   font-weight: 600;
   color: var(--text);
   flex: none;
@@ -2346,7 +2492,7 @@ button {
 
 /* One line, always. The board is for scanning; the modal is for reading. */
 .flow__said {
-  font-size: 0.78rem;
+  font-size: var(--type-small);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2361,7 +2507,7 @@ button {
 
 .flow__hop {
   font-family: var(--font-mono);
-  font-size: 0.56rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   flex: none;
 }
@@ -2377,8 +2523,8 @@ button {
 .wire {
   display: flex;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.3rem 1.5rem 0.3rem 1.15rem;
+  gap: var(--space-5);
+  padding: var(--space-2) var(--space-7) var(--space-2) var(--column-inset);
 }
 
 /* `min-width` so the bracket survives a row that fills. A burst of four peers
@@ -2407,19 +2553,19 @@ button {
 .wire__chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   flex: 0 1 auto;
   min-width: 0;
   max-width: 45%;
-  padding: 0.1rem 0.2rem;
-  border-radius: 99px;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-pill);
   border: 1px solid transparent;
   background: none;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
-  letter-spacing: 0.01em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
   color: var(--faint);
-  transition: border-color 130ms ease, color 130ms ease;
+  transition: border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 .wire__chip:hover {
@@ -2429,8 +2575,8 @@ button {
 .wire__arrow {
   color: var(--accent, var(--flesh));
   flex: none;
-  font-size: 0.8rem;
-  line-height: 1;
+  font-size: var(--type-aside);
+  line-height: var(--lead-flush);
 }
 
 .wire__label {
@@ -2440,7 +2586,7 @@ button {
 }
 
 .wire__why {
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2458,7 +2604,7 @@ button {
    message rather than a message, and the reason is on the row rather than
    behind the click. */
 .wire[data-refused="true"] .wire__chip {
-  padding: 0.24rem 0.6rem;
+  padding: var(--space-2) var(--space-4);
   background: var(--raised);
   border-color: color-mix(in oklab, var(--pit) 40%, transparent);
   color: var(--pit);
@@ -2475,7 +2621,7 @@ button {
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   min-width: 0;
 }
 
@@ -2487,8 +2633,8 @@ button {
    the pointer rather than wearing one permanently, because "click me" is only
    worth saying to somebody already pointing at it. */
 .wire__chip--open:hover {
-  padding: 0.1rem 0.5rem;
-  margin: 0 -0.3rem;
+  padding: var(--space-1) var(--space-4);
+  margin: 0 calc(var(--space-2) * -1);
   background: color-mix(in oklab, var(--accent, var(--flesh)) 8%, var(--raised));
   border-color: color-mix(in oklab, var(--accent, var(--flesh)) 55%, var(--edge));
   color: var(--text);
@@ -2525,7 +2671,7 @@ button {
 
 .wire__quiet-text {
   font-family: var(--font-mono);
-  font-size: 0.63rem;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
@@ -2545,13 +2691,13 @@ button {
    this belongs with what the turn did rather than with what was said to
    anybody. */
 .aside {
-  padding: 0.1rem 1.5rem 0.35rem 2.85rem;
+  padding: var(--space-1) var(--space-7) var(--space-3) var(--column-indent);
 }
 
 .aside .md {
   border-left: 2px solid var(--edge);
-  padding-left: 0.7rem;
-  font-size: 0.85rem;
+  padding-left: var(--space-5);
+  font-size: var(--type-ui);
   color: var(--faint);
 }
 
@@ -2570,7 +2716,7 @@ button {
    ========================================================================== */
 
 .trail {
-  padding: 0.2rem 1.5rem 0.2rem 1.15rem;
+  padding: var(--space-2) var(--space-7) var(--space-2) var(--column-inset);
 }
 
 /* Wide gaps between chips and tight ones inside. Four of these on a line with
@@ -2581,30 +2727,30 @@ button {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem 1.1rem;
+  gap: var(--space-2) var(--space-6);
   /* In line with the message bodies beside it: the gutter is 2.1rem of avatar
      and 0.75rem of gap, and a footnote that starts at the margin instead reads
      as a different column of the page. */
-  padding-left: 2.85rem;
+  padding-left: var(--column-indent);
 }
 
 .trail__chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-3);
   min-width: 0;
   max-width: 100%;
-  padding: 0.08rem 0.3rem;
-  margin: 0 -0.3rem;
+  padding: var(--space-1) var(--space-2);
+  margin: 0 calc(var(--space-2) * -1);
   border: 1px solid transparent;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: none;
   font-family: var(--font-mono);
-  font-size: 0.63rem;
-  letter-spacing: 0.01em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
   color: var(--faint);
   text-align: left;
-  transition: border-color 130ms ease, color 130ms ease, background-color 130ms ease;
+  transition: border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease), background-color var(--tempo-tap) var(--ease);
 }
 
 /* As with a burst chip: "you can open this" is only worth saying to somebody
@@ -2618,8 +2764,8 @@ button {
 
 .trail__caret {
   flex: none;
-  font-size: 0.62rem;
-  line-height: 1;
+  font-size: var(--type-fine);
+  line-height: var(--lead-flush);
   color: var(--faint);
 }
 
@@ -2646,11 +2792,11 @@ button {
    The value is not here and there is no field it could arrive in. */
 .trail__spent {
   flex: none;
-  padding: 0 0.3rem;
-  border-radius: 99px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
   background: var(--pit-soft);
   color: var(--pit);
-  font-size: 0.6rem;
+  font-size: var(--type-fine);
 }
 
 /* Something went wrong, and the row it is on is otherwise a list of things
@@ -2658,7 +2804,7 @@ button {
    a refused send is louder than the traffic around it: this is the one chip on
    the row the operator may have to do something about. */
 .trail__chip[data-failed] {
-  padding: 0.08rem 0.45rem;
+  padding: var(--space-1) var(--space-4);
   margin: 0;
   border-color: color-mix(in oklab, var(--pit) 32%, transparent);
   background: var(--pit-soft);
@@ -2673,14 +2819,14 @@ button {
    calls behind one chip and not a new kind of row. */
 .trail__steps {
   list-style: none;
-  margin: 0.3rem 0 0.2rem;
-  padding: 0.35rem 0 0.35rem 0.7rem;
-  margin-left: 2.85rem;
+  margin: var(--space-2) 0 var(--space-2);
+  padding: var(--space-3) 0 var(--space-3) var(--space-5);
+  margin-left: var(--column-indent);
   max-width: 42rem;
   border-left: 2px solid var(--edge);
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
+  gap: var(--space-3);
 }
 
 .trail__step[data-failed] {
@@ -2691,9 +2837,9 @@ button {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.4rem;
+  gap: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 0.63rem;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
@@ -2711,15 +2857,15 @@ button {
    something written to be read, and a model that could format it could
    describe a command as something other than the command it ran. */
 .trail__target {
-  margin: 0.15rem 0 0;
-  padding: 0.35rem 0.5rem;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-3) var(--space-4);
   max-height: 11rem;
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--sunken);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  line-height: 1.5;
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2737,15 +2883,15 @@ button {
    Unchanged lines are the memory itself and are left alone: tinting them too
    would make a rewrite of one sentence look like a rewrite of the page. */
 .diff {
-  margin: 0.15rem 0 0;
-  padding: 0.35rem 0;
+  margin: var(--space-1) 0 0;
+  padding: var(--space-3) 0;
   max-height: 16rem;
   overflow: auto;
   border-radius: var(--radius-sm);
   background: var(--sunken);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  line-height: 1.5;
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2757,7 +2903,7 @@ button {
    diff stops being scannable, which is the only thing it had. */
 .diff__line {
   display: flex;
-  padding-right: 0.5rem;
+  padding-right: var(--space-4);
 }
 
 .diff__text {
@@ -2779,7 +2925,7 @@ button {
 .diff__mark {
   flex: none;
   width: 1.5rem;
-  padding-left: 0.5rem;
+  padding-left: var(--space-4);
   color: var(--faint);
 }
 
@@ -2801,16 +2947,16 @@ button {
    then a record and not a decision.
    ========================================================================== */
 .ask {
-  margin: 0.6rem 1.5rem 0.6rem 1.15rem;
+  margin: var(--space-4) var(--space-7) var(--space-4) var(--column-inset);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
   background: var(--raised);
-  padding: 0.85rem 1rem;
+  padding: var(--space-5) var(--space-6);
 }
 
 .ask[data-state="pending"] {
   border-color: color-mix(in oklab, var(--flesh) 45%, var(--edge));
-  box-shadow: 0 0.4rem 1.2rem -0.6rem rgb(24 33 27 / 0.18);
+  box-shadow: var(--lift-1);
 }
 
 /* Answered, and therefore history. */
@@ -2822,13 +2968,13 @@ button {
 .ask__head {
   display: flex;
   align-items: flex-start;
-  gap: 0.6rem;
+  gap: var(--space-4);
 }
 
 .ask__summary {
   margin: 0;
   font-weight: 600;
-  font-size: 0.92rem;
+  font-size: var(--type-body);
   color: var(--text);
 }
 
@@ -2838,21 +2984,21 @@ button {
 }
 
 .ask__note {
-  margin: 0.15rem 0 0;
-  font-size: 0.78rem;
+  margin: var(--space-1) 0 0;
+  font-size: var(--type-small);
   color: var(--muted);
 }
 
 .ask__detail {
-  margin: 0.7rem 0 0;
+  margin: var(--space-5) 0 0;
   display: grid;
-  gap: 0.4rem;
+  gap: var(--space-3);
 }
 
 .ask__detail dt {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.12em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps-wide);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -2860,9 +3006,9 @@ button {
 /* The model wrote these. They are shown whole, wrapped, and never as markdown;
    a long brief scrolls rather than pushing the buttons off the screen. */
 .ask__detail dd {
-  margin: 0.1rem 0 0;
-  font-size: 0.84rem;
-  line-height: 1.5;
+  margin: var(--space-1) 0 0;
+  font-size: var(--type-ui);
+  line-height: var(--lead-ui);
   color: var(--text);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -2876,16 +3022,16 @@ button {
 }
 
 .ask__actions {
-  margin-top: 0.85rem;
+  margin-top: var(--space-5);
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .ask__scope {
   flex-basis: 100%;
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   color: var(--faint);
 }
 
@@ -2901,7 +3047,7 @@ button {
 .ask__answer,
 .desk__answer {
   display: flex;
-  gap: 0.4rem;
+  gap: var(--space-3);
   flex: 1;
   min-width: 0;
 }
@@ -2912,13 +3058,14 @@ button {
 .desk__field {
   flex: 1;
   min-width: 0;
-  padding: 0.35rem 0.55rem;
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--ground);
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 0.82rem;
+  font-size: var(--type-ui);
 }
 
 .ask__field:focus-visible,
@@ -2930,14 +3077,14 @@ button {
 .wire-modal__head {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.9rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
 }
 
 .wire-modal__body {
   max-height: 55vh;
   overflow-y: auto;
-  padding: 0.85rem;
+  padding: var(--space-5);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--ground);
@@ -2946,11 +3093,11 @@ button {
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-3);
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  line-height: 1.45;
-  padding: 0.2rem 0.5rem;
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
   border: 1px solid var(--edge);
   background: var(--sunken);
@@ -2961,14 +3108,14 @@ button {
 /* The way out of a failure, on the failure itself. A notice that says only what
    went wrong leaves the operator to work out what to do about it. */
 .chip__action {
-  margin-left: 0.15rem;
-  padding: 0 0.3rem;
+  margin-left: var(--space-1);
+  padding: 0 var(--space-2);
   border: 1px solid currentColor;
-  border-radius: 0.25rem;
+  border-radius: var(--radius-xs);
   background: none;
   color: inherit;
   font: inherit;
-  font-size: 0.64rem;
+  font-size: var(--type-fine);
 }
 
 .chip__action:hover:not(:disabled) {
@@ -3009,16 +3156,16 @@ button {
 .pane__pair {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-4);
   min-width: 0;
 }
 
 .pane__between {
   color: var(--faint);
-  font-size: 0.9rem;
+  font-size: var(--type-ui);
   font-weight: 400;
-  line-height: 1;
-  margin: 0 0.1rem;
+  line-height: var(--lead-flush);
+  margin: 0 var(--space-1);
 }
 
 /* Where the composer would be. The shape of the pane does not change when a
@@ -3027,9 +3174,9 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.7rem;
-  margin: 0.5rem 1.15rem 1.15rem;
-  padding: 0.55rem 0.7rem;
+  gap: var(--space-5);
+  margin: var(--space-4) var(--column-inset) var(--column-inset);
+  padding: var(--space-4) var(--space-5);
   border: 1px dashed var(--edge);
   border-radius: var(--radius);
   background: var(--sunken);
@@ -3039,8 +3186,8 @@ button {
 .viewonly__note {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.78rem;
+  gap: var(--space-3);
+  font-size: var(--type-small);
   color: var(--muted);
 }
 
@@ -3087,7 +3234,7 @@ button {
 }
 
 .turn__trail .trail__chips {
-  padding-left: 2.3rem;
+  padding-left: var(--space-8);
 }
 
 /* The model's working, in full, when it has been asked for. Bounded so the
@@ -3097,8 +3244,8 @@ button {
   max-height: 13rem;
   overflow-y: auto;
   flex: none;
-  margin: 0 1.15rem 0.4rem;
-  padding: 0.5rem 0.7rem;
+  margin: 0 var(--column-inset) var(--space-3);
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--sunken);
@@ -3110,8 +3257,8 @@ button {
 .thought__text {
   margin: 0;
   font-family: inherit;
-  font-size: 0.75rem;
-  line-height: 1.5;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   color: var(--muted);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -3119,15 +3266,15 @@ button {
 
 .thought__empty {
   margin: 0;
-  font-size: 0.75rem;
+  font-size: var(--type-small);
   color: var(--faint);
 }
 
 .working {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0 1.15rem 0.35rem;
+  gap: var(--space-4);
+  padding: 0 var(--column-inset) var(--space-3);
   flex: none;
   /* Its own stacking context, so the pulse behind the character stays behind
      the character and not behind the page. */
@@ -3138,15 +3285,15 @@ button {
 .working__label {
   display: flex;
   align-items: baseline;
-  gap: 0.45rem;
+  gap: var(--space-4);
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
   color: var(--muted);
   opacity: 0;
   transform: translateX(-0.3rem);
-  transition: opacity 160ms ease, transform 160ms ease;
+  transition: opacity var(--tempo-move) var(--ease), transform var(--tempo-move) var(--ease);
   pointer-events: none;
 }
 
@@ -3236,7 +3383,7 @@ button {
   flex: none;
   font-family: var(--font-mono);
   font-style: normal;
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
@@ -3247,9 +3394,9 @@ button {
   content: "";
   position: absolute;
   inset: -0.28rem;
-  border-radius: 0.7rem;
+  border-radius: var(--radius);
   background: color-mix(in oklab, var(--accent, var(--flesh)) 26%, transparent);
-  animation: working-pulse 1.9s ease-in-out infinite;
+  animation: working-pulse 1.9s var(--ease-loop) infinite;
   z-index: -1;
 }
 
@@ -3266,11 +3413,11 @@ button {
 }
 
 .composer {
-  margin: 0.5rem 1.15rem 1.15rem;
+  margin: var(--space-4) var(--column-inset) var(--column-inset);
   border: 1px solid var(--edge);
   border-radius: var(--radius);
   background: var(--raised);
-  transition: border-color 140ms ease;
+  transition: border-color var(--tempo-tap) var(--ease);
   flex: none;
 }
 
@@ -3289,9 +3436,9 @@ button {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: var(--space-3);
   margin: 0;
-  padding: 0.55rem 0.65rem 0;
+  padding: var(--space-4) var(--space-5) 0;
 }
 
 .composer__files .chip__name {
@@ -3311,7 +3458,7 @@ button {
 .chip__thumb {
   width: 1.4rem;
   height: 1.4rem;
-  border-radius: 0.2rem;
+  border-radius: var(--radius-xs);
   object-fit: cover;
   flex: none;
 }
@@ -3323,9 +3470,9 @@ button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.3rem;
+  gap: var(--space-2);
   margin: 0;
-  padding: 0.55rem 0.65rem 0;
+  padding: var(--space-4) var(--space-5) 0;
 }
 
 .chip__remove {
@@ -3333,8 +3480,8 @@ button {
   background: none;
   color: inherit;
   font: inherit;
-  line-height: 1;
-  padding: 0 0.1rem;
+  line-height: var(--lead-flush);
+  padding: 0 var(--space-1);
   cursor: pointer;
   opacity: 0.7;
 }
@@ -3358,7 +3505,7 @@ button {
   display: inline-flex;
   flex-direction: column;
   align-items: stretch;
-  margin-top: 0.35rem;
+  margin-top: var(--space-3);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--sunken);
@@ -3417,12 +3564,12 @@ button {
    eye reads "there is more" without a line of prose saying it. */
 .file__text {
   margin: 0;
-  padding: 0.6rem 0.7rem;
+  padding: var(--space-4) var(--space-5);
   max-height: 9rem;
   overflow: hidden;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
-  line-height: 1.5;
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text);
@@ -3435,7 +3582,7 @@ button {
    reads around rather than through. Same renderer as a message body, because a
    file is the same prose that happened to arrive as one. */
 .file__doc {
-  padding: 0.6rem 0.7rem;
+  padding: var(--space-4) var(--space-5);
   max-height: 11rem;
   overflow: hidden;
   mask-image: linear-gradient(to bottom, #000 70%, transparent);
@@ -3444,14 +3591,14 @@ button {
 /* The heading a document opens with is not a heading in a conversation: at
    message size it shouts across the transcript, and a card is a glance. */
 .file__doc .md {
-  font-size: 0.78rem;
+  font-size: var(--type-small);
 }
 
 .file__foot {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem 0.35rem 0.6rem;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4) var(--space-3) var(--space-4);
   min-width: 0;
 }
 
@@ -3461,7 +3608,7 @@ button {
   padding: 0;
   color: inherit;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3477,7 +3624,7 @@ button {
    one fact the name does not, and a size broken across two lines is the row
    telling the operator its own layout gave up. */
 .file__meta {
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--muted);
   flex: none;
   white-space: nowrap;
@@ -3491,14 +3638,14 @@ button {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  padding: 0.6rem 0.7rem;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
 }
 
 .file__failed-actions {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   flex: none;
 }
 
@@ -3529,8 +3676,8 @@ button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 0.9rem;
-  margin-bottom: 0.9rem;
+  column-gap: var(--space-6);
+  margin-bottom: var(--space-6);
 }
 
 .file-view__head .dialog__title {
@@ -3548,9 +3695,9 @@ button {
    `KB`, which is a dialog admitting it cannot lay out five characters. */
 .file-view__what {
   grid-column: 1;
-  margin: 0.1rem 0 0;
+  margin: var(--space-1) 0 0;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--muted);
   white-space: nowrap;
 }
@@ -3560,7 +3707,7 @@ button {
   grid-row: 1 / span 2;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 /* Its own corner. Beside `Save a copy` it read as the second half of a pair of
@@ -3577,8 +3724,8 @@ button {
   border-radius: var(--radius-sm);
   background: none;
   color: var(--muted);
-  font-size: 1.1rem;
-  line-height: 1;
+  font-size: var(--type-lede);
+  line-height: var(--lead-flush);
 }
 
 .file-view__close:hover {
@@ -3599,7 +3746,7 @@ button {
 .file-view__body[data-kind="text"],
 .file-view__body[data-kind="markdown"] {
   flex-direction: column;
-  padding: 0.35rem 0.5rem;
+  padding: var(--space-3) var(--space-4);
 }
 
 /* No mask, no height cap and no clip in here: this is the reading view, and
@@ -3619,7 +3766,7 @@ button {
 }
 
 .file-view__body .file__text {
-  font-size: 0.75rem;
+  font-size: var(--type-small);
 }
 
 /* The one place in the app where a document is read rather than glanced at, so
@@ -3630,7 +3777,7 @@ button {
    column sits against one edge with the rest of a 64rem window empty beside
    it, which reads as a layout that ran out rather than one that chose. */
 .file-view__body .file__doc .md {
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   max-width: 44rem;
   margin-inline: auto;
 }
@@ -3653,7 +3800,7 @@ button {
 .mentions {
   list-style: none;
   margin: 0;
-  padding: 0.25rem;
+  padding: var(--space-2);
   max-height: 14rem;
   overflow-y: auto;
   border-bottom: 1px solid var(--edge);
@@ -3662,9 +3809,9 @@ button {
 .mentions__item {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
+  gap: var(--space-4);
   width: 100%;
-  padding: 0.3rem 0.45rem;
+  padding: var(--space-2) var(--space-4);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -3677,14 +3824,14 @@ button {
 
 .mentions__name {
   font-family: var(--font-display);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
 }
 
 .mentions__skills {
   margin-left: auto;
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3709,19 +3856,19 @@ button {
   position: absolute;
   left: 100%;
   inset-block: 0;
-  margin-left: 0.4rem;
+  margin-left: var(--space-3);
   display: inline-flex;
-  gap: 0.13rem;
+  gap: var(--space-1);
   align-items: center;
 }
 
 .wire__dots i {
   width: 0.19rem;
   height: 0.19rem;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: currentColor;
   opacity: 0.4;
-  animation: wire-dot 1.1s ease-in-out infinite;
+  animation: wire-dot 1.1s var(--ease-loop) infinite;
 }
 
 .wire__dots i:nth-child(2) { animation-delay: 0.15s; }
@@ -3738,8 +3885,8 @@ button {
 .composer__row {
   display: flex;
   align-items: flex-end;
-  gap: 0.4rem;
-  padding: 0.3rem 0.35rem 0.3rem 0;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3) var(--space-2) 0;
 }
 
 /* The box and the layer that paints its mentions, stacked. The layer is out of
@@ -3758,13 +3905,13 @@ button {
 .composer__mirror,
 .composer__input {
   font: inherit;
-  font-size: 0.925rem;
-  line-height: 1.55;
+  font-size: var(--type-body);
+  line-height: var(--lead-read);
   /* A textarea does not inherit these; the layer under it does. Both are said
      out loud so the two cannot come apart on a UA default. */
   letter-spacing: inherit;
   word-spacing: inherit;
-  padding: 0.28rem 0.2rem 0.28rem 0.85rem;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
   border: 0;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -3802,7 +3949,7 @@ button {
    nothing that moves a glyph by half a pixel. The room around the name is a
    spread shadow, which takes up none. */
 .mention {
-  border-radius: 0.3rem;
+  border-radius: var(--radius-xs);
   background: color-mix(in oklab, var(--flesh) 26%, transparent);
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--flesh) 26%, transparent);
   -webkit-box-decoration-break: clone;
@@ -3813,18 +3960,19 @@ button {
    button is a label for something nothing else in the row could be. */
 .composer__send {
   flex: none;
-  width: 1.75rem;
-  height: 1.75rem;
-  margin-bottom: 0.12rem;
+  /* Round, so the ladder gives it both dimensions at once. */
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin-bottom: var(--space-1);
   display: grid;
   place-items: center;
   border: 0;
   border-radius: 50%;
   background: var(--flesh);
   color: var(--ground);
-  font-size: 0.85rem;
-  line-height: 1;
-  transition: background 120ms ease, opacity 120ms ease;
+  font-size: var(--type-ui);
+  line-height: var(--lead-flush);
+  transition: background var(--tempo-tap) var(--ease), opacity var(--tempo-tap) var(--ease);
 }
 
 .composer__send:hover:not(:disabled) {
@@ -3840,28 +3988,33 @@ button {
 .composer__foot {
   display: flex;
   align-items: center;
-  padding: 0 0.85rem 0.4rem;
+  padding: 0 var(--space-5) var(--space-3);
 }
 
 .hint {
   font-family: var(--font-mono);
-  font-size: 0.63rem;
-  letter-spacing: 0.01em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
   color: var(--faint);
 }
 
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   border: 1px solid var(--edge);
   background: var(--raised);
   color: var(--text);
-  padding: 0.38rem 0.72rem;
+  /* Height is the token and the padding is horizontal only. Vertical padding
+     is how a control ends up a different height from the one beside it: this
+     was 0.38rem against the input's 0.48rem, so a button in a form row sat
+     four pixels short of the field it belonged to. */
+  min-height: var(--control-h);
+  padding: 0 var(--space-5);
   border-radius: var(--radius-sm);
-  font-size: 0.82rem;
+  font-size: var(--type-ui);
   font-weight: 500;
-  transition: background 120ms ease, border-color 120ms ease;
+  transition: background var(--tempo-tap) var(--ease), border-color var(--tempo-tap) var(--ease);
 }
 
 .btn:hover:not(:disabled) {
@@ -3910,10 +4063,10 @@ button {
   color: var(--rail-muted);
   width: 100%;
   justify-content: flex-start;
-  padding: 0.42rem 1rem 0.42rem 0.6rem;
-  gap: 0.2rem;
+  padding: var(--space-3) var(--space-6) var(--space-3) var(--space-4);
+  gap: var(--space-2);
   font-family: var(--font-display);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
   border-radius: 0;
 }
@@ -3930,7 +4083,7 @@ button {
 
 .field {
   display: block;
-  margin-bottom: 0.95rem;
+  margin-bottom: var(--space-6);
 }
 
 /* A setting that is a yes or a no. The label sits beside the control rather
@@ -3939,11 +4092,11 @@ button {
 .field--row {
   display: flex;
   align-items: flex-start;
-  gap: 0.55rem;
+  gap: var(--space-4);
 }
 
 .field--row input[type="checkbox"] {
-  margin-top: 0.2rem;
+  margin-top: var(--space-2);
   flex: none;
 }
 
@@ -3957,7 +4110,7 @@ button {
    to "what can this reach". The name used to be `.connector`, which was true of
    one of the three. */
 .access {
-  margin-bottom: 1.15rem;
+  margin-bottom: var(--column-inset);
 }
 
 /* The brand's mark in the brand's color, on a neutral chip.
@@ -3968,16 +4121,16 @@ button {
   flex: none;
   width: 1.5rem;
   height: 1.5rem;
-  border-radius: 0.36rem;
+  border-radius: var(--radius-sm);
   display: grid;
   place-items: center;
   background: var(--sunken);
   border: 1px solid var(--edge);
   color: var(--mark, var(--muted));
   font-family: var(--font-display);
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   font-weight: 700;
-  line-height: 1;
+  line-height: var(--lead-flush);
 }
 
 /* A brand that publishes a black mark is not there at all on a dark chip.
@@ -4005,9 +4158,9 @@ button {
 .access__item {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
-  padding: 0.5rem;
-  margin-bottom: 0.4rem;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin-bottom: var(--space-3);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--sunken);
@@ -4016,24 +4169,24 @@ button {
 .access__row {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
 
 .access__name {
-  font-size: 0.78rem;
+  font-size: var(--type-small);
   font-weight: 600;
 }
 
 .access__account {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
 .access__where {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   flex: 1;
   min-width: 6rem;
@@ -4044,7 +4197,7 @@ button {
 
 .access__when {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   color: var(--faint);
   margin-left: auto;
 }
@@ -4054,11 +4207,11 @@ button {
    has sixty of these between the operator and the Disconnect button. */
 .toolset {
   list-style: none;
-  margin: 0.2rem 0 0;
+  margin: var(--space-2) 0 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: var(--space-1);
 }
 
 /* Wraps, because a narrowed tool grows a second line of names underneath it.
@@ -4068,8 +4221,8 @@ button {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 0.5rem;
-  padding: 0.3rem 0;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
   border-top: 1px solid var(--edge);
 }
 
@@ -4088,7 +4241,7 @@ button {
 .toolset__name {
   display: block;
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   color: var(--text);
 }
 
@@ -4101,7 +4254,7 @@ button {
   -webkit-line-clamp: 2;
   line-clamp: 2;
   overflow: hidden;
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--muted);
 }
 
@@ -4111,8 +4264,8 @@ button {
    just made, and the vendor's blurb is background. */
 .toolset__who {
   display: block;
-  margin-top: 0.1rem;
-  font-size: 0.64rem;
+  margin-top: var(--space-1);
+  font-size: var(--type-fine);
   color: var(--text);
 }
 
@@ -4131,7 +4284,7 @@ button {
   background: none;
   border: 0;
   color: var(--flesh);
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -4139,7 +4292,7 @@ button {
 .access__ok,
 .access__warn {
   margin: 0;
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
 }
 
 .access__ok {
@@ -4152,8 +4305,9 @@ button {
 
 .input--slim {
   width: auto;
-  padding: 0.2rem 0.3rem;
-  font-size: 0.7rem;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
+  font-size: var(--type-small);
 }
 
 .input--number {
@@ -4162,26 +4316,27 @@ button {
 }
 
 .btn--small {
-  padding: 0.2rem 0.5rem;
-  font-size: 0.66rem;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-4);
+  font-size: var(--type-small);
 }
 
 .field__label {
   display: block;
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: 0.11em;
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 0.32rem;
+  margin-bottom: var(--space-3);
 }
 
 .field__hint {
-  font-size: 0.76rem;
+  font-size: var(--type-small);
   color: var(--faint);
-  margin-top: 0.28rem;
-  line-height: 1.45;
+  margin-top: var(--space-2);
+  line-height: var(--lead-ui);
 }
 
 .input,
@@ -4193,8 +4348,9 @@ button {
   background: var(--ground);
   color: var(--text);
   font: inherit;
-  font-size: 0.875rem;
-  padding: 0.48rem 0.62rem;
+  font-size: var(--type-ui);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
   outline: none;
 }
 
@@ -4206,13 +4362,14 @@ button {
 
 .input--mono {
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
 }
 
 .textarea {
   resize: vertical;
+  padding: var(--space-4);
   min-height: 5.5rem;
-  line-height: 1.55;
+  line-height: var(--lead-read);
 }
 
 /* The scrim scrolls, not the dialog alone: on a short window a tall dialog
@@ -4225,10 +4382,10 @@ button {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 1.5rem;
+  padding: var(--space-7);
   overflow-y: auto;
   z-index: 50;
-  animation: fade 140ms ease;
+  animation: fade var(--tempo-enter) var(--ease) both;
 }
 
 @keyframes fade {
@@ -4251,35 +4408,62 @@ button {
   margin: auto;
   background: var(--raised);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-  padding: 1.35rem;
-  animation: rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
+  box-shadow: var(--lift-3);
+  padding: var(--space-7);
 }
 
-@keyframes rise {
-  from { opacity: 0; transform: translateY(0.6rem) scale(0.99); }
-  to { opacity: 1; transform: none; }
+/* ==========================================================================
+   One arrival
+
+   `.dialog` and `.palette` used to rise on a private 160ms curve, `.scrim`
+   faded on a different 140ms one, and `.menu` did not animate at all: pressing
+   + snapped a panel into existence while opening settings slid one in, and the
+   two read as different applications. One keyframe, one rule, and a surface
+   joins the set by adding its selector here rather than by inventing a
+   gesture of its own.
+
+   The origin is what makes it feel like one mechanism. A menu grows out of the
+   corner nearest the button that was pressed, which its own component sets
+   after it has measured where it fits; a dialog has no anchor and keeps the
+   default. Without it every surface arrives from the same nowhere.
+   ========================================================================== */
+.dialog,
+.palette,
+.menu {
+  animation: pop var(--tempo-enter) var(--ease) both;
+  transform-origin: var(--pop-origin);
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(var(--pop-rise)) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .dialog__title {
   font-family: var(--font-display);
-  font-size: 1.06rem;
+  font-size: var(--type-lede);
   font-weight: 600;
-  letter-spacing: -0.008em;
-  margin: 0 0 0.2rem;
+  letter-spacing: var(--track-tight);
+  margin: 0 0 var(--space-2);
 }
 
 .dialog__lede {
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
   color: var(--muted);
-  margin: 0 0 1rem;
-  line-height: 1.55;
+  margin: 0 0 var(--space-6);
+  line-height: var(--lead-read);
 }
 
 .swatch {
   width: 1.7rem;
   height: 1.7rem;
-  border-radius: 0.4rem;
+  border-radius: var(--radius-sm);
   border: 2px solid transparent;
   background: var(--swatch);
   padding: 0;
@@ -4293,7 +4477,7 @@ button {
 .picker {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(2.9rem, 1fr));
-  gap: 0.3rem;
+  gap: var(--space-2);
 }
 
 .picker__item {
@@ -4303,7 +4487,7 @@ button {
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: var(--ground);
-  padding: 0.3rem;
+  padding: var(--space-2);
 }
 
 .picker__item:hover {
@@ -4319,35 +4503,35 @@ button {
   max-width: 26rem;
   margin: auto;
   text-align: center;
-  padding: 2rem 1rem;
+  padding: var(--space-8) var(--space-6);
 }
 
 .empty__title {
   font-family: var(--font-display);
-  font-size: 1.05rem;
+  font-size: var(--type-lede);
   font-weight: 600;
-  margin: 0.85rem 0 0.4rem;
+  margin: var(--space-5) 0 var(--space-3);
 }
 
 .empty__body {
-  font-size: 0.875rem;
+  font-size: var(--type-ui);
   color: var(--muted);
-  line-height: 1.6;
-  margin: 0 0 1.1rem;
+  line-height: var(--lead-read);
+  margin: 0 0 var(--space-6);
 }
 
 .banner {
-  margin: 0.75rem 1.15rem 0;
-  padding: 0.6rem 0.8rem;
+  margin: var(--space-5) var(--column-inset) 0;
+  padding: var(--space-4) var(--space-5);
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in oklab, var(--pit) 38%, transparent);
   background: var(--pit-soft);
   color: var(--pit);
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: var(--space-5);
   flex: none;
 }
 
@@ -4407,8 +4591,8 @@ button {
 .inspector__head {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
-  padding: 0.55rem 0.5rem 0.35rem;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3);
 }
 
 /* Centered between the two controls rather than after the back arrow, so it
@@ -4418,13 +4602,13 @@ button {
   margin: 0;
   text-align: center;
   font-family: var(--font-display);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
 }
 
 .inspector--closed .inspector__tab {
-  margin: 0.55rem auto 0;
+  margin: var(--space-4) auto 0;
 }
 
 .inspector__tab,
@@ -4433,11 +4617,11 @@ button {
   background: none;
   cursor: pointer;
   color: var(--faint);
-  padding: 0.25rem 0.4rem;
+  padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  font-size: 0.85rem;
-  line-height: 1;
-  transition: color 120ms ease, background 120ms ease;
+  font-size: var(--type-ui);
+  line-height: var(--lead-flush);
+  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .inspector__tab:hover,
@@ -4452,7 +4636,7 @@ button {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 0.75rem 1rem;
+  padding: 0 var(--space-5) var(--space-6);
 }
 
 /* --- memory --------------------------------------------------------------
@@ -4554,7 +4738,7 @@ button {
   /* Shared with the space held open below, so the picture and the gap it leaves
      behind cannot disagree about how tall the screen is. */
   --screen-aspect: 16 / 10;
-  margin-bottom: 1.1rem;
+  margin-bottom: var(--space-6);
 }
 
 /* The stage leaves the flow to cover the window, so this holds the space it had.
@@ -4573,7 +4757,7 @@ button {
 }
 
 .screen__stage[data-zooming="true"] {
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transition: transform var(--tempo-move) var(--ease);
 }
 
 .screen__frame {
@@ -4598,8 +4782,8 @@ button {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.55rem;
-  padding: 0.8rem;
+  gap: var(--space-4);
+  padding: var(--space-5);
 }
 
 /* The offer under that note: one button, or two when the agent already has the
@@ -4608,7 +4792,7 @@ button {
 .screen__offer {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
+  gap: var(--space-3);
 }
 
 /* Transparent on purpose. The picture underneath is the whole point; this only
@@ -4630,23 +4814,23 @@ button {
 .screen__caption {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin: 0.4rem 0 0;
-  font-size: 0.72rem;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  font-size: var(--type-meta);
   color: var(--faint);
 }
 
 .screen__note {
   margin: 0;
-  font-size: 0.78rem;
-  line-height: 1.45;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   color: var(--muted);
 }
 
 .screen__state {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.07em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -4675,8 +4859,8 @@ button {
   flex-direction: column;
   background: var(--rail-ground);
   border: 1px solid var(--rail-edge);
-  border-radius: 12px;
-  box-shadow: 0 24px 60px rgb(0 0 0 / 45%);
+  border-radius: var(--radius);
+  box-shadow: var(--lift-dark);
   overflow: hidden;
 }
 
@@ -4691,8 +4875,8 @@ button {
 .screen__bar {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.5rem 0.55rem 0.5rem 0.85rem;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
   background: var(--rail-ground);
   border-bottom: 1px solid var(--rail-edge);
   color: var(--rail-text);
@@ -4705,9 +4889,9 @@ button {
 .screen__actions {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  padding-left: 0.55rem;
-  margin-left: 0.2rem;
+  gap: var(--space-3);
+  padding-left: var(--space-4);
+  margin-left: var(--space-2);
   border-left: 1px solid var(--rail-edge);
 }
 
@@ -4717,7 +4901,7 @@ button {
 
 .screen__title {
   font-family: var(--font-display);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
 }
 
 /* --- routines ------------------------------------------------------------
@@ -4735,14 +4919,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .routines__title {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
 }
@@ -4752,11 +4936,11 @@ button {
   background: none;
   cursor: pointer;
   color: var(--faint);
-  font-size: 1.1rem;
-  line-height: 1;
-  padding: 0.1rem 0.35rem;
+  font-size: var(--type-lede);
+  line-height: var(--lead-flush);
+  padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-sm);
-  transition: color 120ms ease, background 120ms ease;
+  transition: color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .routines__add:hover:not(:disabled),
@@ -4771,19 +4955,19 @@ button {
 }
 
 .routines__note {
-  margin: 0.2rem 0 0;
-  font-size: 0.76rem;
-  line-height: 1.5;
+  margin: var(--space-2) 0 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   color: var(--faint);
 }
 
 .routine {
   display: flex;
   align-items: flex-start;
-  gap: 0.55rem;
+  gap: var(--space-4);
   width: 100%;
   text-align: left;
-  padding: 0.4rem 0.35rem;
+  padding: var(--space-3) var(--space-3);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -4804,7 +4988,7 @@ button {
   flex: none;
   width: 0.85rem;
   height: 0.85rem;
-  margin-top: 0.15rem;
+  margin-top: var(--space-1);
   border: 0.1rem solid var(--mint);
   border-radius: 50%;
   position: relative;
@@ -4834,7 +5018,7 @@ button {
 .routine__body {
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: var(--space-1);
   min-width: 0;
 }
 
@@ -4849,13 +5033,13 @@ button {
 }
 
 .routine__name {
-  font-size: 0.85rem;
-  line-height: 1.3;
+  font-size: var(--type-ui);
+  line-height: var(--lead-tight);
   color: var(--text);
 }
 
 .routine__when {
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   color: var(--faint);
 }
 
@@ -4909,16 +5093,16 @@ button {
 .detail__actions {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  margin-bottom: 1rem;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
   min-height: 1.6rem;
 }
 
 .detail__save {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
-  margin-bottom: 1rem;
+  gap: var(--space-3);
+  margin-bottom: var(--space-6);
 }
 
 /* A switch, not a checkbox: this is a thing that is on or off right now, and
@@ -4926,11 +5110,11 @@ button {
 .toggle {
   display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: var(--space-4);
   border: 0;
   padding: 0;
   background: none;
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   color: var(--text);
 }
 
@@ -4939,9 +5123,9 @@ button {
   width: 2rem;
   height: 1.1rem;
   flex: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--edge);
-  transition: background 140ms ease;
+  transition: background var(--tempo-tap) var(--ease);
 }
 
 .toggle__track::after {
@@ -4953,8 +5137,8 @@ button {
   height: 0.8rem;
   border-radius: 50%;
   background: var(--raised);
-  box-shadow: 0 1px 2px rgb(24 33 27 / 0.3);
-  transition: transform 140ms ease;
+  box-shadow: var(--lift-1);
+  transition: transform var(--tempo-tap) var(--ease);
 }
 
 .toggle[aria-checked="true"] .toggle__track {
@@ -4974,9 +5158,9 @@ button {
 .when {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   flex-wrap: wrap;
-  padding: 0.5rem 0.6rem;
+  padding: var(--space-4) var(--space-4);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--raised);
@@ -4991,9 +5175,9 @@ button {
 .history__row {
   display: flex;
   align-items: baseline;
-  gap: 0.4rem;
-  padding: 0.3rem 0;
-  font-size: 0.78rem;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  font-size: var(--type-small);
   color: var(--text);
   border-bottom: 1px solid var(--edge);
 }
@@ -5004,13 +5188,13 @@ button {
 
 .history__kind {
   font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.06em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--pit);
   background: var(--pit-soft);
-  border-radius: 999px;
-  padding: 0.05rem 0.4rem;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
 }
 
 /* What a firing bought. On the row rather than behind a click, because it is
@@ -5020,9 +5204,9 @@ button {
 .history__spend {
   display: inline-flex;
   align-items: baseline;
-  gap: 0.3rem;
+  gap: var(--space-2);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--faint);
 }
 
@@ -5035,15 +5219,15 @@ button {
    reached a model. */
 .history__quiet {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.05em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--pit);
 }
 
 .history__ago {
   margin-left: auto;
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   color: var(--faint);
 }
 
@@ -5067,18 +5251,18 @@ button {
   position: fixed;
   z-index: 51;
   min-width: 10rem;
-  padding: 0.25rem;
+  padding: var(--space-2);
   background: var(--raised);
   border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--lift-2);
 }
 
 .menu__head {
   margin: 0;
-  padding: 0.3rem 0.55rem 0.35rem;
+  padding: var(--space-2) var(--space-4) var(--space-3);
   font-family: var(--font-mono);
-  font-size: 0.55rem;
-  letter-spacing: 0.08em;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
   overflow: hidden;
@@ -5090,9 +5274,9 @@ button {
    message; here it is where somebody goes when a reply looks wrong. */
 .menu__model {
   display: block;
-  margin-top: 0.1rem;
+  margin-top: var(--space-1);
   text-transform: none;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--track-flat);
   opacity: 0.8;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5101,7 +5285,7 @@ button {
 .menu__rule {
   border: 0;
   border-top: 1px solid var(--edge);
-  margin: 0.25rem 0;
+  margin: var(--space-2) 0;
 }
 
 .menu__item[data-tone="danger"] {
@@ -5117,13 +5301,13 @@ button {
   display: block;
   width: 100%;
   text-align: left;
-  padding: 0.36rem 0.55rem;
+  padding: var(--space-3) var(--space-4);
   border: 0;
-  border-radius: 0.25rem;
+  border-radius: var(--radius-xs);
   background: none;
   cursor: pointer;
   font: inherit;
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   color: var(--text);
 }
 
@@ -5137,8 +5321,8 @@ button {
    already named at the top of it. */
 .menu__detail {
   display: block;
-  margin-top: 0.08rem;
-  font-size: 0.7rem;
+  margin-top: var(--space-1);
+  font-size: var(--type-meta);
   color: var(--faint);
 }
 
@@ -5157,16 +5341,17 @@ button {
 .rail__search {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  width: calc(100% - 1.2rem);
-  margin: 0.15rem 0.6rem 0.5rem;
-  padding: 0.4rem 0.5rem;
+  gap: var(--space-4);
+  width: calc(100% - var(--space-4) * 2);
+  margin: var(--space-1) var(--space-4) var(--space-4);
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
   border: 1px solid var(--rail-edge);
   border-radius: var(--radius-sm);
   background: color-mix(in oklab, var(--rail-raised) 70%, transparent);
   color: var(--rail-muted);
   text-align: left;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: background var(--tempo-tap) var(--ease), border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 .rail__search:hover {
@@ -5176,24 +5361,24 @@ button {
 }
 
 .rail__glass {
-  font-size: 0.95rem;
-  line-height: 1;
+  font-size: var(--type-body);
+  line-height: var(--lead-flush);
   opacity: 0.85;
 }
 
 .rail__search-label {
   flex: 1;
-  font-size: 0.82rem;
+  font-size: var(--type-ui);
 }
 
 /* The shortcut is a reminder, not a control, so it recedes until the row is
    under the pointer. */
 .rail__key {
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.04em;
-  padding: 0.1rem 0.25rem;
-  border-radius: 0.25rem;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-xs);
   border: 1px solid var(--rail-edge);
   color: var(--rail-muted);
   opacity: 0.75;
@@ -5214,23 +5399,22 @@ button {
   flex-direction: column;
   background: var(--raised);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
+  box-shadow: var(--lift-3);
   overflow: hidden;
-  animation: rise 160ms cubic-bezier(0.2, 0.7, 0.3, 1);
 }
 
 .palette__query {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  padding: 0.85rem 1rem;
+  gap: var(--space-4);
+  padding: var(--space-5) var(--space-6);
   border-bottom: 1px solid var(--edge);
   flex: none;
 }
 
 .palette__glass {
-  font-size: 1.15rem;
-  line-height: 1;
+  font-size: var(--type-lede);
+  line-height: var(--lead-flush);
   color: var(--faint);
 }
 
@@ -5241,7 +5425,7 @@ button {
   outline: none;
   background: none;
   font-family: var(--font-ui);
-  font-size: 1.02rem;
+  font-size: var(--type-lede);
   color: var(--text);
 }
 
@@ -5251,8 +5435,8 @@ button {
 
 .palette__tabs {
   display: flex;
-  gap: 0.15rem;
-  padding: 0.5rem 0.7rem;
+  gap: var(--space-1);
+  padding: var(--space-4) var(--space-5);
   border-bottom: 1px solid var(--edge);
   overflow-x: auto;
   flex: none;
@@ -5267,12 +5451,15 @@ button {
   border: 0;
   background: none;
   color: var(--muted);
-  padding: 0.28rem 0.6rem;
-  border-radius: 99px;
-  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--type-ui);
   font-weight: 500;
   white-space: nowrap;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 .palette__tab:hover {
@@ -5288,7 +5475,7 @@ button {
 
 .palette__results {
   overflow-y: auto;
-  padding: 0.35rem;
+  padding: var(--space-3);
   flex: 1;
 }
 
@@ -5297,8 +5484,8 @@ button {
   display: grid;
   grid-template-columns: 1.85rem 1fr auto;
   align-items: center;
-  gap: 0.7rem;
-  padding: 0.42rem 0.6rem;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -5318,8 +5505,8 @@ button {
 }
 
 .palette__glyph {
-  font-size: 0.95rem;
-  line-height: 1;
+  font-size: var(--type-body);
+  line-height: var(--lead-flush);
   color: var(--faint);
 }
 
@@ -5327,14 +5514,14 @@ button {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
+  gap: var(--space-1);
 }
 
 .palette__title {
   font-family: var(--font-display);
-  font-size: 0.9rem;
+  font-size: var(--type-ui);
   font-weight: 600;
-  letter-spacing: -0.004em;
+  letter-spacing: var(--track-tight);
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5342,7 +5529,7 @@ button {
 }
 
 .palette__detail {
-  font-size: 0.78rem;
+  font-size: var(--type-small);
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5351,16 +5538,16 @@ button {
 
 .palette__meta {
   font-family: var(--font-mono);
-  font-size: 0.63rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   white-space: nowrap;
 }
 
 .palette__empty {
-  padding: 1.6rem 1rem;
+  padding: var(--space-7) var(--space-6);
   margin: 0;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   color: var(--muted);
 }
 
@@ -5371,7 +5558,7 @@ button {
 [data-found="true"] .wire {
   background: color-mix(in oklab, var(--flesh) 14%, transparent);
   border-radius: var(--radius-sm);
-  animation: found 1.8s ease-out;
+  animation: found 1.8s var(--ease);
 }
 
 @keyframes found {
@@ -5413,36 +5600,36 @@ button {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 1.2rem;
-  padding: 1.35rem 1.35rem 1rem;
+  gap: var(--space-6);
+  padding: var(--space-7) var(--space-7) var(--space-6);
   border-bottom: 1px solid var(--edge);
   flex: none;
 }
 
 .cafeteria__stations {
   overflow-y: auto;
-  padding: 0.35rem 1.35rem 1rem;
+  padding: var(--space-3) var(--space-7) var(--space-6);
   flex: 1;
 }
 
 .cafeteria__station {
-  margin-top: 1.1rem;
+  margin-top: var(--space-6);
 }
 
 .cafeteria__station-name {
   font-family: var(--font-mono);
-  font-size: 0.68rem;
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
-  margin: 0 0 0.55rem;
+  margin: 0 0 var(--space-4);
 }
 
 .cafeteria__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15.5rem, 1fr));
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 /* One hireable agent. A button rather than a card with a checkbox in it: the
@@ -5452,13 +5639,13 @@ button {
   display: grid;
   grid-template-columns: 2.6rem 1fr;
   align-items: start;
-  gap: 0.65rem;
+  gap: var(--space-5);
   text-align: left;
-  padding: 0.7rem 0.75rem;
+  padding: var(--space-5) var(--space-5);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
   background: var(--raised);
-  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+  transition: border-color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease), box-shadow var(--tempo-tap) var(--ease);
 }
 
 .hire:hover {
@@ -5477,24 +5664,24 @@ button {
 .hire__face {
   display: grid;
   place-items: center;
-  padding-top: 0.1rem;
+  padding-top: var(--space-1);
 }
 
 .hire__body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: var(--space-2);
 }
 
 .hire__name {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
   font-family: var(--font-display);
-  font-size: 0.92rem;
+  font-size: var(--type-body);
   font-weight: 600;
-  letter-spacing: -0.004em;
+  letter-spacing: var(--track-tight);
   color: var(--text);
 }
 
@@ -5503,43 +5690,43 @@ button {
    about it. */
 .hire__already {
   font-family: var(--font-mono);
-  font-size: 0.58rem;
+  font-size: var(--type-mark);
   font-weight: 500;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
   border: 1px solid var(--edge);
-  border-radius: 99px;
-  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
 }
 
 .hire__tagline {
-  font-size: 0.79rem;
-  line-height: 1.35;
+  font-size: var(--type-aside);
+  line-height: var(--lead-tight);
   color: var(--muted);
 }
 
 .hire__skills {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
-  margin-top: 0.15rem;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
 }
 
 .hire__skill {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
+  font-size: var(--type-fine);
   color: var(--muted);
   background: var(--sunken);
-  border-radius: 99px;
-  padding: 0.1rem 0.4rem;
+  border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3);
 }
 
 .cafeteria__foot {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.9rem 1.35rem;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-7);
   border-top: 1px solid var(--edge);
   flex: none;
 }
@@ -5588,7 +5775,7 @@ button {
 }
 
 .settings__head {
-  padding: 1.35rem 1.35rem 1rem;
+  padding: var(--space-7) var(--space-7) var(--space-6);
   border-bottom: 1px solid var(--edge);
   flex: none;
 }
@@ -5602,11 +5789,11 @@ button {
 .settings__nav {
   flex: none;
   width: 11rem;
-  padding: 0.6rem 0.5rem;
+  padding: var(--space-4) var(--space-4);
   border-right: 1px solid var(--edge);
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: var(--space-1);
   overflow-y: auto;
 }
 
@@ -5614,11 +5801,14 @@ button {
   border: 0;
   background: none;
   text-align: left;
-  padding: 0.4rem 0.55rem;
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h);
+  padding: 0 var(--space-4);
   border-radius: var(--radius-sm);
-  font-size: 0.82rem;
+  font-size: var(--type-ui);
   color: var(--muted);
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
 .settings__tab:hover {
@@ -5635,21 +5825,21 @@ button {
 .settings__pane {
   flex: 1;
   overflow-y: auto;
-  padding: 1.1rem 1.35rem 1.35rem;
+  padding: var(--space-6) var(--space-7) var(--space-7);
 }
 
 .settings__title {
   font-family: var(--font-display);
-  font-size: 0.95rem;
+  font-size: var(--type-body);
   font-weight: 600;
-  margin: 0 0 0.2rem;
+  margin: 0 0 var(--space-2);
 }
 
 .settings__lede {
-  font-size: 0.8rem;
+  font-size: var(--type-aside);
   color: var(--muted);
-  margin: 0 0 1.1rem;
-  line-height: 1.5;
+  margin: 0 0 var(--space-6);
+  line-height: var(--lead-ui);
   max-width: 34rem;
 }
 
@@ -5663,9 +5853,9 @@ button {
    feature that is broken. */
 .access__empty {
   display: grid;
-  gap: 0.5rem;
+  gap: var(--space-4);
   justify-items: start;
-  margin-top: 0.6rem;
+  margin-top: var(--space-4);
 }
 
 .settings__list {
@@ -5673,7 +5863,7 @@ button {
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 0.7rem;
+  gap: var(--space-5);
 }
 
 .settings__list .field__label,
@@ -5685,8 +5875,8 @@ button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 0.5rem;
-  padding: 0.9rem 1.35rem;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-7);
   border-top: 1px solid var(--edge);
   flex: none;
 }
@@ -5697,8 +5887,8 @@ button {
 .settings__probe {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin-top: 1.2rem;
+  gap: var(--space-4);
+  margin-top: var(--space-6);
 }
 
 /* A row of choices that are one choice: the surface, the scale. Radio
@@ -5706,7 +5896,7 @@ button {
    at once and the set is always short. */
 .choices {
   display: flex;
-  gap: 0.3rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -5715,9 +5905,9 @@ button {
   background: var(--raised);
   color: var(--muted);
   border-radius: var(--radius-sm);
-  padding: 0.32rem 0.7rem;
-  font-size: 0.78rem;
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--type-small);
+  transition: border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .choice:hover:not([aria-pressed="true"]):not([aria-checked="true"]) {
@@ -5728,8 +5918,8 @@ button {
 /* Two words in a row that already carries a name and a sentence. The base
    size would make the pair as tall as the text beside them. */
 .choice--tight {
-  padding: 0.18rem 0.45rem;
-  font-size: 0.68rem;
+  padding: var(--space-1) var(--space-4);
+  font-size: var(--type-fine);
 }
 
 .choice:disabled {
@@ -5753,8 +5943,8 @@ button {
 .switch-row {
   display: flex;
   align-items: flex-start;
-  gap: 0.75rem;
-  padding: 0.55rem 0;
+  gap: var(--space-5);
+  padding: var(--space-4) 0;
   border-bottom: 1px solid var(--edge);
 }
 
@@ -5769,7 +5959,7 @@ button {
 
 .switch-row__label {
   display: block;
-  font-size: 0.84rem;
+  font-size: var(--type-ui);
   color: var(--text);
 }
 
@@ -5779,10 +5969,10 @@ button {
 
 .switch-row__hint {
   display: block;
-  font-size: 0.74rem;
+  font-size: var(--type-small);
   color: var(--faint);
-  margin-top: 0.1rem;
-  line-height: 1.45;
+  margin-top: var(--space-1);
+  line-height: var(--lead-ui);
 }
 
 /* One provider the operator can pick, with what is known about it. A button
@@ -5794,15 +5984,15 @@ button {
 .preset {
   display: flex;
   align-items: baseline;
-  gap: 0.6rem;
+  gap: var(--space-4);
   width: 100%;
   text-align: left;
   border: 1px solid var(--edge);
   background: var(--raised);
   border-radius: var(--radius-sm);
-  padding: 0.34rem 0.6rem;
-  margin-bottom: 0.25rem;
-  transition: border-color 120ms ease, background 120ms ease;
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-2);
+  transition: border-color var(--tempo-tap) var(--ease), background var(--tempo-tap) var(--ease);
 }
 
 .preset:hover {
@@ -5819,12 +6009,12 @@ button {
   flex: 1;
   display: flex;
   align-items: baseline;
-  gap: 0.5rem;
+  gap: var(--space-4);
 }
 
 .preset__name {
   flex: none;
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
   color: var(--text);
 }
 
@@ -5833,7 +6023,7 @@ button {
 .preset__url {
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5846,8 +6036,8 @@ button {
 .preset__state {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.6rem;
-  letter-spacing: 0.08em;
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -5873,7 +6063,7 @@ button {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--space-3);
 }
 
 /* The code the operator has to carry to a browser.
@@ -5883,30 +6073,30 @@ button {
   border: 1px solid var(--flesh);
   background: color-mix(in oklab, var(--flesh) 8%, var(--raised));
   border-radius: var(--radius-sm);
-  padding: 0.7rem 0.8rem;
-  margin: 0.5rem 0 0.25rem;
+  padding: var(--space-5) var(--space-5);
+  margin: var(--space-4) 0 var(--space-2);
 }
 
 .devicecode__lede {
-  margin: 0 0 0.5rem;
-  font-size: 0.78rem;
+  margin: 0 0 var(--space-4);
+  font-size: var(--type-small);
   color: var(--text);
 }
 
 .devicecode__code {
-  margin: 0 0 0.35rem;
+  margin: 0 0 var(--space-3);
   font-family: var(--font-mono);
-  font-size: 1.5rem;
-  letter-spacing: 0.18em;
+  font-size: var(--type-display);
+  letter-spacing: var(--track-caps-wide);
   color: var(--text);
   /* Selectable on purpose: retyping is where a fifteen-minute code is lost. */
   user-select: all;
 }
 
 .devicecode__url {
-  margin: 0 0 0.5rem;
+  margin: 0 0 var(--space-4);
   font-family: var(--font-mono);
-  font-size: 0.66rem;
+  font-size: var(--type-fine);
   color: var(--faint);
   overflow-wrap: anywhere;
   user-select: all;
@@ -5914,24 +6104,24 @@ button {
 
 /* The shortcuts table. A definition list, because that is what it is. */
 .keys {
-  margin: 0 0 1.1rem;
+  margin: 0 0 var(--space-6);
 }
 
 .keys__group {
   font-family: var(--font-mono);
-  font-size: 0.64rem;
+  font-size: var(--type-fine);
   font-weight: 500;
-  letter-spacing: 0.11em;
+  letter-spacing: var(--track-caps);
   text-transform: uppercase;
   color: var(--muted);
-  margin: 0.9rem 0 0.35rem;
+  margin: var(--space-6) 0 var(--space-3);
 }
 
 .keys__row {
   display: flex;
   align-items: baseline;
-  gap: 0.75rem;
-  padding: 0.3rem 0;
+  gap: var(--space-5);
+  padding: var(--space-2) 0;
   border-bottom: 1px solid var(--edge);
 }
 
@@ -5941,19 +6131,19 @@ button {
 
 .keys__what {
   flex: 1;
-  font-size: 0.82rem;
+  font-size: var(--type-aside);
   color: var(--text);
 }
 
 .keys__combo {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   color: var(--muted);
   background: var(--sunken);
   border: 1px solid var(--edge);
   border-radius: var(--radius-sm);
-  padding: 0.1rem 0.36rem;
+  padding: var(--space-1) var(--space-3);
   white-space: nowrap;
 }
 
@@ -5961,24 +6151,24 @@ button {
    set of controls. */
 .about {
   text-align: center;
-  padding: 1rem 0 0.5rem;
+  padding: var(--space-6) 0 var(--space-4);
 }
 
 .about__name {
   font-family: var(--font-display);
-  font-size: 1.3rem;
+  font-size: var(--type-title);
   font-weight: 600;
   margin: 0;
 }
 
 .about__version {
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: var(--type-meta);
   color: var(--faint);
-  margin: 0.25rem 0 0;
+  margin: var(--space-2) 0 0;
 }
 
 .about__facts {
-  margin: 1.2rem 0 0;
+  margin: var(--space-6) 0 0;
   text-align: left;
 }
