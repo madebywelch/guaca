@@ -1463,6 +1463,65 @@ button {
   color: var(--rail-muted);
 }
 
+/* The crew's name, beside its circle, while the circle is pointed at or
+   focused. `components/OrbTag.tsx` has the argument: faces alone cannot tell
+   two crews hired from the same cafeteria counters apart, and the way out was
+   clicking through the column.
+
+   Fixed to the window rather than laid out in the column, for the reason
+   `.rail__held` is: `.grail__list` scrolls, so it clips on both axes — a box
+   with `overflow-y: auto` computes `visible` to `auto` on the other axis — and
+   a tag inside it would be cut off at the edge of a four-rem column. Its
+   vertical middle is measured off the circle when it opens and arrives as
+   `--tag-y`; the centering is `translate` rather than a transform, because the
+   arrival below animates `transform` and would land it half a box too low.
+
+   It wraps rather than ellipsing. A name cut short is the thing this exists to
+   fix, and cutting it here would only move where that happens. */
+.orb__tag {
+  --pop-origin: left center;
+
+  position: fixed;
+  left: var(--grail-w);
+  top: var(--tag-y);
+  translate: 0 -50%;
+  z-index: 30;
+  /* The circle underneath is a button and a drop target, and the tag is drawn
+     over the pane beside it. Neither may lose a pointer to a label. */
+  pointer-events: none;
+  max-width: 14rem;
+  display: flex;
+  flex-direction: column;
+  /* The circle is a button, and a button centers its text. Read as a label the
+     name and the line under it have to start at the same edge. */
+  text-align: left;
+  gap: var(--space-1);
+  margin-left: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-radius: var(--radius-sm);
+  background: var(--rail-raised);
+  box-shadow: inset 0 0 0 1px var(--rail-edge), var(--lift-dark);
+}
+
+.orb__tag-name {
+  font-family: var(--font-display);
+  font-size: var(--type-ui);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lead-ui);
+  color: var(--rail-text);
+}
+
+/* The same sentence the label says, from the same function. A circle can carry
+   the ring and the corner count on two channels; this is where they are put
+   into words, which is what makes "is anything over there my problem" readable
+   without opening the crew. */
+.orb__tag-note {
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--rail-muted);
+}
+
 .orb__all-count {
   font-family: var(--font-mono);
   font-size: var(--type-aside);
@@ -4668,7 +4727,8 @@ button {
    ========================================================================== */
 .dialog,
 .palette,
-.menu {
+.menu,
+.orb__tag {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }

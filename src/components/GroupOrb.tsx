@@ -2,8 +2,9 @@ import type { CSSProperties } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { cluster } from "../lib/orb";
-import { presenceLabel, presenceOf } from "../lib/presence";
+import { presenceLabel, presenceNote, presenceOf } from "../lib/presence";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
+import { OrbTag, useOrbTag } from "./OrbTag";
 
 interface Props {
   group: Group;
@@ -29,10 +30,11 @@ function percent(fraction: number): string {
  *
  * Faces rather than a name, because a crew is recognized by who is in it long
  * before its name is read. How they stand is the crew's size: `lib/orb.ts` owns
- * the seating and says why. The name is not drawn at all here, because the
- * column is four rem wide and a name cut to fit it is a name nobody can read;
- * it is on the tooltip, on the label, and heading the crew column the moment
- * this is clicked.
+ * the seating and says why. The name is still not drawn *under* the circle,
+ * because the column is four rem wide and a name cut to fit it is a name nobody
+ * can read: it is drawn beside the circle, over the app, whenever the circle is
+ * pointed at or focused. `OrbTag` has the rest of that argument, including why
+ * faces alone were never enough to tell two crews apart.
  *
  * Two jobs in one control, which is why it is a circle and not a row in a menu.
  * Clicking opens the group. Dropping an agent on it puts the agent in the group,
@@ -50,6 +52,7 @@ export function GroupOrb({
   onDragOut,
 }: Props) {
   const { seats, rest } = cluster(members);
+  const tag = useOrbTag();
 
   // The two states worth interrupting a glance for, and why they are not one
   // mark: `lib/presence.ts`. This column is the only thing on screen about the
@@ -66,8 +69,19 @@ export function GroupOrb({
       data-state={presence.working ? "working" : undefined}
       data-over={over ? "true" : undefined}
       onClick={onOpen}
-      onPointerEnter={onDragOver}
-      onPointerLeave={onDragOut}
+      onFocus={tag.open}
+      onBlur={tag.close}
+      // Naming the crew and aiming a drag at it are the same gesture on
+      // purpose. A drag is when the operator most needs the circle to say which
+      // crew it is, and it is the one moment the native tooltip is suppressed.
+      onPointerEnter={(event) => {
+        tag.open(event);
+        onDragOver();
+      }}
+      onPointerLeave={() => {
+        tag.close();
+        onDragOut();
+      }}
     >
       <span className="orb__ring">
         <span className="orb__faces">
@@ -109,6 +123,9 @@ export function GroupOrb({
         <span className="orb__waiting" aria-hidden="true">
           {presence.blocked}
         </span>
+      )}
+      {tag.at !== null && (
+        <OrbTag name={group.name} note={presenceNote(members.length, presence)} at={tag.at} />
       )}
     </button>
   );
