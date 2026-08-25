@@ -8,12 +8,15 @@ import { Inspector } from "./Inspector";
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const agentRoutines = vi.fn<() => Promise<never[]>>();
+const agentNotes = vi.fn<(id: string) => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     agentComputer: (id: string) => agentComputer(id),
     agentBrowser: (id: string) => agentBrowser(id),
     agentRoutines: () => agentRoutines(),
+    agentNotes: (id: string) => agentNotes(id),
+    setAgentNotes: vi.fn(),
     startAgentComputer: vi.fn(),
     stopAgentComputer: vi.fn(),
     deleteAgentComputer: vi.fn(),
@@ -50,6 +53,7 @@ function configure() {
   useStore.setState({
     openingRoutine: null,
     routineVersion: {},
+    memoryVersion: {},
     settings: {
       operatorName: "",
       e2bKeySet: true,
@@ -84,6 +88,7 @@ describe("Inspector", () => {
     agentComputer.mockResolvedValue(null);
     agentBrowser.mockResolvedValue(null);
     agentRoutines.mockResolvedValue([]);
+    agentNotes.mockImplementation(async (id) => `${id} remembers this`);
     localStorage.clear();
     configure();
   });
@@ -108,7 +113,21 @@ describe("Inspector", () => {
     await waitFor(() => expect(screen.getAllByText(/'s screen$/)).toHaveLength(1));
     expect(screen.getAllByText(/'s browser$/)).toHaveLength(1);
     expect(screen.getAllByRole("heading", { name: "Routines" })).toHaveLength(1);
+    expect(screen.getAllByLabelText("Memory")).toHaveLength(1);
     expect(screen.queryByText("Cook's screen")).toBeNull();
     expect(screen.queryByText("Scribe's screen")).toBeNull();
+  });
+
+  it("switches the memory over with everything else, rather than under the new name", async () => {
+    // One key on the level they share is the whole mechanism, and a memory
+    // left behind is the worst of the three to leave: an operator editing what
+    // they believe is one agent's memory would save it onto another's.
+    const view = render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    expect(await screen.findByDisplayValue("a1 remembers this")).toBeTruthy();
+
+    view.rerender(<Inspector agent={card("a2", "Scribe")} onEditProfile={vi.fn()} />);
+
+    expect(await screen.findByDisplayValue("a2 remembers this")).toBeTruthy();
+    expect(screen.queryByDisplayValue("a1 remembers this")).toBeNull();
   });
 });

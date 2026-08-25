@@ -34,6 +34,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/keybinds.ts     Every key the app answers to, in one list.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
   components/         One file per surface.
+    Memory.tsx        What an agent remembers, and what happens when both of
+                      you write it at once.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
@@ -121,6 +123,9 @@ repo: the frontend renders state and forwards intent.
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
+| What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
+| An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
+| A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
@@ -181,6 +186,29 @@ flow would fail at the server and put the operator's account at risk, so it is
 not implemented. Claude models arrive through an API key or OpenRouter, which is
 still the default. Dates and sources: `docs/PROTOCOL.md`.
 
+**Every length is named, not spelled.** A size, a space, a radius, a duration,
+an easing and a shadow are each spelled from a closed set of tokens at the top
+of `src/styles.css`, and `styles.test.ts` fails the build on a literal. The rule
+is not that 13px is the right size for a second line: it is that the decision is
+*named*, so changing your mind means editing one token and watching every rule
+that shares the decision move with it. Spelled at the point of use a decision is
+invisible, and this file reached 41 font sizes with 38 of them inside ten
+pixels, 41 padding lengths, 22 radii and 5 easing curves with a considered color
+system sitting at the top of it the whole time. Nobody chose that, and no review
+would have caught it. The exceptions are named in the suite with their reasons;
+add one there rather than working around it.
+
+**One arrival, and three registers of motion.** Every surface that appears runs
+`@keyframes pop` at `--tempo-enter` on `--ease`, listed in one rule, and a new
+surface joins by adding its selector to it. What tells a menu from a dialog is
+`--pop-origin`, which a menu's own component sets to the corner nearest the
+button that opened it, *after* measuring where it actually fit: a menu pulled
+back off a window edge and grown from the corner it wanted slides across the
+screen on the way in. The three curves are not preferences. `--ease` is a
+surface arriving, `--ease-spring` is a character reacting and may only be spent
+on the vegetables, `--ease-loop` is anything that loops or travels. A fourth has
+to argue it is a register.
+
 **A secret never reaches a model.** A credential's value and a cookie's value do
 not enter a prompt, a transcript, an event or the webview, and there is no field
 on the types that cross those boundaries for one to arrive in. Keep it that way:
@@ -227,6 +255,17 @@ the model takes a screenshot to see what `browse` did.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **A memory read never replaces what the operator is in the middle of
+  typing.** The panel refreshes because the agent rewrote the file mid-turn,
+  which is exactly when somebody is most likely to be editing it by hand. A
+  version that lands under a draft is held to one side, the panel says so, and
+  the two ways out are already on screen: Save keeps what you wrote, Discard
+  takes what the agent wrote. `arrived` decides that against what is held when
+  the read lands, not what was held when it started. Only the runtime's write
+  emits `MemoryChanged`: the operator's own comes back from `set_agent_notes`
+  as what was stored, and what came back is what goes on screen, because
+  `Workspace::write` trims and cuts and the typed version is a page the agent
+  is never going to be given.
 - **What a memory rewrite replaced is absent, empty or a page, and the three
   mean different things.** Absent is a call that replaced nothing, which is
   every other tool and every write recorded before the field existed: there is

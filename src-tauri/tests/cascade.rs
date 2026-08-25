@@ -21,7 +21,7 @@ use guac_lib::db::Store;
 use guac_lib::domain::agent::Lifecycle;
 use guac_lib::domain::approval::{ApprovalState, Decision, ProtectedAction, Request};
 use guac_lib::domain::connector::CleanConnector;
-use guac_lib::domain::envelope::{Part, Participant};
+use guac_lib::domain::envelope::{Part, Participant, ToolOutcome};
 use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
 use guac_lib::domain::now_ms;
 use guac_lib::domain::routine::{Cadence, RunKind, Trigger};
@@ -623,6 +623,76 @@ async fn a_memory_write_records_the_version_it_replaced() {
         replaced,
         vec![Some(String::new()), Some("Smith handles verification.".to_string())],
         "the first write replaced nothing and the second replaced the first"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_memory_write_tells_the_panel_drawing_it() {
+    // The operator reads an agent's memory in the column beside it, and the
+    // moment they are most likely to be doing that is while the agent is
+    // working, which is the moment the agent rewrites the file. Without this
+    // the page on screen is the one that was true when the panel was drawn and
+    // the only way to find out otherwise is to click away and back.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else {
+            Script::Notes("Smith handles verification.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "remember who verifies").unwrap();
+    h.settle(run).await;
+
+    let manager = h.id("Manager");
+    assert_eq!(
+        h.sink
+            .count_of(|e| matches!(e, UiEvent::MemoryChanged { agent_id } if *agent_id == manager)),
+        1,
+        "the agent rewrote its memory and nothing said so"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_memory_write_that_failed_tells_nobody_it_changed() {
+    // The panel reads the file again on this event, so one emitted for a write
+    // that did not land is a read that reports the same page it already had,
+    // in front of an operator who has just been told something changed.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Done.".into())
+        } else {
+            Script::Notes("Smith handles verification.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    // A file where the workspace directory has to go: every write fails.
+    std::fs::write(h.runtime.workspace().root(), b"not a directory").unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "remember who verifies").unwrap();
+    h.settle(run).await;
+
+    let failed = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 200)
+        .unwrap()
+        .iter()
+        .flat_map(|m| m.parts.clone())
+        .any(|part| {
+            matches!(part, Part::ToolCall { name, outcome, .. }
+                if name == "update_notes" && matches!(outcome, ToolOutcome::Failed { .. }))
+        });
+    assert!(failed, "the write was supposed to fail, so the assertion below proves nothing");
+
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::MemoryChanged { .. })),
+        0,
+        "nothing was stored, so nothing changed"
     );
 }
 

@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { AgentCard, Group } from "../lib/types";
@@ -57,7 +58,7 @@ export function AgentMenu({
 }: Props) {
   const { agent } = target;
   const ref = useRef<HTMLDivElement>(null);
-  const [at, setAt] = useState({ x: target.x, y: target.y });
+  const [at, setAt] = useState({ x: target.x, y: target.y, origin: "top left" });
   /**
    * Clearing, asked twice, and the second wording says what survives.
    *
@@ -81,9 +82,15 @@ export function AgentMenu({
     const node = ref.current;
     if (!node) return;
     const { width, height } = node.getBoundingClientRect();
+    const x = Math.min(target.x, window.innerWidth - width - MARGIN);
+    const y = Math.min(target.y, window.innerHeight - height - MARGIN);
     setAt({
-      x: Math.min(target.x, window.innerWidth - width - MARGIN),
-      y: Math.min(target.y, window.innerHeight - height - MARGIN),
+      x,
+      y,
+      // The corner nearest the click, read off where the menu actually landed.
+      // Clamped away from an edge it is no longer under the pointer, and an
+      // origin taken from the click would slide it across the screen.
+      origin: `${y < target.y ? "bottom" : "top"} ${x < target.x ? "right" : "left"}`,
     });
   }, [target.x, target.y]);
 
@@ -137,7 +144,7 @@ export function AgentMenu({
         ref={ref}
         role="menu"
         aria-label={agent.name}
-        style={{ left: at.x, top: at.y }}
+        style={{ left: at.x, top: at.y, "--pop-origin": at.origin } as CSSProperties}
       >
         <p className="menu__head">
           {agent.name}

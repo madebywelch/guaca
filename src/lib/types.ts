@@ -855,6 +855,12 @@ export type UiEvent =
    */
   | { type: "routinesChanged"; agentId: AgentId }
   /**
+   * One agent rewrote its own memory. The panel drawing it reads the file
+   * again; nothing here is patched, because the file is a page at most and the
+   * event carries none of it.
+   */
+  | { type: "memoryChanged"; agentId: AgentId }
+  /**
    * A coding job could not run, for a reason only the operator can fix.
    *
    * The agent that asked is told in its own channel, and that is not enough: a

@@ -241,6 +241,15 @@ interface State {
    */
   routineVersion: Record<AgentId, number | undefined>;
 
+  /**
+   * The same counter for each agent's memory, and it is a second one rather
+   * than a share of the first. A schedule and a memory move on different
+   * occasions, and a panel that read the whole file back every time a routine
+   * came due would throw away an edit the operator was in the middle of
+   * writing.
+   */
+  memoryVersion: Record<AgentId, number | undefined>;
+
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
 
@@ -419,6 +428,7 @@ export const useStore = create<State>((set, get) => ({
   focused: null,
   openingRoutine: null,
   routineVersion: {},
+  memoryVersion: {},
   banner: null,
 
   async bootstrap() {
@@ -1064,6 +1074,16 @@ export const useStore = create<State>((set, get) => ({
           routineVersion: {
             ...state.routineVersion,
             [event.agentId]: (state.routineVersion[event.agentId] ?? 0) + 1,
+          },
+        }));
+        break;
+      }
+
+      case "memoryChanged": {
+        set((state) => ({
+          memoryVersion: {
+            ...state.memoryVersion,
+            [event.agentId]: (state.memoryVersion[event.agentId] ?? 0) + 1,
           },
         }));
         break;
