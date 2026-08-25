@@ -68,3 +68,76 @@ export function applyMention(
   const next = text.slice(0, query.start) + inserted + text.slice(query.end);
   return { text: next, caret: query.start + inserted.length };
 }
+
+/** A stretch of a message body: prose, or one `@` that resolved to an agent. */
+export type Run =
+  | { kind: "text"; at: number; text: string }
+  | { kind: "mention"; at: number; text: string; name: string };
+
+/** Letters, digits and underscore, in any script an operator types in. */
+const WORD = /[\p{L}\p{N}_]/u;
+
+/**
+ * Splits a body into prose and the mentions inside it.
+ *
+ * Resolution against the roster is the whole rule: `@Critic` is a mention
+ * because there is a Critic, and `@lunch` is a word somebody wrote. Nothing
+ * else can decide it, because `@` followed by a word is also a handle, a
+ * decorator and half an email address, and drawing a chip around one of those
+ * tells the operator this app knows something it does not.
+ *
+ * Runs carry the text as it was typed rather than the roster's spelling, which
+ * matters in the composer: the layer this paints sits under the operator's own
+ * characters, so a chip drawn one glyph wider than the name under it is a pill
+ * that has slid off. `name` is the canonical one, for anything asking who was
+ * meant.
+ */
+export function splitMentions(text: string, names: string[]): Run[] {
+  if (!text) return [];
+  // Longest first, because a roster can hold both "Head" and "Head Chef": the
+  // shorter one matches first otherwise and the rest of the name reads as prose.
+  const roster = names.filter((name) => name.length > 0).sort((a, b) => b.length - a.length);
+  if (roster.length === 0) return [{ kind: "text", at: 0, text }];
+
+  const runs: Run[] = [];
+  let plain = 0;
+  let from = 0;
+
+  while (from < text.length) {
+    const found = text.indexOf("@", from);
+    if (found === -1) break;
+    const name = resolve(text, found, roster);
+    if (!name) {
+      from = found + 1;
+      continue;
+    }
+    if (found > plain) runs.push({ kind: "text", at: plain, text: text.slice(plain, found) });
+    const end = found + 1 + name.length;
+    runs.push({ kind: "mention", at: found, text: text.slice(found, end), name });
+    from = end;
+    plain = end;
+  }
+
+  if (plain < text.length) runs.push({ kind: "text", at: plain, text: text.slice(plain) });
+  return runs;
+}
+
+/** The agent an `@` at this index names, or null if it names nobody. */
+function resolve(text: string, at: number, roster: string[]): string | null {
+  // The same rule the typeahead opens on, so what lights up is what could have
+  // been completed: an `@` mid-word is an email address, not a mention.
+  const preceding = at === 0 ? "" : text[at - 1]!;
+  if (preceding && !/\s|[([{]/.test(preceding)) return null;
+
+  const rest = text.slice(at + 1);
+  const lower = rest.toLowerCase();
+  for (const name of roster) {
+    if (!lower.startsWith(name.toLowerCase())) continue;
+    // "Critic" must not light up inside "@Critical". Punctuation after a name
+    // is ordinary prose and ends it.
+    const after = rest[name.length];
+    if (after !== undefined && WORD.test(after)) continue;
+    return name;
+  }
+  return null;
+}
