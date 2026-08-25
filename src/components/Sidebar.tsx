@@ -64,6 +64,7 @@ export function Sidebar({
   const agents = useLiveAgents();
   const groups = useStore((s) => s.groups);
   const repositories = useStore((s) => s.repositories);
+  const building = useStore((s) => s.building);
   const repoStatus = useStore((s) => s.repoStatus);
   const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
@@ -513,6 +514,7 @@ export function Sidebar({
                   )}
                   status={repoStatus}
                   row={row}
+                  building={building}
                   isOver={isOver}
                   onDragOver={hover}
                   // Back to the crew rather than to nothing. Leaving a
@@ -568,6 +570,7 @@ export function Sidebar({
                         crew={here}
                         status={repoStatus}
                         row={row}
+                        building={building}
                         isOver={isOver}
                         onDragOver={hover}
                         onDragLeave={() => hover({ kind: "group", id: group.id })}

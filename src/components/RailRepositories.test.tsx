@@ -64,6 +64,7 @@ function draw(
   crew: AgentCard[],
   dragging = false,
   status: Record<string, RepoStatus> = {},
+  building: Record<string, string> = {},
 ) {
   const onDragOver = vi.fn();
   const rendered = render(
@@ -71,6 +72,7 @@ function draw(
       repositories={repositories}
       crew={crew}
       status={status}
+      building={building}
       row={row}
       isOver={() => false}
       onDragOver={onDragOver}
@@ -185,6 +187,20 @@ describe("RailRepositories", () => {
     });
     expect(screen.getByText("4 PR")).toBeTruthy();
     expect(screen.getByTitle("4 open pull requests")).toBeTruthy();
+  });
+
+  it("says a repository is building while a coding job runs in it", () => {
+    // The job outlives the turn that started it, so the agent that asked has
+    // already gone idle. Without this the crew reads as stopped at exactly the
+    // moment it is building, which is what the operator asked about.
+    draw([repository()], [member("a1", "Ada", "r1")], false, {}, { r1: "a1" });
+    expect(screen.getByText("building")).toBeTruthy();
+    expect(screen.getByTitle("a coding agent is working here")).toBeTruthy();
+  });
+
+  it("goes back to the member count when the job ends", () => {
+    draw([repository()], [member("a1", "Ada", "r1")], false, {}, {});
+    expect(screen.queryByText("building")).toBeNull();
   });
 
   it("marks a detached head as the state it is", () => {

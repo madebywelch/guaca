@@ -334,7 +334,7 @@ use crate::domain::envelope::{
     channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
     Trust,
 };
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::routine::{Routine, RunKind};
@@ -458,6 +458,18 @@ pub enum RuntimeError {
          puts an agent in one by dragging it onto that repository in the rail"
     )]
     NoRepository(String),
+    /// A coding job is already running in that work tree.
+    ///
+    /// Not a race to retry through: the sentence has to make an agent wait for
+    /// the message it is already going to get, because the alternative it will
+    /// otherwise reach for is starting the job again.
+    #[error(
+        "a coding agent is already working in {repository}, started by {who}. Two of them in one \
+         repository overwrite each other's work. Do not start another: whoever asked for the \
+         first one gets a message when it finishes, and that is when the next piece of work can \
+         begin. Say that it is already in progress"
+    )]
+    RepositoryBusy { repository: String, who: String },
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("no agent with id {0}")]
@@ -533,6 +545,17 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
+    /// Which repositories have a coding job running, and who started it.
+    ///
+    /// Keyed by repository rather than by agent, because the thing that can
+    /// only happen once is a harness working in a directory. Two `pi` processes
+    /// in one work tree interleave their edits and run git against each other,
+    /// and nothing downstream would say which of them wrote what.
+    ///
+    /// In memory rather than on the row: a job does not survive a restart, and
+    /// a stored flag would come back true forever after a crash and lock a
+    /// repository nobody was working in.
+    coding: Mutex<HashMap<RepositoryId, AgentId>>,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
     /// Where each plugin's MCP server is, when it is not where it usually is.
@@ -604,6 +627,7 @@ impl Runtime {
                 workspace,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
+                coding: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
@@ -1385,12 +1409,47 @@ impl Runtime {
             .agent_repository(card.id)?
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
 
+        // One harness per work tree. Taken before anything is spawned and held
+        // for the life of the job: two `pi` processes in one directory
+        // interleave their edits and run git against each other, and nothing
+        // downstream could say which of them wrote what.
+        //
+        // Reachable in the ordinary course of things, not just from a confused
+        // model: a job takes minutes, the agent that started it goes idle
+        // because its turn ended, and a coordinator reading the lane as free
+        // sends the next brief straight into the same repository.
+        {
+            let mut coding = self.inner.coding.lock();
+            if let Some(busy) = coding.get(&repository.id) {
+                let who = self
+                    .inner
+                    .store
+                    .get_agent(*busy)
+                    .ok()
+                    .flatten()
+                    .map(|card| card.name)
+                    .unwrap_or_else(|| "another agent".to_string());
+                return Err(RuntimeError::RepositoryBusy {
+                    repository: repository.name.clone(),
+                    who,
+                });
+            }
+            coding.insert(repository.id, card.id);
+        }
+
         let runtime = self.clone();
         let agent = card.id;
         let name = repository.name.clone();
         let path = repository.path.clone();
         let task = task.to_string();
         let note = repository.note.clone();
+        let repository_id = repository.id;
+
+        self.emit(UiEvent::CodingJobStarted {
+            agent_id: card.id,
+            repository_id,
+            repository: name.clone(),
+        });
 
         tokio::spawn(async move {
             // The operator's note rides in front of the brief rather than being
@@ -1404,6 +1463,11 @@ impl Runtime {
             };
 
             let outcome = crate::pi::run(&path, &brief, |_| {}).await;
+            // Released before the result is delivered, so the turn that reads
+            // "it finished" can start the next job in the same repository. The
+            // other order is a lane that has to wait a turn to carry on.
+            runtime.inner.coding.lock().remove(&repository_id);
+            runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
             runtime.job_finished(agent, &name, outcome);
         });
 

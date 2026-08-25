@@ -861,7 +861,18 @@ export type UiEvent =
    * sentence inside one transcript is a sentence nobody reads. This is the same
    * thing said where somebody setting up is looking.
    */
-  | { type: "codingJobFailed"; agentId: AgentId; repository: string; reason: string };
+  | { type: "codingJobFailed"; agentId: AgentId; repository: string; reason: string }
+  /**
+   * A coding job started or ended, and the repository it works in is busy or
+   * free.
+   *
+   * The rail draws this because nothing else would: `code` returns as soon as
+   * the harness is up and the turn ends, so an agent sits idle while a coding
+   * agent works in its repository for twenty minutes, and the crew reads as
+   * stopped at exactly the moment it is building.
+   */
+  | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
+  | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

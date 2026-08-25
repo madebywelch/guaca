@@ -125,7 +125,9 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
             // A precondition the operator can fix from the rail, so it says so
             // rather than reading as something that broke.
-            RuntimeError::NoRepository(_) => CommandError::new("badRequest", err.to_string()),
+            RuntimeError::NoRepository(_) | RuntimeError::RepositoryBusy { .. } => {
+                CommandError::new("badRequest", err.to_string())
+            }
             // All three are this side answering a request with the wrong shape
             // of answer, which is a defect here rather than something the
             // operator did. Reported as an ordinary failure so it lands in the

@@ -973,6 +973,27 @@ button {
 /* The indent, and the rule that makes it read as containment rather than as a
    margin somebody chose. Down the left of the members, starting under the
    glyph in the heading. */
+/* A repository with a coding job running. Words rather than a spinner: the
+   rail already carries a pulse for an agent mid-turn, and a second animation
+   beside it would read as the same thing when it is deliberately not. */
+.rail__repo-building {
+  flex: none;
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: var(--flesh);
+  animation: repo-building 2s ease-in-out infinite;
+}
+
+@keyframes repo-building {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .rail__repo-crew {
   margin-left: 1.25rem;
   padding-left: 0.35rem;

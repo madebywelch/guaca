@@ -83,6 +83,13 @@ interface State {
    */
   repositories: Repository[];
   /**
+   * Repositories with a coding job running, and the agent that started each.
+   *
+   * In memory and event-driven, like the job itself. It does not survive a
+   * restart, which is correct: neither does the job.
+   */
+  building: Record<RepositoryId, AgentId>;
+  /**
    * What each linked repository is doing, by id.
    *
    * Separate from the repositories themselves because it has a different
@@ -372,6 +379,7 @@ export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
   repositories: [],
+  building: {},
   repoStatus: {},
   activity: {},
   lastActive: {},
@@ -992,6 +1000,21 @@ export const useStore = create<State>((set, get) => ({
       // the operator's own machine is theirs to fix, and it stopped every
       // coding job in the workspace while every agent reported that nothing
       // needed doing.
+      case "codingJobStarted": {
+        set((state) => ({
+          building: { ...state.building, [event.repositoryId]: event.agentId },
+        }));
+        break;
+      }
+
+      case "codingJobFinished": {
+        set((state) => {
+          const { [event.repositoryId]: _gone, ...rest } = state.building;
+          return { building: rest };
+        });
+        break;
+      }
+
       case "codingJobFailed": {
         get().setBanner({
           tone: "error",

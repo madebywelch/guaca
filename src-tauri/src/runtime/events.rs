@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -197,6 +197,24 @@ pub enum UiEvent {
     ApprovalSettled {
         approval_id: ApprovalId,
         state: ApprovalState,
+    },
+
+    /// A coding job started, and the repository it is working in is now busy.
+    ///
+    /// The rail draws this because nothing else would. `code` returns as soon
+    /// as the harness is up and the turn ends, so an agent goes idle while a
+    /// coding agent works in its repository for twenty minutes: the crew looks
+    /// stopped at exactly the moment it is building. The job outlives the turn,
+    /// so it cannot be an [`Activity`], which is cleared when a turn ends.
+    CodingJobStarted {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
+        repository: String,
+    },
+    /// That job ended, however it ended. The repository is free again.
+    CodingJobFinished {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
     },
 
     /// A coding job could not run, for a reason only the operator can fix.
