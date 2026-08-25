@@ -210,6 +210,22 @@ pub enum UiEvent {
     RoutinesChanged {
         agent_id: AgentId,
     },
+
+    /// One agent's memory was rewritten by the agent itself.
+    ///
+    /// Same argument as `RoutinesChanged`, one panel over: the operator reads
+    /// an agent's memory in the column beside it while the agent is working,
+    /// and the agent rewrites that file mid-turn. Without this the page on
+    /// screen is the one that was true when the panel was drawn, and the only
+    /// way to find out otherwise is to click away and back.
+    ///
+    /// Only the runtime's own write emits it. The operator's edit comes back
+    /// from `set_agent_notes` as what was actually stored, so the panel that
+    /// made it already has the answer, and an event there would be a refetch
+    /// to learn what the reply just said.
+    MemoryChanged {
+        agent_id: AgentId,
+    },
 }
 
 pub trait EventSink: Send + Sync + 'static {

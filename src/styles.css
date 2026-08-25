@@ -4407,6 +4407,95 @@ button {
   padding: 0 0.75rem 1rem;
 }
 
+/* --- memory --------------------------------------------------------------
+
+   The one section every agent has something in, so it sits first. A page at
+   most, in the same monospace the operator would edit it in, capped in height
+   so a full memory cannot push a live desktop off the bottom of the panel.
+   */
+
+.memory {
+  margin-bottom: 1.1rem;
+}
+
+.memory__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.memory__title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Drawn only near the cap. Room running out is a fact and reads as one; room
+   gone means the end of what is on screen will not be stored, which is a loss
+   and is the one thing here allowed to be loud. */
+.memory__room {
+  font-size: 0.68rem;
+  color: var(--muted);
+  text-align: right;
+}
+
+.memory__room[data-over] {
+  color: var(--alarm);
+}
+
+/* Its own box rather than `.textarea` plus `.input--mono`: those are dialog
+   sizes, and matching the panel would mean out-specifying two rules declared
+   above this one, which is the trap `.dialog--file` has a note about. */
+.memory__text {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  /* Grown to its content in the component, and stopped here. Past this it
+     scrolls: what is under it is a desktop somebody is watching. */
+  max-height: 14rem;
+  overflow-y: auto;
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+  color: var(--text);
+  padding: 0.45rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  line-height: 1.55;
+  outline: none;
+}
+
+.memory__text:focus {
+  border-color: color-mix(in oklab, var(--flesh) 60%, var(--edge));
+}
+
+.memory__text::placeholder {
+  color: var(--faint);
+}
+
+.memory__actions {
+  display: flex;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+}
+
+.memory__note {
+  margin: 0.4rem 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.memory__note code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
 /* --- the screen ----------------------------------------------------------
 
    One connection, two sizes. Going full screen promotes the stage inside this

@@ -133,6 +133,53 @@ back the flicker the sentence rule in `lib/reasoning.ts` takes out. What the
 line is for is the wait an operator notices, so a call has to become one before
 it earns the line.
 
+## An agent's memory is in the panel, and never quietly overwritten
+
+The transcript above says what an agent changed about itself. What it currently
+believes is a different question, and it used to be answered two thirds of the
+way down the profile dialog, behind a right click. That put the one thing about
+an agent that changes on its own behind a modal opened to change the things that
+do not: the name, the look, the instructions. Memory is the opposite shape. It
+is read constantly, written rarely by hand, and rewritten by the agent itself in
+the middle of a turn. So it moved to the panel beside the transcript, and it is
+first in it, because it is the only section there that every agent has something
+in: a screen is usually an offer rather than a picture, and a new agent keeps no
+routines.
+
+It is one box, always editable, rather than a rendered page with an edit mode.
+What is stored is markdown, and an operator seeding a persona wants to see the
+characters the agent will actually be shown; a mode would buy formatting nobody
+asked for and cost a click on the thing the panel exists to make cheap.
+
+**A read never replaces what the operator is in the middle of typing.** The
+whole reason the panel refreshes is `MemoryChanged`, which is the agent
+rewriting the file mid-turn, and the operator is most likely to be editing it
+exactly then. So a version that lands under a draft is held to one side rather
+than applied, the panel says it happened, and the two ways out are already on
+screen: Save keeps what you wrote, Discard takes what the agent wrote. `arrived`
+is where that decision is made and it is made against what is held at the moment
+the read lands, not what was held when it started. A draft typed back to what is
+on disk is not a draft, and holding it as one would leave the panel sitting on a
+page the agent has since replaced.
+
+**Only the runtime's own write emits the event.** The operator's edit comes back
+from `set_agent_notes` as what was actually stored, so the panel that made it
+already has the answer and an event there is a refetch to learn what the reply
+just said. What comes back is also what goes on screen, not what was typed:
+`Workspace::write` trims and cuts at `MAX_NOTES`, and leaving the typed version
+up would show an operator a page their agent is never going to be given. A cut
+is said out loud; a trim is not, because a trim on every save that ended in a
+newline is crying wolf.
+
+**How full it is, is said only near the cap.** A running character count under
+every agent's memory is a number nobody reads. Past the cap the end is not
+stored, and an agent at the cap has already started throwing things away to make
+room, which are the two states worth a glance. The number here mirrors
+`MAX_NOTES` and is advisory in the way `LIMITS` is advisory about the guard's
+bounds: the runtime is what actually cuts, and the read-back is what the operator
+is shown, so a mirror that has drifted costs a warning that arrives slightly
+early or slightly late and cannot cost anybody their text.
+
 ## A reply can be a figure, and a figure is a fenced block
 
 An operator asking for last quarter by region gets four numbers, and four
