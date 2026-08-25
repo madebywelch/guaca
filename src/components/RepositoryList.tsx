@@ -134,9 +134,14 @@ function worksIn(repository: Repository, crew: AgentCard[]): string {
  * question, and answering it should not mean opening six agents one at a time.
  * The same reason the plugin panel says who a sign-in is offered to.
  *
- * There is no "every agent" button here and there is one on the plugins above.
+ * There is no "every agent" button here and there is one on the plugins panel.
  * An agent hired next week must not inherit the operator's own source. Names,
  * always, and only on the agent.
+ *
+ * The heading and the sentence explaining all of that are the section's, not
+ * this panel's. It has a section of its own in the group editor rather than a
+ * third block under Plugins, so drawing its own title under the section's would
+ * be the same word twice at two sizes.
  *
  * ## Why the harness is a choice on the row and not a setting
  *
@@ -237,15 +242,6 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   return (
     <div className="access">
-      <div className="routines__head">
-        <span className="field__label">Repositories</span>
-        {adding && (
-          <button type="button" className="btn btn--ghost btn--small" onClick={reset}>
-            Cancel
-          </button>
-        )}
-      </div>
-
       {repositories.map((repository) => (
         <div className="access__item" key={repository.id}>
           <div className="access__row">
@@ -362,6 +358,12 @@ export function RepositoryList({ groupId, crew }: Props) {
             >
               Link
             </button>
+            {/* Beside the thing it cancels rather than in a heading above the
+                list. The section owns the heading now, and a Cancel a panel
+                away from the form is one an operator hunts for. */}
+            <button type="button" className="btn btn--ghost btn--small" onClick={reset}>
+              Cancel
+            </button>
           </div>
           <div className="access__row">
             <input
@@ -390,16 +392,9 @@ export function RepositoryList({ groupId, crew }: Props) {
           </p>
         </div>
       ) : (
-        <>
-          <p className="field__hint">
-            A directory on this machine that this crew may write code in. Linking one gives it to
-            nobody. You hand it to an agent from that agent's own panel, one at a time, and an agent
-            you hire later does not inherit it.
-          </p>
-          <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
-            Link a repository
-          </button>
-        </>
+        <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
+          Link a repository
+        </button>
       )}
 
       {error && (

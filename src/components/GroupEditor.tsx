@@ -38,7 +38,7 @@ interface Props {
   onClose: () => void;
 }
 
-const SECTIONS = ["general", "provider", "limits", "plugins"] as const;
+const SECTIONS = ["general", "provider", "limits", "plugins", "repositories"] as const;
 
 type Section = (typeof SECTIONS)[number];
 
@@ -47,7 +47,16 @@ const SECTION_LABELS: Record<Section, string> = {
   provider: "Provider",
   limits: "Limits",
   plugins: "Plugins",
+  repositories: "Repositories",
 };
+
+/**
+ * The sections that are about something attached to a crew, so a crew has to
+ * exist first. A sign-in, a credential and a linked directory all have to
+ * belong to something, and there is no row to hang any of them on until the
+ * group is created.
+ */
+const NEEDS_GROUP: readonly Section[] = ["plugins", "repositories"];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -313,9 +322,7 @@ export function GroupEditor({ group, onClose }: Props) {
                 role="tab"
                 className="settings__tab"
                 aria-selected={section === key}
-                // A group that does not exist yet has nothing to connect a
-                // plugin to, and nowhere to put a credential.
-                disabled={key === "plugins" && !group}
+                disabled={NEEDS_GROUP.includes(key) && !group}
                 onClick={() => setSection(key)}
               >
                 {SECTION_LABELS[key]}
@@ -573,6 +580,24 @@ export function GroupEditor({ group, onClose }: Props) {
                 </p>
                 <PluginList groupId={group.id} crew={members} />
                 <CredentialList groupId={group.id} />
+              </>
+            )}
+
+            {/* Its own section rather than a third panel under Plugins. A
+                plugin is a server this crew signs in to and a repository is a
+                directory on this machine that it writes in: they share a shape
+                (given to the crew, then handed to named agents) and nothing
+                else, and stacked in one pane the operator scrolled past two
+                sign-in panels to reach the one about their own source. */}
+            {section === "repositories" && group && (
+              <>
+                <h3 className="settings__title">Repositories</h3>
+                <p className="settings__lede">
+                  The directories on this machine this crew may write code in, and which program
+                  does the writing in each. Linking one gives it to nobody: you hand it to an agent
+                  from that agent&rsquo;s own panel, one at a time, and an agent you hire later does
+                  not inherit it.
+                </p>
                 <RepositoryList groupId={group.id} crew={members} />
               </>
             )}

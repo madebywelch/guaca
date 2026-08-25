@@ -73,6 +73,10 @@ const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => 
   includesCodex: false,
 }));
 const groupConnectors = vi.fn(async () => []);
+const groupPlugins = vi.fn(async () => []);
+const pluginCatalog = vi.fn(async () => []);
+const groupRepositories = vi.fn(async () => []);
+const codingHarnesses = vi.fn(async () => []);
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -84,6 +88,10 @@ vi.mock("../lib/ipc", () => ({
     testGroupConnection: (id: string | null, draft: GroupDraft) => testGroupConnection(id, draft),
     subscriptionStatus: () => subscriptionStatus(),
     groupConnectors: () => groupConnectors(),
+    groupPlugins: () => groupPlugins(),
+    pluginCatalog: () => pluginCatalog(),
+    groupRepositories: () => groupRepositories(),
+    codingHarnesses: () => codingHarnesses(),
   },
 }));
 
@@ -288,9 +296,28 @@ describe("what the operator is shown", () => {
     expect(field(/Model calls per conversation/).placeholder).toBe("60");
   });
 
-  it("does not offer plugins for a group that does not exist yet", () => {
+  it("does not offer plugins or repositories for a group that does not exist yet", () => {
+    // A sign-in, a credential and a linked directory all have to belong to
+    // something, and there is no row to hang any of them on yet.
     open(null);
     expect((screen.getByRole("tab", { name: "Plugins" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("tab", { name: "Repositories" }) as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+  });
+
+  it("puts repositories in a section of their own rather than under plugins", async () => {
+    // A plugin is a server this crew signs in to and a repository is a
+    // directory on this machine it writes in. They share a shape and nothing
+    // else, and stacked in one pane the operator scrolled past two sign-in
+    // panels to reach the one about their own source.
+    open();
+    pane("Repositories");
+    expect(await screen.findByText("Link a repository")).toBeTruthy();
+
+    pane("Plugins");
+    await waitFor(() => expect(groupPlugins).toHaveBeenCalled());
+    expect(screen.queryByText("Link a repository")).toBeNull();
   });
 
   it("refuses to save a group with no name", () => {

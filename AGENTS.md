@@ -341,6 +341,16 @@ the model takes a screenshot to see what `browse` did.
   against 16,000 and told operators their memory was about to be cut by a runtime
   storing it whole. A warning is read as a fact about what will happen, so the
   number is only worth drawing while it is the runtime's number.
+- **An edit to a repository is a `RepositoryEdit`, not a draft with a stand-in
+  path.** A `RepositoryDraft` validates the path before anything else, so an
+  edit routed through one has to invent a path it does not have. The stand-in
+  was `/`, which is the empty string once `clean` takes its trailing separator
+  off: every rename, every note and every harness switch came back *a repository
+  needs a directory; pick one to link*, about a directory the operator had
+  already picked and could read on the row above the box. Neither the panel nor
+  the store was wrong and both are tested, which is how it shipped and stayed.
+  A type with no path on it is the only version of "the path is not editable"
+  that nothing downstream can forget.
 - **A harness is two functions, and the process around them is one.** What `pi`
   and Claude Code share is the shape of a job: one process, in one directory,
   whose stdout is JSON objects one per line, that ends. So the spawn, the read

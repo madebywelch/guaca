@@ -232,10 +232,61 @@ pub struct CleanRepository {
     pub harness: Harness,
 }
 
+/// What an operator may change about a repository that is already linked.
+///
+/// The path is not on it, and the absence is the whole point of the type. A
+/// different directory is a different repository: whoever was given this one
+/// was given that directory, so editing a path in place would move their
+/// boundary, and their undo, with nothing on screen saying a decision had been
+/// taken. A shape that cannot carry a path is the only version of that rule
+/// nothing downstream can forget.
+///
+/// It is also here because the obvious alternative does not work, and fails in
+/// the one way nobody looks for. An edit routed through [`RepositoryDraft`]
+/// needs a stand-in path; the stand-in was `/`, and `/` is the empty string
+/// once [`RepositoryDraft::clean`] takes its trailing separator off. Every
+/// rename, every note and every harness switch came back as *a repository needs
+/// a directory; pick one to link*, about a directory the operator had already
+/// picked and could read on the row above the box. Neither the panel nor the
+/// store was wrong, and both have tests, which is how it survived.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RepositoryEdit {
+    pub name: String,
+    pub note: String,
+    pub harness: Harness,
+}
+
+impl RepositoryEdit {
+    /// Everything checkable about an edit, which is everything it carries.
+    ///
+    /// A blank name is refused rather than backfilled. The directory's own name
+    /// is what *linking* falls back to and there is no path here to take one
+    /// from, and keeping the stored name instead would be a save that quietly
+    /// did not do what the box in front of the operator says.
+    pub fn clean(&self) -> Result<RepositoryEdit, RepositoryError> {
+        let name = self.name.trim().to_string();
+        if name.is_empty() {
+            return Err(RepositoryError::NoName);
+        }
+        if name.chars().count() > MAX_NAME_LEN {
+            return Err(RepositoryError::NameTooLong);
+        }
+
+        let note = self.note.trim().to_string();
+        if note.chars().count() > MAX_NOTE_LEN {
+            return Err(RepositoryError::NoteTooLong);
+        }
+
+        Ok(RepositoryEdit { name, note, harness: self.harness })
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum RepositoryError {
     #[error("a repository needs a directory; pick one to link")]
     NoPath,
+    #[error("a repository needs a name; it is what its agents are told the directory is called")]
+    NoName,
     #[error(
         "`{0}` is not an absolute path; link a directory by its full path, starting from the root"
     )]
@@ -270,25 +321,25 @@ impl RepositoryDraft {
             return Err(RepositoryError::NotAbsolute(path.to_string()));
         }
 
-        let name = match self.name.trim() {
-            "" => path.rsplit('/').next().unwrap_or(path).to_string(),
-            given => given.to_string(),
-        };
-        if name.chars().count() > MAX_NAME_LEN {
-            return Err(RepositoryError::NameTooLong);
+        // The name is decided here rather than inside the edit because only a
+        // path can supply the fallback, and everything after it is the same
+        // question an edit asks, answered in one place.
+        let edit = RepositoryEdit {
+            name: match self.name.trim() {
+                "" => path.rsplit('/').next().unwrap_or(path).to_string(),
+                given => given.to_string(),
+            },
+            note: self.note.clone(),
+            harness: self.harness,
         }
-
-        let note = self.note.trim().to_string();
-        if note.chars().count() > MAX_NOTE_LEN {
-            return Err(RepositoryError::NoteTooLong);
-        }
+        .clean()?;
 
         Ok(CleanRepository {
             group_id: self.group_id,
-            name,
+            name: edit.name,
             path: path.to_string(),
-            note,
-            harness: self.harness,
+            note: edit.note,
+            harness: edit.harness,
         })
     }
 }
@@ -332,6 +383,45 @@ mod tests {
     #[test]
     fn an_empty_path_is_refused_before_anything_else() {
         assert_eq!(draft("   ").clean().unwrap_err(), RepositoryError::NoPath);
+    }
+
+    #[test]
+    fn the_root_is_an_empty_path_once_its_separator_is_off() {
+        // Kept as an explanation rather than as a rule. `/` is what an edit
+        // routed through a draft used as its stand-in path, and this is why
+        // every rename, note and harness switch was refused for having no
+        // directory. `RepositoryEdit` is the fix; this is the reason.
+        assert_eq!(draft("/").clean().unwrap_err(), RepositoryError::NoPath);
+    }
+
+    #[test]
+    fn an_edit_is_not_refused_for_having_no_path() {
+        let clean = RepositoryEdit {
+            name: "  guac  ".into(),
+            note: "  never touch migrations  ".into(),
+            harness: Harness::Claude,
+        }
+        .clean()
+        .expect("an edit carries no path and must not be refused for one");
+
+        assert_eq!(clean.name, "guac");
+        assert_eq!(clean.note, "never touch migrations");
+        assert_eq!(clean.harness, Harness::Claude);
+    }
+
+    #[test]
+    fn an_edit_refuses_what_a_link_refuses_and_a_name_it_cannot_backfill() {
+        let refused = |name: &str, note: &str| {
+            RepositoryEdit { name: name.into(), note: note.into(), harness: Harness::Pi }
+                .clean()
+                .unwrap_err()
+        };
+
+        assert_eq!(refused(&"x".repeat(MAX_NAME_LEN + 1), ""), RepositoryError::NameTooLong);
+        assert_eq!(refused("guaca", &"x".repeat(MAX_NOTE_LEN + 1)), RepositoryError::NoteTooLong);
+        // There is no path here to take the directory's own name from, and a
+        // blank one stored would draw as a repository with no name at all.
+        assert_eq!(refused("   ", ""), RepositoryError::NoName);
     }
 
     #[test]
