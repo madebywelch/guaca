@@ -973,6 +973,96 @@ button {
 /* The indent, and the rule that makes it read as containment rather than as a
    margin somebody chose. Down the left of the members, starting under the
    glyph in the heading. */
+/* What a coding agent is doing, in the channel of the agent that asked.
+
+   Above the composer and below the transcript, in the band the turn footer
+   uses, because it answers the same question that band answers: what is
+   happening right now that has not landed as a message yet. Bounded height and
+   its own scroll, so a job that runs three hundred tools does not push the
+   composer off the screen. */
+.coding {
+  flex: none;
+  margin: 0 1rem 0.4rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in oklab, var(--flesh) 28%, transparent);
+  background: color-mix(in oklab, var(--flesh) 7%, transparent);
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.coding__head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.coding__pulse {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--flesh);
+  animation: repo-building 2s ease-in-out infinite;
+}
+
+.coding__title {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 62%, transparent);
+}
+
+.coding__waiting,
+.coding__lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+}
+
+.coding__waiting {
+  font-style: italic;
+}
+
+.coding__line {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  min-width: 0;
+}
+
+/* The tool is a fixed column so the details line up and the eye can run down
+   them. A ragged left edge here reads as noise rather than as a sequence. */
+.coding__tool {
+  flex: none;
+  width: 3.2rem;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--flesh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coding__detail {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* What the coding agent says, as opposed to what it runs. Wrapped rather than
+   clipped: this is prose and it is the part worth reading. */
+.coding__said {
+  font-style: italic;
+  color: color-mix(in oklab, var(--ink) 85%, transparent);
+}
+
 /* A repository with a coding job running. Words rather than a spinner: the
    rail already carries a pulse for an agent mid-turn, and a second animation
    beside it would read as the same thing when it is deliberately not. */

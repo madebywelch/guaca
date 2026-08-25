@@ -758,6 +758,58 @@ describe("a coding job that could not run", () => {
     expect(banner?.text).toContain("expired");
   });
 
+  it("holds what a running job is doing, and drops it when the job ends", () => {
+    // The same discipline a turn's thinking has. The record of what a job did
+    // is the message it delivers; this is what that looks like beforehand, so
+    // keeping it after the fact would be a second copy that could disagree.
+    useStore.getState().applyEvent({
+      type: "codingJobStarted",
+      agentId: "a1",
+      repositoryId: "r1",
+      repository: "vision-ios",
+    });
+    useStore.getState().applyEvent({
+      type: "codingProgress",
+      agentId: "a1",
+      repositoryId: "r1",
+      tool: "bash",
+      detail: "swift test",
+    });
+    expect(useStore.getState().building.r1).toBe("a1");
+    expect(useStore.getState().coding.a1).toEqual([{ tool: "bash", detail: "swift test" }]);
+
+    useStore.getState().applyEvent({
+      type: "codingJobFinished",
+      agentId: "a1",
+      repositoryId: "r1",
+    });
+    expect(useStore.getState().building.r1).toBeUndefined();
+    expect(useStore.getState().coding.a1).toBeUndefined();
+  });
+
+  it("bounds the tail, because a long job runs hundreds of tools", () => {
+    useStore.getState().applyEvent({
+      type: "codingJobStarted",
+      agentId: "a2",
+      repositoryId: "r2",
+      repository: "vision-ios-api",
+    });
+    for (let n = 0; n < 200; n++) {
+      useStore.getState().applyEvent({
+        type: "codingProgress",
+        agentId: "a2",
+        repositoryId: "r2",
+        tool: "bash",
+        detail: `step ${n}`,
+      });
+    }
+    const held = useStore.getState().coding.a2 ?? [];
+    expect(held.length).toBeLessThanOrEqual(40);
+    // The newest end is the one kept: what it is doing now beats what it did
+    // three hundred tools ago.
+    expect(held.at(-1)?.detail).toBe("step 199");
+  });
+
   it("names the repository, because an operator has more than one", () => {
     useStore.getState().applyEvent({
       type: "codingJobFailed",

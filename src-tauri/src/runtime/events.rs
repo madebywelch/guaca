@@ -211,6 +211,26 @@ pub enum UiEvent {
         repository_id: RepositoryId,
         repository: String,
     },
+    /// One line of what a running coding job is doing.
+    ///
+    /// Ephemeral by construction, exactly as a turn's thinking is: addressed to
+    /// the job rather than filed anywhere, held by the webview while the job
+    /// runs and dropped when it ends. The record of what a job did is the
+    /// message it delivers at the end; this is only what that looks like before
+    /// it exists.
+    ///
+    /// Filtered on this side rather than forwarded raw. `pi`'s stream is tens
+    /// of thousands of lines of deltas and cumulative usage, and putting that
+    /// on the event channel would be a re-render per token for a panel nobody
+    /// could read.
+    CodingProgress {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
+        /// What it is doing: a tool name, or empty when it is talking.
+        tool: String,
+        /// The command, the path, or the sentence.
+        detail: String,
+    },
     /// That job ended, however it ended. The repository is free again.
     CodingJobFinished {
         agent_id: AgentId,

@@ -872,7 +872,29 @@ export type UiEvent =
    * stopped at exactly the moment it is building.
    */
   | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
-  | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId };
+  | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId }
+  /**
+   * One line of what a running coding job is doing.
+   *
+   * Ephemeral, exactly as a turn's thinking is: held while the job runs and
+   * dropped when it ends. The record of what a job did is the message it
+   * delivers at the end; this is what that looks like before it exists.
+   */
+  | {
+      type: "codingProgress";
+      agentId: AgentId;
+      repositoryId: RepositoryId;
+      /** A tool name, or empty when the coding agent is talking. */
+      tool: string;
+      /** The command, the path, or the sentence. */
+      detail: string;
+    };
+
+/** One line of a running coding job, as the panel draws it. */
+export interface CodingLine {
+  tool: string;
+  detail: string;
+}
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

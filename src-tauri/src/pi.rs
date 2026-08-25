@@ -50,6 +50,35 @@ const BINARY: &str = "pi";
 /// nobody will answer holds a process and a tokio task for the life of the app.
 const CEILING: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
+/// Appended to the harness's own system prompt, on every job.
+///
+/// Only things that are true of every piece of work in every repository. What
+/// to change belongs in the brief; how to leave the tree behind belongs here,
+/// because it is the same answer every time and an agent writing a brief should
+/// not have to remember it.
+///
+/// Commits are the argument. The job runs unattended for many minutes with no
+/// one watching, `pi` has no permission system, and there is no undo but git:
+/// a run that works for forty minutes and commits once leaves the operator a
+/// single enormous diff and nothing to bisect if it went wrong halfway. Small
+/// commits are the only checkpoints this arrangement has.
+///
+/// Appended rather than replacing: `pi`'s own coding prompt is the thing that
+/// makes it good at this, and Guaca has no business rewriting it.
+const APPENDED_PROMPT: &str = "\
+You are running unattended, started by an agent rather than by a person sitting \
+in front of you. Nobody will answer a question, so decide and proceed.
+
+Commit early and often. Every commit is a checkpoint and it is the only undo \
+anyone has here: commit as soon as a piece of work stands on its own, before \
+starting the next one, rather than saving it all for the end. A run that works \
+for forty minutes and commits once leaves a single enormous diff that cannot be \
+bisected or partly reverted. Prefer many small commits with real messages, each \
+one leaving the tree in a state that builds.
+
+Say what you actually did at the end, including what you could not do. Your \
+last message is the only thing the agent that asked for this will read.";
+
 #[derive(Debug, thiserror::Error)]
 pub enum PiError {
     #[error(
@@ -99,10 +128,16 @@ pub struct Outcome {
 }
 
 /// One line of progress, for whoever is watching the job run.
+///
+/// Deliberately not the raw event. The stream is tens of thousands of lines of
+/// deltas and cumulative usage, and forwarding it into a channel would be a
+/// firehose nobody reads at the cost of a re-render per token. This is the
+/// shape a person watching over the shoulder would want: what it is doing, and
+/// what it says as it goes.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Progress {
-    /// A tool the harness started, by name.
-    Using(String),
+    /// A tool the harness started, with the one argument worth reading.
+    Using { tool: String, detail: String },
     /// Something the harness said on its way through.
     Said(String),
 }
@@ -136,7 +171,10 @@ fn absorb(outcome: &mut Outcome, event: &serde_json::Value, watching: &mut impl 
         "tool_execution_start" => {
             outcome.tool_calls += 1;
             if let Some(name) = event["toolName"].as_str() {
-                watching(Progress::Using(name.to_string()));
+                watching(Progress::Using {
+                    tool: name.to_string(),
+                    detail: detail_of(name, &event["args"]),
+                });
             }
         }
         // The authoritative message, as opposed to the deltas: pi's own
@@ -201,7 +239,7 @@ pub async fn run(
 ) -> Result<Outcome, PiError> {
     let mut child = tokio::process::Command::new(BINARY)
         .current_dir(repository)
-        .args(["--mode", "json", "-p", task])
+        .args(["--mode", "json", "--append-system-prompt", APPENDED_PROMPT, "-p", task])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -271,6 +309,33 @@ pub async fn run(
     Ok(outcome)
 }
 
+/// The one argument of a tool call worth putting on a line.
+///
+/// A command, a path, a pattern. Not the whole `args`: a `write` carries the
+/// entire file in it, and a watcher wants to know that `src/api.go` is being
+/// written rather than to read it going past.
+///
+/// The names are `pi`'s built-ins. Anything else falls back to nothing rather
+/// than guessing a field, because a wrong guess here prints somebody's file
+/// contents into a channel.
+fn detail_of(tool: &str, args: &serde_json::Value) -> String {
+    let pick = match tool {
+        "bash" => "command",
+        "read" | "write" | "edit" => "path",
+        "grep" | "find" => "pattern",
+        _ => return String::new(),
+    };
+    let raw = args[pick].as_str().unwrap_or_default().trim();
+    // One line, and short. A heredoc in a `bash` command is a screen of text
+    // that would push everything else out of the panel.
+    let first = raw.lines().next().unwrap_or_default();
+    if first.chars().count() > 120 {
+        format!("{}…", first.chars().take(120).collect::<String>())
+    } else {
+        first.to_string()
+    }
+}
+
 /// Every text part of a message, joined.
 fn text_of(message: &serde_json::Value) -> String {
     message["content"]
@@ -330,7 +395,10 @@ mod tests {
         absorb(&mut outcome, &event, &mut |p| progress.borrow_mut().push(p));
 
         assert_eq!(outcome.tool_calls, 1);
-        assert_eq!(progress.borrow().as_slice(), [Progress::Using("bash".into())]);
+        assert_eq!(
+            progress.borrow().as_slice(),
+            [Progress::Using { tool: "bash".into(), detail: String::new() }]
+        );
     }
 
     #[test]
@@ -404,6 +472,19 @@ mod tests {
         let outcome =
             drive(&["npm warn something", r#"{"type":"tool_execution_start","toolName":"edit"}"#]);
         assert_eq!(outcome.tool_calls, 1);
+    }
+
+    #[test]
+    fn the_appended_prompt_is_about_how_to_work_and_never_about_what_to_build() {
+        // Anything here is true of every job in every repository. What to change
+        // is the brief's, and a sentence in here about it would quietly apply to
+        // work it was never written for.
+        assert!(APPENDED_PROMPT.contains("Commit early and often"));
+        assert!(APPENDED_PROMPT.contains("checkpoint"));
+        // Unattended is the fact everything else follows from: nobody will
+        // answer, so it decides, and git is the only undo.
+        assert!(APPENDED_PROMPT.contains("unattended"));
+        assert!(APPENDED_PROMPT.contains("last message"));
     }
 
     #[test]

@@ -1462,7 +1462,20 @@ impl Runtime {
                 format!("{}\n\nStanding instruction for this repository: {}", task, note.trim())
             };
 
-            let outcome = crate::pi::run(&path, &brief, |_| {}).await;
+            let watcher = runtime.clone();
+            let outcome = crate::pi::run(&path, &brief, move |progress| {
+                let (tool, detail) = match progress {
+                    crate::pi::Progress::Using { tool, detail } => (tool, detail),
+                    crate::pi::Progress::Said(said) => (String::new(), said),
+                };
+                watcher.emit(UiEvent::CodingProgress {
+                    agent_id: agent,
+                    repository_id,
+                    tool,
+                    detail,
+                });
+            })
+            .await;
             // Released before the result is delivered, so the turn that reads
             // "it finished" can start the next job in the same repository. The
             // other order is a lane that has to wait a turn to carry on.

@@ -300,6 +300,15 @@ export function Sidebar({
     id: AgentId,
     state: Activity | undefined,
   ): { text: string; kind: string | undefined } => {
+    // Before the turn states, because a coding job outlives the turn that
+    // started it: the agent goes idle the moment `code` returns and stays that
+    // way while a coding agent works in its repository for twenty minutes.
+    // Read off `building` rather than off `Activity` for the same reason —
+    // `Activity` is cleared when a turn ends, and this is not a turn.
+    if (Object.values(building).includes(id)) {
+      return { text: "writing code", kind: "thinking" };
+    }
+
     switch (state?.state) {
       case "thinking":
         return { text: "typing", kind: "thinking" };

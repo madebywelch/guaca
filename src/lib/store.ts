@@ -12,6 +12,15 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
+
+/**
+ * How much of a running coding job's work is kept on screen.
+ *
+ * Enough to see what it has been doing, not enough to be a transcript. The
+ * transcript is the message the job delivers when it ends.
+ */
+const CODING_TAIL = 40;
+
 import { keepThought } from "./reasoning";
 import type { LiveCall } from "./trail";
 import type {
@@ -21,6 +30,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  CodingLine,
   Decision,
   Envelope,
   Group,
@@ -89,6 +99,14 @@ interface State {
    * restart, which is correct: neither does the job.
    */
   building: Record<RepositoryId, AgentId>;
+  /**
+   * What each running job is doing, newest last, by the agent that started it.
+   *
+   * Bounded and ephemeral: dropped when the job ends, because the record of
+   * what a job did is the message it delivers. Keyed by agent because that is
+   * whose channel draws it.
+   */
+  coding: Record<AgentId, CodingLine[]>;
   /**
    * What each linked repository is doing, by id.
    *
@@ -380,6 +398,7 @@ export const useStore = create<State>((set, get) => ({
   groups: [],
   repositories: [],
   building: {},
+  coding: {},
   repoStatus: {},
   activity: {},
   lastActive: {},
@@ -1007,10 +1026,27 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "codingProgress": {
+        set((state) => {
+          // Bounded. A long job runs hundreds of tools, and an unbounded tail
+          // is a growing array re-rendered on every line of it.
+          const held = [
+            ...(state.coding[event.agentId] ?? []),
+            {
+              tool: event.tool,
+              detail: event.detail,
+            },
+          ].slice(-CODING_TAIL);
+          return { coding: { ...state.coding, [event.agentId]: held } };
+        });
+        break;
+      }
+
       case "codingJobFinished": {
         set((state) => {
           const { [event.repositoryId]: _gone, ...rest } = state.building;
-          return { building: rest };
+          const { [event.agentId]: _done, ...others } = state.coding;
+          return { building: rest, coding: others };
         });
         break;
       }
