@@ -42,9 +42,6 @@ export function AgentEditor({ agent, onClose }: Props) {
     skills: agent?.skills ?? [],
   }));
   const [skillText, setSkillText] = useState(agent?.skills.join(", ") ?? "");
-  const [notes, setNotes] = useState("");
-  const [notesLoaded, setNotesLoaded] = useState(!agent);
-  const [notesDirty, setNotesDirty] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -55,26 +52,6 @@ export function AgentEditor({ agent, onClose }: Props) {
   useEffect(() => {
     nameRef.current?.focus();
   }, []);
-
-  // An agent's memory lives on disk rather than on the card, so it is fetched
-  // separately and only written back when the operator actually edited it.
-  // Saving it unconditionally would clobber anything the agent wrote while this
-  // dialog was open.
-  useEffect(() => {
-    if (!agent) return;
-    let canceled = false;
-    void api
-      .agentNotes(agent.id)
-      .then((content) => {
-        if (canceled) return;
-        setNotes(content);
-        setNotesLoaded(true);
-      })
-      .catch(() => setNotesLoaded(true));
-    return () => {
-      canceled = true;
-    };
-  }, [agent]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -106,7 +83,6 @@ export function AgentEditor({ agent, onClose }: Props) {
     try {
       if (agent) {
         await api.updateAgent(agent.id, payload);
-        if (notesDirty) await api.setAgentNotes(agent.id, notes);
       } else {
         const created = await api.createAgent(payload);
         await refreshAgents();
@@ -277,29 +253,6 @@ export function AgentEditor({ agent, onClose }: Props) {
             Comma separated. This is what other agents read when deciding who to ask.
           </span>
         </label>
-
-        {agent && (
-          <label className="field">
-            <span className="field__label">Memory</span>
-            <textarea
-              className="textarea input--mono"
-              value={notesLoaded ? notes : "Loading…"}
-              rows={6}
-              disabled={!notesLoaded}
-              placeholder="Empty. The agent writes here when it learns something durable."
-              onChange={(event) => {
-                setNotes(event.target.value);
-                setNotesDirty(true);
-              }}
-            />
-            <span className="field__hint">
-              The agent's own memory, shown to it every turn and rewritten by it with{" "}
-              <code>update_notes</code>: ask it to remember something, or to update its memory, and
-              this is the file it writes. Seed a persona here if you like. Stored as markdown in the
-              workspace folder beside the database.
-            </span>
-          </label>
-        )}
 
         {agent && <SigninList agent={agent} />}
 

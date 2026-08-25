@@ -2657,6 +2657,10 @@ impl Runtime {
             ToolInvocation::UpdateNotes { content } => {
                 match self.inner.workspace.write(card.id, &card.name, &content) {
                     Ok(stored) => {
+                        // The panel beside the agent is drawing this file, and
+                        // the operator is most likely to be reading it while
+                        // the agent is working, which is exactly when it moves.
+                        self.emit(UiEvent::MemoryChanged { agent_id: card.id });
                         let summary = if stored.truncated {
                             format!(
                                 "Memory saved, but it was too long and the end was cut. {} \

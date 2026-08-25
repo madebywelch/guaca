@@ -784,7 +784,13 @@ export type UiEvent =
    * or one came due and moved. The list refetches; nothing here is patched,
    * because a schedule is a handful of rows.
    */
-  | { type: "routinesChanged"; agentId: AgentId };
+  | { type: "routinesChanged"; agentId: AgentId }
+  /**
+   * One agent rewrote its own memory. The panel drawing it reads the file
+   * again; nothing here is patched, because the file is a page at most and the
+   * event carries none of it.
+   */
+  | { type: "memoryChanged"; agentId: AgentId };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {

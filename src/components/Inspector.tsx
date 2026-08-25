@@ -4,6 +4,7 @@ import { useStore } from "../lib/store";
 import type { AgentCard, RoutineId } from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 import { ComputerScreen } from "./ComputerScreen";
+import { Memory } from "./Memory";
 import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
 
@@ -47,6 +48,11 @@ function remembered(): boolean {
  * The agent's name, look and instructions are deliberately not here. Those are
  * edited rarely and all at once, which is what a dialog is for; these are
  * glanced at constantly.
+ *
+ * Memory is first, and it is the only section that has something to show on
+ * every agent: a screen is usually an offer rather than a picture, and a new
+ * agent keeps no routines. It is capped in height, so a long one cannot push
+ * a live desktop off the panel.
  */
 export function Inspector({ agent, onEditProfile }: Props) {
   const [open, setOpen] = useState(remembered);
@@ -162,6 +168,7 @@ export function Inspector({ agent, onEditProfile }: Props) {
             its polling still running, every switch added another, and only
             closing the panel cleared them. */}
         <div className="inspector__level" hidden={routine !== null} key={agent.id}>
+          <Memory agentId={agent.id} />
           <ComputerScreen agent={agent} />
           <BrowserScreen agent={agent} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} />
