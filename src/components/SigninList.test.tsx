@@ -22,6 +22,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name: "Researcher",
     avatar: "plain",
     color: "#c7d96b",

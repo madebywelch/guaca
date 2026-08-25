@@ -1050,8 +1050,247 @@ button {
   box-shadow: 0 0 0.375rem color-mix(in oklab, var(--flesh) 55%, transparent);
 }
 
+/* The codebases a crew works in, drawn as headings with their agents under
+   them.
+
+   A tree, which is the whole reason an agent works in at most one repository:
+   every agent has exactly one place in the rail, so a name is never in two
+   sections at once and there is never a question of which row is the real one.
+
+   The rows inside are the rail's own rows, so an agent under a repository has
+   the same menu, the same activity readout and the same drag as one anywhere
+   else. Only the indent and the rule beside it differ. */
+.rail__repos {
+  display: flex;
+  flex-direction: column;
+}
+
+.rail__repo {
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.rail__repo-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-2) var(--column-inset);
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  font-weight: 600;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--rail-muted);
+  min-width: 0;
+}
+
+/* A branch glyph, not an icon. Two rules meeting is what a directory looks
+   like in every tree an engineer already reads, and it costs no asset and no
+   color: at this size an icon is a smudge and a colored one competes with the
+   agent avatars, which are the thing in this column that is meant to be
+   recognized at a glance. */
+.rail__repo-mark {
+  flex: none;
+  width: var(--space-4);
+  height: var(--space-4);
+  border-left: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
+  border-bottom: 1.5px solid color-mix(in oklab, var(--flesh) 60%, transparent);
+  margin-bottom: var(--space-1);
+}
+
+.rail__repo-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--rail-text);
+}
+
+/* How many work here. Absent at zero rather than drawn as "0": the line under
+   an empty repository already says so in words, and a zero beside a name reads
+   as a broken counter. */
+.rail__repo-count {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+/* The indent, and the rule that makes it read as containment rather than as a
+   margin somebody chose. Down the left of the members, starting under the
+   glyph in the heading. */
+/* What a coding agent is doing, in the channel of the agent that asked.
+
+   Above the composer and below the transcript, in the band the turn footer
+   uses, because it answers the same question that band answers: what is
+   happening right now that has not landed as a message yet. Bounded height and
+   its own scroll, so a job that runs three hundred tools does not push the
+   composer off the screen. */
+.coding {
+  flex: none;
+  margin: 0 var(--space-6) var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius);
+  border: 1px solid color-mix(in oklab, var(--flesh) 28%, transparent);
+  background: color-mix(in oklab, var(--flesh) 7%, transparent);
+  max-height: 11rem;
+  overflow-y: auto;
+}
+
+.coding__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.coding__pulse {
+  width: var(--space-3);
+  height: var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--flesh);
+  animation: repo-building 2s var(--ease-loop) infinite;
+}
+
+.coding__title {
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--ink) 62%, transparent);
+}
+
+.coding__waiting,
+.coding__lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: color-mix(in oklab, var(--ink) 70%, transparent);
+}
+
+.coding__waiting {
+  font-style: italic;
+}
+
+.coding__line {
+  display: flex;
+  gap: var(--space-3);
+  align-items: baseline;
+  min-width: 0;
+}
+
+/* The tool is a fixed column so the details line up and the eye can run down
+   them. A ragged left edge here reads as noise rather than as a sequence. */
+.coding__tool {
+  flex: none;
+  width: var(--column-face);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--flesh);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.coding__detail {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* What the coding agent says, as opposed to what it runs. Wrapped rather than
+   clipped: this is prose and it is the part worth reading. */
+.coding__said {
+  font-style: italic;
+  color: color-mix(in oklab, var(--ink) 85%, transparent);
+}
+
+/* A repository with a coding job running. Words rather than a spinner: the
+   rail already carries a pulse for an agent mid-turn, and a second animation
+   beside it would read as the same thing when it is deliberately not. */
+.rail__repo-building {
+  flex: none;
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  color: var(--flesh);
+  animation: repo-building 2s var(--ease-loop) infinite;
+}
+
+@keyframes repo-building {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.rail__repo-crew {
+  margin-left: var(--column-inset);
+  padding-left: var(--space-3);
+  border-left: 1px solid color-mix(in oklab, var(--rail-wire) 90%, transparent);
+}
+
+/* What the repository is doing. A second line under the name rather than more
+   on it: the name is what the row is about and it must not be squeezed by a
+   branch called `madebywelch/agent-coding-with-pi`. */
+.rail__repo-state {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0 var(--space-6) var(--space-2) var(--space-7);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--rail-muted);
+  min-width: 0;
+}
+
+/* The one part that gives up space, because it is the one part with no bound:
+   a branch name is whatever somebody typed, and the counts beside it are two
+   or three characters each. */
+.rail__repo-branch {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in oklab, var(--rail-text) 78%, transparent);
+}
+
+/* A detached HEAD is a state to get out of rather than a place to work from,
+   so it does not get to look like a branch name. */
+.rail__repo-branch[data-detached="true"] {
+  font-style: italic;
+  color: var(--rail-muted);
+}
+
+.rail__repo-dirty {
+  flex: none;
+  color: color-mix(in oklab, var(--flesh) 82%, var(--rail-text));
+}
+
+.rail__repo-prs {
+  flex: none;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.rail__repo-empty {
+  margin: 0;
+  padding: var(--space-1) var(--space-6) var(--space-2) var(--space-7);
+  font-size: var(--type-fine);
+  font-style: italic;
+  color: var(--rail-muted);
+}
+
 /* A whole crew as the target, which is what dropping anywhere but on a row
    means: this group, no particular place in it. */
+.rail__repo[data-over="true"],
 .rail__group[data-over="true"],
 .orb[data-over="true"] .orb__ring {
   background: color-mix(in oklab, var(--flesh) 12%, transparent);
@@ -4647,21 +4886,21 @@ button {
    */
 
 .memory {
-  margin-bottom: 1.1rem;
+  margin-bottom: var(--space-6);
 }
 
 .memory__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .memory__title {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
 }
@@ -4670,7 +4909,7 @@ button {
    gone means the end of what is on screen will not be stored, which is a loss
    and is the one thing here allowed to be loud. */
 .memory__room {
-  font-size: 0.68rem;
+  font-size: var(--type-meta);
   color: var(--muted);
   text-align: right;
 }
@@ -4695,10 +4934,10 @@ button {
   border-radius: var(--radius-sm);
   background: var(--sunken);
   color: var(--text);
-  padding: 0.45rem 0.55rem;
+  padding: var(--space-3) var(--space-4);
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  line-height: 1.55;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   outline: none;
 }
 
@@ -4712,14 +4951,14 @@ button {
 
 .memory__actions {
   display: flex;
-  gap: 0.35rem;
-  margin-top: 0.4rem;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .memory__note {
-  margin: 0.4rem 0 0;
-  font-size: 0.72rem;
-  line-height: 1.5;
+  margin: var(--space-3) 0 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   color: var(--faint);
 }
 

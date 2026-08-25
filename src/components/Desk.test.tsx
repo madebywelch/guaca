@@ -29,6 +29,7 @@ function agent(name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

@@ -48,6 +48,10 @@ import type {
   PluginOffer,
   ProtectedAction,
   RankedModel,
+  RepoStatus,
+  Repository,
+  RepositoryDraft,
+  RepositoryId,
   Routine,
   RoutineDraft,
   RoutineId,
@@ -129,7 +133,61 @@ export const api = {
 
   deleteConnector: (id: ConnectorId) => invoke<void>("delete_connector", { id }),
 
-  /** The plugins on offer. Static, and the same for every group. */
+  /**
+   * The directories a crew has linked, and who in it may work in each.
+   *
+   * No disk is touched: a repository moved or deleted since it was linked still
+   * comes back, because this panel is where the operator fixes that.
+   */
+  /**
+   * Every repository in the workspace. One read for the whole rail, which draws
+   * crews and their contents from one roster.
+   */
+  listRepositories: () => invoke<Repository[]>("list_repositories"),
+
+  /**
+   * What every linked repository is doing, by id. One call for the whole rail.
+   *
+   * A repository that could not be read is absent rather than present and
+   * empty: the directory may have been moved since it was linked, and a row
+   * saying "main, clean" about a path that is gone is worse than one saying
+   * nothing.
+   */
+  repositoryStatuses: () => invoke<Record<RepositoryId, RepoStatus>>("repository_statuses"),
+
+  groupRepositories: (groupId: GroupId) => invoke<Repository[]>("group_repositories", { groupId }),
+
+  /**
+   * Links a directory, after checking with git that it is the root of a work
+   * tree. Nobody is given it here: that is `setRepositoryAccess`.
+   */
+  createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
+
+  /**
+   * Renames one, or rewrites the line its agents read. The path is not among
+   * them: a different directory is a different repository, because reach was
+   * granted for that one.
+   */
+  updateRepository: (id: RepositoryId, name: string, note: string) =>
+    invoke<Repository>("update_repository", { id, name, note }),
+
+  /** Unlinks it. Nothing on disk is touched. */
+  deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
+
+  /**
+   * Gives one agent a repository, or takes it back. One agent per call, so a
+   * panel that is a tick behind cannot revoke somebody while granting somebody
+   * else.
+   */
+  /**
+   * Puts one agent in a repository, or takes it out with `null`.
+   *
+   * A move rather than a grant: an agent works in at most one, so there is no
+   * second call that takes one away and no list to send.
+   */
+  setAgentRepository: (id: AgentId, repositoryId: RepositoryId | null) =>
+    invoke<AgentCard>("set_agent_repository", { id, repositoryId }),
+
   pluginCatalog: () => invoke<PluginOffer[]>("plugin_catalog"),
 
   /** What one crew has connected. Never carries a grant. */

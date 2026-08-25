@@ -11,6 +11,7 @@ function card(id: string, name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "plain",
     color: "#c7d96b",
