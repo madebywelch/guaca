@@ -1,6 +1,7 @@
 import type { DropTarget } from "../lib/rail";
 import type { Activity, AgentCard, AgentId, Group, GroupId } from "../lib/types";
 import { GroupOrb } from "./GroupOrb";
+import { OrbTag, useOrbTag } from "./OrbTag";
 
 interface Props {
   groups: Group[];
@@ -48,6 +49,8 @@ export function GroupRail({
   onDragOver,
   onDragOut,
 }: Props) {
+  const all = useOrbTag();
+
   if (groups.length < 2) return null;
 
   return (
@@ -63,10 +66,17 @@ export function GroupRail({
         aria-label={`All groups, ${agents.length} agents`}
         title="All groups"
         onClick={() => onFocus(null)}
+        onPointerEnter={all.open}
+        onPointerLeave={all.close}
+        onFocus={all.open}
+        onBlur={all.close}
       >
         <span className="orb__ring">
           <span className="orb__all-count">{agents.length}</span>
         </span>
+        {all.at !== null && (
+          <OrbTag name="All groups" note={`${agents.length} agents`} at={all.at} />
+        )}
       </button>
 
       <span className="grail__rule" aria-hidden="true" />
