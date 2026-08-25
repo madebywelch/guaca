@@ -25,6 +25,7 @@ const MAX_WAITING: usize = 10;
 use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
+use crate::domain::worknote::{self, WorkingNote};
 use crate::llm::openrouter::ChatMessage;
 use crate::llm::tools::Surfaces;
 
@@ -68,7 +69,12 @@ pub fn system_prompt(
     // third kind of reach, and the only one where the agent holds nothing: the
     // call is made by Guaca with the group's own grant on it.
     plugins: &[PluginToolset],
-    notes: &str,
+    memory: &str,
+    // What this agent is in the middle of, oldest first, with when each line
+    // was written. Separate from memory because it has a different lifetime,
+    // and in the prompt for the same reason memory is: an agent that has to ask
+    // for its own state asks after it has decided what to do.
+    working_notes: &[WorkingNote],
     // What this agent already has standing, newest firing first. In the prompt
     // rather than behind a tool call: an agent asked to change something it
     // keeps has to know it keeps it before it decides what to do, and a list it
@@ -411,28 +417,71 @@ pub fn system_prompt(
 
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should color how it reads everything after.
+    //
+    // Memory and the working notes are two sections and not one, and the order
+    // is the argument. What you know comes before what you are doing, because
+    // an agent reads the second in the light of the first.
     out.push_str("\n## Your memory\n");
     out.push_str(
-        "This is your memory, and your notes are the same thing: one file of your own, shown to \
-         you at the start of every turn, and the only thing you carry between conversations. \
-         Everything else you are reading now is this conversation, and it goes. Keeping it is your \
-         job, and nobody else does it for you.\n\n\
-         `update_notes` is how you write it, whichever way you were asked: remember this, update \
-         your memory, make a note of that, forget that. It replaces the whole file, so send back \
-         everything you want to keep, not just the new part. Write what will still matter next \
-         week: how you work, standing preferences you have been given, decisions that hold across \
-         conversations, what you have learned about the people and agents you work with. Leave out \
-         what this conversation already says.\n\n\
+        "One file of your own, shown to you at the start of every turn. It holds what you know \
+         rather than what you are doing: who you are and how you work, standing preferences you \
+         have been given, decisions that hold across conversations, what you have learned about \
+         the people and agents you work with. Keeping it is your job, and nobody else does it for \
+         you.\n\n\
+         `update_memory` is how you write it, whichever way you were asked: remember this, update \
+         your memory, forget that. It replaces the whole file, so send back everything you want \
+         to keep, not just the new part.\n\n\
+         Keep what you could not look up again. If you could open it, do not copy it: record \
+         where it is and when it is worth opening, in one line. A document you summarize here is \
+         a document you are storing twice, and the copy is the one that goes stale.\n\n\
+         Where things stand right now is not memory. What you are waiting on, what you have just \
+         delivered and what is still open go in your working notes below, and putting them here \
+         instead is how a memory ends up describing a week that has finished.\n\n\
          Keep it current. Correct what turns out to be wrong and delete what has gone stale, \
          because you will act on this as though it were true: something you have outgrown does \
          more damage than something you never wrote down.\n\n",
     );
-    if notes.trim().is_empty() {
+    if memory.trim().is_empty() {
         out.push_str("It is empty. Nothing has been worth keeping yet.\n");
     } else {
         out.push_str("What you have kept so far:\n\n");
-        out.push_str(notes.trim());
+        out.push_str(memory.trim());
         out.push('\n');
+    }
+
+    out.push_str("\n## Your working notes\n");
+    out.push_str(
+        "Where your work stands, as lines you add with `note_progress`. This is the other half \
+         of what you carry between conversations, and it is the half that expires: what you have \
+         just done, what you have handed over, what you are waiting on and from whom.\n\n\
+         Note freely. A note is one line and costs nothing, and these are what stop you redoing \
+         work or waiting on something that already arrived. You cannot edit or delete one, and \
+         the oldest drop off by themselves once there are more than a page of them, so when \
+         something you noted stops being true, note the new state rather than trying to tidy the \
+         list.\n\n\
+         One thing needs no note: a message you sent a peer that has not come back is worked out \
+         from your own sent messages and listed for you further down. Spend these on what nothing \
+         else can see, which is everything off that path: what the operator owes you, what you \
+         handed over, what you decided, and what is still open.\n\n",
+    );
+    if working_notes.is_empty() {
+        out.push_str("You have none. Nothing is in flight that you have written down.\n");
+    } else {
+        // The age is the reason this section is worth reading. A list of notes
+        // with no dates says an agent is waiting; the same list with "6d ago"
+        // against it says the thing it waits for is not coming.
+        let now = crate::domain::now_ms();
+        for note in working_notes {
+            out.push_str(&format!(
+                "- {} — {}\n",
+                worknote::how_long_ago(note.at, now),
+                one_line(&note.body)
+            ));
+        }
+        out.push_str(
+            "\nRead the ages. Something you noted days ago that has not moved is something to \
+             chase or to give up on, not something to keep waiting for.\n",
+        );
     }
 
     if !card.skills.is_empty() {
@@ -569,7 +618,8 @@ pub fn system_prompt(
         out.push_str(
             "\n## What you are waiting on\n\
              You asked for these and have not heard back since. Taken from your own sent \
-             messages, so it is what happened rather than what you remember.\n",
+             messages, so it is what happened rather than what you remember, and it is why your \
+             working notes above do not need to carry it.\n",
         );
         for one in waiting_on.iter().take(MAX_WAITING) {
             out.push_str(&format!("- {}\n", one.line(crate::domain::now_ms())));
@@ -824,7 +874,8 @@ pub fn build_messages(
     signins: &[Signin],
     plugins: &[PluginToolset],
     names: &NameTable,
-    notes: &str,
+    memory: &str,
+    working_notes: &[WorkingNote],
     routines: &[Routine],
     history: &[Envelope],
     inbound: &[Envelope],
@@ -840,7 +891,8 @@ pub fn build_messages(
         credentials,
         signins,
         plugins,
-        notes,
+        memory,
+        working_notes,
         routines,
         mode,
         waiting_on,
@@ -891,11 +943,36 @@ mod tests {
             &[],
             notes,
             &[],
+            &[],
             mode,
             &[],
             None,
             Surfaces::both(),
         )
+    }
+
+    /// The prompt for an agent holding working notes, which is the other half
+    /// of what it carries and the half with a clock on it.
+    fn prompt_noting(card: &AgentCard, notes: &[WorkingNote]) -> String {
+        system_prompt(
+            card,
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            notes,
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            Surfaces::both(),
+        )
+    }
+
+    fn note(at: i64, body: &str) -> WorkingNote {
+        WorkingNote { at, body: body.to_string() }
     }
 
     /// The prompt for an agent that already keeps a schedule.
@@ -908,6 +985,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             routines,
             ReplyMode::ToOperator,
             &[],
@@ -935,6 +1013,7 @@ mod tests {
             &[],
             names,
             notes,
+            &[],
             &[],
             history,
             inbound,
@@ -1167,6 +1246,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1224,6 +1304,7 @@ mod tests {
             &[plugin(PluginKind::Neon, &["run_sql", "create_branch"])],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1256,6 +1337,7 @@ mod tests {
             &[],
             &[set],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1291,6 +1373,7 @@ mod tests {
             &[set],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1321,6 +1404,7 @@ mod tests {
             &[],
             &[plugin(PluginKind::Cloudflare, &["execute"])],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1360,6 +1444,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1392,6 +1477,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1429,6 +1515,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1459,6 +1546,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1775,6 +1863,7 @@ mod tests {
             &NameTable::new(),
             "",
             &[],
+            &[],
             &[sent],
             &[],
             ReplyMode::ToOperator,
@@ -1795,18 +1884,45 @@ mod tests {
     }
 
     #[test]
-    fn memory_and_notes_are_named_as_one_file() {
-        // The operator asks an agent to update its memory; the tool it has is
-        // called `update_notes`. If the prompt only ever uses one of the two
-        // words, the other one arrives as a request the agent has to guess at,
-        // and the guess it makes is a tool that does not exist.
+    fn memory_and_progress_are_two_sections_that_name_each_other() {
+        // The whole change. One store meant an agent with a live task put the
+        // task in the only thing that survived the turn, which is how a memory
+        // fills with "waiting on" lines that outlive the waiting. Two stores
+        // only work if each says where the other's material goes: told "not
+        // here" and nothing else, an agent still has to put it somewhere, and
+        // the somewhere it picked was here.
         let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
         let memory = section(&prompt, "## Your memory");
-        assert!(memory.contains("your notes are the same thing"), "{memory}");
-        assert!(memory.contains("`update_notes`"), "the tool has to be named here: {memory}");
+        let progress = section(&prompt, "## Your working notes");
+
+        assert!(memory.contains("`update_memory`"), "the tool has to be named here: {memory}");
+        assert!(
+            memory.contains("working notes"),
+            "memory has to say where progress goes instead: {memory}"
+        );
         assert!(
             memory.contains("update your memory"),
             "the operator's own wording has to appear as one of the ways this gets asked: {memory}"
+        );
+        assert!(progress.contains("`note_progress`"), "{progress}");
+        assert!(
+            progress.contains("waiting on"),
+            "the progress section has to be about work in flight: {progress}"
+        );
+    }
+
+    #[test]
+    fn memory_is_told_to_point_at_a_document_rather_than_copy_it() {
+        // The operator's own definition of what memory is for, and the rule
+        // that reclaims the most room: an assistant here spent a fifth of its
+        // memory restating four documents whose filenames were three lines
+        // further up the same file.
+        let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        let memory = section(&prompt, "## Your memory");
+        assert!(memory.contains("do not copy it"), "the index rule has gone: {memory}");
+        assert!(
+            memory.contains("where it is"),
+            "naming the pointer is the half that says what to write instead: {memory}"
         );
     }
 
@@ -1819,7 +1935,7 @@ mod tests {
             prompt_for(&card("Manager"), &[], "- The operator is Robert.", ReplyMode::ToPeer);
 
         for prompt in [&empty, &held] {
-            assert!(prompt.contains("update_notes"), "it must know how to write");
+            assert!(prompt.contains("update_memory"), "it must know how to write");
             assert!(
                 prompt.contains("replaces the whole file"),
                 "a partial write silently drops everything else it had kept"
@@ -1827,10 +1943,6 @@ mod tests {
             assert!(
                 prompt.contains("delete what has gone stale"),
                 "keeping it current is the part that is actually hard"
-            );
-            assert!(
-                prompt.contains("between conversations"),
-                "it has to know this is the only thing that survives"
             );
         }
         assert!(held.contains("- The operator is Robert."));
@@ -1850,6 +1962,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1866,6 +1979,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1886,14 +2000,111 @@ mod tests {
             ReplyMode::ToOperator,
         );
         assert!(prompt.contains("Operator prefers terse replies."));
-        assert!(prompt.contains("update_notes"), "the agent must know it can revise them");
+        assert!(prompt.contains("update_memory"), "the agent must know it can revise them");
     }
 
     #[test]
     fn an_agent_with_an_empty_memory_is_told_what_belongs_there() {
         let prompt = prompt_for(&card("Manager"), &[], "   ", ReplyMode::ToOperator);
         assert!(prompt.contains("It is empty."));
-        assert!(prompt.contains("still matter next week"));
+        assert!(
+            prompt.contains("could not look up again"),
+            "an empty memory is the one that most needs telling what goes in it: {prompt}"
+        );
+    }
+
+    #[test]
+    fn working_notes_are_drawn_oldest_first_with_how_long_ago_each_was() {
+        // The age is why this section is worth reading at all. Without it, a
+        // list of notes says an agent is waiting; with it, the same list says
+        // whether the thing it waits for is ever coming.
+        let now = crate::domain::now_ms();
+        let notes = vec![
+            note(now - 6 * 86_400_000, "asked the paralegal for the regulatory read"),
+            note(now - 2 * 3_600_000, "handed the scope document to Robert"),
+        ];
+        let prompt = prompt_noting(&card("Manager"), &notes);
+        let progress = section(&prompt, "## Your working notes");
+
+        let first = progress.find("regulatory read").expect("the older note is missing");
+        let second = progress.find("scope document").expect("the newer note is missing");
+        assert!(first < second, "notes must read oldest first: {progress}");
+        assert!(progress.contains("6d ago"), "{progress}");
+        assert!(progress.contains("2h ago"), "{progress}");
+        assert!(
+            progress.contains("chase or to give up on"),
+            "an age nobody is told to act on is decoration: {progress}"
+        );
+    }
+
+    #[test]
+    fn the_written_notes_and_the_derived_waiting_list_do_not_overlap() {
+        // Two sections that both answer "what am I waiting on", arrived at from
+        // opposite ends. The derived one is computed from the agent's own sent
+        // messages and cannot go stale; the written one is whatever the agent
+        // chose to record and covers everything off that path, which is the
+        // operator, an outside party, and what it has already handed over.
+        //
+        // Nothing else would catch these collapsing into one. Both would still
+        // render, both suites would pass, and the cost is an agent spending
+        // half a bounded list restating a list it is given for free.
+        let now = crate::domain::now_ms();
+        let waiting = vec![Outstanding {
+            peer: "Paralegal".into(),
+            at: now - 2 * 3_600 * 1000,
+            asked: "the regulatory read".into(),
+        }];
+        let prompt = system_prompt(
+            &card("Manager"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[note(now, "Robert owes a decision on the six items")],
+            &[],
+            ReplyMode::ToOperator,
+            &waiting,
+            None,
+            Surfaces::both(),
+        );
+        let progress = section(&prompt, "## Your working notes");
+
+        assert!(
+            progress.contains("needs no note"),
+            "the written list has to say what the derived one already covers: {progress}"
+        );
+        let derived = section(&prompt, "## What you are waiting on");
+        assert!(
+            derived.contains("working notes above do not need to carry it"),
+            "and the derived one has to say why the other is short: {derived}"
+        );
+    }
+
+    #[test]
+    fn an_agent_with_nothing_in_flight_is_told_the_section_is_empty() {
+        // Rather than a heading standing over nothing, which reads as a feature
+        // that failed to load and invites the agent to explain it to somebody.
+        let prompt = prompt_noting(&card("Manager"), &[]);
+        let progress = section(&prompt, "## Your working notes");
+        assert!(progress.contains("You have none."), "{progress}");
+        assert!(
+            progress.contains("note_progress"),
+            "it still has to know how to write one: {progress}"
+        );
+    }
+
+    #[test]
+    fn a_note_reaches_the_prompt_on_one_line() {
+        // A model that ignored "keep it to a line" must not be able to push the
+        // roster off the bottom of its own prompt with a pasted document.
+        let now = crate::domain::now_ms();
+        let prompt = prompt_noting(&card("Manager"), &[note(now, "first\nsecond\nthird")]);
+        let progress = section(&prompt, "## Your working notes");
+        let line =
+            progress.lines().find(|line| line.contains("first")).expect("the note is missing");
+        assert!(line.contains("second") && line.contains("third"), "the note was cut: {line}");
     }
 
     #[test]
@@ -2011,6 +2222,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -2030,6 +2242,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -2082,6 +2295,7 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -2107,6 +2321,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -2386,13 +2601,17 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &waiting,
             None,
             Surfaces::both(),
         );
 
-        assert!(prompt.contains("What you are waiting on"), "{prompt}");
+        // The heading, not the phrase. The memory section says "What you are
+        // waiting on ... goes in your working notes below", so a bare substring
+        // match is true of every prompt whether the section is drawn or not.
+        assert!(prompt.contains("## What you are waiting on"), "{prompt}");
         assert!(prompt.contains("Vision iOS SRE"), "{prompt}");
         assert!(prompt.contains("2 hours ago"), "{prompt}");
         // The whole point: without this line the list is read as a to-do and
@@ -2413,11 +2632,12 @@ mod tests {
             &[],
             "",
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
             Surfaces::both(),
         );
-        assert!(!prompt.contains("What you are waiting on"), "{prompt}");
+        assert!(!prompt.contains("## What you are waiting on"), "{prompt}");
     }
 }

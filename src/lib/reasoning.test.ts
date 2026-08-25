@@ -70,14 +70,14 @@ describe("the line drawn from it", () => {
   });
 
   it("takes the marks off rather than drawing them", () => {
-    expect(thoughtNow("running `update_notes` next.").line).toBe("running update_notes next.");
+    expect(thoughtNow("running `update_memory` next.").line).toBe("running update_memory next.");
   });
 
   it("leaves an identifier alone", () => {
     // Stripping every character markdown can use would make this
     // "updatenotes", which is a tool the operator does not have.
-    expect(thoughtNow("call update_notes with the whole file.").line).toBe(
-      "call update_notes with the whole file.",
+    expect(thoughtNow("call update_memory with the whole file.").line).toBe(
+      "call update_memory with the whole file.",
     );
   });
 

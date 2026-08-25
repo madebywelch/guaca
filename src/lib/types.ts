@@ -861,6 +861,12 @@ export type UiEvent =
    */
   | { type: "memoryChanged"; agentId: AgentId }
   /**
+   * One agent appended a working note. Its own event rather than a second
+   * meaning for `memoryChanged`: notes are written far more often, and folding
+   * them together would have every note refetch a memory that has not moved.
+   */
+  | { type: "workingNotesChanged"; agentId: AgentId }
+  /**
    * A coding job could not run, for a reason only the operator can fix.
    *
    * The agent that asked is told in its own channel, and that is not enough: a
@@ -1104,4 +1110,16 @@ export function plainText(envelope: Envelope): string {
 
 export function isInterAgent(envelope: Envelope): boolean {
   return envelope.from.kind === "agent" && envelope.to.kind === "agent";
+}
+
+/**
+ * One line an agent wrote about where its work stands.
+ *
+ * The counterpart to memory and shaped by what memory is not: appended rather
+ * than rewritten, stamped, and dropped by age rather than by anybody's
+ * decision. `at` is milliseconds since the epoch, as everything else here is.
+ */
+export interface WorkingNote {
+  at: number;
+  body: string;
 }

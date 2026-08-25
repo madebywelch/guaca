@@ -4,12 +4,20 @@
 //! shown to it at the start of every turn. This is the smallest thing that
 //! deserves the name memory, and the shape is deliberate.
 //!
-//! It is called memory everywhere a person or a model reads about it, and
-//! `notes` everywhere the code names it: the tool is `update_notes`, the
-//! commands are `agent_notes` and `set_agent_notes`, and the files are these.
-//! Renaming the internals would rewrite the IPC contract to no effect, so
-//! instead both words reach the same file at the model boundary, and the
-//! operator's word is the one an agent is told.
+//! It is called memory everywhere now, in the code as well as in the app. It
+//! was `notes` internally for a year, on the argument that renaming would
+//! rewrite the IPC contract to no effect. That stopped being true the moment
+//! there was a second store: with working notes beside it, `notes` named two
+//! things with opposite lifetimes, and the one word nobody could use without
+//! saying which one they meant was the word the code used everywhere.
+//! `update_notes` survives as a parse alias and nothing else.
+//!
+//! What lives here is only half of what an agent carries. The other half is
+//! `domain::worknote`, and the line between them is what each is for: this file
+//! holds what the agent knows, and could not look up again; a working note
+//! holds where its work stands, and expires. The two shapes are opposites on
+//! purpose, and the reasoning for that is in `worknote.rs` rather than repeated
+//! here.
 //!
 //! The 2026 survey of agent memory (arXiv 2603.07670) frames memory as a
 //! write-manage-read loop and names the engineering realities that decide
@@ -35,8 +43,8 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::ids::AgentId;
 
-/// Notes longer than this are cut. Four pages: enough for a persona, standing
-/// preferences, durable facts, and the state a coordinator carries.
+/// Memory longer than this is cut. Four pages: enough for a persona, standing
+/// preferences, durable facts, and pointers to the documents worth reopening.
 ///
 /// It was 4,000, which is one page, and every agent doing real work was jammed
 /// against it. Measured across a workspace of twenty-one: the ten busiest were
@@ -48,15 +56,22 @@ use crate::domain::ids::AgentId;
 ///
 /// Naming the number in the tool description did not help, which is the
 /// evidence that mattered: the models were not guessing the cap, they had more
-/// state than the cap held. A coordinator keeping eight agents' work in here
-/// had compressed its prose to telegraphese to fit, which is lossy in a way
-/// nothing can recover from a turn later.
+/// state than the cap held.
 ///
-/// The cost is real and is prompt tokens on every turn of every agent, which is
-/// why this is not simply large. Four pages is the size the busiest files
-/// actually wanted. What it buys is that extra model call back, on half the
-/// writes, and prose a model can still read next week.
-pub const MAX_NOTES: usize = 16_000;
+/// That measurement predates the split, and some of what it measured was
+/// pressure this file should never have been under. A fifth of the same
+/// workspace's memory was progress, which now goes to `domain::worknote`, and
+/// more again was documents restated rather than pointed at. Whether four pages
+/// is still the right size is a question for the next measurement rather than
+/// this one, and it is deliberately not lowered on a prediction: being wrong
+/// upward costs prompt tokens, and being wrong downward costs back the extra
+/// model call on half of all writes that this bought.
+///
+/// Mirrored in `Memory.tsx` as `CAP`, which the suite pins to this by reading
+/// this file. The two drifted to 4,000 against 16,000 once, and the panel spent
+/// that release telling operators their memory was about to be cut by a runtime
+/// that was storing it whole.
+pub const MAX_MEMORY: usize = 16_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -106,7 +121,7 @@ impl Workspace {
         &self.root
     }
 
-    /// Where an agent's notes should live, given its current name.
+    /// Where an agent's memory should live, given its current name.
     pub fn preferred_path(&self, id: AgentId, name: &str) -> PathBuf {
         self.root.join(format!("{}-{}.md", slug(name), id.short()))
     }
@@ -114,7 +129,7 @@ impl Workspace {
     /// Finds an agent's file wherever it currently is.
     ///
     /// Located by the id suffix rather than by name, so renaming an agent can
-    /// never orphan its notes even if the file move fails.
+    /// never orphan its memory even if the file move fails.
     fn existing_path(&self, id: AgentId) -> Option<PathBuf> {
         let suffix = format!("-{}.md", id.short());
         let entries = fs::read_dir(&self.root).ok()?;
@@ -127,12 +142,12 @@ impl Workspace {
         None
     }
 
-    /// An agent's notes, or an empty string if it has never written any.
+    /// An agent's memory, or an empty string if it has never written any.
     pub fn read(&self, id: AgentId) -> String {
         self.existing_path(id).and_then(|path| fs::read_to_string(path).ok()).unwrap_or_default()
     }
 
-    /// Replaces an agent's notes.
+    /// Replaces an agent's memory.
     ///
     /// Returns what was actually stored, which is the input trimmed and, if it
     /// ran over the cap, cut at a line boundary with a marker. Silently storing
@@ -150,13 +165,13 @@ impl Workspace {
             .map_err(|source| WorkspaceError::Io { path: self.root.clone(), source })?;
 
         let trimmed = content.trim();
-        let (body, truncated) = if trimmed.chars().count() <= MAX_NOTES {
+        let (body, truncated) = if trimmed.chars().count() <= MAX_MEMORY {
             (trimmed.to_string(), false)
         } else {
-            let mut kept: String = trimmed.chars().take(MAX_NOTES).collect();
+            let mut kept: String = trimmed.chars().take(MAX_MEMORY).collect();
             // Cut at a line boundary so the file never ends mid-sentence.
             if let Some(last_break) = kept.rfind('\n') {
-                if last_break > MAX_NOTES / 2 {
+                if last_break > MAX_MEMORY / 2 {
                     kept.truncate(last_break);
                 }
             }
@@ -180,7 +195,7 @@ impl Workspace {
         Ok(Stored { before, characters: body.chars().count(), truncated, path: target })
     }
 
-    /// Deletes an agent's notes. Called when the agent is deleted.
+    /// Deletes an agent's memory. Called when the agent is deleted.
     pub fn remove(&self, id: AgentId) {
         if let Some(path) = self.existing_path(id) {
             let _ = fs::remove_file(path);
@@ -207,7 +222,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_round_trip() {
+    fn memory_round_trips() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         assert_eq!(ws.read(id), "", "an agent starts with nothing");
@@ -265,7 +280,7 @@ mod tests {
     }
 
     #[test]
-    fn renaming_an_agent_moves_its_notes_without_losing_them() {
+    fn renaming_an_agent_moves_its_memory_without_losing_it() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "remembered").unwrap();
@@ -278,7 +293,7 @@ mod tests {
     }
 
     #[test]
-    fn notes_are_found_by_id_even_if_the_filename_is_stale() {
+    fn memory_is_found_by_id_even_if_the_filename_is_stale() {
         // Lookup by id is what makes a failed rename harmless.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
@@ -302,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn oversized_notes_are_cut_and_reported() {
+    fn oversized_memory_is_cut_and_reported() {
         // Silently storing a truncated file would let an agent believe it had
         // recorded something it had not.
         let (ws, _dir) = workspace();
@@ -310,34 +325,34 @@ mod tests {
         // Sized off the cap rather than a fixed repeat count, so this still
         // tests truncation the next time the ceiling moves. It did not, and a
         // raise turned it into a test that the input happened to fit.
-        let huge = "a line of notes\n".repeat(MAX_NOTES / 8);
+        let huge = "a line of notes\n".repeat(MAX_MEMORY / 8);
 
         let stored = ws.write(id, "Manager", &huge).unwrap();
         assert!(stored.truncated);
-        assert!(stored.characters <= MAX_NOTES);
-        assert!(ws.read(id).chars().count() <= MAX_NOTES);
+        assert!(stored.characters <= MAX_MEMORY);
+        assert!(ws.read(id).chars().count() <= MAX_MEMORY);
     }
 
     #[test]
     fn truncation_lands_on_a_line_boundary() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        ws.write(id, "Manager", &"a line of notes\n".repeat(MAX_NOTES / 8)).unwrap();
+        ws.write(id, "Manager", &"a line of notes\n".repeat(MAX_MEMORY / 8)).unwrap();
         assert!(ws.read(id).ends_with("a line of notes"), "cut mid-sentence");
     }
 
     #[test]
-    fn notes_within_the_cap_are_stored_whole() {
+    fn memory_within_the_cap_is_stored_whole() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        let body = "x".repeat(MAX_NOTES);
+        let body = "x".repeat(MAX_MEMORY);
         let stored = ws.write(id, "Manager", &body).unwrap();
         assert!(!stored.truncated);
-        assert_eq!(ws.read(id).chars().count(), MAX_NOTES);
+        assert_eq!(ws.read(id).chars().count(), MAX_MEMORY);
     }
 
     #[test]
-    fn deleting_an_agent_removes_its_notes() {
+    fn deleting_an_agent_removes_its_memory() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
         ws.write(id, "Manager", "gone soon").unwrap();
@@ -368,7 +383,7 @@ mod tests {
         let stored = ws.write(id, "../../../../tmp/pwned", "x").unwrap();
         assert!(
             stored.path.starts_with(ws.root()),
-            "notes escaped the workspace: {}",
+            "memory escaped the workspace: {}",
             stored.path.display()
         );
     }

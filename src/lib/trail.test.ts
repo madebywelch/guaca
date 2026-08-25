@@ -22,7 +22,7 @@ function call(name: string, args: unknown, outcome: ToolOutcome = ok("done")): T
 
 /** A memory rewrite, which is the only call that carries what it overwrote. */
 function rewrote(content: string, replaced: string): ToolCall {
-  return { ...call("update_notes", { content }, ok("Memory saved.")), replaced };
+  return { ...call("update_memory", { content }, ok("Memory saved.")), replaced };
 }
 
 function steps(...calls: ToolCall[]): Step[] {
@@ -239,7 +239,7 @@ describe("whether a chip opens anything", () => {
 
   it("opens what an agent wrote to its own memory", () => {
     const groups = foldTrail(
-      steps(call("update_notes", { content: "Smith handles verification." }, ok("Memory saved."))),
+      steps(call("update_memory", { content: "Smith handles verification." }, ok("Memory saved."))),
     );
     expect(hasDetail(groups[0]!)).toBe(true);
     expect(groups[0]?.steps[0]?.target).toBe("Smith handles verification.");
@@ -275,7 +275,7 @@ describe("what a rewrite changed", () => {
 
   it("has nothing to compare where the runtime recorded nothing", () => {
     // Every write already in a channel, and every other tool there is.
-    const [written] = steps(call("update_notes", { content: "Smith verifies." }));
+    const [written] = steps(call("update_memory", { content: "Smith verifies." }));
     expect(stepDiff(written!)).toBeNull();
 
     const [ran] = steps(call("run_command", { command: "ls" }));
@@ -296,7 +296,7 @@ describe("a call while it is still happening", () => {
     // thing the operator is waiting on: a command still running is not a
     // command that ran.
     expect(callInFlight("run_command", { command: "npm test" })).toBe("Running a command");
-    expect(callInFlight("update_notes", { content: "x" })).toBe("Updating its memory");
+    expect(callInFlight("update_memory", { content: "x" })).toBe("Updating its memory");
   });
 
   it("names the site a page is being opened at, because that is the wait", () => {
@@ -310,7 +310,50 @@ describe("a call while it is still happening", () => {
 
   it("names a tool this build has never heard of after the tool", () => {
     // A crew's plugin tools are named by that crew's servers. Guessing at what
-    // one does is how `update_notes` once drew as a message sent to nobody.
+    // one does is how `update_memory` once drew as a message sent to nobody.
     expect(callInFlight("linear__create_issue", {})).toBe("Using linear__create_issue");
+  });
+});
+
+describe("the memory tool under both of its names", () => {
+  it("draws a transcript written before the rename", () => {
+    // A tool call is stored as JSON on the message, so every turn recorded
+    // while this tool was called `update_notes` still says so. A renderer that
+    // knew only the new name would draw a year of history as "Used
+    // update_notes", which is the same failure `Part::Approval` refuses to be
+    // widened over: old rows cannot be migrated into a new spelling.
+    const [old] = steps(call("update_notes", { content: "Smith verifies." }));
+    const [current] = steps(call("update_memory", { content: "Smith verifies." }));
+    expect(old!.title).toBe("Updated its memory");
+    expect(current!.title).toBe(old!.title);
+    expect(callInFlight("update_notes", { content: "x" })).toBe("Updating its memory");
+  });
+});
+
+describe("a progress note", () => {
+  it("says what it is rather than naming the tool", () => {
+    const [step] = steps(call("note_progress", { note: "waiting on the legal read" }));
+    expect(step!.title).toBe("Noted where its work stands");
+    expect(step!.target).toBe("waiting on the legal read");
+    expect(callInFlight("note_progress", { note: "x" })).toBe("Noting where its work stands");
+  });
+
+  it("adds nothing beside a chip that already said it", () => {
+    // "Noted. You have 3 of 16 working notes" is a number the model needs and
+    // the operator can already read off the panel that lists them. Noting is
+    // meant to be cheap and frequent, so its chip has to stay one line.
+    const [step] = steps(
+      call("note_progress", { note: "waiting" }, ok("Noted. You have 3 of 16 working notes.")),
+    );
+    expect(tellsMore(step!)).toBe(false);
+  });
+
+  it("shows what went wrong when one could not be saved", () => {
+    // A failure is never an echo: whatever broke is not something the title
+    // could have said.
+    const [step] = steps(
+      call("note_progress", { note: "waiting" }, { status: "failed", error: "database is locked" }),
+    );
+    expect(tellsMore(step!)).toBe(true);
   });
 });

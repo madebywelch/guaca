@@ -248,21 +248,13 @@ async fn an_announcement_is_not_repeated_to_anyone() {
     let stub = serve(|body: &serde_json::Value| {
         if has_tool_result(body) {
             Script::Say("everyone has been told".into())
-        } else if body["messages"]
-            .as_array()
-            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).any(|c| c.contains("noted")))
-            .unwrap_or(false)
-        {
+        } else if anyone_said(body, "noted") {
             // The habit: say it again, word for word.
             Script::SendTo {
                 recipients: vec!["Chef".into(), "Baker".into()],
                 text: "the time is 11:03pm".into(),
             }
-        } else if body["messages"]
-            .as_array()
-            .map(|m| m.iter().filter_map(|m| m["content"].as_str()).any(|c| c.contains("11:03pm")))
-            .unwrap_or(false)
-        {
+        } else if anyone_said(body, "11:03pm") {
             Script::Say("noted".into())
         } else {
             Script::SendTo {
