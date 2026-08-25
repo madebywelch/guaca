@@ -92,6 +92,7 @@ repo: the frontend renders state and forwards intent.
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
+| A sign-in that stopped working, refreshing, expiry, signing out | *A token's `exp` is a floor on its life, not a ceiling* in `docs/ARCHITECTURE.md`, then `Subscription::renew` and the 401 path in `codex::stream` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
@@ -223,6 +224,21 @@ the model takes a screenshot to see what `browse` did.
 
 ## What looks like a simplification and is not
 
+- **A ChatGPT access token's `exp` is not when it stops working.** OpenAI mints
+  one ten days out and the backend refuses it after about three, with
+  `token_expired`. The local claim is the only signal on the machine and it is
+  wrong in the direction that strands an operator: refreshing against it alone
+  left a dead token in place for a week, refused every turn, and kept reporting
+  a healthy sign-in in Settings, because "signed in" was a file existing. So a
+  401 from the backend is what triggers a refresh, and the same request goes
+  again under the new token. `Subscription::renew`, and *A token's `exp` is a
+  floor on its life* in `docs/ARCHITECTURE.md`.
+- **A refresh is serialized, and one the service refuses forgets the sign-in.**
+  The refresh token rotates, so a crew that all hit the dead token at once would
+  race to retire each other's and the losers would hold one the service already
+  threw away. And a 4xx from the token endpoint is the sign-in genuinely being
+  over: the file goes, so Settings offers signing in rather than signing out. A
+  5xx is the service having a bad minute and costs nobody their sign-in.
 - **A group's settings are two blocks, and each is all-or-nothing.** A draft
   that mentions `inference` or `limits` replaces every override in that block,
   and one that leaves it out changes none of them. Per-field "absent means leave
