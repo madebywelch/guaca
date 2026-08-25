@@ -33,6 +33,7 @@ use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
 use crate::domain::usage::{GroupUsage, RunUsage};
+use crate::domain::worknote::WorkingNote;
 use crate::e2b::{Computer, E2bClient, E2bError};
 use crate::kernel::{Browser, KernelClient, KernelError};
 use crate::llm::catalog::{Catalog, CatalogError, RankedModel};
@@ -1330,6 +1331,11 @@ async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()
     // Its schedule goes too, or it would keep coming due for an agent that can
     // no longer act on it.
     let _ = state.runtime.store().delete_agent_routines(id);
+    // And what it was in the middle of, for the reason the memory above goes:
+    // it is the agent's own account of its work and belongs to nobody else. The
+    // row is only marked terminated rather than deleted, so the table's own
+    // cascade never fires and this is the whole cleanup.
+    let _ = state.runtime.store().clear_working_notes(id);
     // And what its browser was signed in to, which was cookies on the disk
     // destroyed above. Left behind, the roster would keep telling the crew to
     // ask this agent for an account nothing can reach any more.
@@ -1523,13 +1529,13 @@ pub fn agent_activity(state: State<'_, AppState>) -> Reply<HashMap<AgentId, Acti
 /// most recently. Live updates come from message events; this seeds them.
 /// An agent's memory: a small markdown file it maintains for itself.
 #[tauri::command]
-pub fn agent_notes(state: State<'_, AppState>, id: AgentId) -> Reply<String> {
+pub fn agent_memory(state: State<'_, AppState>, id: AgentId) -> Reply<String> {
     Ok(state.runtime.workspace().read(id))
 }
 
 /// Lets the operator seed or correct an agent's memory by hand.
 #[tauri::command]
-pub fn set_agent_notes(state: State<'_, AppState>, id: AgentId, content: String) -> Reply<String> {
+pub fn set_agent_memory(state: State<'_, AppState>, id: AgentId, content: String) -> Reply<String> {
     let card = state
         .runtime
         .store()
@@ -1541,6 +1547,25 @@ pub fn set_agent_notes(state: State<'_, AppState>, id: AgentId, content: String)
         .write(id, &card.name, &content)
         .map_err(|err| CommandError::new("storage", err.to_string()))?;
     Ok(state.runtime.workspace().read(id))
+}
+
+/// What an agent is in the middle of: the other half of what it carries.
+#[tauri::command]
+pub fn agent_working_notes(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<WorkingNote>> {
+    Ok(state.runtime.store().working_notes(id)?)
+}
+
+/// Drops every note an agent holds.
+///
+/// The operator's only write here, and deliberately the blunt one. Editing a
+/// single note would make the list a document two parties maintain, which is
+/// the shape memory already has and the reason it needed the held-draft dance
+/// in the panel. This list is the agent's own account of its work; the operator
+/// either believes it or says the work is done.
+#[tauri::command]
+pub fn clear_agent_working_notes(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    state.runtime.store().clear_working_notes(id)?;
+    Ok(())
 }
 
 #[tauri::command]

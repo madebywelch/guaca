@@ -7,6 +7,7 @@ import { ComputerScreen } from "./ComputerScreen";
 import { Memory } from "./Memory";
 import { RoutineDetail } from "./RoutineDetail";
 import { RoutineList } from "./RoutineList";
+import { WorkingNotes } from "./WorkingNotes";
 
 interface Props {
   agent: AgentCard | undefined;
@@ -49,10 +50,12 @@ function remembered(): boolean {
  * edited rarely and all at once, which is what a dialog is for; these are
  * glanced at constantly.
  *
- * Memory is first, and it is the only section that has something to show on
- * every agent: a screen is usually an offer rather than a picture, and a new
- * agent keeps no routines. It is capped in height, so a long one cannot push
- * a live desktop off the panel.
+ * Memory is first, and what the agent is in the middle of is directly under
+ * it: they are the two halves of what an agent carries between conversations,
+ * and read apart neither says what it means. Those two are also the only
+ * sections with something to show on every agent, since a screen is usually an
+ * offer rather than a picture and a new agent keeps no routines. Memory is
+ * capped in height, so a long one cannot push a live desktop off the panel.
  */
 export function Inspector({ agent, onEditProfile }: Props) {
   const [open, setOpen] = useState(remembered);
@@ -169,6 +172,7 @@ export function Inspector({ agent, onEditProfile }: Props) {
             closing the panel cleared them. */}
         <div className="inspector__level" hidden={routine !== null} key={agent.id}>
           <Memory agentId={agent.id} />
+          <WorkingNotes agentId={agent.id} />
           <ComputerScreen agent={agent} />
           <BrowserScreen agent={agent} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} />

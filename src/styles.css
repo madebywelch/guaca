@@ -5027,6 +5027,76 @@ button {
   font-size: 0.95em;
 }
 
+/* --- working notes -------------------------------------------------------
+   Under the memory and deliberately lighter than it. Memory is a box you type
+   into; this is a list you read, and giving it the same weight would say the
+   two are the same kind of thing when the whole point is that they are not. */
+
+.worknotes {
+  margin-bottom: var(--space-6);
+}
+
+.worknotes__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.worknotes__title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.worknotes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The age is a column rather than a suffix, so a glance down the right-hand
+   edge answers the question the list is actually for: how long has this been
+   sitting here. Run into the text it has to be found in every line. */
+.worknotes__note {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--text);
+}
+
+.worknotes__body {
+  min-width: 0;
+}
+
+.worknotes__age {
+  flex: none;
+  font-size: var(--type-meta);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.worknotes__empty {
+  margin: 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--faint);
+}
+
+.worknotes__empty code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
 /* --- the screen ----------------------------------------------------------
 
    One connection, two sizes. Going full screen promotes the stage inside this

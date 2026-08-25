@@ -66,6 +66,7 @@ import type {
   Staged,
   SubscriptionStatus,
   UiEvent,
+  WorkingNote,
 } from "./types";
 
 const EVENT_CHANNEL = "guac://event";
@@ -385,11 +386,17 @@ export const api = {
   agentLastActive: () => invoke<Record<AgentId, number>>("agent_last_active"),
 
   /** An agent's memory: a small markdown file it maintains for itself. */
-  agentNotes: (id: AgentId) => invoke<string>("agent_notes", { id }),
+  agentMemory: (id: AgentId) => invoke<string>("agent_memory", { id }),
 
   /** Lets the operator seed or correct an agent's memory by hand. */
-  setAgentNotes: (id: AgentId, content: string) =>
-    invoke<string>("set_agent_notes", { id, content }),
+  setAgentMemory: (id: AgentId, content: string) =>
+    invoke<string>("set_agent_memory", { id, content }),
+
+  /** What an agent is in the middle of, oldest first. */
+  agentWorkingNotes: (id: AgentId) => invoke<WorkingNote[]>("agent_working_notes", { id }),
+
+  /** Drops every note an agent holds. The operator's only write here. */
+  clearAgentWorkingNotes: (id: AgentId) => invoke<void>("clear_agent_working_notes", { id }),
 
   /**
    * A channel's newest messages. `through` widens the window until it reaches

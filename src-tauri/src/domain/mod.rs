@@ -11,6 +11,7 @@ pub mod routine;
 pub mod search;
 pub mod signin;
 pub mod usage;
+pub mod worknote;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};

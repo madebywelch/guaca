@@ -339,6 +339,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
+use crate::domain::worknote;
 use crate::files::FileStore;
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
@@ -2197,7 +2198,15 @@ impl Runtime {
             .filter(|e| !batch.iter().any(|b| b.id == e.id))
             .collect::<Vec<_>>();
 
-        let notes = self.inner.workspace.read(agent_id);
+        let memory = self.inner.workspace.read(agent_id);
+        // Read fresh alongside it, and a read that fails is an empty list
+        // rather than a refused turn: an agent that cannot see what it is in
+        // the middle of still has this conversation, and half a prompt beats
+        // none.
+        let working_notes = self.inner.store.working_notes(agent_id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's working notes for its prompt");
+            Vec::new()
+        });
         // What this agent already keeps, read fresh for the same reason the
         // sign-ins below are: the turn that is about to be asked to change a
         // routine has to know it has one. A read that fails is an empty
@@ -2270,7 +2279,8 @@ impl Runtime {
             &signins,
             &plugins,
             &names,
-            &notes,
+            &memory,
+            &working_notes,
             &routines,
             &history,
             &batch,
@@ -2974,7 +2984,7 @@ impl Runtime {
                 (payload, Part::tool_call(tools::DIRECTORY, arguments, ToolOutcome::Ok { summary }))
             }
 
-            ToolInvocation::UpdateNotes { content } => {
+            ToolInvocation::UpdateMemory { content } => {
                 match self.inner.workspace.write(card.id, &card.name, &content) {
                     Ok(stored) => {
                         // The panel beside the agent is drawing this file, and
@@ -2995,7 +3005,7 @@ impl Runtime {
                                  end was cut off, so whatever you wrote last is gone. {} \
                                  characters kept. Write it again inside the limit, most \
                                  important first, keeping only what will still matter next week.",
-                                crate::workspace::MAX_NOTES,
+                                crate::workspace::MAX_MEMORY,
                                 stored.characters
                             )
                         } else if stored.characters == 0 {
@@ -3009,7 +3019,7 @@ impl Runtime {
                             // show what changed rather than a page of memory
                             // the operator has to read twice to compare.
                             Part::tool_call_replacing(
-                                tools::UPDATE_NOTES,
+                                tools::UPDATE_MEMORY,
                                 arguments,
                                 ToolOutcome::Ok { summary },
                                 stored.before,
@@ -3019,7 +3029,52 @@ impl Runtime {
                     Err(err) => (
                         format!("Error: your memory could not be saved ({err})."),
                         Part::tool_call(
-                            tools::UPDATE_NOTES,
+                            tools::UPDATE_MEMORY,
+                            arguments,
+                            ToolOutcome::Failed { error: err.to_string() },
+                        ),
+                    ),
+                }
+            }
+
+            ToolInvocation::NoteProgress { note } => {
+                let (body, cut) = worknote::store_as(&note);
+                match self.inner.store.append_working_note(card.id, &body, now_ms()) {
+                    Ok(()) => {
+                        self.emit(UiEvent::WorkingNotesChanged { agent_id: card.id });
+                        // The count is the whole answer. It is how an agent
+                        // learns the list is bounded without being lectured
+                        // about it in the tool description every turn, and it
+                        // is the one number that tells it an older note has
+                        // just gone.
+                        let summary = if cut {
+                            format!(
+                                "Noted, but it was long for a working note and the end was cut. \
+                                 A note is one line; anything longer is a document or a memory. \
+                                 You have {} of {} notes.",
+                                self.note_count(card.id),
+                                worknote::KEPT
+                            )
+                        } else {
+                            format!(
+                                "Noted. You have {} of {} working notes.",
+                                self.note_count(card.id),
+                                worknote::KEPT
+                            )
+                        };
+                        (
+                            summary.clone(),
+                            Part::tool_call(
+                                tools::NOTE_PROGRESS,
+                                arguments,
+                                ToolOutcome::Ok { summary },
+                            ),
+                        )
+                    }
+                    Err(err) => (
+                        format!("Error: your note could not be saved ({err})."),
+                        Part::tool_call(
+                            tools::NOTE_PROGRESS,
                             arguments,
                             ToolOutcome::Failed { error: err.to_string() },
                         ),
@@ -4407,6 +4462,17 @@ impl Runtime {
     /// what it now holds, and a row that cannot be read falls back to the card
     /// rather than to nothing: provisioning again is the expensive answer,
     /// refusing a turn its machine because the store hiccupped is the wrong one.
+    /// How many working notes an agent is holding, for the line handed back
+    /// after one is written.
+    ///
+    /// Read after the append rather than counted from it, because the append
+    /// also drops whatever went over the bound: a number worked out from "one
+    /// more than last time" keeps climbing past `KEPT` and tells the agent it
+    /// has twenty notes in a store that keeps sixteen.
+    fn note_count(&self, agent: AgentId) -> usize {
+        self.inner.store.working_notes(agent).map(|notes| notes.len()).unwrap_or(0)
+    }
+
     fn held(&self, card: &AgentCard) -> AgentCard {
         self.inner.store.get_agent(card.id).ok().flatten().unwrap_or_else(|| card.clone())
     }

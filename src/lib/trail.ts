@@ -174,8 +174,17 @@ function describe(tool: string, args: Args): Described {
     case "directory":
       return { title: "Checked who is available", target: null };
 
+    // Both names, and the old one is not decoration. A tool call is stored as
+    // JSON on the message, so every turn recorded before the rename still says
+    // `update_notes`, and a renderer that knows only the new name draws a year
+    // of transcripts as "Used update_notes". Same argument `Part::Approval` has
+    // for never being widened: old rows cannot be migrated into a new spelling.
+    case "update_memory":
     case "update_notes":
       return { title: "Updated its memory", target: text(args, "content") };
+
+    case "note_progress":
+      return { title: "Noted where its work stands", target: text(args, "note") };
 
     case "create_agent": {
       const name = text(args, "name");
@@ -279,7 +288,7 @@ function describe(tool: string, args: Args): Described {
     }
 
     // A tool this build does not know about reads as a tool nobody has
-    // explained yet. Guessing at it is how `update_notes` once drew as a
+    // explained yet. Guessing at it is how `update_memory` once drew as a
     // message sent to no one.
     default:
       return { title: `Used ${tool}`, target: null };
@@ -336,8 +345,11 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Sending a message";
     case "attach_file":
       return "Attaching a file";
+    case "update_memory":
     case "update_notes":
       return "Updating its memory";
+    case "note_progress":
+      return "Noting where its work stands";
     case "directory":
       return "Checking who is available";
     case "schedule":
@@ -378,8 +390,11 @@ function manyLabel(group: TrailGroup): string {
       return `${count} changes to its schedule`;
     case "attach_file":
       return `Attached ${count} files`;
+    case "update_memory":
     case "update_notes":
       return `Updated its memory ${count} times`;
+    case "note_progress":
+      return `Noted where its work stands ${count} times`;
     case "directory":
       return `Checked who is available ${count} times`;
     default:
@@ -438,8 +453,10 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
  * `browse` answers `read in the browser` beside a step that already says "Read
  * the page". `open_on_desktop` answers with the command it was handed.
  * `use_screen` answers `clicked at (412, 96)` beside a step that says where it
- * clicked. `update_notes` answers with a character count printed directly above
- * the characters. `attach_file` answers `attached brief.md` beside a chip that
+ * clicked. `update_memory` answers with a character count printed directly above
+ * the characters. `note_progress` answers with how many notes the agent now
+ * holds, which is a number the model needs and the operator can already see by
+ * looking at the panel that lists them. `attach_file` answers `attached brief.md` beside a chip that
  * says "Attached brief.md" and a card drawing brief.md. None of them is wrong;
  * all of them are the line above read back, and nine of those turned a row into
  * a paragraph of gray monospace, which is the shape this was collapsed to get
@@ -448,7 +465,15 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
  * A failure is never an echo. Whatever went wrong is not something the title
  * could have said.
  */
-const ECHOES = new Set(["browse", "use_screen", "open_on_desktop", "update_notes", "attach_file"]);
+const ECHOES = new Set([
+  "browse",
+  "use_screen",
+  "open_on_desktop",
+  "update_memory",
+  "update_notes",
+  "note_progress",
+  "attach_file",
+]);
 
 /** Whether what came back is worth reading beside the call it came from. */
 export function tellsMore(step: Step): boolean {

@@ -29,7 +29,7 @@ export interface DiffLine {
  * Beyond this many cells the table is not worth building.
  *
  * The exact diff costs one cell per pair of lines. Memory is capped at a page
- * by `MAX_NOTES`, so the ordinary case is tens of lines against tens of lines
+ * by `MAX_MEMORY`, so the ordinary case is tens of lines against tens of lines
  * and nowhere near this; a document that reaches it is one where a line-by-line
  * comparison was never going to be read anyway, and it is shown as a wholesale
  * replacement rather than left to lock up the window working out otherwise.

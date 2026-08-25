@@ -1098,6 +1098,42 @@ UPDATE agents SET repository_id = (
 DROP TABLE repository_access;
 "#,
     ),
+    (
+        39,
+        r#"
+-- Working notes: what an agent is in the middle of, as against what it knows.
+--
+-- Memory is a file the agent rewrites, and that shape is right for what memory
+-- holds: a small page of durable belief, reconciled against itself on every
+-- write. It is the wrong shape for progress. A rewrite re-emits the whole page,
+-- and copying a stale line forward is cheaper than deciding to drop it, so
+-- progress written into memory ratchets: sixteen of this operator's twenty-three
+-- agents had a "Waiting on" or "Status" section, and a fifth of everything in
+-- every memory file was task state that had stopped being true.
+--
+-- So this is a table and not a second file, and the difference is the point.
+-- One row per note, appended, never rewritten. The oldest fall off on their own
+-- once there are enough of them, which means no agent ever has to decide to
+-- forget: the operation LLMs are measurably worst at is the one this store does
+-- not ask for.
+--
+-- A table rather than a file for a second reason. An append is a read-modify-
+-- write, and an agent's memory is written from every thread it holds, so an
+-- append to a file loses notes under exactly the concurrency this app has. An
+-- INSERT does not.
+CREATE TABLE working_notes (
+    id       INTEGER PRIMARY KEY,
+    agent_id TEXT    NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    at       INTEGER NOT NULL,
+    body     TEXT    NOT NULL
+);
+
+-- The only question asked of it: what is this agent in the middle of. `id DESC`
+-- rather than `at DESC` because two notes from one turn share a timestamp, and
+-- the order they were written in is the order they are worth reading in.
+CREATE INDEX working_notes_agent ON working_notes (agent_id, id DESC);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
