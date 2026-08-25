@@ -397,7 +397,7 @@ pub async fn stream<F>(
 where
     F: FnMut(Token<'_>),
 {
-    let access = subscription.access().await.map_err(auth_error)?;
+    let mut access = subscription.access().await.map_err(auth_error)?;
 
     // From the credential rather than from the constant: the account and the
     // backend that will accept it are one fact, and it is what lets the
@@ -406,31 +406,52 @@ where
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
     let body = build(request, &request.model);
 
-    let mut send = http
-        .post(&url)
-        .bearer_auth(&access.token)
-        .header("originator", ORIGINATOR)
-        .header("Accept", "text/event-stream")
-        .timeout(timeout)
-        .json(&body);
+    // At most twice, and the second time only after a refresh. The backend is
+    // the authority on whether a token still works and it disagrees with the
+    // token's own `exp`, so a 401 is not "sign in again" until the refresh
+    // token has been offered: `Subscription::renew`. Retrying here is safe
+    // because nothing has been streamed yet: a refusal is decided on the status
+    // line, before `consume` is reached, so no `on_token` has run and there is
+    // no half a sentence on screen to be written twice.
+    let mut renewed = false;
+    loop {
+        let mut send = http
+            .post(&url)
+            .bearer_auth(&access.token)
+            .header("originator", ORIGINATOR)
+            .header("Accept", "text/event-stream")
+            .timeout(timeout)
+            .json(&body);
 
-    // Which workspace the call is billed to. Omitted rather than sent empty for
-    // a personal account that has never had one: the backend rejects a blank
-    // value and accepts an absent one.
-    if !access.account_id.is_empty() {
-        send = send.header("ChatGPT-Account-Id", &access.account_id);
-    }
-
-    let response = send.send().await.map_err(|source| {
-        if source.is_timeout() {
-            LlmError::Timeout { secs: timeout.as_secs() }
-        } else {
-            LlmError::Transport { url: url.clone(), source }
+        // Which workspace the call is billed to. Omitted rather than sent empty
+        // for a personal account that has never had one: the backend rejects a
+        // blank value and accepts an absent one.
+        if !access.account_id.is_empty() {
+            send = send.header("ChatGPT-Account-Id", &access.account_id);
         }
-    })?;
 
-    let status = response.status();
-    if !status.is_success() {
+        let response = send.send().await.map_err(|source| {
+            if source.is_timeout() {
+                LlmError::Timeout { secs: timeout.as_secs() }
+            } else {
+                LlmError::Transport { url: url.clone(), source }
+            }
+        })?;
+
+        let status = response.status();
+        if status.is_success() {
+            return consume(response, &url, timeout, on_token).await;
+        }
+
+        // Only a 401, and only once. A 403 is a plan or a workspace saying no,
+        // which a fresh token spells exactly the same way, and a second 401
+        // after a refresh is a sign-in that is genuinely finished.
+        if status == reqwest::StatusCode::UNAUTHORIZED && !renewed {
+            renewed = true;
+            access = subscription.renew(&access.token).await.map_err(auth_error)?;
+            continue;
+        }
+
         let retry_after = response
             .headers()
             .get("retry-after")
@@ -439,8 +460,6 @@ where
         let text = response.text().await.unwrap_or_default();
         return Err(classify(status.as_u16(), &text, &request.model, retry_after));
     }
-
-    consume(response, &url, timeout, on_token).await
 }
 
 async fn consume<F>(

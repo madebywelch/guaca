@@ -230,6 +230,19 @@ describe("who pays for a group's turns", () => {
     expect((await save()).inference?.provider).toBe("chatgpt");
   });
 
+  it("says where the sign-in is managed whether or not there is one", async () => {
+    // Signed in is the state that matters. A group editor is where an operator
+    // whose turns are being refused looks first, and this row deliberately has
+    // no sign-out button of its own: the credential belongs to the app. Saying
+    // only "robert@example.com · Pro" leaves them looking at a healthy sign-in
+    // with nothing to press and nowhere named to go.
+    subscriptionStatus.mockResolvedValueOnce(signedIn());
+    open();
+    pane("Provider");
+    await screen.findByText(/robert@example.com/);
+    expect(screen.getByText(/Settings . Provider/)).toBeTruthy();
+  });
+
   it("offers the subscription's own models once it is the one paying", async () => {
     subscriptionStatus.mockResolvedValueOnce(signedIn());
     open(

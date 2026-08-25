@@ -337,6 +337,32 @@ set rotates on refresh, which is Guaca writing in the background, while
 writers on one file lose a refreshed token to a stale in-memory copy, and the
 symptom is a sign-in that works until an unrelated setting changes.
 
+**A token's `exp` is a floor on its life, not a ceiling, and the backend is the
+authority.** OpenAI mints a ChatGPT access token with ten days on its `exp` claim
+and `chatgpt.com/backend-api/codex` stops accepting one after about three, with
+`token_expired`. Nothing on the machine can tell: the claim is the only local
+signal there is and it is wrong in the dangerous direction. A build that refreshed
+only against the claim therefore sat on a dead token for the rest of its nominal
+week, refused every turn in the app, and went on drawing a healthy sign-in in
+Settings the whole time, because "signed in" was answered by a file existing.
+
+So the 401 decides. `codex::stream` refuses once, calls `Subscription::renew`,
+and sends the same request again under whatever came back. That is safe because a
+refusal is decided on the status line, before `consume` is reached, so no token
+has been handed to the operator and there is no half a sentence on screen to
+write twice. The `exp` check stays in front of it as the latency optimization it
+always was: without it the common case pays a wasted round trip, and without the
+401 path the operator pays a week.
+
+Two consequences worth keeping. **`renew` is serialized**, because the refresh
+token rotates and eight agents discovering one dead token at the same moment
+would race to retire each other's; whoever is first refreshes, and everyone
+behind them finds the new token already stored and takes it rather than spending
+a second one. And **a refresh the service refuses forgets the sign-in**, on a 4xx
+only: that is the case where the operator genuinely has to sign in again, and
+keeping the file is exactly what made Settings disagree with every turn. A 5xx is
+the service having a bad minute and must not cost anybody a working sign-in.
+
 **A group chooses its own provider, and the sign-in is still one credential.**
 Which of the two is paying is a setting, not an account, so a group can be moved
 onto the ChatGPT subscription while the app settings still say a pasted key, and

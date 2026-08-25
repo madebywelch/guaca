@@ -65,6 +65,9 @@ pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// wait on a round trip that was never going to work, and the retry it triggers
 /// looks like an outage. Five minutes is long enough to cover a slow refresh
 /// and a clock that is a little wrong in either direction.
+///
+/// This is the optimization, not the guarantee. What decides whether a token
+/// still works is the backend refusing it: see [`Subscription::renew`].
 const REFRESH_SKEW: Duration = Duration::from_secs(5 * 60);
 
 /// How long the whole device flow may take before it is abandoned.
@@ -98,6 +101,11 @@ pub enum SigninError {
     Malformed(String),
     #[error("nobody entered the code within fifteen minutes. Start the sign-in again.")]
     TimedOut,
+    #[error(
+        "no ChatGPT subscription is signed in on this machine. Open Settings, choose Provider, \
+         and sign in."
+    )]
+    NotSignedIn,
     #[error("could not save the sign-in to {path}: {source}")]
     Io {
         path: PathBuf,
@@ -150,7 +158,12 @@ struct Stored {
     account_id: String,
     /// Unix seconds, read from the access token rather than from a duration the
     /// service quoted. A quoted lifetime plus the local clock at the moment of
-    /// exchange drifts; the token says when it actually stops working.
+    /// exchange drifts.
+    ///
+    /// It is a floor on the token's life and not a ceiling: the backend stops
+    /// accepting one well before this, which is what [`Subscription::renew`]
+    /// exists for. A token observed three days old, with seven days of `exp`
+    /// still on it, was refused with `token_expired`.
     expires_at: i64,
     /// Denormalized out of the id token so a signed-in status can be answered
     /// without decoding a JWT on every read.
@@ -192,6 +205,17 @@ pub struct Subscription {
     backend: String,
     http: reqwest::Client,
     tokens: Mutex<Option<Stored>>,
+    /// Held across a refresh, so a crew that all discover a dead token at once
+    /// spends one.
+    ///
+    /// The refresh token rotates, so concurrent refreshes race to retire each
+    /// other's: the losers are left holding one the service has already thrown
+    /// away, and the sign-in dies with nothing on screen able to say why.
+    /// Whoever gets in first refreshes, and everyone behind them finds the new
+    /// token already stored and takes it. Async rather than `parking_lot`
+    /// because it is held across an await, which is the one thing the other
+    /// lock here is careful never to be.
+    renewing: tokio::sync::Mutex<()>,
 }
 
 impl Subscription {
@@ -239,6 +263,7 @@ impl Subscription {
                 .build()
                 .unwrap_or_default(),
             tokens: Mutex::new(tokens),
+            renewing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -390,10 +415,7 @@ impl Subscription {
     pub async fn access(&self) -> Result<Access, SigninError> {
         let stored = self.tokens.lock().clone();
         let Some(stored) = stored else {
-            return Err(SigninError::Upstream {
-                status: 401,
-                message: "not signed in".to_string(),
-            });
+            return Err(SigninError::NotSignedIn);
         };
 
         if !expiring_soon(stored.expires_at) {
@@ -402,28 +424,68 @@ impl Subscription {
 
         // A refresh that fails on the network leaves the stored token in place:
         // it may still have minutes left, and a turn that could have run is
-        // worth more than a tidy cache. A refusal is different and is allowed to
-        // surface, because the operator has to sign in again.
-        match self.refresh(&stored.refresh_token).await {
-            Ok(fresh) => {
-                let status = self.store(fresh)?;
-                debug_assert!(status.signed_in);
-                let held = self.tokens.lock().clone();
-                match held {
-                    Some(held) => {
-                        Ok(Access { token: held.access_token, account_id: held.account_id })
-                    }
-                    None => Err(SigninError::Upstream {
-                        status: 401,
-                        message: "the sign-in was cleared mid-refresh".to_string(),
-                    }),
-                }
-            }
+        // worth more than a tidy cache. Every other failure surfaces, because
+        // the token it was called to replace is already inside its own last
+        // five minutes.
+        match self.renew(&stored.access_token).await {
+            Ok(access) => Ok(access),
             Err(err @ SigninError::Transport { .. }) => {
                 tracing::warn!(%err, "using the stored token: its refresh could not be reached");
                 Ok(Access { token: stored.access_token, account_id: stored.account_id })
             }
             Err(err) => Err(err),
+        }
+    }
+
+    /// Trades the refresh token in for a new one, whatever the stored expiry
+    /// says, and hands back what to spend next.
+    ///
+    /// This is the recovery path, and it exists because `exp` is not the truth.
+    /// OpenAI mints a ChatGPT access token with ten days on its `exp` claim and
+    /// the backend stops accepting it long before that, with `token_expired`.
+    /// A build that believed the claim sat on a three-day-old token for a week,
+    /// refused every turn, and went on reporting a healthy sign-in in Settings
+    /// the whole time. So the backend is the authority: [`crate::llm::codex`]
+    /// calls this on a 401 and tries the call again.
+    ///
+    /// `refused` is the token that was just turned down. If somebody else
+    /// refreshed while this call was queued behind them, theirs is by
+    /// definition not the one that failed, and it is handed back untouched
+    /// rather than burned on a second refresh.
+    pub async fn renew(&self, refused: &str) -> Result<Access, SigninError> {
+        let _gate = self.renewing.lock().await;
+
+        let Some(held) = self.tokens.lock().clone() else {
+            return Err(SigninError::NotSignedIn);
+        };
+        if held.access_token != refused {
+            return Ok(Access { token: held.access_token, account_id: held.account_id });
+        }
+
+        let fresh = match self.refresh(&held.refresh_token).await {
+            Ok(fresh) => fresh,
+            Err(err) => {
+                // A refused refresh is the end of this sign-in, and keeping the
+                // file is what let Settings claim a credential every turn had
+                // already been told was dead. Forgetting it is what makes "sign
+                // in again" a thing the operator can actually do.
+                if is_terminal(&err) {
+                    if let Err(gone) = self.sign_out() {
+                        tracing::warn!(%gone, "could not remove a sign-in the service refused");
+                    }
+                }
+                return Err(err);
+            }
+        };
+
+        let status = self.store(fresh)?;
+        debug_assert!(status.signed_in);
+        match self.tokens.lock().clone() {
+            Some(held) => Ok(Access { token: held.access_token, account_id: held.account_id }),
+            // Signed out from Settings while this refresh was in flight. The
+            // operator's click wins: a token stored back over it would sign
+            // them silently back in.
+            None => Err(SigninError::NotSignedIn),
         }
     }
 
@@ -669,6 +731,17 @@ fn expiring_soon(expires_at: i64) -> bool {
     expires_at <= now.saturating_add(REFRESH_SKEW.as_secs() as i64)
 }
 
+/// Whether a refused refresh means this sign-in is finished.
+///
+/// The token endpoint answers a refresh token it has retired with a 4xx and an
+/// `invalid_grant`, and that is the one case where the operator has to sign in
+/// again. A 5xx is the service having a bad minute and must not cost them a
+/// working sign-in; neither must a body this build could not read, which is a
+/// deployment that changed shape rather than a credential that expired.
+fn is_terminal(err: &SigninError) -> bool {
+    matches!(err, SigninError::Upstream { status: 400 | 401 | 403, .. })
+}
+
 /// Whether a plan can call Codex at all.
 ///
 /// A free account signs in perfectly well and then cannot make one model call.
@@ -767,8 +840,11 @@ mod tests {
         }))
     }
 
-    fn access_token(expires_at: i64) -> String {
-        jwt(serde_json::json!({ "exp": expires_at }))
+    /// `nth` distinguishes one issue from the next, exactly as a real service's
+    /// tokens do. Two refreshes a millisecond apart otherwise mint the same
+    /// string, and a test about not refreshing twice cannot see the difference.
+    fn access_token(expires_at: i64, nth: usize) -> String {
+        jwt(serde_json::json!({ "exp": expires_at, "nth": nth }))
     }
 
     fn hour_ahead() -> i64 {
@@ -829,14 +905,14 @@ mod tests {
                         assert!(body.contains("code_verifier=verifier-1"), "verifier not sent");
                         assert!(body.contains("deviceauth%2Fcallback"), "redirect not sent");
                         return axum::Json(serde_json::json!({
-                            "access_token": access_token(hour_ahead()),
+                            "access_token": access_token(hour_ahead(), 0),
                             "refresh_token": "refresh-1",
                             "id_token": id_token("pro", "acct-1", "a@example.com"),
                         }))
                         .into_response();
                     }
 
-                    stub.refreshes.fetch_add(1, Ordering::SeqCst);
+                    let nth = stub.refreshes.fetch_add(1, Ordering::SeqCst) + 1;
                     let status = stub.refresh_status.load(Ordering::SeqCst);
                     if status != 0 {
                         return (
@@ -849,7 +925,7 @@ mod tests {
                     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
                     assert_eq!(parsed["grant_type"], "refresh_token");
                     let mut fresh = serde_json::json!({
-                        "access_token": access_token(hour_ahead()),
+                        "access_token": access_token(hour_ahead(), nth),
                         // The refresh token is deliberately absent, to pin that
                         // the old one is kept.
                     });
@@ -1021,6 +1097,95 @@ mod tests {
         let err = subscription.access().await.unwrap_err();
         let message = err.to_string();
         assert!(message.contains("expired"), "the reason has to reach the operator: {message}");
+
+        // And it is forgotten, because it is finished. A stored sign-in the
+        // service has retired is what makes Settings say "signed in" while
+        // every turn says the opposite, with no way out of the disagreement.
+        assert!(!subscription.is_signed_in());
+        assert!(!dir.path().join("subscription.json").exists());
+    }
+
+    #[tokio::test]
+    async fn a_sign_in_service_having_a_bad_minute_does_not_cost_the_sign_in() {
+        let stub = Stub { refresh_status: Arc::new(AtomicUsize::new(503)), ..Default::default() };
+        let base = serve(stub.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = store(&dir, &base);
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+
+        subscription.tokens.lock().as_mut().unwrap().expires_at = 0;
+        subscription.access().await.unwrap_err();
+
+        // A 5xx is the service, not the credential. Signing the operator out
+        // over one turns a wait into a sign-in they have to do by hand.
+        assert!(subscription.is_signed_in());
+        assert!(dir.path().join("subscription.json").exists());
+    }
+
+    #[tokio::test]
+    async fn a_token_the_backend_refused_is_replaced_however_current_it_looks() {
+        let stub = Stub::default();
+        let base = serve(stub.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = store(&dir, &base);
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+
+        // A whole week of `exp` left, which is exactly the state the live
+        // backend refuses: OpenAI mints ten days and stops accepting one after
+        // about three. Nothing local can tell, so the refusal is the only
+        // signal there is, and `renew` has to act on it.
+        subscription.tokens.lock().as_mut().unwrap().expires_at =
+            chrono::Utc::now().timestamp() + 7 * 86_400;
+        let refused = subscription.access().await.unwrap();
+        assert_eq!(stub.refreshes.load(Ordering::SeqCst), 0, "nothing was due yet");
+
+        let fresh = subscription.renew(&refused.token).await.unwrap();
+        assert_eq!(stub.refreshes.load(Ordering::SeqCst), 1);
+        assert_ne!(fresh.token, refused.token, "the refused token cannot be handed back");
+    }
+
+    #[tokio::test]
+    async fn one_refusal_seen_by_a_whole_crew_spends_one_refresh() {
+        let stub = Stub::default();
+        let base = serve(stub.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = Arc::new(store(&dir, &base));
+        let code = subscription.begin().await.unwrap();
+        subscription.complete(&code).await.unwrap();
+
+        let refused = subscription.access().await.unwrap().token;
+
+        // Eight agents, one dead token, all of them told so at once. The
+        // refresh token rotates, so eight refreshes would race to retire each
+        // other's and the last seven would be holding one the service has
+        // already thrown away.
+        let mut crew = Vec::new();
+        for _ in 0..8 {
+            let subscription = subscription.clone();
+            let refused = refused.clone();
+            crew.push(tokio::spawn(async move { subscription.renew(&refused).await }));
+        }
+        let mut tokens = Vec::new();
+        for agent in crew {
+            tokens.push(agent.await.unwrap().unwrap().token);
+        }
+
+        assert_eq!(stub.refreshes.load(Ordering::SeqCst), 1, "one dead token, one refresh");
+        assert!(tokens.iter().all(|t| *t == tokens[0]), "everyone leaves with the same token");
+        assert_ne!(tokens[0], refused);
+    }
+
+    #[tokio::test]
+    async fn renewing_without_a_sign_in_says_so_in_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let subscription = store(&dir, "http://unused");
+        let err = subscription.renew("anything").await.unwrap_err();
+        assert!(matches!(err, SigninError::NotSignedIn), "got {err}");
+        // The operator reads this one after the app has signed them out for
+        // them, so it has to say where to go rather than quote a status code.
+        assert!(err.to_string().contains("Settings"), "{err}");
     }
 
     #[tokio::test]
@@ -1142,7 +1307,7 @@ mod tests {
 
     #[test]
     fn an_expiry_is_read_from_the_access_token_itself() {
-        assert_eq!(expiry_of(&access_token(1_700_000_000)), Some(1_700_000_000));
+        assert_eq!(expiry_of(&access_token(1_700_000_000, 0)), Some(1_700_000_000));
         assert_eq!(expiry_of("nonsense"), None);
     }
 

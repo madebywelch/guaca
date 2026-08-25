@@ -406,7 +406,7 @@ export function GroupEditor({ group, onClose }: Props) {
                         ? `${subscription.email || "signed in"}${
                             subscription.plan ? ` · ${planLabel(subscription.plan)}` : ""
                           }`
-                        : "Not signed in. Settings → Provider is where that happens."}
+                        : "Not signed in."}
                     </span>
                   </span>
                   {subscription?.signedIn &&
@@ -425,6 +425,17 @@ export function GroupEditor({ group, onClose }: Props) {
                       </button>
                     ))}
                 </div>
+
+                {/* Said in both states, not only when nobody is signed in.
+                    Whichever it is, this row is the whole subscription as far
+                    as a group is concerned, and an operator whose turns are
+                    being refused reads "signed in" here and has nothing to
+                    press: signing out and back in is two panes away and this
+                    was the only place saying so. */}
+                <p className="hint">
+                  Signing in and out happens in Settings → Provider. There is one sign-in on this
+                  machine and every group spends the same one.
+                </p>
 
                 {onSubscription && (
                   <SubscriptionModel
