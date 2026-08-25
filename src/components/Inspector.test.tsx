@@ -8,15 +8,15 @@ import { Inspector } from "./Inspector";
 const agentComputer = vi.fn<(id: string) => Promise<Computer | null>>();
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const agentRoutines = vi.fn<() => Promise<never[]>>();
-const agentNotes = vi.fn<(id: string) => Promise<string>>();
+const agentMemory = vi.fn<(id: string) => Promise<string>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     agentComputer: (id: string) => agentComputer(id),
     agentBrowser: (id: string) => agentBrowser(id),
     agentRoutines: () => agentRoutines(),
-    agentNotes: (id: string) => agentNotes(id),
-    setAgentNotes: vi.fn(),
+    agentMemory: (id: string) => agentMemory(id),
+    setAgentMemory: vi.fn(),
     startAgentComputer: vi.fn(),
     stopAgentComputer: vi.fn(),
     deleteAgentComputer: vi.fn(),
@@ -87,7 +87,7 @@ describe("Inspector", () => {
     agentComputer.mockResolvedValue(null);
     agentBrowser.mockResolvedValue(null);
     agentRoutines.mockResolvedValue([]);
-    agentNotes.mockImplementation(async (id) => `${id} remembers this`);
+    agentMemory.mockImplementation(async (id) => `${id} remembers this`);
     localStorage.clear();
     configure();
   });

@@ -521,6 +521,71 @@ async fn an_upstream_failure_is_reported_in_the_channel_rather_than_swallowed() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_progress_note_is_in_the_next_turn_with_how_long_ago_it_was_written() {
+    // The other half of the write-manage-read loop, and the half that expires.
+    // An agent notes what it is waiting on, and finds it on its next turn under
+    // an age, which is what tells it whether to keep waiting.
+    let stub = serve(|body| {
+        let system = body["messages"][0]["content"].as_str().unwrap_or_default();
+        if system.contains("waiting on the legal read") {
+            // Said back so the assertion below is about the prompt rather than
+            // about anything this stub knows.
+            let age = if system.contains("just now") { "fresh" } else { "stale" };
+            Script::Say(format!("still waiting, and the note reads {age}."))
+        } else if has_tool_result(body) {
+            Script::Say("Noted.".into())
+        } else {
+            Script::Progress("waiting on the legal read".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "chase the legal read").unwrap();
+    h.settle(first).await;
+
+    let notes = h.runtime.store().working_notes(h.id("Manager")).unwrap();
+    assert_eq!(notes.len(), 1, "the note should be stored");
+    assert_eq!(notes[0].body, "waiting on the legal read");
+    // And nowhere near the memory, which is the entire point of the split.
+    assert_eq!(
+        h.runtime.workspace().read(h.id("Manager")),
+        "",
+        "a progress note must not reach the memory file"
+    );
+
+    let second = h.runtime.send_from_human(h.id("Manager"), "any news?").unwrap();
+    h.settle(second).await;
+
+    let said = h.channel_texts("Manager").join("\n");
+    assert!(said.contains("still waiting"), "the note was not in the second prompt: {said}");
+    assert!(said.contains("reads fresh"), "the note reached the prompt without its age: {said}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_progress_note_tells_the_agent_how_many_it_now_holds() {
+    // The count is how an agent learns the list is bounded without being
+    // lectured about it in the tool description on every turn, and it is what
+    // says an older note has just gone.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            let results = serde_json::to_string(&body["messages"]).unwrap_or_default();
+            Script::Say(results)
+        } else {
+            Script::Progress("handed the scope document to Robert".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "where are we?").unwrap();
+    h.settle(run).await;
+
+    let said = h.channel_texts("Manager").join("\n");
+    assert!(said.contains("1 of 16 working notes"), "the count did not come back: {said}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
     // The write-manage-read loop, end to end: an agent records something on one
     // turn and finds it in its own prompt on the next.
@@ -554,11 +619,12 @@ async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn an_agent_asked_for_its_memory_writes_the_same_file_as_its_notes() {
-    // What the operator calls this file is memory; the tool is `update_notes`.
-    // An agent that takes the operator at their word and calls `update_memory`
-    // has written the right thing to the right place, and refusing it would
-    // spend a turn on the difference between two words for one file.
+async fn an_agent_calling_the_old_name_for_its_memory_still_writes_it() {
+    // `update_notes` is what this tool was called for a year. A model that
+    // learned Guaca from an older transcript still reaches for it, and refusing
+    // it would spend a turn on a rename the agent had no way to hear about.
+    // What is recorded is the current name either way, so the rename does not
+    // fork the transcript from today onward.
     let stub = serve(|body| {
         if has_tool_result(body) {
             Script::Say("Remembered.".into())
@@ -614,7 +680,7 @@ async fn a_memory_write_records_the_version_it_replaced() {
         .iter()
         .flat_map(|m| m.parts.clone())
         .filter_map(|part| match part {
-            Part::ToolCall { name, replaced, .. } if name == "update_notes" => Some(replaced),
+            Part::ToolCall { name, replaced, .. } if name == "update_memory" => Some(replaced),
             _ => None,
         })
         .collect();
@@ -685,7 +751,7 @@ async fn a_memory_write_that_failed_tells_nobody_it_changed() {
         .flat_map(|m| m.parts.clone())
         .any(|part| {
             matches!(part, Part::ToolCall { name, outcome, .. }
-                if name == "update_notes" && matches!(outcome, ToolOutcome::Failed { .. }))
+                if name == "update_memory" && matches!(outcome, ToolOutcome::Failed { .. }))
         });
     assert!(failed, "the write was supposed to fail, so the assertion below proves nothing");
 

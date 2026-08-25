@@ -72,11 +72,13 @@ pub enum Script {
     /// Call one of a connected plugin's tools, by its prefixed name. Nothing in
     /// this build knows what those are: the crew's servers said.
     Plugin { name: String, arguments: serde_json::Value },
-    /// Emit an `update_notes` tool call.
+    /// Emit an `update_memory` tool call under the name the tool had for a
+    /// year, which is the alias a model trained on an older transcript emits.
     Notes(String),
-    /// The same call under the name a model reaches for when it is asked to
-    /// update its memory rather than its notes.
+    /// The same call under the tool's current name.
     Memory(String),
+    /// Emit a `note_progress` tool call: one line about where work stands.
+    Progress(String),
     /// Emit a `create_agent` tool call.
     Hire { name: String, instructions: String, notes: String },
     /// Emit a `schedule` tool call that books a repeat on the calendar.
@@ -205,6 +207,16 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_notes","type":"function",
                  "function":{"name": tool,"arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Progress(note) => {
+            let args = serde_json::json!({ "note": note }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_progress","type":"function",
+                 "function":{"name":"note_progress","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
@@ -363,6 +375,30 @@ pub fn reading_peer_replies(body: &serde_json::Value) -> bool {
 /// agent has already acted and should now speak.
 pub fn has_tool_result(body: &serde_json::Value) -> bool {
     body["messages"].as_array().map(|m| m.iter().any(|msg| msg["role"] == "tool")).unwrap_or(false)
+}
+
+/// Whether anybody has said this in the conversation so far.
+///
+/// The system prompt is excluded, and that is the entire reason this exists
+/// rather than each stub scanning `messages` itself. A stub branching on "has
+/// somebody said `noted` to me" that reads every message is really asking "does
+/// this word appear anywhere in the request", and the request opens with two
+/// thousand words of instructions. Adding a sentence to the prompt then rewrites
+/// what the scripted crew does: the working-notes section says "when something
+/// you noted stops being true", and every stub keyed on `noted` began firing on
+/// the first call, which reads in the eval output as a crew that will not stop
+/// repeating itself.
+pub fn anyone_said(body: &serde_json::Value, needle: &str) -> bool {
+    body["messages"]
+        .as_array()
+        .map(|messages| {
+            messages
+                .iter()
+                .filter(|msg| msg["role"] != "system")
+                .filter_map(|msg| msg["content"].as_str())
+                .any(|content| content.contains(needle))
+        })
+        .unwrap_or(false)
 }
 
 pub struct Stub {

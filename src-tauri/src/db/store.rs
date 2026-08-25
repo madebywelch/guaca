@@ -32,6 +32,7 @@ use crate::domain::search::{
 };
 use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
+use crate::domain::worknote::{WorkingNote, KEPT};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -808,6 +809,72 @@ impl Store {
     pub fn delete_agent_routines(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM routines WHERE agent_id=?1", params![agent.to_string()])?)
+    }
+
+    // ---- working notes ---------------------------------------------------
+
+    /// Appends a note and drops whatever that pushed past `KEPT`.
+    ///
+    /// Both halves in one transaction, because the trim is not housekeeping
+    /// that can run later: between the insert and the delete the agent is over
+    /// its own bound, and a read landing there hands a turn a list that is one
+    /// longer than the list the design says it reads. Cheap to hold, since this
+    /// runs once per note.
+    ///
+    /// The trim is by id and not by count of rows read, so two notes written in
+    /// the same millisecond drop in the order they were written rather than in
+    /// whatever order SQLite returns a tie in.
+    pub fn append_working_note(
+        &self,
+        agent: AgentId,
+        body: &str,
+        at: i64,
+    ) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO working_notes (agent_id,at,body) VALUES (?1,?2,?3)",
+            params![agent.to_string(), at, body],
+        )?;
+        tx.execute(
+            "DELETE FROM working_notes
+              WHERE agent_id=?1
+                AND id NOT IN (
+                    SELECT id FROM working_notes WHERE agent_id=?1 ORDER BY id DESC LIMIT ?2
+                )",
+            params![agent.to_string(), KEPT as i64],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// An agent's working notes, oldest first.
+    ///
+    /// Oldest first because that is reading order: the list is a short account
+    /// of how the agent got to now, and read newest-first it is a stack nobody
+    /// asked for. The newest are the ones kept, which is a separate question
+    /// and is answered by the `DESC` in the trim above.
+    pub fn working_notes(&self, agent: AgentId) -> Result<Vec<WorkingNote>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT at, body FROM working_notes WHERE agent_id=?1 ORDER BY id ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![agent.to_string(), KEPT as i64], |row| {
+            Ok(WorkingNote { at: row.get(0)?, body: row.get(1)? })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Drops every note an agent holds. The operator's way to say "that is all
+    /// done", and what deleting an agent takes with it.
+    pub fn clear_working_notes(&self, agent: AgentId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn
+            .execute("DELETE FROM working_notes WHERE agent_id=?1", params![agent.to_string()])?)
     }
 
     // ---- approvals -------------------------------------------------------
@@ -6689,5 +6756,103 @@ mod tests {
             f.store.group_plugins(group).unwrap()[0].access,
             PluginAccess::Chosen { agents: vec![] }
         );
+    }
+
+    #[test]
+    fn working_notes_come_back_oldest_first() {
+        // Reading order. The list is a short account of how the agent got to
+        // now, and newest-first it is a stack nobody asked for.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        for (i, body) in
+            ["asked the paralegal", "handed over the scope", "waiting on Robert"].iter().enumerate()
+        {
+            f.store.append_working_note(agent.id, body, 1_000 + i as i64).unwrap();
+        }
+
+        let bodies: Vec<String> =
+            f.store.working_notes(agent.id).unwrap().into_iter().map(|n| n.body).collect();
+        assert_eq!(bodies, ["asked the paralegal", "handed over the scope", "waiting on Robert"]);
+    }
+
+    #[test]
+    fn the_oldest_working_notes_fall_off_once_there_are_too_many() {
+        // The whole reason this is a store and not a second file the agent
+        // maintains: forgetting happens without anybody deciding to.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        for i in 0..(KEPT + 6) {
+            f.store.append_working_note(agent.id, &format!("note {i}"), 1_000 + i as i64).unwrap();
+        }
+
+        let notes = f.store.working_notes(agent.id).unwrap();
+        assert_eq!(notes.len(), KEPT, "the bound is not being enforced");
+        assert_eq!(notes.first().unwrap().body, "note 6", "the wrong end fell off");
+        assert_eq!(notes.last().unwrap().body, format!("note {}", KEPT + 5));
+    }
+
+    #[test]
+    fn notes_written_in_the_same_millisecond_keep_the_order_they_were_written() {
+        // Two notes from one turn share a timestamp, so the trim and the read
+        // both order by id. Ordered by `at`, which was the obvious column, the
+        // pair comes back in whatever order SQLite resolves a tie in, and the
+        // one that falls off the end is not reliably the older one.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        for i in 0..(KEPT + 2) {
+            f.store.append_working_note(agent.id, &format!("note {i}"), 7).unwrap();
+        }
+
+        let bodies: Vec<String> =
+            f.store.working_notes(agent.id).unwrap().into_iter().map(|n| n.body).collect();
+        assert_eq!(bodies.first().unwrap(), "note 2");
+        assert_eq!(bodies.last().unwrap(), &format!("note {}", KEPT + 1));
+    }
+
+    #[test]
+    fn one_agents_notes_are_not_anothers() {
+        let f = fixture();
+        let a = f.store.create_agent(&draft("Manager")).unwrap();
+        let b = f.store.create_agent(&draft("Chef")).unwrap();
+        f.store.append_working_note(a.id, "mine", 1).unwrap();
+        f.store.append_working_note(b.id, "also mine", 1).unwrap();
+
+        assert_eq!(f.store.working_notes(a.id).unwrap().len(), 1);
+        assert_eq!(f.store.working_notes(b.id).unwrap()[0].body, "also mine");
+    }
+
+    #[test]
+    fn trimming_one_agent_leaves_every_other_agents_notes_alone() {
+        // The delete is bounded by agent, and a `LIMIT` that lost its `WHERE`
+        // would quietly empty the rest of the crew the moment one agent got
+        // busy. Nothing else in the build would notice.
+        let f = fixture();
+        let busy = f.store.create_agent(&draft("Manager")).unwrap();
+        let quiet = f.store.create_agent(&draft("Chef")).unwrap();
+        f.store.append_working_note(quiet.id, "still here", 1).unwrap();
+        for i in 0..(KEPT * 2) {
+            f.store.append_working_note(busy.id, &format!("note {i}"), 1_000 + i as i64).unwrap();
+        }
+
+        assert_eq!(f.store.working_notes(quiet.id).unwrap().len(), 1);
+        assert_eq!(f.store.working_notes(busy.id).unwrap().len(), KEPT);
+    }
+
+    #[test]
+    fn clearing_takes_every_note_and_leaves_the_agent() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        f.store.append_working_note(agent.id, "waiting on Robert", 1).unwrap();
+
+        assert_eq!(f.store.clear_working_notes(agent.id).unwrap(), 1);
+        assert!(f.store.working_notes(agent.id).unwrap().is_empty());
+        assert!(f.store.get_agent(agent.id).unwrap().is_some(), "the agent went with its notes");
+    }
+
+    #[test]
+    fn an_agent_with_no_notes_reads_as_empty_rather_than_an_error() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        assert!(f.store.working_notes(agent.id).unwrap().is_empty());
     }
 }

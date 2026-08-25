@@ -187,12 +187,12 @@ describe("an agent's own record of what it did", () => {
   });
 
   it("does not draw a memory update as a message to nobody", () => {
-    // update_notes has no recipients, so falling through to the send renderer
+    // update_memory has no recipients, so falling through to the send renderer
     // drew it as "Sent to no one" with the memory body as the message.
     show(
       record({
         type: "toolCall",
-        name: "update_notes",
+        name: "update_memory",
         arguments: { content: "Smith handles verification." },
         outcome: { status: "ok", summary: "Memory saved (28 characters)." },
       }),
@@ -212,7 +212,7 @@ describe("an agent's own record of what it did", () => {
     show(
       record({
         type: "toolCall",
-        name: "update_notes",
+        name: "update_memory",
         arguments: { content: "Smith handles verification.\nJones signs off." },
         outcome: { status: "ok", summary: "Memory saved (44 characters)." },
         replaced: "Smith handles verification.\nPatel signs off.",
@@ -242,7 +242,7 @@ describe("an agent's own record of what it did", () => {
     show(
       record({
         type: "toolCall",
-        name: "update_notes",
+        name: "update_memory",
         arguments: { content: "" },
         outcome: { status: "ok", summary: "Memory cleared." },
         replaced: "Smith handles verification.",
@@ -261,7 +261,7 @@ describe("an agent's own record of what it did", () => {
     show(
       record({
         type: "toolCall",
-        name: "update_notes",
+        name: "update_memory",
         arguments: { content: "Smith handles verification.\nJones signs off." },
         outcome: { status: "ok", summary: "Memory saved (44 characters)." },
       }),

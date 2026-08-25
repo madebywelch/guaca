@@ -62,7 +62,7 @@ peer rather than "5 messages with 2 agents".
 
 **What came back is on the chip in two cases and no others.** Most of these
 summaries are the line above read back in the runtime's words: `browse` answers
-`read in the browser`, `update_notes` answers with a character count printed
+`read in the browser`, `update_memory` answers with a character count printed
 directly over the characters. Nine of those turned a row into a paragraph of
 gray monospace. So the summary earns its place when the call went wrong, or when
 the call has nothing else to show and the summary is the whole of what came
@@ -77,7 +77,7 @@ one call with no content and something to say anyway: what was thrown away is
 the whole of what happened, so it opens on that.
 
 **A memory rewrite opens as a diff, because the call is always the whole page.**
-`update_notes` replaces the file rather than appending to it, which is the right
+`update_memory` replaces the file rather than appending to it, which is the right
 interface for an agent — it has to reconcile what it believed against what it
 just learned — and the wrong one for whoever reads the result. Opening a rewrite
 used to show a page of markdown, and "what did it decide to remember this time"
@@ -163,10 +163,10 @@ on disk is not a draft, and holding it as one would leave the panel sitting on a
 page the agent has since replaced.
 
 **Only the runtime's own write emits the event.** The operator's edit comes back
-from `set_agent_notes` as what was actually stored, so the panel that made it
+from `set_agent_memory` as what was actually stored, so the panel that made it
 already has the answer and an event there is a refetch to learn what the reply
 just said. What comes back is also what goes on screen, not what was typed:
-`Workspace::write` trims and cuts at `MAX_NOTES`, and leaving the typed version
+`Workspace::write` trims and cuts at `MAX_MEMORY`, and leaving the typed version
 up would show an operator a page their agent is never going to be given. A cut
 is said out loud; a trim is not, because a trim on every save that ended in a
 newline is crying wolf.
@@ -174,11 +174,83 @@ newline is crying wolf.
 **How full it is, is said only near the cap.** A running character count under
 every agent's memory is a number nobody reads. Past the cap the end is not
 stored, and an agent at the cap has already started throwing things away to make
-room, which are the two states worth a glance. The number here mirrors
-`MAX_NOTES` and is advisory in the way `LIMITS` is advisory about the guard's
-bounds: the runtime is what actually cuts, and the read-back is what the operator
-is shown, so a mirror that has drifted costs a warning that arrives slightly
-early or slightly late and cannot cost anybody their text.
+room, which are the two states worth a glance.
+
+The number here mirrors `MAX_MEMORY`, and `Memory.test.tsx` reads the Rust and
+compares, the way `ipc.contract.test.ts` does across the same seam. It was
+written as advisory in the way `LIMITS` is advisory, on the reasoning that the
+runtime is what actually cuts and the read-back is what the operator is shown,
+so a drifted mirror cannot cost anybody their text. True, and not the failure
+that happened. The runtime went to 16,000 and the panel stayed at 4,000, and a
+5,003-character memory drew *1,003 characters over. The end is cut on save.*
+about a page the runtime was storing whole. A warning is read as a fact about
+what is going to happen, so an operator believing that one edits down a memory
+that was never in danger. Both sides compiled, both suites passed, and the only
+symptom was a sentence on screen that was not true. The number is only worth
+drawing while it is the runtime's number.
+
+## An agent's memory is what it knows, and its working notes are what it is doing
+
+Two stores, because one cannot have both lifetimes.
+
+Given only memory, an agent puts its progress in it, and it is right to: memory
+is the only thing that survives the turn, and the alternative to writing down
+what it is waiting on is forgetting it. What that costs is that a page rewritten
+every turn is a page where copying a stale section forward is cheaper than
+deciding it is stale, so the ratchet turns one way. Sixteen of one operator's
+twenty-three agents had a *Waiting on* or *Status* heading, a fifth of every
+memory file was task state that had stopped being true, and several agents had
+invented headings called *Working notes* and *Working memory* inside the one
+file they had. The distinction was already being drawn by hand, without support.
+
+**Memory holds what you could not look up again.** Who the agent is, how it
+works, standing preferences, decisions that hold across conversations, what it
+has learned about the people around it. And pointers: if the agent could open
+it, it does not copy it, it records where the thing is and when it is worth
+opening. An assistant here spent 900 characters summarizing an engineering
+report whose filename was three lines further up its own memory, and the summary
+is the copy that goes stale.
+
+**Working notes hold where the work stands, and expire.** One line per note,
+appended with `note_progress`, never revised. The agent is shown them with an
+age against each, which is what turns *waiting on the legal read* into something
+it can act on: the same line marked six days old says the thing is not coming.
+
+**The write rules are deliberately not symmetric.** Consolidating a memory after
+every interaction degrades it, and past a point below having no memory at all
+(arXiv 2605.12978); localized maintenance holds up better than global
+reorganization (arXiv 2606.24775). A full rewrite is global reorganization by
+definition, so memory is small and written rarely and can afford it, and a
+working note is never consolidated at all. An append is also the only write that
+is safe here: an agent's stores are written from every thread it holds, so a
+read-modify-write against a file loses notes under exactly this app's
+concurrency. An `INSERT` does not, which is why this one is a table.
+
+**Forgetting is the store's job, not the agent's.** The oldest notes fall off
+once there are more than `KEPT` of them, and there is deliberately no tool to
+edit or delete one. A stale note does not sit inert, it steers the next turn
+toward work that is already done (arXiv 2505.16067), and deciding what to drop
+is the operation these models are measurably worst at. This is the one store
+that never asks.
+
+**The panel below the memory is read-only apart from Clear.** That asymmetry is
+the design and not an unfinished half of it. Memory is a page two parties
+maintain, which is why it needs a draft, a held incoming version and two ways
+out. The working notes are the agent's own account of its work: the operator
+either believes it or declares the work done. Clearing exists because the one
+failure this list has is an agent still waiting on something the operator
+settled in person. Editing a single line does not, because a list the operator
+half-rewrites is one neither of them can trust.
+
+**The tool is `update_memory`, and `update_notes` still parses.** `notes` meant
+memory everywhere the code named it for a year, which is exactly the ambiguity a
+second store cannot survive, so the internals took the operator's word. The old
+name is kept as an alias because a model that learned Guaca from an older
+transcript still reaches for it, and refusing it spends a whole turn on a rename
+the agent had no way to hear about. What is *recorded* is the current name
+either way, so the transcript does not fork from here on; `lib/trail.ts` answers
+to both because rows written before the rename cannot be migrated into a new
+spelling, which is the same reason `Part::Approval` was never widened.
 
 ## A reply can be a figure, and a figure is a fenced block
 

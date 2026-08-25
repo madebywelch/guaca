@@ -790,7 +790,8 @@ export type UiEvent =
    * again; nothing here is patched, because the file is a page at most and the
    * event carries none of it.
    */
-  | { type: "memoryChanged"; agentId: AgentId };
+  | { type: "memoryChanged"; agentId: AgentId }
+  | { type: "workingNotesChanged"; agentId: AgentId };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {
@@ -994,4 +995,16 @@ export function plainText(envelope: Envelope): string {
 
 export function isInterAgent(envelope: Envelope): boolean {
   return envelope.from.kind === "agent" && envelope.to.kind === "agent";
+}
+
+/**
+ * One line an agent wrote about where its work stands.
+ *
+ * The counterpart to memory and shaped by what memory is not: appended rather
+ * than rewritten, stamped, and dropped by age rather than by anybody's
+ * decision. `at` is milliseconds since the epoch, as everything else here is.
+ */
+export interface WorkingNote {
+  at: number;
+  body: string;
 }

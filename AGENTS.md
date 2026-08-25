@@ -36,9 +36,12 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   components/         One file per surface.
     Memory.tsx        What an agent remembers, and what happens when both of
                       you write it at once.
+    WorkingNotes.tsx  What it is in the middle of, which is the other store
+                      and the one that expires.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
+    worknote.rs       A line about work in flight, and why it is not memory.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
     group.rs          A crew's wall, and the settings its agents run on.
@@ -66,6 +69,7 @@ src-tauri/src/
   kernel.rs           Browsers: a hosted Chrome, which is where the web belongs.
   cdp.rs              The DevTools protocol. Asks a page instead of looking.
   workspace.rs        Per-agent memory: one markdown file the agent rewrites.
+                      Its counterpart is `domain/worknote.rs` plus one table.
   files.rs            Attachments, addressed by the SHA-256 of their contents.
   eval.rs             Reads a run and says whether it communicated sensibly.
   trajectory.rs       Reads a run's events and says whether the machinery did.
@@ -124,6 +128,7 @@ repo: the frontend renders state and forwards intent.
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
+| Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
@@ -255,6 +260,50 @@ the model takes a screenshot to see what `browse` did.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **Memory and working notes are two stores, and the asymmetry between them is
+  the design.** Memory is a file the agent rewrites whole; a working note is a
+  row it appends and can never revise. One store cannot hold both lifetimes: an
+  agent given only memory puts its progress there, correctly, because the
+  alternative to writing down what it is waiting on is forgetting it, and a page
+  rewritten every turn is one where copying a stale line forward is cheaper than
+  deciding it is stale. Consolidating after every interaction is also the regime
+  that measurably degrades a memory, so the small store is reconciled rarely and
+  the perishable one is never consolidated at all. `docs/WORKSPACE.md`.
+- **Nothing offers an agent a way to edit or delete a working note.** The oldest
+  fall off past `KEPT` and that is the whole of forgetting. A stale note steers
+  the next turn toward work already done, and deciding what to drop is the
+  operation these models are worst at: this is the one store that never asks.
+  Adding a `revise` or a `clear` to the tool surface hands that decision straight
+  back.
+- **Working notes are a table because an append is a read-modify-write.** An
+  agent's stores are written from every thread it holds, so appending to a file
+  loses notes under exactly the concurrency this app has. The insert and the
+  trim share one transaction for the same reason: between them the agent is over
+  its own bound, and a read landing there gets a list one longer than the design
+  says exists.
+- **A working note is stamped, and the age is what makes the list worth
+  reading.** Undated, a list of notes says an agent is working; the same list
+  marked *6d ago* says the thing it waits for is not coming. The age is rendered
+  in the coarsest unit that is still true, on both sides, because a model handed
+  an ISO timestamp has to do date arithmetic against a clock nobody gave it.
+- **The memory tool is `update_memory` and `update_notes` still parses.**
+  `notes` meant memory everywhere the code named it, which is the one ambiguity
+  a second store cannot survive. The old name stays as an alias because a model
+  that learned Guaca from an older transcript reaches for it, and what is
+  recorded is the current name either way. `lib/trail.ts` answers to both,
+  because rows written before the rename cannot be migrated into a new spelling.
+- **The panel's cap is pinned to `MAX_MEMORY` by a test that reads both
+  sources.** It was advisory, on the reasoning that the runtime is what cuts and
+  a drifted mirror cannot cost the operator their text. It drifted to 4,000
+  against 16,000 and told operators their memory was about to be cut by a runtime
+  storing it whole. A warning is read as a fact about what will happen, so the
+  number is only worth drawing while it is the runtime's number.
+- **A stub that branches on what was said must not read the system prompt.**
+  `anyone_said` skips it. Every scripted eval keyed on a word is really asking
+  "does this appear anywhere in the request", and the request opens with two
+  thousand words of instructions: adding the working-notes section, which says
+  "when something you noted stops being true", made every stub keyed on `noted`
+  fire on the first call and read as a crew that would not stop repeating itself.
 - **A memory read never replaces what the operator is in the middle of
   typing.** The panel refreshes because the agent rewrote the file mid-turn,
   which is exactly when somebody is most likely to be editing it by hand. A

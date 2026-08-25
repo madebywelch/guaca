@@ -168,7 +168,7 @@ function lastSentence(line: string): string {
  *
  * This is a line of muted chrome, not a document, so `**` and backticks come
  * off rather than get rendered. Nothing else does: stripping every character
- * markdown can use would turn `update_notes` into `updatenotes`, which is a
+ * markdown can use would turn `update_memory` into `updatememory`, which is a
  * tool the operator does not have.
  */
 function plain(line: string): string {

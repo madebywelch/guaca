@@ -141,7 +141,7 @@ describe("peer traffic in a channel", () => {
         inbound("chef"),
         record({
           type: "toolCall",
-          name: "update_notes",
+          name: "update_memory",
           arguments: { content: "x" },
           outcome: { status: "ok", summary: "saved" },
         }),

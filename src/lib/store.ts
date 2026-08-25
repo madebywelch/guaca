@@ -204,6 +204,8 @@ interface State {
    * writing.
    */
   memoryVersion: Record<AgentId, number | undefined>;
+  /** Its own counter, because notes move far more often than memory does. */
+  workingNotesVersion: Record<AgentId, number | undefined>;
 
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
@@ -372,6 +374,7 @@ export const useStore = create<State>((set, get) => ({
   openingRoutine: null,
   routineVersion: {},
   memoryVersion: {},
+  workingNotesVersion: {},
   banner: null,
 
   async bootstrap() {
@@ -941,6 +944,16 @@ export const useStore = create<State>((set, get) => ({
           memoryVersion: {
             ...state.memoryVersion,
             [event.agentId]: (state.memoryVersion[event.agentId] ?? 0) + 1,
+          },
+        }));
+        break;
+      }
+
+      case "workingNotesChanged": {
+        set((state) => ({
+          workingNotesVersion: {
+            ...state.workingNotesVersion,
+            [event.agentId]: (state.workingNotesVersion[event.agentId] ?? 0) + 1,
           },
         }));
         break;

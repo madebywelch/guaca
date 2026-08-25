@@ -8,13 +8,17 @@ import { type AgentId, errorMessage } from "../lib/types";
  * The cap the runtime enforces, mirrored here so the operator is warned before
  * they lose anything rather than after.
  *
- * Advisory, exactly as `LIMITS` is advisory about the guard's bounds.
- * `Workspace::write` is what actually cuts, and this panel puts back whatever
- * came home from the write rather than leaving what was typed on screen, so a
- * number that has drifted from `MAX_NOTES` costs a warning that arrives a
- * little early or a little late. It cannot cost the operator their text.
+ * Pinned to `MAX_MEMORY` by the suite, which reads both sources and compares
+ * them, exactly as `ipc.contract.test.ts` does across the same seam. It was
+ * written as advisory on the reasoning that this panel puts back whatever came
+ * home from the write, so a drifted number cannot cost the operator their
+ * text. True, and not the failure: a low copy tells an operator "the end is
+ * cut on save" about a page the runtime stores whole. They then edit down a
+ * memory that was never in danger, which is worse than no warning at all,
+ * because a warning is read as a fact about what the runtime is going to do.
+ * The number is only worth drawing while it is the runtime's number.
  */
-const CAP = 4_000;
+export const CAP = 4_000;
 
 /** How near the cap is near enough to say so. */
 const ROOM = 400;
@@ -112,7 +116,7 @@ export function Memory({ agentId }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const content = await api.agentNotes(agentId);
+      const content = await api.agentMemory(agentId);
       // Through `arrived` rather than straight onto the state, so what happens
       // to an operator mid-sentence is decided against what is held right now
       // rather than against what was held when this read was started.
@@ -152,7 +156,7 @@ export function Memory({ agentId }: Props) {
       // What comes back is what was actually stored: the runtime trims it and
       // cuts anything over the cap, so leaving what was typed on screen would
       // show the operator a page their agent is never going to be given.
-      const saved = await api.setAgentNotes(agentId, sent);
+      const saved = await api.setAgentMemory(agentId, sent);
       setHeld({ stored: saved, draft: null, incoming: null });
       setCut(saved !== sent.trim());
     } catch (caught) {
@@ -236,8 +240,9 @@ export function Memory({ agentId }: Props) {
           same three sentences are a paragraph under every glance. */}
       {!loading && value === "" && (
         <p className="memory__note">
-          The agent writes here with <code>update_notes</code> when it learns something durable, and
-          is shown it at the start of every turn. Seed a persona if you like.
+          The agent writes here with <code>update_memory</code> when it learns something durable,
+          and is shown it at the start of every turn. Where its work stands goes in the working
+          notes below instead. Seed a persona if you like.
         </p>
       )}
 

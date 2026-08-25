@@ -20,7 +20,8 @@ use crate::llm::openrouter::{ToolCall, ToolSpec};
 
 pub const DIRECTORY: &str = "directory";
 pub const SEND_MESSAGE: &str = "send_message";
-pub const UPDATE_NOTES: &str = "update_notes";
+pub const UPDATE_MEMORY: &str = "update_memory";
+pub const NOTE_PROGRESS: &str = "note_progress";
 pub const RUN_COMMAND: &str = "run_command";
 pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 pub const USE_SCREEN: &str = "use_screen";
@@ -196,22 +197,27 @@ fn all_specs() -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
-            name: UPDATE_NOTES.to_string(),
+            name: UPDATE_MEMORY.to_string(),
             // The description is the whole design. It has to make selective
             // writing and consolidation the obvious reading, because the model
             // has no other signal about what belongs in a durable file.
-            description: "Replace your memory. Your memory is a short markdown file, also called \
-                          your notes, shown to you at the start of every turn, so anything kept \
-                          there you will always know. This is the tool for anything asked of your \
-                          memory, in whatever words: remember this, update your memory, make a \
-                          note of that, forget that. Record only what will still matter in a week: \
-                          who you are and how you work, the operator's standing preferences, \
-                          decisions that hold across conversations, and durable facts. Do not \
-                          record the conversation itself, task-by-task progress, or anything \
-                          already in the messages above. This REPLACES the file entirely, so write \
-                          out everything you want to keep and leave behind what no longer holds; \
-                          if something you believed turned out to be wrong, correct it here rather \
-                          than adding a contradiction. Space is limited, so choose."
+            description: "Replace your memory. Your memory is a short markdown file shown to you \
+                          at the start of every turn, so anything kept there you will always \
+                          know. This is the tool for anything asked of it, in whatever words: \
+                          remember this, update your memory, forget that. Keep what you could \
+                          not look up again: who you are and how you work, the operator's \
+                          standing preferences, decisions that hold across conversations, what \
+                          you have learned about the people and agents you work with. If you \
+                          could open it, do not copy it: record where it is and when it is worth \
+                          opening, in one line. A memory that restates a document you already \
+                          have is spending the only space you keep on the one thing you can get \
+                          back. Progress, status and what you are waiting on do NOT belong here \
+                          and have their own tool, `note_progress`; a memory holding last \
+                          week's task state will have you act on it as though it were still \
+                          true. This REPLACES the file entirely, so write out everything you \
+                          want to keep and leave behind what no longer holds; if something you \
+                          believed turned out to be wrong, correct it here rather than adding a \
+                          contradiction. Space is limited, so choose."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -222,6 +228,39 @@ fn all_specs() -> Vec<ToolSpec> {
                     }
                 },
                 "required": ["content"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
+            name: NOTE_PROGRESS.to_string(),
+            // Deliberately cheap to reach for. This tool competes with
+            // `update_memory` for the same impulse, and it wins only if it is
+            // obviously the smaller thing to do: one line, no rewrite, nothing
+            // to reconcile. Anything that made an agent stop and think would
+            // send the thought back to memory, which is where it used to go.
+            description: "Note one line about what you are doing right now: what you have just \
+                          done, what you have handed over, what you are waiting on and from \
+                          whom. These are your working notes. You are shown them at the start of \
+                          every turn with how long ago each was written, which is how you know \
+                          whether you are still waiting or have been forgotten about. Use this \
+                          whenever the state of your work changes and you would otherwise lose \
+                          it: it is cheap, so note freely. Each note is added to the list; you \
+                          cannot edit or delete one, and the oldest drop off by themselves, so \
+                          write what is true now rather than trying to keep the list tidy. When \
+                          something you noted stops being true, note the new state and let the \
+                          old one age out. Keep it to a line. Durable facts about how you work \
+                          or what you have been told to prefer are memory, not progress, and go \
+                          in `update_memory`."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "note": {
+                        "type": "string",
+                        "description": "One line about the state of your work right now."
+                    }
+                },
+                "required": ["note"],
                 "additionalProperties": false
             }),
         },
@@ -720,8 +759,13 @@ pub enum ToolInvocation {
         /// What they may pick. Empty is a written answer.
         options: Vec<String>,
     },
-    UpdateNotes {
+    UpdateMemory {
         content: String,
+    },
+    /// One line about what the agent is in the middle of. Appended, never
+    /// revised: there is deliberately no tool to edit or remove one.
+    NoteProgress {
+        note: String,
     },
     RunCommand {
         command: String,
@@ -826,7 +870,8 @@ pub enum ScreenAction {
 pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, attach_file, \
-         update_notes, run_command, open_on_desktop, use_screen, browse, schedule, create_agent."
+         update_memory, note_progress, run_command, open_on_desktop, use_screen, browse, \
+         schedule, create_agent."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -837,8 +882,10 @@ pub enum ToolParseError {
     MissingText,
     #[error("attach_file needs a non-empty `files` list")]
     MissingFiles,
-    #[error("update_notes needs a `content` string")]
+    #[error("update_memory needs a `content` string")]
     MissingContent,
+    #[error("note_progress needs a non-empty `note` string")]
+    MissingNote,
     #[error("run_command needs a non-empty `command` string")]
     MissingCommand,
     #[error("open_on_desktop needs a non-empty `command` string")]
@@ -865,9 +912,13 @@ impl ToolParseError {
             ToolParseError::UnknownTool { name } => {
                 format!(
                     "Error: no tool named {name:?}. You can call `directory`, `send_message`, \
-                     `attach_file`, `update_notes` (your memory), or `run_command`."
+                     `attach_file`, `update_memory`, or `run_command`."
                 )
             }
+            ToolParseError::MissingNote => "Error: `note_progress` needs a non-empty `note` \
+                 string: one line about where your work stands. To clear what you noted before, \
+                 note the new state instead; the old lines age out on their own."
+                .to_string(),
             ToolParseError::BadJson { name, detail } => format!(
                 "Error: the arguments to `{name}` were not valid JSON ({detail}). Send a single \
                  well-formed JSON object."
@@ -1310,9 +1361,12 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
         // it, and notes is what the tool is called. An agent told to update its
         // memory reaches for the word it was given, and the name it lands on is
         // the same file either way, so refusing one spends a turn on spelling.
-        UPDATE_NOTES | "update_memory" | "save_memory" => {
+        // `update_notes` is what this tool was called for a year, and it is
+        // still what a model that learned Guaca from an older transcript will
+        // reach for. It costs one match arm and saves that turn.
+        UPDATE_MEMORY | "update_notes" | "save_memory" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
-                name: UPDATE_NOTES.to_string(),
+                name: UPDATE_MEMORY.to_string(),
                 detail: e.to_string(),
             })?;
             // An empty string is a legitimate instruction: clear the memory.
@@ -1322,9 +1376,33 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 .or_else(|| value.get("memory"))
             {
                 Some(serde_json::Value::String(content)) => {
-                    Ok(ToolInvocation::UpdateNotes { content: content.clone() })
+                    Ok(ToolInvocation::UpdateMemory { content: content.clone() })
                 }
                 _ => Err(ToolParseError::MissingContent),
+            }
+        }
+        // `note` is the field, and the two near misses are what a model
+        // reaches for when it has just been told to write down where things
+        // stand. Refusing one costs a whole turn to learn a synonym.
+        NOTE_PROGRESS | "log_progress" | "note_status" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: NOTE_PROGRESS.to_string(),
+                detail: e.to_string(),
+            })?;
+            match value
+                .get("note")
+                .or_else(|| value.get("progress"))
+                .or_else(|| value.get("status"))
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|note| !note.is_empty())
+            {
+                // Unlike a memory, an empty note is not an instruction. There
+                // is nothing it could mean: clearing is not an operation this
+                // store has, and a blank line in the list is one the agent
+                // will read back next turn and try to interpret.
+                Some(note) => Ok(ToolInvocation::NoteProgress { note: note.to_string() }),
+                None => Err(ToolParseError::MissingNote),
             }
         }
         CREATE_AGENT => {
@@ -2086,7 +2164,7 @@ mod tests {
         // And everything that needs neither is still there, because messaging
         // and memory work with no provider configured at all.
         let neither = names(Surfaces::none());
-        for always in [DIRECTORY, SEND_MESSAGE, UPDATE_NOTES, SCHEDULE, CREATE_AGENT] {
+        for always in [DIRECTORY, SEND_MESSAGE, UPDATE_MEMORY, SCHEDULE, CREATE_AGENT] {
             assert!(neither.contains(&always.to_string()), "{always} needs no provider");
         }
 
@@ -2289,10 +2367,10 @@ mod tests {
         let specs = specs(Surfaces::both());
         assert_eq!(
             specs.len(),
-            12,
+            13,
             "directory, run_command, open_on_desktop, use_screen, browse, schedule, \
              create_agent, request_permission, ask_operator, send_message, attach_file, \
-             update_notes"
+             update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
@@ -2526,19 +2604,19 @@ mod tests {
     }
 
     #[test]
-    fn update_notes_takes_the_complete_new_contents() {
+    fn update_memory_takes_the_complete_new_contents() {
         // Doubled hashes: a markdown heading inside the JSON would otherwise
         // close an `r#"..."#` literal early.
-        let parsed = parse(&call(UPDATE_NOTES, r##"{"content":"# Style\nTerse."}"##)).unwrap();
-        assert_eq!(parsed, ToolInvocation::UpdateNotes { content: "# Style\nTerse.".into() });
+        let parsed = parse(&call(UPDATE_MEMORY, r##"{"content":"# Style\nTerse."}"##)).unwrap();
+        assert_eq!(parsed, ToolInvocation::UpdateMemory { content: "# Style\nTerse.".into() });
     }
 
     #[test]
     fn clearing_notes_is_allowed() {
         // An empty string is an instruction, not a mistake.
         assert_eq!(
-            parse(&call(UPDATE_NOTES, r#"{"content":""}"#)).unwrap(),
-            ToolInvocation::UpdateNotes { content: String::new() }
+            parse(&call(UPDATE_MEMORY, r#"{"content":""}"#)).unwrap(),
+            ToolInvocation::UpdateMemory { content: String::new() }
         );
     }
 
@@ -2548,17 +2626,17 @@ mod tests {
         // `update_notes`. An agent told to update its memory writes the same
         // file whichever word it reaches for, so a rejection here would cost a
         // whole turn to say only that the two words mean one thing.
-        for name in [UPDATE_NOTES, "update_memory", "save_memory"] {
+        for name in [UPDATE_MEMORY, "update_notes", "save_memory"] {
             assert_eq!(
                 parse(&call(name, r#"{"content":"kept"}"#)).unwrap(),
-                ToolInvocation::UpdateNotes { content: "kept".into() },
+                ToolInvocation::UpdateMemory { content: "kept".into() },
                 "{name} did not reach the memory file"
             );
         }
         for field in ["content", "notes", "memory"] {
             assert_eq!(
-                parse(&call(UPDATE_NOTES, &format!("{{\"{field}\":\"kept\"}}"))).unwrap(),
-                ToolInvocation::UpdateNotes { content: "kept".into() },
+                parse(&call(UPDATE_MEMORY, &format!("{{\"{field}\":\"kept\"}}"))).unwrap(),
+                ToolInvocation::UpdateMemory { content: "kept".into() },
                 "{field} was not read"
             );
         }
@@ -2581,27 +2659,87 @@ mod tests {
     }
 
     #[test]
-    fn update_notes_without_content_is_rejected_with_guidance() {
-        let err = parse(&call(UPDATE_NOTES, "{}")).unwrap_err();
+    fn update_memory_without_content_is_rejected_with_guidance() {
+        let err = parse(&call(UPDATE_MEMORY, "{}")).unwrap_err();
         assert_eq!(err, ToolParseError::MissingContent);
         assert!(err.guidance().contains("empty string"));
     }
 
     #[test]
-    fn the_memory_tool_asks_for_durable_things_and_forbids_a_transcript_dump() {
-        // The description is the only control over what an agent writes, so the
-        // selective-write instruction has to survive edits.
-        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == UPDATE_NOTES).unwrap();
-        let text = spec.description.to_lowercase();
-        // Both words, because the tool is named for one of them and asked for
-        // in the other: an agent reading only "notes" here has to guess that
-        // the operator's "update your memory" landed on this tool.
+    fn the_memory_tool_asks_for_durable_things_and_sends_progress_elsewhere() {
+        // The description is the only control over what an agent writes, so
+        // every clause it turns on has to survive an edit.
+        let text = spec(UPDATE_MEMORY).description.to_lowercase();
         assert!(text.contains("memory"), "{text}");
-        assert!(text.contains("notes"), "{text}");
-        assert!(text.contains("still matter in a week"));
-        assert!(text.contains("do not record the conversation"));
         assert!(text.contains("replaces the file"), "consolidation must be explicit");
         assert!(text.contains("space is limited"));
+
+        // The index rule, which is what stops a memory becoming a second copy
+        // of documents the agent can already open. Without it an assistant
+        // spent 900 characters of a 4,000 character file summarizing a report
+        // whose filename was three lines further up.
+        assert!(text.contains("do not copy it"), "the index rule has gone: {text}");
+
+        // And where progress goes instead. Naming the other tool is the whole
+        // mechanism: an agent told only "not here" still has to put what it is
+        // waiting on somewhere, and with one store that somewhere was here.
+        assert!(text.contains("note_progress"), "memory must name its counterpart: {text}");
+    }
+
+    #[test]
+    fn the_progress_tool_is_the_cheap_one_and_says_it_forgets_by_itself() {
+        let text = spec(NOTE_PROGRESS).description.to_lowercase();
+        // Cheap to reach for, or the impulse goes back to memory where it came
+        // from. "Note freely" is doing more work here than any refusal could.
+        assert!(text.contains("note freely"), "{text}");
+        assert!(text.contains("one line"), "{text}");
+
+        // That it forgets on its own is the sentence that stops an agent trying
+        // to curate the list, which is the operation this store exists to avoid
+        // asking for. It has to be told it cannot revise, and told why that is
+        // fine.
+        assert!(text.contains("cannot edit"), "{text}");
+        assert!(text.contains("drop off"), "{text}");
+
+        // And the line back, so a durable fact noted here gets moved rather
+        // than aging out of a memory it should have been in.
+        assert!(text.contains("update_memory"), "progress must name its counterpart: {text}");
+    }
+
+    #[test]
+    fn a_progress_note_takes_the_line_under_any_of_three_names() {
+        // A model that has just been told to write down where things stand
+        // reaches for whichever of these its training used. Refusing a near
+        // miss costs the whole turn.
+        for name in [NOTE_PROGRESS, "log_progress", "note_status"] {
+            assert_eq!(
+                parse(&call(name, r#"{"note":"waiting on the legal read"}"#)).unwrap(),
+                ToolInvocation::NoteProgress { note: "waiting on the legal read".into() },
+                "{name} did not parse"
+            );
+        }
+        for field in ["note", "progress", "status"] {
+            assert_eq!(
+                parse(&call(NOTE_PROGRESS, &format!("{{\"{field}\":\" kept \"}}"))).unwrap(),
+                ToolInvocation::NoteProgress { note: "kept".into() },
+                "{field} did not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_progress_note_is_refused_rather_than_stored() {
+        // Unlike a memory, where empty means clear. There is no clearing here
+        // and a blank row is one the agent reads back next turn and tries to
+        // interpret.
+        for body in [r#"{"note":""}"#, r#"{"note":"   "}"#, "{}"] {
+            let err = parse(&call(NOTE_PROGRESS, body)).unwrap_err();
+            assert_eq!(err, ToolParseError::MissingNote, "{body}");
+            // And the way forward, which is not "try again with content": the
+            // agent usually wants the old note gone, and has to be told that
+            // noting the new state is how that happens.
+            assert!(err.guidance().contains("note the new state"), "{}", err.guidance());
+        }
     }
 
     #[test]
@@ -2704,7 +2842,7 @@ mod tests {
         assert!(matches!(err, ToolParseError::UnknownTool { .. }));
         assert!(err.guidance().contains("directory"));
         assert!(err.guidance().contains("send_message"));
-        assert!(err.guidance().contains("update_notes"));
+        assert!(err.guidance().contains("update_memory"));
         assert!(
             err.guidance().contains("memory"),
             "a model that invented a name for its memory has to recognize the real tool in the \

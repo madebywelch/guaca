@@ -392,7 +392,7 @@ describe("what an agent is reaching for", () => {
       callId: "call_1",
       part: {
         type: "toolCall",
-        name: "update_notes",
+        name: "update_memory",
         arguments: { content: "Smith handles verification." },
         outcome: { status: "ok", summary: "Memory saved." },
         replaced: "Jones handles verification.",

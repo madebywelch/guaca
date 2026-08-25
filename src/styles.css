@@ -4647,21 +4647,21 @@ button {
    */
 
 .memory {
-  margin-bottom: 1.1rem;
+  margin-bottom: var(--space-6);
 }
 
 .memory__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .memory__title {
   margin: 0;
   font-family: var(--font-ui);
-  font-size: 0.85rem;
+  font-size: var(--type-ui);
   font-weight: 500;
   color: var(--muted);
 }
@@ -4670,7 +4670,7 @@ button {
    gone means the end of what is on screen will not be stored, which is a loss
    and is the one thing here allowed to be loud. */
 .memory__room {
-  font-size: 0.68rem;
+  font-size: var(--type-meta);
   color: var(--muted);
   text-align: right;
 }
@@ -4695,10 +4695,10 @@ button {
   border-radius: var(--radius-sm);
   background: var(--sunken);
   color: var(--text);
-  padding: 0.45rem 0.55rem;
+  padding: var(--space-3) var(--space-4);
   font-family: var(--font-mono);
-  font-size: 0.74rem;
-  line-height: 1.55;
+  font-size: var(--type-small);
+  line-height: var(--lead-read);
   outline: none;
 }
 
@@ -4712,18 +4712,88 @@ button {
 
 .memory__actions {
   display: flex;
-  gap: 0.35rem;
-  margin-top: 0.4rem;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
 }
 
 .memory__note {
-  margin: 0.4rem 0 0;
-  font-size: 0.72rem;
-  line-height: 1.5;
+  margin: var(--space-3) 0 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
   color: var(--faint);
 }
 
 .memory__note code {
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+/* --- working notes -------------------------------------------------------
+   Under the memory and deliberately lighter than it. Memory is a box you type
+   into; this is a list you read, and giving it the same weight would say the
+   two are the same kind of thing when the whole point is that they are not. */
+
+.worknotes {
+  margin-bottom: var(--space-6);
+}
+
+.worknotes__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+.worknotes__title {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.worknotes__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+/* The age is a column rather than a suffix, so a glance down the right-hand
+   edge answers the question the list is actually for: how long has this been
+   sitting here. Run into the text it has to be found in every line. */
+.worknotes__note {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--text);
+}
+
+.worknotes__body {
+  min-width: 0;
+}
+
+.worknotes__age {
+  flex: none;
+  font-size: var(--type-meta);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.worknotes__empty {
+  margin: 0;
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--faint);
+}
+
+.worknotes__empty code {
   font-family: var(--font-mono);
   font-size: 0.95em;
 }

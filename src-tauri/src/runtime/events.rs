@@ -220,10 +220,20 @@ pub enum UiEvent {
     /// way to find out otherwise is to click away and back.
     ///
     /// Only the runtime's own write emits it. The operator's edit comes back
-    /// from `set_agent_notes` as what was actually stored, so the panel that
+    /// from `set_agent_memory` as what was actually stored, so the panel that
     /// made it already has the answer, and an event there would be a refetch
     /// to learn what the reply just said.
     MemoryChanged {
+        agent_id: AgentId,
+    },
+    /// One agent appended a working note.
+    ///
+    /// Its own event rather than a second meaning for `MemoryChanged`, because
+    /// the two panels refetch different things and folding them together would
+    /// have every note an agent writes re-read a memory that has not moved.
+    /// Notes are written far more often than memory, which is the whole design,
+    /// so the cheap one must not drag the expensive one behind it.
+    WorkingNotesChanged {
         agent_id: AgentId,
     },
 }
@@ -449,7 +459,7 @@ mod tests {
             message_id: MessageId::new(),
             call_id: "call_1".into(),
             part: Part::tool_call(
-                "update_notes",
+                "update_memory",
                 serde_json::json!({ "content": "now" }),
                 ToolOutcome::Failed { error: "no machine".into() },
             ),
