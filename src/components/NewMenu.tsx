@@ -1,3 +1,4 @@
+import type { CSSProperties } from "react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface Props {
@@ -30,7 +31,7 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [at, setAt] = useState({ x: 0, y: 0 });
+  const [at, setAt] = useState({ x: 0, y: 0, origin: "top left" });
 
   // Measured after it is in the tree, like every other menu here. It opens to
   // the right because the button is near the left edge of the window: laid out
@@ -42,11 +43,20 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
     if (!open || !button || !menu) return;
     const anchor = button.getBoundingClientRect();
     const { width, height } = menu.getBoundingClientRect();
+    // Left edges aligned, then pulled back inside the window if that is not
+    // where it fits.
+    const wanted = { x: Math.max(MARGIN, anchor.left), y: anchor.bottom + 4 };
+    const x = Math.min(wanted.x, window.innerWidth - width - MARGIN);
+    const y = Math.min(wanted.y, window.innerHeight - height - MARGIN);
     setAt({
-      // Left edges aligned, then pulled back inside the window if that is not
-      // where it fits.
-      x: Math.min(Math.max(MARGIN, anchor.left), window.innerWidth - width - MARGIN),
-      y: Math.min(anchor.bottom + 4, window.innerHeight - height - MARGIN),
+      x,
+      y,
+      // The corner the menu grew out of, which is the corner nearest the plus.
+      // Compared against where it asked to go rather than against the button:
+      // a menu pulled back off a window edge is no longer under its button, and
+      // growing it from the corner it wanted slides it across the screen on the
+      // way in.
+      origin: `${y < wanted.y ? "bottom" : "top"} ${x < wanted.x ? "right" : "left"}`,
     });
   }, [open]);
 
@@ -116,7 +126,7 @@ export function NewMenu({ onNewAgent, onNewGroup }: Props) {
             ref={menuRef}
             role="menu"
             aria-label="Make something new"
-            style={{ left: at.x, top: at.y }}
+            style={{ left: at.x, top: at.y, "--pop-origin": at.origin } as CSSProperties}
           >
             {item("New agent", "Somebody new in this workspace", onNewAgent)}
             {item("New group", "A crew that cannot see the others", onNewGroup)}

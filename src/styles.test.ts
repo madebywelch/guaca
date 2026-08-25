@@ -11,6 +11,14 @@
  * Only invariants that survive a redesign belong in this file. A color, a
  * spacing or a font size is a decision, not a rule, and locking one down here
  * would make changing your mind a test failure.
+ *
+ * The closed sets below are the one thing that reads like an exception and is
+ * not. Nothing here says 13px is the right size for a second line. It says a
+ * size is *named*, so that changing your mind means editing one token and
+ * seeing every rule that shares the decision move with it. Spelled at the
+ * point of use, a decision is invisible: this file reached 41 font sizes, 38
+ * of them inside ten pixels, with a considered color system sitting at the top
+ * of it the whole time. Nobody chose that and no review would have caught it.
  */
 
 import { readFileSync } from "node:fs";
@@ -244,12 +252,53 @@ describe("the composer's mention layer", () => {
   it("wraps the copy exactly as the box wraps the original", () => {
     const { mirror, input } = drawn();
 
-    // Vacuous if the rule stopped reaching either element.
-    expect(mirror.fontSize).toBeTruthy();
-    expect(mirror.paddingLeft).toBeTruthy();
+    // Vacuous if the rule stopped reaching either element. Read off a property
+    // that is a keyword rather than a length: jsdom substitutes no custom
+    // property, so everything on a scale reads back as the empty string here
+    // and would pass this on both elements while proving nothing. The check
+    // below is what holds the tokenized half.
+    expect(mirror.whiteSpace).toBeTruthy();
+    expect(mirror.overflowWrap).toBeTruthy();
 
     for (const property of PLACES_A_GLYPH) {
       expect(mirror[property], `${property} differs from the box's`).toBe(input[property]);
+    }
+  });
+
+  /**
+   * The same invariant, read off the rules instead of off the cascade.
+   *
+   * The comparison above is the original check and still catches a UA default
+   * coming apart on the two keywords. It stopped being able to catch a *value*
+   * the moment the composer moved onto the scale, because jsdom resolves no
+   * `var()`: every tokenized property reads back as the empty string on both
+   * elements and compares equal to it. Its own vacuity guard said so, which is
+   * the guard working rather than the rule breaking.
+   *
+   * What survives is the structure the equality was standing in for. Every
+   * property that decides where a glyph lands is declared once, in the rule the
+   * two elements share, and neither of them says one of those again underneath
+   * it. A value cannot drift between two elements that never had two values.
+   */
+  it("declares what places a glyph once, in the rule they share", () => {
+    const MOVES_A_GLYPH =
+      /^(font|line-height|letter-spacing|word-spacing|padding|border(?!-radius)|white-space|overflow-wrap|text-indent|tab-size)/;
+    const shared = declarations()
+      .filter((d) => d.selector === ".composer__mirror, .composer__input")
+      .filter((d) => MOVES_A_GLYPH.test(d.property));
+
+    // Vacuous if the shared rule was split or renamed.
+    expect(shared.map((d) => d.property)).toContain("padding");
+    expect(shared.length).toBeGreaterThan(6);
+
+    for (const selector of [".composer__mirror", ".composer__input"]) {
+      const own = declarations()
+        .filter((d) => d.selector === selector)
+        .filter((d) => MOVES_A_GLYPH.test(d.property));
+      expect(
+        own.map((d) => `${selector} { ${d.property}: ${d.value} }`),
+        `${selector} moves its own characters and leaves the other's where they were`,
+      ).toEqual([]);
     }
   });
 
@@ -283,5 +332,170 @@ describe("the composer's mention layer", () => {
     expect(moves, `.mention declares ${moves.join(", ")}, which moves the text under it`).toEqual(
       [],
     );
+  });
+});
+
+/**
+ * Every declaration in the file, with the rule it belongs to.
+ *
+ * Comments come out first, so a value named in prose is not read as one that
+ * was written. The two `:root` blocks are where the tokens are defined and are
+ * the one place a literal is the point, so everything above the first ordinary
+ * rule is skipped.
+ */
+function declarations(): { selector: string; property: string; value: string }[] {
+  const body = css.slice(css.indexOf("\n* {")).replace(/\/\*[\s\S]*?\*\//g, "");
+  const found: { selector: string; property: string; value: string }[] = [];
+  const stack: string[] = [];
+  let token = "";
+  for (const ch of body) {
+    if (ch === "{") {
+      stack.push(token.trim().replace(/\s+/g, " "));
+      token = "";
+    } else if (ch === "}") {
+      const selector = stack.join(" ") || "?";
+      for (const declaration of token.matchAll(/([a-z-]+):\s*([^;]+);/g)) {
+        const [, property = "", value = ""] = declaration;
+        found.push({ selector, property, value: value.trim().replace(/\s+/g, " ") });
+      }
+      stack.pop();
+      token = "";
+    } else {
+      token += ch;
+    }
+  }
+  return found;
+}
+
+/**
+ * The closed sets.
+ *
+ * A design system nobody can bypass is a build gate; one nobody checks is a
+ * comment. Each rule below says which token family a property has to be spelled
+ * from, and names the exceptions with the reason they are exceptions, because
+ * an unexplained hole in a gate is how the gate stops meaning anything.
+ */
+describe("every length is named, not spelled", () => {
+  /**
+   * Whether a value is spelled out of a family rather than written down.
+   *
+   * Two questions, and both have to hold: every token it names is from the
+   * right family, and every literal left over is one this property is allowed
+   * to contain. A multiplier inside `calc()` is arithmetic rather than a
+   * length, which is how a token is spent as a pull-back; `0` is the absence
+   * of a length and `auto` is a question for the layout, so neither is a
+   * decision any scale could hold.
+   */
+  const named = (value: string, family: RegExp, also = /^$/) => {
+    const tokens = [...value.matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1] ?? "");
+    if (!tokens.every((token) => family.test(token))) return false;
+    return value
+      .replace(/[*/]\s*-?[0-9.]+/g, " ")
+      .replace(/var\(--[a-z0-9-]+(,[^)]*)?\)/g, " ")
+      .replace(/calc\(|min\(|max\(|[()+]|,/g, " ")
+      .split(/\s+/)
+      .filter(Boolean)
+      .every((part) => part === "0" || part === "auto" || also.test(part));
+  };
+
+  it.each([
+    // Sizes come from the type scale. `em` is the one unit that is a ratio
+    // rather than a size, which is what inline code inside a paragraph wants
+    // and the only thing it is used for; `--ui-scale` is the root anchor every
+    // rem in the file is measured against, so it cannot be a rem itself.
+    ["font-size", /^--type-/, /^[0-9.]+em$|--ui-scale/, /^$/],
+    // `inherit` is the composer's mention layer saying out loud what a textarea
+    // does not inherit, so the copy under it cannot come apart from the box on
+    // a UA default. It is a value taken from somewhere else rather than one
+    // this rule picked, which is the one thing no scale can hold.
+    ["letter-spacing", /^--track-/, /^inherit$/, /^$/],
+    // `0` is the inline-descender reset a few SVG wrappers want. It is a
+    // layout fix rather than leading, and there is no leading it could mean.
+    ["line-height", /^--(lead-|badge)/, /^0$/, /^$/],
+    // `50%` is a circle and `1px` is a hairline softening on a chart mark:
+    // neither is on a radius scale, and quantizing them would round a 3px bar
+    // into a lozenge.
+    ["border-radius", /^--radius/, /^$/, /^(50%|1px)$/],
+  ])("%s", (property, family, exempt, also) => {
+    const bad = declarations()
+      .filter((d) => d.property === property)
+      .filter((d) => !exempt.test(d.value) && !named(d.value, family, also));
+    expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it.each(["padding", "margin", "gap", "row-gap", "column-gap"])(
+    "%s and its long-hands",
+    (base) => {
+      const bad = declarations()
+        .filter((d) => d.property === base || d.property.startsWith(`${base}-`))
+        // `1px` is a hairline: the gap between two bars of a sparkline, and the
+        // one-pixel pull-back that hides a visually-hidden box. `12vh` holds the
+        // palette below the title bar and is a fraction of the window rather
+        // than a step on any scale.
+        .filter((d) => !named(d.value, /^--(space-|column-|dot|flow-)/, /^(-?1px|12vh)$/));
+      expect(bad.map((d) => `${d.selector} { ${d.property}: ${d.value} }`)).toEqual([]);
+    },
+  );
+
+  /**
+   * Motion is where cohesion is felt rather than read, so it is held hardest.
+   *
+   * Three curves, and each one says which register the motion is in: a surface
+   * arriving, a character reacting, something that loops or travels. A fourth
+   * has to argue it is a register rather than a preference.
+   */
+  it("transitions run on a tempo and a named curve", () => {
+    const bad = declarations()
+      .filter((d) => d.property === "transition")
+      .filter((d) => d.value !== "none")
+      .filter((d) => !/^(?:[a-z-]+ var\(--tempo-[a-z]+\) var\(--ease\)(?:, )?)+$/.test(d.value));
+    expect(bad.map((d) => `${d.selector} { transition: ${d.value} }`)).toEqual([]);
+  });
+
+  /**
+   * The long-hands too, or the rule only covers the spelling it expected.
+   *
+   * A `transition-duration: 90ms` sat in the rail for as long as the shorthand
+   * rule did, because nothing was reading that property name. The reduced-motion
+   * block is the exemption and is not a hole: `0.001ms !important` over every
+   * element in the document is the standard way to turn motion off, and it has
+   * to beat every tempo in the file to work.
+   */
+  it.each(["transition-duration", "animation-duration"])("%s", (property) => {
+    const bad = declarations()
+      .filter((d) => d.property === property)
+      .filter((d) => !d.value.startsWith("0.001ms"))
+      .filter((d) => !named(d.value, /^--tempo-/));
+    expect(bad.map((d) => `${d.selector} { ${property}: ${d.value} }`)).toEqual([]);
+  });
+
+  it("animations run on a named curve", () => {
+    // Duration is deliberately free here. An ambient loop is timed against the
+    // other loops beside it by eye, and a shared tempo would sync a breath, a
+    // blink and a glance into one metronome.
+    const bad = declarations()
+      .filter((d) => d.property === "animation")
+      .filter((d) => d.value !== "none")
+      .filter((d) => !/var\(--ease(-spring|-loop)?\)|steps\(|linear/.test(d.value));
+    expect(bad.map((d) => `${d.selector} { animation: ${d.value} }`)).toEqual([]);
+  });
+
+  /**
+   * A shadow is one of three elevations, a ring, or a glow.
+   *
+   * The px ones this replaced are why the rule mentions units at all: in an app
+   * where every other length is a rem, a `24px` blur is a blur that ignores the
+   * operator's interface scale.
+   */
+  it("shadows are a lift, a ring or a glow", () => {
+    const bad = declarations()
+      .filter((d) => d.property === "box-shadow")
+      .filter((d) => d.value !== "none")
+      .filter((d) => !d.value.includes("var(--lift-"))
+      .filter((d) => !d.value.includes("inset"))
+      // A glow sits on the thing that casts it: no offset, so nothing about it
+      // is claiming height off the page.
+      .filter((d) => !/^0 0 /.test(d.value));
+    expect(bad.map((d) => `${d.selector} { box-shadow: ${d.value} }`)).toEqual([]);
   });
 });
