@@ -199,6 +199,28 @@ pub enum UiEvent {
         state: ApprovalState,
     },
 
+    /// A coding job could not run, for a reason only the operator can fix.
+    ///
+    /// The agent is told too, in its own channel, and that is not enough. An
+    /// expired credential on the operator's own machine is the operator's
+    /// problem, and a sentence about it inside one agent's transcript is a
+    /// sentence nobody reads: it cost a whole afternoon of silent no-ops, with
+    /// every agent in the workspace dutifully reporting that nothing needed
+    /// doing.
+    ///
+    /// Only for failures of the harness itself — it would not start, or it
+    /// ended its own turn on an error. A job that ran and did the wrong thing
+    /// is the agent's to report and belongs nowhere near a banner.
+    CodingJobFailed {
+        agent_id: AgentId,
+        /// Named, because an operator with several repositories needs to know
+        /// which one stopped.
+        repository: String,
+        /// The harness's own words. Guaca has no better description of a
+        /// failure it did not cause and cannot interpret.
+        reason: String,
+    },
+
     /// One agent's schedule changed: it set a routine, edited one, canceled
     /// one, or one came due and moved to its next slot.
     ///

@@ -988,6 +988,18 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      // Onto the banner rather than into a channel. An expired credential on
+      // the operator's own machine is theirs to fix, and it stopped every
+      // coding job in the workspace while every agent reported that nothing
+      // needed doing.
+      case "codingJobFailed": {
+        get().setBanner({
+          tone: "error",
+          text: `A coding job in ${event.repository} could not run: ${event.reason}`,
+        });
+        break;
+      }
+
       case "routinesChanged": {
         set((state) => ({
           routineVersion: {

@@ -1427,6 +1427,11 @@ impl Runtime {
         repository: &str,
         outcome: Result<crate::pi::Outcome, crate::pi::PiError>,
     ) {
+        // What the operator is told, separately from what the agent is told.
+        // Set only where the harness itself failed: a job that ran and did the
+        // wrong thing is the agent's to report.
+        let mut operator_should_know = None;
+
         let text = match outcome {
             // Reported before the empty case below, and that ordering is the
             // whole of it. `pi` ends a failed turn inside its own stream and
@@ -1436,6 +1441,7 @@ impl Runtime {
             // reported that nothing needed doing.
             Ok(done) if done.failed.is_some() => {
                 let why = done.failed.unwrap_or_default();
+                operator_should_know = Some(why.clone());
                 format!(
                     "The coding agent in {repository} could not run: {why}. Nothing changed and \
                      this is not something you can fix or retry: it is the coding harness \
@@ -1465,12 +1471,23 @@ impl Runtime {
                 );
                 text
             }
-            Err(err) => format!(
-                "The coding agent in {repository} could not finish: {err}. Nothing was \
-                 necessarily left in a working state, so say what you asked for and what \
-                 happened rather than reporting it as done."
-            ),
+            Err(err) => {
+                operator_should_know = Some(err.to_string());
+                format!(
+                    "The coding agent in {repository} could not finish: {err}. Nothing was \
+                     necessarily left in a working state, so say what you asked for and what \
+                     happened rather than reporting it as done."
+                )
+            }
         };
+
+        if let Some(reason) = operator_should_know {
+            self.emit(UiEvent::CodingJobFailed {
+                agent_id: agent,
+                repository: repository.to_string(),
+                reason,
+            });
+        }
 
         let run_id = RunId::new();
         let envelope = Envelope {

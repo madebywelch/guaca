@@ -739,3 +739,32 @@ describe("openMessage", () => {
     expect(useStore.getState().focused).toBeNull();
   });
 });
+
+describe("a coding job that could not run", () => {
+  it("reaches the operator, not just the agent that asked", () => {
+    // The afternoon this cost. An expired credential on the operator's own
+    // machine stopped every coding job in the workspace, each agent was told in
+    // its own channel, and the operator saw nothing at all.
+    useStore.getState().applyEvent({
+      type: "codingJobFailed",
+      agentId: "a1",
+      repository: "vision-ios",
+      reason: "Provided authentication token is expired.",
+    });
+
+    const banner = useStore.getState().banner;
+    expect(banner?.tone).toBe("error");
+    expect(banner?.text).toContain("vision-ios");
+    expect(banner?.text).toContain("expired");
+  });
+
+  it("names the repository, because an operator has more than one", () => {
+    useStore.getState().applyEvent({
+      type: "codingJobFailed",
+      agentId: "a1",
+      repository: "vision-ios-api",
+      reason: "the `pi` coding harness is not installed",
+    });
+    expect(useStore.getState().banner?.text).toContain("vision-ios-api");
+  });
+});

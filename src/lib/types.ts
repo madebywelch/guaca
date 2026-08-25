@@ -853,7 +853,15 @@ export type UiEvent =
    * or one came due and moved. The list refetches; nothing here is patched,
    * because a schedule is a handful of rows.
    */
-  | { type: "routinesChanged"; agentId: AgentId };
+  | { type: "routinesChanged"; agentId: AgentId }
+  /**
+   * A coding job could not run, for a reason only the operator can fix.
+   *
+   * The agent that asked is told in its own channel, and that is not enough: a
+   * sentence inside one transcript is a sentence nobody reads. This is the same
+   * thing said where somebody setting up is looking.
+   */
+  | { type: "codingJobFailed"; agentId: AgentId; repository: string; reason: string };
 
 /** Tokens spent, as the provider counted them. Never estimated. */
 export interface Tokens {
