@@ -34,6 +34,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/keybinds.ts     Every key the app answers to, in one list.
   lib/limits.ts       The five bounds a conversation runs inside, in words.
   components/         One file per surface.
+    Memory.tsx        What an agent remembers, and what happens when both of
+                      you write it at once.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
@@ -121,6 +123,7 @@ repo: the frontend renders state and forwards intent.
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
+| What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
@@ -228,6 +231,17 @@ the model takes a screenshot to see what `browse` did.
   A one-class modifier above the base rule loses every property they share on
   source order, which is invisible in a diff: the reading view opened at the
   ordinary 38rem for that reason. `styles.test.ts` walks the modifiers.
+- **A memory read never replaces what the operator is in the middle of
+  typing.** The panel refreshes because the agent rewrote the file mid-turn,
+  which is exactly when somebody is most likely to be editing it by hand. A
+  version that lands under a draft is held to one side, the panel says so, and
+  the two ways out are already on screen: Save keeps what you wrote, Discard
+  takes what the agent wrote. `arrived` decides that against what is held when
+  the read lands, not what was held when it started. Only the runtime's write
+  emits `MemoryChanged`: the operator's own comes back from `set_agent_notes`
+  as what was stored, and what came back is what goes on screen, because
+  `Workspace::write` trims and cuts and the typed version is a page the agent
+  is never going to be given.
 - **What a memory rewrite replaced is absent, empty or a page, and the three
   mean different things.** Absent is a call that replaced nothing, which is
   every other tool and every write recorded before the field existed: there is
