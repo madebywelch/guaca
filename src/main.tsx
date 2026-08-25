@@ -2,13 +2,15 @@ import "@fontsource-variable/inter";
 import "@fontsource-variable/space-grotesk";
 import "@fontsource-variable/jetbrains-mono";
 
-import React from "react";
+import React, { useMemo } from "react";
 import ReactDOM from "react-dom/client";
 
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { Roster } from "./components/Markdown";
 import { applyAppearance } from "./lib/appearance";
 import { loadPrefs } from "./lib/prefs";
+import { useStore } from "./lib/store";
 import "./styles.css";
 
 /**
@@ -73,10 +75,31 @@ window.addEventListener("unhandledrejection", (event) =>
 const root = document.getElementById("root");
 if (!root) throw new Error("missing #root");
 
+/**
+ * The names an `@` in a message body is allowed to resolve to.
+ *
+ * At the root because a body is drawn in a channel, in a pair's thread, in the
+ * activity board and behind a search hit, and none of those should have to
+ * remember to say so. The whole roster rather than the live one: a transcript
+ * is history, and an agent that has since been let go was still an agent when
+ * somebody wrote to it. The composer answers the other question, which is who
+ * a message can be delivered to, so it completes against the live crew.
+ */
+function Guaca() {
+  const everyone = useStore((state) => state.agents);
+  const roster = useMemo(() => everyone.map((agent) => agent.name), [everyone]);
+
+  return (
+    <Roster.Provider value={roster}>
+      <App />
+    </Roster.Provider>
+  );
+}
+
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
     <ErrorBoundary>
-      <App />
+      <Guaca />
     </ErrorBoundary>
   </React.StrictMode>,
 );

@@ -382,6 +382,68 @@ holds is not one: a channel opened from the activity board spent the session
 listening to a node that had been thrown away, which is the shape the report
 arrived in.
 
+## A mention is one thing, in the box and in the message
+
+An `@` that names an agent is drawn as a chip: a rounded tint behind the name,
+so an operator can see at a glance who a message actually reaches. It happens in
+two places, and the point is that they agree. What the box paints while a draft
+is typed is what the transcript paints after it is sent.
+
+**Resolution against the roster is the whole rule.** `@Critic` is a mention
+because there is a Critic; `@lunch` is a word somebody wrote. Nothing else can
+decide it, because `@` in front of a word is also a handle, a Python decorator,
+a shell flag and half an email address, and a chip around one of those tells the
+operator this app knows something it does not. `splitMentions` in
+`lib/mentions.ts` is the one answer, and it opens on the same word-boundary rule
+the typeahead does, so what lights up is exactly what could have been completed.
+It takes the longest name that fits, or a crew holding both "Head" and
+"Head Chef" gets a chip on the first word and the rest of a name reading as
+prose. It stops at the end of the name rather than inside a longer word, which
+is why `@Critical` is nobody.
+
+Two rosters, and the difference is which question is being asked. The composer
+completes against the live crew, because a mention is about to become a
+delivery. A transcript resolves against everyone the store holds, retired agents
+included, because it is history: an agent that has since been let go was still
+an agent when somebody wrote to it, and dropping its name back into prose
+rewrites what the message looked like the day it was sent.
+
+**In a message, the chip is a remark plugin, not a pass over the rendered
+output.** A mention turns up inside a bold run, a list item, a heading and a
+table cell, and the mdast is the one place all four are the same node. It is
+declared with `hName` and `hProperties`, so what `react-markdown` builds is
+still plain hast and the rule about raw HTML is untouched: no `rehype-raw`, no
+markup from a model reaching the document. Code and fences never reach the walk,
+because they carry a value rather than text children, and links are skipped on
+purpose. A chip inside an anchor is two things claiming one click, and
+`remark-gfm` autolinks a bare email address, which is the one place an `@` is
+guaranteed not to be a mention.
+
+**In the composer, the chip is painted on a copy of the draft, underneath the
+operator's own characters.** The textarea is still the text. A contenteditable
+would make a mention a real element that backspace deletes whole, and it would
+also cost the caret, the undo stack, an input method and every native thing a
+box does. Making the textarea's own text transparent and reading the copy
+instead is the other way, and it is worse where it matters: a selection over
+transparent text is an empty highlight, and the box an operator drags across is
+the one they are about to retype.
+
+So the copy carries the pill and nothing else. That is a constraint on the chip
+rather than a note about it: `.mention` may not declare a padding, a weight, a
+letter-spacing or anything else that moves a glyph, because the copy would move
+and the characters on top of it would not. The room around a name is a spread
+shadow, which takes up none. `styles.test.ts` reads the two elements back
+through the cascade and compares every property that decides where a character
+lands, and it reads `.mention` out of the source to check it declares nothing
+that shifts one. Neither is visible in review and neither renders in a window
+with no layout, which is the whole reason they are assertions.
+
+The copy is out of flow, so the textarea is still what gives the row its height
+and still what grows as the draft does. Past the twelve-rem cap the box scrolls,
+and the copy is scrolled with it from two places: the scroll event, and the
+effect that resizes it. Typing at the bottom of a full box moves the view
+without the operator having scrolled anything.
+
 ## The rail is arranged by hand, and lends the top of a section out
 
 Two orders, not one. `railOrder` on the card is the arrangement: the operator
@@ -687,14 +749,35 @@ matches by reference, so two arrows leave a listener behind on every open.
 
 ## The cafeteria is a copy machine, not a registry
 
-Sixteen agents written out once, well, so that a new workspace is a few clicks
-rather than an hour of typing. They are named after jobs rather than functions:
-"Chief of Staff" and "Paralegal", not "Manager" and "Reviewer". A role carries
-duties and refusals a function label does not, so the operator does not have to
-supply them in the prompt, which is the work this removes. Titles are capped at
-three words because peers resolve each other by whole name and the composer's
-`@` typeahead gives up after two spaces, so a longer title is an agent nobody
-can delegate to.
+Twenty-one agents written out once, well, so that a new workspace is a few
+clicks rather than an afternoon of typing. They are named after jobs rather than
+functions: "Chief of Staff" and "Paralegal", not "Manager" and "Reviewer". A
+role carries duties and refusals a function label does not, so the operator does
+not have to supply them in the prompt, which is the work this removes. Titles
+are capped at three words because peers resolve each other by whole name and the
+composer's `@` typeahead gives up after two spaces, so a longer title is an
+agent nobody can delegate to.
+
+The six counters are the departments of a small software company, and the set is
+chosen against one test: a crew assembled from it can take a change the whole
+way without the operator writing a prompt. Somebody decides what to build,
+somebody draws it, somebody writes it, somebody reviews it, somebody ships it
+and watches it, somebody documents it, somebody tells the market. A gap in that
+chain is exactly the prompt an operator ends up writing by hand. That is why
+design, reliability, security and growth are hires of their own rather than
+duties folded into the engineer and the marketer: an agent doing five jobs has
+no refusals, and the refusals are most of what a role is.
+
+Product and engineering used to be one counter, and nine cards under one heading
+is a wall rather than a menu. They are two now, because they answer different
+questions: what to build is decided at the first and settled at the second.
+
+The catalog cannot grow past the character cast, and that is a rule rather than
+an accident. A crew is whatever subset the operator ticked, so two presets
+sharing a silhouette are two agents that look the same in one rail, and the
+silhouette is the only thing that separates them at 22px. A new preset is a new
+ingredient in `avatars/catalog.tsx` or it is not a preset. `lib/cafeteria.test.ts`
+is where that is enforced.
 
 A hire copies the preset's fields into an ordinary `AgentDraft` and forgets
 where they came from: there is no preset id on
