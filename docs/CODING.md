@@ -75,6 +75,25 @@ row written before it was already running. An unrecognized value reads back as
 build and then a downgrade, and refusing to read it would take the repository off
 the one panel where the operator could fix it.
 
+## Editing one carries no path, and the type is what says so
+
+`update_repository` takes a `RepositoryEdit`: a name, a note and a harness, and
+nothing else. The path is not a parameter because a different directory is a
+different repository, and whoever was given this one was given that directory.
+
+It is a separate type rather than a `RepositoryDraft` with the path left out,
+because that is what it was and it did not work. A draft validates the path
+first, so an edit routed through one has to invent a stand-in, the stand-in was
+`/`, and `/` is the empty string once `clean` takes its trailing separator off.
+Every rename, every note and every harness switch was refused with *a repository
+needs a directory; pick one to link*, about a directory the operator had already
+picked and could read on the row above the box. Neither the panel nor the store
+was wrong, and both have tests, which is why it lasted from the day repositories
+shipped: the only untested seam was the shape being passed between them.
+
+The lesson is not "check the stand-in". It is that a command whose whole rule is
+*this field is not editable* must not take a type with that field on it.
+
 ## One process lifecycle, two of what genuinely differs
 
 What the two harnesses share is the shape of a job: one process, in one

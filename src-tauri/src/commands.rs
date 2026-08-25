@@ -28,7 +28,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{Harness, Repository, RepositoryDraft};
+use crate::domain::repository::{Harness, Repository, RepositoryDraft, RepositoryEdit};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -593,6 +593,12 @@ pub async fn create_repository(
 /// work happens in a directory the operator already chose, and the day it needs
 /// changing is the day one of the two sign-ins stops paying.
 ///
+/// [`RepositoryEdit`] rather than a [`RepositoryDraft`] with a stand-in path,
+/// and that is a bug fix rather than tidying: the stand-in was `/`, which
+/// cleans down to the empty string, so every call here was refused with *a
+/// repository needs a directory; pick one to link*. Its doc comment is the
+/// long version.
+///
 /// A job already running is not affected. It is a process that was started with
 /// the old answer, and reaching into it would be a second way to stop a job that
 /// `Runtime::start_job` does not have.
@@ -604,16 +610,7 @@ pub fn update_repository(
     note: String,
     harness: Harness,
 ) -> Reply<Repository> {
-    let clean = RepositoryDraft {
-        group_id: GroupId::new(),
-        name,
-        // Not stored and not read. `clean` needs a path to validate the rest,
-        // and the row's own is what stays.
-        path: "/".to_string(),
-        note,
-        harness,
-    }
-    .clean()?;
+    let clean = RepositoryEdit { name, note, harness }.clean()?;
     let repository =
         state.runtime.store().update_repository(id, &clean.name, &clean.note, clean.harness)?;
     state.runtime.emit(UiEvent::AgentsChanged);
