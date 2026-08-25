@@ -159,11 +159,17 @@ impl Stub {
     }
 
     fn header(&self, name: &str) -> Option<String> {
+        self.headers(name).into_iter().next()
+    }
+
+    /// Every request's value for one header, in order.
+    fn headers(&self, name: &str) -> Vec<String> {
         self.headers
             .lock()
             .iter()
-            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .filter(|(key, _)| key.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.clone())
+            .collect()
     }
 }
 
@@ -190,6 +196,19 @@ fn has_tool_result(body: &serde_json::Value) -> bool {
 }
 
 async fn serve<F>(decide: F) -> Stub
+where
+    F: Fn(&serde_json::Value) -> Say + Clone + Send + Sync + 'static,
+{
+    serve_refusing(0, decide).await
+}
+
+/// The same backend, with the first `refusals` calls answered 401.
+///
+/// What an access token the backend has stopped accepting looks like from here:
+/// a well-formed request, a credential that is not, and nothing about it
+/// visible on this machine. The refusal is counted and recorded like any other
+/// call, so a test can say what the retry sent as well as that it happened.
+async fn serve_refusing<F>(refusals: usize, decide: F) -> Stub
 where
     F: Fn(&serde_json::Value) -> Say + Clone + Send + Sync + 'static,
 {
@@ -241,9 +260,16 @@ where
                         );
                     }
 
-                    calls.fetch_add(1, Ordering::SeqCst);
+                    let nth = calls.fetch_add(1, Ordering::SeqCst);
                     let script = decide(&parsed);
                     seen.lock().push(parsed);
+                    if nth < refusals {
+                        return (
+                            axum::http::StatusCode::UNAUTHORIZED,
+                            r#"{"detail":"Provided authentication token is expired."}"#,
+                        )
+                            .into_response();
+                    }
                     ([("content-type", "text/event-stream")], render(&script)).into_response()
                 }
             }
@@ -256,10 +282,69 @@ where
     Stub { backend: format!("http://{addr}"), seen, headers, calls }
 }
 
+/// The sign-in service, as far as a running turn ever touches it.
+///
+/// Only `/oauth/token`, and only the refresh grant: the device flow that put
+/// the file there has its own tests in `subscription.rs`, and driving it again
+/// here would make every test below depend on a second stub answering a browser
+/// nobody is at.
+struct Signin {
+    issuer: String,
+    refreshes: Arc<AtomicUsize>,
+}
+
+/// A sign-in service that either mints a new token or says the refresh token is
+/// finished.
+///
+/// The two are the whole fork after a 401: one is a token the backend quietly
+/// stopped accepting, which the operator should never hear about, and the other
+/// is a sign-in they have to repeat by hand.
+async fn signin_service(refusing: bool) -> Signin {
+    let refreshes = Arc::new(AtomicUsize::new(0));
+
+    let app = Router::new().route(
+        "/oauth/token",
+        post({
+            let refreshes = refreshes.clone();
+            move |body: String| {
+                let refreshes = refreshes.clone();
+                async move {
+                    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+                    assert_eq!(parsed["grant_type"], "refresh_token", "got {body}");
+                    let nth = refreshes.fetch_add(1, Ordering::SeqCst) + 1;
+                    if refusing {
+                        return (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            r#"{"error":"invalid_grant","error_description":"refresh token expired"}"#,
+                        )
+                            .into_response();
+                    }
+                    axum::Json(serde_json::json!({
+                        // A different token every time, as a real service
+                        // issues them, so a test can see which one a call
+                        // carried.
+                        "access_token": format!("refreshed-token-{nth}"),
+                        "refresh_token": format!("refresh-token-{nth}"),
+                    }))
+                    .into_response()
+                }
+            }
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    Signin { issuer: format!("http://{addr}"), refreshes }
+}
+
 struct Signed {
     runtime: Runtime,
     sink: Arc<RecordingSink>,
     ids: std::collections::HashMap<String, AgentId>,
+    /// The same store the runtime is spending, so a test can ask whether a
+    /// refused sign-in was kept.
+    subscription: Arc<Subscription>,
     _dir: tempfile::TempDir,
 }
 
@@ -325,7 +410,19 @@ impl Signed {
 /// because the flow that produces that file has its own tests and repeating it
 /// here would make every one of these depend on a second stub.
 fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
-    signed_in_where(stub, names, plan, false)
+    signed_in_where(stub, names, plan, false, NO_SIGNIN_SERVICE)
+}
+
+/// A closed port, for every test whose turn is never refused.
+///
+/// Reaching it at all is a failure the test should see: a sign-in service is
+/// only touched when a token needs replacing, and one being replaced under a
+/// test that did not arrange for it is the thing worth finding out about.
+const NO_SIGNIN_SERVICE: &str = "http://127.0.0.1:1";
+
+/// Signed in, and able to refresh: the arrangement a stale token needs.
+fn signed_in_at(stub: &Stub, names: &[&str], plan: &str, signin: &Signin) -> Signed {
+    signed_in_where(stub, names, plan, false, &signin.issuer)
 }
 
 /// The same, with the choice of who pays made by the group rather than the app.
@@ -335,7 +432,13 @@ fn signed_in(stub: &Stub, names: &[&str], plan: &str) -> Signed {
 /// work: one sign-in on the machine, and each crew deciding whether to spend it.
 /// The app's endpoint is left pointing at a closed port either way, so a
 /// resolution that read the wrong layer fails rather than passing quietly.
-fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) -> Signed {
+fn signed_in_where(
+    stub: &Stub,
+    names: &[&str],
+    plan: &str,
+    by_the_group: bool,
+    issuer: &str,
+) -> Signed {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(&dir.path().join("guac.db")).unwrap();
 
@@ -368,7 +471,7 @@ fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) 
     std::fs::write(
         &path,
         serde_json::json!({
-            "access_token": "access-token-for-tests",
+            "access_token": "first-token-for-tests",
             "refresh_token": "refresh-token-for-tests",
             "id_token": jwt(plan),
             "account_id": "acct-test",
@@ -382,8 +485,7 @@ fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) 
     )
     .unwrap();
 
-    let subscription =
-        Arc::new(Subscription::open_at(path, "http://127.0.0.1:1", stub.backend.clone()));
+    let subscription = Arc::new(Subscription::open_at(path, issuer, stub.backend.clone()));
     assert!(subscription.is_signed_in(), "the written sign-in has to be readable");
 
     let config = AppConfig {
@@ -408,7 +510,7 @@ fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) 
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
         store,
-        LlmClient::new().unwrap().with_subscription(subscription),
+        LlmClient::new().unwrap().with_subscription(subscription.clone()),
         config,
         Workspace::new(dir.path().join("workspace")),
         FileStore::new(dir.path().join("files")),
@@ -416,7 +518,7 @@ fn signed_in_where(stub: &Stub, names: &[&str], plan: &str, by_the_group: bool) 
     );
     runtime.start_all().unwrap();
 
-    Signed { runtime, sink, ids, _dir: dir }
+    Signed { runtime, sink, ids, subscription, _dir: dir }
 }
 
 /// An unsigned id token carrying the claims the store reads.
@@ -481,7 +583,7 @@ async fn a_group_can_spend_the_subscription_while_the_app_pays_with_a_key() {
     // that resolved the app's provider instead of the group's cannot reach
     // anything, and this test would fail rather than pass by accident.
     let stub = serve(|_| Say::Text("On the plan.".into())).await;
-    let app = signed_in_where(&stub, &["Manager"], "pro", true);
+    let app = signed_in_where(&stub, &["Manager"], "pro", true, NO_SIGNIN_SERVICE);
 
     let run = app.ask("Manager", "Say hello.");
     app.settle(run).await;
@@ -503,7 +605,7 @@ async fn the_call_is_authorized_by_the_sign_in_and_billed_to_its_account() {
 
     assert_eq!(
         stub.header("authorization").as_deref(),
-        Some("Bearer access-token-for-tests"),
+        Some("Bearer first-token-for-tests"),
         "the stored token has to reach the request"
     );
     // Dropping this header is a 403 from the backend, which reads as a rejected
@@ -657,13 +759,57 @@ async fn testing_the_connection_reaches_the_subscription() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_turn_that_is_refused_says_to_sign_in_again() {
-    // A 401 here is a sign-in to repeat, not a key to check. An operator sent to
-    // the API key field they have never used does not get back on their feet.
-    let app = signed_in(&refusing(401).await, &["Manager"], "pro");
+async fn a_token_the_backend_has_stopped_accepting_is_replaced_mid_turn() {
+    // The failure this exists for. OpenAI mints a ChatGPT access token with ten
+    // days on its `exp` claim and the backend stops accepting one after about
+    // three, with `token_expired`. Nothing on this machine can tell, so a build
+    // that trusted the claim refused every turn for a week while Settings went
+    // on reporting a healthy sign-in.
+    let signin = signin_service(false).await;
+    let stub = serve_refusing(1, |_| Say::Text("Working on it.".into())).await;
+    let app = signed_in_at(&stub, &["Manager"], "pro", &signin);
 
     let run = app.ask("Manager", "Go.");
     app.settle(run).await;
+
+    // The operator sees a reply, not a sign-in they have to repeat.
+    let said = app.texts("Manager").join("\n");
+    assert!(said.contains("Working on it."), "the turn has to survive the refusal: {said}");
+    let all = app.everything("Manager");
+    assert!(
+        !all.to_lowercase().contains("sign in"),
+        "a token the app can replace itself is not the operator's problem: {all}"
+    );
+
+    assert_eq!(signin.refreshes.load(Ordering::SeqCst), 1, "one refusal, one refresh");
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "the refused call and the retry");
+
+    // The retry is the same request under a new credential, which is what makes
+    // it safe to send twice: nothing had streamed when the refusal landed.
+    let bodies = stub.bodies();
+    assert_eq!(bodies[0], bodies[1], "the retry must not be a different question");
+    let bearers = stub.headers("authorization");
+    assert_eq!(bearers[0], "Bearer first-token-for-tests");
+    assert_eq!(bearers[1], "Bearer refreshed-token-1", "the retry has to carry the new token");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_sign_in_that_cannot_be_refreshed_is_forgotten_and_says_so() {
+    // A 401 the refresh token cannot fix is the one case the operator has to
+    // act on. It is also a sign-in to repeat, not a key to check: an operator
+    // sent to the API key field they have never used does not get back on their
+    // feet.
+    let signin = signin_service(true).await;
+    let app = signed_in_at(&refusing(401).await, &["Manager"], "pro", &signin);
+
+    let run = app.ask("Manager", "Go.");
+    app.settle(run).await;
+
+    assert!(signin.refreshes.load(Ordering::SeqCst) >= 1, "the refresh token has to be tried");
+    // And the dead sign-in is gone, so Settings offers signing in rather than
+    // signing out. Claiming a credential every turn has already been told is
+    // dead is the disagreement that leaves an operator with nothing to press.
+    assert!(!app.subscription.is_signed_in(), "a refused sign-in must not be kept");
 
     let all = app.everything("Manager");
     assert!(all.to_lowercase().contains("sign in"), "the way out has to be in the message: {all}");
@@ -784,7 +930,7 @@ async fn a_real_subscription_answers_a_real_turn() {
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
         store,
-        LlmClient::new().unwrap().with_subscription(subscription),
+        LlmClient::new().unwrap().with_subscription(subscription.clone()),
         config,
         Workspace::new(dir.path().join("workspace")),
         FileStore::new(dir.path().join("files")),
@@ -805,6 +951,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         runtime,
         sink,
         ids: [("Manager".to_string(), manager)].into_iter().collect(),
+        subscription,
         _dir: dir,
     };
 
