@@ -254,6 +254,12 @@ pub enum UiEvent {
         /// Named, because an operator with several repositories needs to know
         /// which one stopped.
         repository: String,
+        /// And which program stopped, because the way out of the commonest
+        /// failure here is the other one. A spent plan is not a thing the
+        /// operator can fix from inside this app, and a banner that says a
+        /// coding job failed without saying what was running it leaves them
+        /// guessing which sign-in to go and look at.
+        harness: String,
         /// The harness's own words. Guaca has no better description of a
         /// failure it did not cause and cannot interpret.
         reason: String,

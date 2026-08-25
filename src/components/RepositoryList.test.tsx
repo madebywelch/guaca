@@ -1,7 +1,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AgentCard, Repository, RepositoryDraft } from "../lib/types";
+import type {
+  AgentCard,
+  Harness,
+  HarnessOnMachine,
+  Repository,
+  RepositoryDraft,
+} from "../lib/types";
 import { RepositoryList } from "./RepositoryList";
 
 const groupRepositories = vi.fn<(groupId: string) => Promise<Repository[]>>();
@@ -9,14 +15,17 @@ const createRepository = vi.fn<(draft: RepositoryDraft) => Promise<Repository>>(
 const updateRepository = vi.fn();
 const deleteRepository = vi.fn();
 const setAgentRepository = vi.fn();
+const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     groupRepositories: (groupId: string) => groupRepositories(groupId),
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
-    updateRepository: (id: string, name: string, note: string) => updateRepository(id, name, note),
+    updateRepository: (id: string, name: string, note: string, harness: Harness) =>
+      updateRepository(id, name, note, harness),
     deleteRepository: (id: string) => deleteRepository(id),
     setAgentRepository: vi.fn(),
+    codingHarnesses: () => codingHarnesses(),
   },
 }));
 
@@ -55,6 +64,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     name: "guaca",
     path: "/Users/you/dev/guaca",
     note: "",
+    harness: "pi",
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -67,7 +77,12 @@ describe("RepositoryList", () => {
     createRepository.mockReset();
     updateRepository.mockReset();
     deleteRepository.mockReset();
+    codingHarnesses.mockReset();
     groupRepositories.mockResolvedValue([]);
+    codingHarnesses.mockResolvedValue([
+      { harness: "pi", installed: true, install: "npm install -g pi" },
+      { harness: "claude", installed: true, install: "npm install -g @anthropic-ai/claude-code" },
+    ]);
   });
 
   it("offers no way to make every agent an engineer", async () => {
@@ -127,6 +142,7 @@ describe("RepositoryList", () => {
         name: "",
         path: "/Users/you/dev/guaca",
         note: "",
+        harness: "pi",
       }),
     );
   });
@@ -172,7 +188,124 @@ describe("RepositoryList", () => {
     fireEvent.click(screen.getByText("Save"));
 
     await waitFor(() =>
-      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "run ./scripts/ci.sh"),
+      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "run ./scripts/ci.sh", "pi"),
+    );
+  });
+
+  it("changes which program writes the code on the click, not on a later Save", async () => {
+    // The day this exists for: one plan is spent, and the operator's way out is
+    // the other program rather than a setting on the one that stopped paying.
+    //
+    // On the click, because a `.choice` means that everywhere else in this app.
+    // Staged, it sits under a Save button an operator has every reason to press
+    // before they reach it, and the change is lost with nothing saying so.
+    groupRepositories.mockResolvedValue([repository({ note: "never touch migrations" })]);
+    updateRepository.mockResolvedValue(repository({ harness: "claude" }));
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+    fireEvent.click(screen.getByRole("button", { name: "Coding harness: Claude Code" }));
+
+    await waitFor(() =>
+      expect(updateRepository).toHaveBeenCalledWith(
+        "r1",
+        "guaca",
+        "never touch migrations",
+        "claude",
+      ),
+    );
+  });
+
+  it("does not save a half-typed rename along with the harness", async () => {
+    // The click is a decision about the program, and nothing else. A name the
+    // operator is in the middle of typing is not something they asked to store,
+    // and Save is still the gesture that stores it.
+    groupRepositories.mockResolvedValue([repository()]);
+    updateRepository.mockResolvedValue(repository({ harness: "claude" }));
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+    fireEvent.change(screen.getByDisplayValue("guaca"), { target: { value: "guac" } });
+    fireEvent.click(screen.getByRole("button", { name: "Coding harness: Claude Code" }));
+
+    await waitFor(() => expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "claude"));
+  });
+
+  it("says which program a repository runs without opening it", async () => {
+    // Visible on the row, because the question "which of these is on the plan
+    // that still works" is asked about the list rather than about one row.
+    groupRepositories.mockResolvedValue([repository({ harness: "claude" })]);
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    expect(await screen.findByText(/written by Claude Code/)).toBeTruthy();
+  });
+
+  it("links a repository with the harness that was chosen", async () => {
+    groupRepositories.mockResolvedValue([]);
+    createRepository.mockResolvedValue(repository({ harness: "claude" }));
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Link a repository"));
+    fireEvent.change(screen.getByPlaceholderText("/Users/you/dev/your-project"), {
+      target: { value: "/Users/you/dev/guaca" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Coding harness: Claude Code" }));
+    fireEvent.click(screen.getByText("Link"));
+
+    await waitFor(() =>
+      expect(createRepository).toHaveBeenCalledWith({
+        groupId: GROUP,
+        name: "",
+        path: "/Users/you/dev/guaca",
+        note: "",
+        harness: "claude",
+      }),
+    );
+  });
+
+  it("offers a harness that is not installed, disabled, with the command that installs it", async () => {
+    // Not hidden. The state this control exists for is a plan that has just run
+    // out, and an absent option reads as a thing the app cannot do. Not enabled
+    // either: the only symptom of storing it would be a coding job that never
+    // starts, reported to an agent forty minutes later.
+    codingHarnesses.mockResolvedValue([
+      { harness: "pi", installed: true, install: "npm install -g pi" },
+      { harness: "claude", installed: false, install: "npm install -g @anthropic-ai/claude-code" },
+    ]);
+    groupRepositories.mockResolvedValue([repository()]);
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Coding harness: Claude Code" })
+          .hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    expect(screen.getByText("npm install -g @anthropic-ai/claude-code")).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Coding harness: pi" }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
+
+  it("disables neither when the machine could not be asked", async () => {
+    // A check that could not run must not refuse to save the thing the operator
+    // can see working in their own terminal. A job's own refusal already names
+    // the install command.
+    codingHarnesses.mockRejectedValue(new Error("no"));
+    groupRepositories.mockResolvedValue([repository()]);
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Coding harness: Claude Code" })
+          .hasAttribute("disabled"),
+      ).toBe(false),
     );
   });
 

@@ -96,6 +96,9 @@ pub enum Script {
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
     Shell(String),
+    /// Emit a `code` tool call: a brief handed to whichever coding harness the
+    /// agent's repository names.
+    Code(String),
     /// Emit a `browse` tool call that opens a url: the same reach, at the other
     /// place.
     Open(String),
@@ -264,6 +267,16 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_shell","type":"function",
                  "function":{"name":"run_command","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Code(task) => {
+            let args = serde_json::json!({ "task": task }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_code","type":"function",
+                 "function":{"name":"code","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

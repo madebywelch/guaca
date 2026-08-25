@@ -1134,6 +1134,24 @@ CREATE TABLE working_notes (
 CREATE INDEX working_notes_agent ON working_notes (agent_id, id DESC);
 "#,
     ),
+    (
+        40,
+        r#"
+-- Which coding harness a job in this directory starts.
+--
+-- Two programs, because a subscription is spent by the program it was issued to
+-- and by no other. `pi` holding an Anthropic OAuth credential and dialling the
+-- Messages API with it is refused with `You're out of extra usage` while
+-- `claude` on the same machine and the same account runs the work off the plan.
+-- An operator whose ChatGPT plan is spent and whose Claude plan is not cannot be
+-- helped by configuring one harness; they need the other program.
+--
+-- `'pi'` is what every row written before today was already running, so the
+-- default is a statement of fact rather than a preference. Unrecognized values
+-- read back as `pi` rather than failing the row: see `Harness::parse`.
+ALTER TABLE repositories ADD COLUMN harness TEXT NOT NULL DEFAULT 'pi';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2118,6 +2136,36 @@ mod tests {
             vec![("early".into(), 0), ("middle".into(), 1), ("late".into(), 2)],
             "an upgrade must draw the rail it drew before, and give every row its own place"
         );
+    }
+
+    #[test]
+    fn a_repository_linked_before_there_were_two_harnesses_keeps_running_pi() {
+        // The upgrade path, which no test starting from a blank database can
+        // reach. Every repository ever linked was started with `pi`, and a
+        // backfill that said anything else would silently move somebody's
+        // directory onto a program they have never signed in to, on launch,
+        // with no gesture.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 40) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at)
+             VALUES ('r1',?1,'guaca','/dev/guaca','',1,1)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let harness: String = conn
+            .query_row("SELECT harness FROM repositories WHERE id='r1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(harness, "pi", "an upgrade must not change what a directory starts");
     }
 
     #[test]

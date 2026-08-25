@@ -428,6 +428,7 @@ pub fn run() {
             commands::create_repository,
             commands::update_repository,
             commands::delete_repository,
+            commands::coding_harnesses,
             commands::set_agent_repository,
             commands::plugin_catalog,
             commands::group_plugins,

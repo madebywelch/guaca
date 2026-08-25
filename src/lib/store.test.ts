@@ -749,6 +749,7 @@ describe("a coding job that could not run", () => {
       type: "codingJobFailed",
       agentId: "a1",
       repository: "vision-ios",
+      harness: "pi",
       reason: "Provided authentication token is expired.",
     });
 
@@ -756,6 +757,21 @@ describe("a coding job that could not run", () => {
     expect(banner?.tone).toBe("error");
     expect(banner?.text).toContain("vision-ios");
     expect(banner?.text).toContain("expired");
+  });
+
+  it("names which program stopped, because the way out is the other one", () => {
+    // A spent plan is not something the operator can fix from inside this app.
+    // What they can do is move the repository to the harness whose sign-in still
+    // pays, and a banner that does not say what was running leaves them
+    // guessing which one that is.
+    useStore.getState().applyEvent({
+      type: "codingJobFailed",
+      agentId: "a1",
+      repository: "vision-ios",
+      harness: "Claude Code",
+      reason: "You're out of extra usage.",
+    });
+    expect(useStore.getState().banner?.text).toContain("Claude Code");
   });
 
   it("holds what a running job is doing, and drops it when the job ends", () => {
@@ -815,7 +831,8 @@ describe("a coding job that could not run", () => {
       type: "codingJobFailed",
       agentId: "a1",
       repository: "vision-ios-api",
-      reason: "the `pi` coding harness is not installed",
+      harness: "pi",
+      reason: "the pi coding harness is not installed",
     });
     expect(useStore.getState().banner?.text).toContain("vision-ios-api");
   });
