@@ -12,6 +12,15 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
+
+/**
+ * How much of a running coding job's work is kept on screen.
+ *
+ * Enough to see what it has been doing, not enough to be a transcript. The
+ * transcript is the message the job delivers when it ends.
+ */
+const CODING_TAIL = 40;
+
 import { keepThought } from "./reasoning";
 import type { LiveCall } from "./trail";
 import type {
@@ -21,6 +30,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  CodingLine,
   Decision,
   Envelope,
   Group,
@@ -28,6 +38,9 @@ import type {
   GroupUsage,
   MessageId,
   Participant,
+  RepoStatus,
+  Repository,
+  RepositoryId,
   RoutineId,
   RunId,
   Settings,
@@ -71,6 +84,38 @@ export interface Placement {
 interface State {
   agents: AgentCard[];
   groups: Group[];
+  /**
+   * Every repository in the workspace, filtered per crew where it is drawn.
+   *
+   * Beside the roster rather than fetched by whoever draws it, for the reason
+   * groups are: an agent given a repository changes what two panels say, and
+   * one refresh keeps them consistent.
+   */
+  repositories: Repository[];
+  /**
+   * Repositories with a coding job running, and the agent that started each.
+   *
+   * In memory and event-driven, like the job itself. It does not survive a
+   * restart, which is correct: neither does the job.
+   */
+  building: Record<RepositoryId, AgentId>;
+  /**
+   * What each running job is doing, newest last, by the agent that started it.
+   *
+   * Bounded and ephemeral: dropped when the job ends, because the record of
+   * what a job did is the message it delivers. Keyed by agent because that is
+   * whose channel draws it.
+   */
+  coding: Record<AgentId, CodingLine[]>;
+  /**
+   * What each linked repository is doing, by id.
+   *
+   * Separate from the repositories themselves because it has a different
+   * lifetime: the row changes when the operator links or renames one, and this
+   * changes when they commit, in a terminal Guaca never sees. Absent for a
+   * repository whose directory could not be read.
+   */
+  repoStatus: Record<RepositoryId, RepoStatus>;
   activity: Record<AgentId, Activity>;
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
@@ -210,6 +255,14 @@ interface State {
 
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
+  /**
+   * Asks git, and `gh`, what the linked repositories are doing.
+   *
+   * Polled rather than pushed. Nothing that changes a branch or opens a pull
+   * request goes through Guaca, so there is no event to listen for and the
+   * only honest options are asking again or being wrong.
+   */
+  refreshRepoStatuses: () => Promise<void>;
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
@@ -352,6 +405,10 @@ function keptChannel(state: State, group: GroupId | null): boolean {
 export const useStore = create<State>((set, get) => ({
   agents: [],
   groups: [],
+  repositories: [],
+  building: {},
+  coding: {},
+  repoStatus: {},
   activity: {},
   lastActive: {},
   settings: null,
@@ -375,23 +432,34 @@ export const useStore = create<State>((set, get) => ({
   banner: null,
 
   async bootstrap() {
-    const [agents, groups, activity, lastActive, settings, usage, approvals, pending] =
-      await Promise.all([
-        api.listAgents(),
-        api.listGroups(),
-        api.agentActivity(),
-        api.agentLastActive(),
-        api.getSettings(),
-        api.usageSummary(),
-        api.approvalStates(),
-        // A turn parked before the window was opened is still parked. The desk
-        // has to be right on the first paint, or the operator's first read of
-        // it says nobody is waiting.
-        api.pendingApprovals(),
-      ]);
+    const [
+      agents,
+      groups,
+      repositories,
+      activity,
+      lastActive,
+      settings,
+      usage,
+      approvals,
+      pending,
+    ] = await Promise.all([
+      api.listAgents(),
+      api.listGroups(),
+      api.listRepositories(),
+      api.agentActivity(),
+      api.agentLastActive(),
+      api.getSettings(),
+      api.usageSummary(),
+      api.approvalStates(),
+      // A turn parked before the window was opened is still parked. The desk
+      // has to be right on the first paint, or the operator's first read of
+      // it says nobody is waiting.
+      api.pendingApprovals(),
+    ]);
     set({
       agents,
       groups,
+      repositories,
       activity,
       lastActive,
       settings,
@@ -407,15 +475,30 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async refreshRepoStatuses() {
+    try {
+      set({ repoStatus: await api.repositoryStatuses() });
+    } catch {
+      // Left as it was rather than cleared. A failed poll is usually a
+      // directory that is momentarily busy, and blanking every branch name for
+      // one bad read makes the rail flicker on a timer.
+    }
+  },
+
   async refreshAgents() {
     // Groups come back with the roster because an agent moving between them
     // changes both counts, and one refresh keeps the two consistent on screen.
-    const [agents, groups] = await Promise.all([api.listAgents(), api.listGroups()]);
+    const [agents, groups, repositories] = await Promise.all([
+      api.listAgents(),
+      api.listGroups(),
+      api.listRepositories(),
+    ]);
     // A group the rail was looking inside can be deleted from the group editor,
     // and a focus on one that is gone draws an empty rail with no way out of it.
     set((state) => ({
       agents,
       groups,
+      repositories,
       railGroup: groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
     }));
 
@@ -513,6 +596,22 @@ export const useStore = create<State>((set, get) => ({
 
     if (target.kind === "group") {
       await get().moveAgent(id, { groupId: target.id, before: null });
+      return;
+    }
+
+    // A move, like dropping on a crew, but inside the crew: an agent works in
+    // at most one repository, so this replaces whatever it was in rather than
+    // adding to it. Dropping it back where it already is changes nothing, which
+    // is what makes an accidental drag free.
+    if (target.kind === "repository") {
+      const repository = state.repositories.find((r) => r.id === target.id);
+      if (!repository || repository.id === dragged.repositoryId) return;
+      // The store refuses this anyway. Refused here too so a drag across a
+      // crew boundary is a gesture that does nothing rather than one that
+      // raises an error the rail has nowhere to put.
+      if (repository.groupId !== dragged.groupId) return;
+      await api.setAgentRepository(id, target.id);
+      await get().refreshAgents();
       return;
     }
 
@@ -923,6 +1022,50 @@ export const useStore = create<State>((set, get) => ({
           approvals: { ...state.approvals, [event.approvalId]: event.state },
         }));
         void get().refreshApprovals();
+        break;
+      }
+
+      // Onto the banner rather than into a channel. An expired credential on
+      // the operator's own machine is theirs to fix, and it stopped every
+      // coding job in the workspace while every agent reported that nothing
+      // needed doing.
+      case "codingJobStarted": {
+        set((state) => ({
+          building: { ...state.building, [event.repositoryId]: event.agentId },
+        }));
+        break;
+      }
+
+      case "codingProgress": {
+        set((state) => {
+          // Bounded. A long job runs hundreds of tools, and an unbounded tail
+          // is a growing array re-rendered on every line of it.
+          const held = [
+            ...(state.coding[event.agentId] ?? []),
+            {
+              tool: event.tool,
+              detail: event.detail,
+            },
+          ].slice(-CODING_TAIL);
+          return { coding: { ...state.coding, [event.agentId]: held } };
+        });
+        break;
+      }
+
+      case "codingJobFinished": {
+        set((state) => {
+          const { [event.repositoryId]: _gone, ...rest } = state.building;
+          const { [event.agentId]: _done, ...others } = state.coding;
+          return { building: rest, coding: others };
+        });
+        break;
+      }
+
+      case "codingJobFailed": {
+        get().setBanner({
+          tone: "error",
+          text: `A coding job in ${event.repository} could not run: ${event.reason}`,
+        });
         break;
       }
 

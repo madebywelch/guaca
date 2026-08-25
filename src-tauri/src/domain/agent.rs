@@ -9,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::ids::{AgentId, GroupId};
+use super::ids::{AgentId, GroupId, RepositoryId};
 
 /// Where an agent is in its lifecycle.
 ///
@@ -109,6 +109,17 @@ pub struct AgentCard {
     /// two places: a crew where one agent reads the web and nobody else leaves
     /// the workspace is the ordinary shape, not a special case.
     pub has_browser: bool,
+    /// The repository this agent works in, if the operator gave it one.
+    ///
+    /// At most one, always. Two agents on one codebase coordinate in the crew
+    /// they share; one agent on two codebases is a change whose shape nobody
+    /// can see. It is also what makes the rail a tree rather than a
+    /// many-to-many drawn twice.
+    ///
+    /// Always in this agent's own group. A repository belongs to a crew, so one
+    /// from another crew is as unreachable as that crew's credentials, and the
+    /// store refuses it rather than storing a row every read would filter out.
+    pub repository_id: Option<RepositoryId>,
     pub lifecycle: Lifecycle,
     /// Kept at the top of the rail. Where a row is drawn and nothing else: a
     /// pinned agent is addressed, paid for and messaged exactly as before, so
@@ -464,6 +475,7 @@ mod tests {
             browser_id: None,
             has_computer: false,
             has_browser: false,
+            repository_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,
             rail_order: 0,

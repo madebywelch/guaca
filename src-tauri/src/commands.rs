@@ -22,12 +22,13 @@ use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
+use crate::domain::repository::{Repository, RepositoryDraft};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -89,7 +90,8 @@ impl From<crate::db::StoreError> for CommandError {
             StoreError::AgentNotFound(_)
             | StoreError::GroupNotFound(_)
             | StoreError::ApprovalNotFound(_)
-            | StoreError::ConnectorNotFound(_) => CommandError::new("notFound", err.to_string()),
+            | StoreError::ConnectorNotFound(_)
+            | StoreError::RepositoryNotFound(_) => CommandError::new("notFound", err.to_string()),
             // Its own kind: a request answered twice, or answered after it
             // lapsed, is a stale button rather than anything being wrong. The
             // UI redraws it instead of showing a failure.
@@ -98,7 +100,11 @@ impl From<crate::db::StoreError> for CommandError {
             }
             // An operator naming a variable twice is a mistake they can fix,
             // not a disk failure, and the message already says which name.
-            StoreError::DuplicateEnvVar(_) => CommandError::new("validation", err.to_string()),
+            StoreError::DuplicateEnvVar(_)
+            | StoreError::DuplicateRepository(_)
+            | StoreError::AgentNotInGroupForRepository(_) => {
+                CommandError::new("validation", err.to_string())
+            }
             // Its own kind: the UI can offer to move the agents, which it
             // cannot do for a generic storage failure.
             StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteDefaultGroup => {
@@ -117,6 +123,11 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::UnknownAgent(_) => CommandError::new("notFound", err.to_string()),
             RuntimeError::AgentTerminated(_) => CommandError::new("terminated", err.to_string()),
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
+            // A precondition the operator can fix from the rail, so it says so
+            // rather than reading as something that broke.
+            RuntimeError::NoRepository(_) | RuntimeError::RepositoryBusy { .. } => {
+                CommandError::new("badRequest", err.to_string())
+            }
             // All three are this side answering a request with the wrong shape
             // of answer, which is a defect here rather than something the
             // operator did. Reported as an ordinary failure so it lands in the
@@ -155,6 +166,22 @@ impl From<crate::domain::group::GroupError> for CommandError {
 
 impl From<crate::domain::connector::ConnectorError> for CommandError {
     fn from(err: crate::domain::connector::ConnectorError) -> Self {
+        CommandError::new("validation", err.to_string())
+    }
+}
+
+impl From<crate::domain::repository::RepositoryError> for CommandError {
+    fn from(err: crate::domain::repository::RepositoryError) -> Self {
+        CommandError::new("validation", err.to_string())
+    }
+}
+
+impl From<crate::repo::RepoError> for CommandError {
+    fn from(err: crate::repo::RepoError) -> Self {
+        // Every one of these is something the operator can fix in the dialog
+        // they are already looking at: pick a different directory, run
+        // `git init`, install git. Reported as validation so it lands beside
+        // the field rather than in a banner about storage.
         CommandError::new("validation", err.to_string())
     }
 }
@@ -478,6 +505,132 @@ pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()
     state.runtime.store().delete_connector(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
+}
+
+// ---- repositories --------------------------------------------------------
+
+/// The directories one crew has linked, and who in it may work in each.
+///
+/// No filesystem is touched here. A repository that has been moved or deleted
+/// on disk since it was linked still comes back, because the panel is where the
+/// operator fixes that and a list that silently dropped a row would leave them
+/// nothing to fix.
+#[tauri::command]
+pub fn group_repositories(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Repository>> {
+    Ok(state.runtime.store().group_repositories(group_id)?)
+}
+
+/// What every linked repository is doing right now, by id.
+///
+/// One call for the rail rather than one per row, and every repository is asked
+/// concurrently: the git half is local and instant, the `gh` half is a network
+/// round trip, and asked in series a crew with four codebases would spend more
+/// than a second before the first branch name appeared.
+///
+/// A repository that cannot be read is absent from the map rather than present
+/// and empty. The directory may have been moved or unmounted since it was
+/// linked, and a row saying `main, clean` about a path that is no longer there
+/// is worse than a row saying nothing.
+#[tauri::command]
+pub async fn repository_statuses(
+    state: State<'_, AppState>,
+) -> Reply<std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>> {
+    let repositories = state.runtime.store().repositories()?;
+    let asked = repositories.into_iter().map(|repository| async move {
+        crate::repo::status(&repository.path).await.map(|status| (repository.id, status))
+    });
+    Ok(futures_util::future::join_all(asked).await.into_iter().flatten().collect())
+}
+
+/// Every repository in the workspace, with who may work in each.
+///
+/// One read for the whole rail. The crews column and the rail inside a crew are
+/// drawn from one roster, and a call per crew would make the round trips the
+/// number of crews.
+#[tauri::command]
+pub fn list_repositories(state: State<'_, AppState>) -> Reply<Vec<Repository>> {
+    Ok(state.runtime.store().repositories()?)
+}
+
+/// Links a directory to a crew, after checking that it is one.
+///
+/// The check is the point of the command being async: it runs git, and it is
+/// the only moment anything asks the disk whether this path is real. Everything
+/// after it works from the canonical path git agreed to, so two spellings of
+/// one directory cannot become two repositories.
+///
+/// Nobody is given it here. Adding and handing out are two decisions, and the
+/// second one is `set_repository_access`.
+#[tauri::command]
+pub async fn create_repository(
+    state: State<'_, AppState>,
+    draft: RepositoryDraft,
+) -> Reply<Repository> {
+    let mut clean = draft.clean()?;
+    clean.path = crate::repo::verify(&clean.path).await?;
+    // Taken from the canonical path rather than the typed one, for the case
+    // where they differ: a directory reached through a symlink would otherwise
+    // be named for the link and drawn beside a path that says something else.
+    if draft.name.trim().is_empty() {
+        clean.name = clean.path.rsplit('/').next().unwrap_or(&clean.path).to_string();
+    }
+
+    let repository = state.runtime.store().create_repository(&clean)?;
+    // The roster every agent is shown says what its peers can reach, and a
+    // repository is now part of that.
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(repository)
+}
+
+/// Renames one, or rewrites the line its agents read on every turn.
+///
+/// The path is not editable and is not a parameter. A different directory is a
+/// different repository: editing the path in place would move every named
+/// agent's boundary with nothing on screen saying so.
+#[tauri::command]
+pub fn update_repository(
+    state: State<'_, AppState>,
+    id: RepositoryId,
+    name: String,
+    note: String,
+) -> Reply<Repository> {
+    let clean = RepositoryDraft {
+        group_id: GroupId::new(),
+        name,
+        // Not stored and not read. `clean` needs a path to validate the rest,
+        // and the row's own is what stays.
+        path: "/".to_string(),
+        note,
+    }
+    .clean()?;
+    let repository = state.runtime.store().update_repository(id, &clean.name, &clean.note)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(repository)
+}
+
+/// Unlinks a repository. Nothing on the operator's disk is touched.
+#[tauri::command]
+pub fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> Reply<()> {
+    state.runtime.store().delete_repository(id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Puts one agent in a repository, or takes it out.
+///
+/// A move rather than a grant: an agent works in at most one, so `null` is how
+/// it comes back out and there is no second call that takes one away. The rail
+/// drops an agent onto a repository exactly as it drops one onto a crew, and
+/// the two gestures mean the same kind of thing for the same reason.
+#[tauri::command]
+pub fn set_agent_repository(
+    state: State<'_, AppState>,
+    id: AgentId,
+    repository_id: Option<RepositoryId>,
+) -> Reply<AgentCard> {
+    let card = state.runtime.store().set_agent_repository(id, repository_id)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(card)
 }
 
 // ---- plugins -------------------------------------------------------------
@@ -1189,6 +1342,10 @@ async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()
     // the same reason: a row naming an agent that no longer exists grants
     // nothing and draws as nobody in the panel that lists them.
     let _ = state.runtime.store().delete_agent_plugin_access(id);
+    // And its reach into whatever the crew was working in. Same argument, and
+    // one more that only applies here: a repository is the operator's own
+    // source, so a retired agent must not leave one drawn as handed out.
+    let _ = state.runtime.store().clear_agent_repository(id);
     Ok(())
 }
 
@@ -1604,6 +1761,25 @@ pub fn stop_run(state: State<'_, AppState>, run_id: RunId) -> Reply<bool> {
     Ok(state.runtime.stop_run(run_id))
 }
 
+/// Empties one agent's channel, and touches nothing else it knows.
+///
+/// An agent carries two kinds of state and this is one of them. The channel is
+/// what its turns read back as conversation, and it is where a crew's habits
+/// accumulate: a coordinator that spent a day inventing assignment numbers has
+/// a day of that in front of it on every turn, and it will keep going. Its
+/// memory is the other, a file it wrote deliberately and would have to write
+/// again, and it is a markdown file in the workspace folder that nothing here
+/// reaches.
+///
+/// So this is the operator's way to give an agent a fresh start without taking
+/// away what it learned, and the wording on the menu item says so, because an
+/// operator who cannot tell the two apart does not use it.
+///
+/// One channel, not a conversation. A message this agent sent a peer is filed
+/// in the *peer's* channel, so clearing here leaves what it told them where
+/// they can still read it, and takes away only what this agent would read
+/// back. That asymmetry is the point rather than a limitation: resetting one
+/// confused agent must not erase a colleague's record of what it asked for.
 #[tauri::command]
 pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)

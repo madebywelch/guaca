@@ -60,6 +60,9 @@ pub enum Script {
     /// peer. The tool name is the one a model actually emitted, so the alias
     /// path is exercised wherever a scenario asks for it.
     Attach { tool: String, files: Vec<String> },
+    /// A `write_document` call: a document made out of the turn's own words,
+    /// which is the one way to produce a file with no machine anywhere.
+    Write { tool: String, name: String, content: String },
     /// Say something and then call a tool, in one reply.
     ///
     /// The shape a model takes when it narrates its work: a sentence about what
@@ -180,6 +183,16 @@ pub fn render(script: &Script) -> String {
             let args = serde_json::json!({ "files": files }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_attach","type":"function",
+                 "function":{"name": tool,"arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Write { tool, name, content } => {
+            let args = serde_json::json!({ "name": name, "content": content }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_write","type":"function",
                  "function":{"name": tool,"arguments": args}}
             ]}}]})));
             body.push_str(&frame(

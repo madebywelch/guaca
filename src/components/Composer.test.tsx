@@ -64,6 +64,7 @@ function anAgent(name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     version: 1,
   };
 }

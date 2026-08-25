@@ -35,9 +35,28 @@ use std::path::{Path, PathBuf};
 
 use crate::domain::ids::AgentId;
 
-/// Notes longer than this are refused. Roughly a page: enough for a persona,
-/// standing preferences, and a handful of durable facts.
-pub const MAX_NOTES: usize = 4_000;
+/// Notes longer than this are cut. Four pages: enough for a persona, standing
+/// preferences, durable facts, and the state a coordinator carries.
+///
+/// It was 4,000, which is one page, and every agent doing real work was jammed
+/// against it. Measured across a workspace of twenty-one: the ten busiest were
+/// all above 3,800, four were within a hundred characters of the ceiling, and
+/// **more than half of every turn that wrote to memory had to write twice**,
+/// because the first attempt came back cut. That is a whole extra model call,
+/// paid on half of the memory writes in the workspace, and memory was the most
+/// used tool in it.
+///
+/// Naming the number in the tool description did not help, which is the
+/// evidence that mattered: the models were not guessing the cap, they had more
+/// state than the cap held. A coordinator keeping eight agents' work in here
+/// had compressed its prose to telegraphese to fit, which is lossy in a way
+/// nothing can recover from a turn later.
+///
+/// The cost is real and is prompt tokens on every turn of every agent, which is
+/// why this is not simply large. Four pages is the size the busiest files
+/// actually wanted. What it buys is that extra model call back, on half the
+/// writes, and prose a model can still read next week.
+pub const MAX_NOTES: usize = 16_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkspaceError {
@@ -288,7 +307,10 @@ mod tests {
         // recorded something it had not.
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        let huge = "a line of notes\n".repeat(1_000);
+        // Sized off the cap rather than a fixed repeat count, so this still
+        // tests truncation the next time the ceiling moves. It did not, and a
+        // raise turned it into a test that the input happened to fit.
+        let huge = "a line of notes\n".repeat(MAX_NOTES / 8);
 
         let stored = ws.write(id, "Manager", &huge).unwrap();
         assert!(stored.truncated);
@@ -300,7 +322,7 @@ mod tests {
     fn truncation_lands_on_a_line_boundary() {
         let (ws, _dir) = workspace();
         let id = AgentId::new();
-        ws.write(id, "Manager", &"a line of notes\n".repeat(1_000)).unwrap();
+        ws.write(id, "Manager", &"a line of notes\n".repeat(MAX_NOTES / 8)).unwrap();
         assert!(ws.read(id).ends_with("a line of notes"), "cut mid-sentence");
     }
 

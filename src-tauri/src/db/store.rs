@@ -20,12 +20,13 @@ use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
+use crate::domain::repository::{CleanRepository, Repository};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -34,6 +35,53 @@ use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
+
+/// One thing an agent asked for and has not heard back on.
+///
+/// Read on every turn and never stored, so it is always true and there is
+/// nothing to keep in step. See [`Store::outstanding_asks`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outstanding {
+    pub peer: String,
+    pub at: i64,
+    /// What was asked, as the agent itself wrote it.
+    pub asked: String,
+}
+
+/// How much of the original ask is quoted back.
+///
+/// A line, not the message. The agent wrote it and can read the whole thing in
+/// the channel; what this list is for is recognising which one it was.
+const ASK_GIST: usize = 120;
+
+impl Outstanding {
+    /// One line, as the prompt draws it.
+    ///
+    /// The wait is in words rather than a timestamp because that is what the
+    /// decision turns on: nobody chases a thing because it happened at 14:03,
+    /// they chase it because it has been two hours.
+    pub fn line(&self, now: i64) -> String {
+        let mut gist: String = self.asked.split_whitespace().collect::<Vec<_>>().join(" ");
+        if gist.chars().count() > ASK_GIST {
+            gist = gist.chars().take(ASK_GIST).collect::<String>().trim_end().to_string();
+            gist.push('…');
+        }
+
+        let waited = (now - self.at).max(0) / 1000;
+        let ago = match waited {
+            0..=90 => "just now".to_string(),
+            91..=5_400 => format!("{} minutes ago", waited / 60),
+            5_401..=172_800 => format!("{} hours ago", waited / 3_600),
+            _ => format!("{} days ago", waited / 86_400),
+        };
+
+        if gist.is_empty() {
+            format!("{}, {ago}", self.peer)
+        } else {
+            format!("{}, {ago}: {gist}", self.peer)
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -74,6 +122,16 @@ pub enum StoreError {
     ApprovalSettled { state: ApprovalState },
     #[error("{0} is already used by another credential in this group")]
     DuplicateEnvVar(String),
+    #[error("no repository with id {0}")]
+    RepositoryNotFound(RepositoryId),
+    #[error(
+        "this crew already has {0} linked; give it to whoever needs it instead of adding it again"
+    )]
+    DuplicateRepository(String),
+    #[error(
+        "agent {0} is not in this group, so it cannot be given one of the group's repositories"
+    )]
+    AgentNotInGroupForRepository(AgentId),
 }
 
 /// Guards the one-time-per-file setup inside `Store::open`.
@@ -108,6 +166,9 @@ fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
         browser_id: None,
         has_computer: false,
         has_browser: false,
+        // Given from the rail, never at creation. A fresh agent belongs to no
+        // codebase, which is the same rule every other capability follows.
+        repository_id: None,
         lifecycle: Lifecycle::Active,
         pinned: false,
         rail_order,
@@ -332,7 +393,7 @@ impl Store {
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents WHERE id=?1",
             params![id.to_string()],
             row_to_card,
@@ -349,7 +410,7 @@ impl Store {
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents ORDER BY rowid",
         )?;
         let rows = stmt.query_map([], row_to_card)?;
@@ -1153,6 +1214,268 @@ impl Store {
     pub fn delete_connector(&self, id: ConnectorId) -> Result<bool, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM connectors WHERE id=?1", params![id.to_string()])? > 0)
+    }
+
+    /// What this agent has asked a peer for and not heard back on.
+    ///
+    /// Derived from the messages rather than kept anywhere. This is the state a
+    /// coordinator was writing into its own memory, which is a file it rewrites
+    /// whole every turn: it drifted, it truncated, and one crew's board
+    /// reported an assignment as outstanding that had never been sent at all.
+    /// The record already knows, and the record cannot drift.
+    ///
+    /// Only `work`. A courtesy is by definition not something anybody owes an
+    /// answer to, and counting one would put "thanks, received" on a list of
+    /// things somebody is waiting for.
+    ///
+    /// Anything at all from the peer since closes it, rather than a reply that
+    /// names the request. Agents do not thread, so holding this open until
+    /// something referenced the original would leave every finished piece of
+    /// work on the list forever, which is what makes a list like this worth
+    /// ignoring.
+    pub fn outstanding_asks(&self, agent: AgentId) -> Result<Vec<Outstanding>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "WITH asked AS (
+                 SELECT to_agent AS peer, max(created_at) AS at
+                   FROM messages
+                  WHERE from_agent = :me AND to_agent IS NOT NULL AND intent = 'work'
+                  GROUP BY to_agent
+             ),
+             heard AS (
+                 SELECT from_agent AS peer, max(created_at) AS at
+                   FROM messages
+                  WHERE to_agent = :me AND from_agent IS NOT NULL
+                  GROUP BY from_agent
+             )
+             SELECT agents.name, asked.at, (
+                 SELECT parts FROM messages
+                  WHERE from_agent = :me AND to_agent = asked.peer
+                    AND intent = 'work' AND created_at = asked.at
+                  LIMIT 1
+             )
+               FROM asked
+               JOIN agents ON agents.id = asked.peer
+               LEFT JOIN heard ON heard.peer = asked.peer
+              WHERE agents.lifecycle <> 'terminated'
+                AND (heard.at IS NULL OR heard.at < asked.at)
+              ORDER BY asked.at DESC",
+        )?;
+
+        let rows = stmt.query_map(named_params! { ":me": agent.to_string() }, |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?))
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            let (peer, at, parts) = row?;
+            let asked = parts
+                .and_then(|raw| serde_json::from_str::<Vec<Part>>(&raw).ok())
+                .map(|parts| {
+                    parts
+                        .iter()
+                        .filter_map(|part| part.as_plain_text())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default();
+            out.push(Outstanding { peer, at, asked });
+        }
+        Ok(out)
+    }
+
+    // ---- repositories ----------------------------------------------------
+
+    pub fn create_repository(&self, clean: &CleanRepository) -> Result<Repository, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let id = RepositoryId::new();
+
+        conn.execute(
+            "INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?6)",
+            params![
+                id.to_string(),
+                clean.group_id.to_string(),
+                clean.name,
+                clean.path,
+                clean.note,
+                now,
+            ],
+        )
+        .map_err(|e| classify_repository(e, &clean.path))?;
+
+        self.get_repository(id)?.ok_or(StoreError::RepositoryNotFound(id))
+    }
+
+    /// Every repository in the workspace.
+    ///
+    /// Workspace-wide rather than per group because the rail is: it draws crews
+    /// and their contents from one roster, and a second read per crew would
+    /// make the number of round trips the number of crews.
+    ///
+    /// Who is in each is not on the row and is not a second query. An agent
+    /// carries the repository it works in, so the roster already answers it,
+    /// and a list here would be the same fact in two places with nothing
+    /// keeping them in step.
+    pub fn repositories(&self) -> Result<Vec<Repository>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} ORDER BY name, rowid"))?;
+        let rows = stmt.query_map([], row_to_repository)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Every repository one crew has linked.
+    pub fn group_repositories(&self, group: GroupId) -> Result<Vec<Repository>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt =
+            conn.prepare(&format!("{REPOSITORY_COLUMNS} WHERE group_id=?1 ORDER BY name, rowid"))?;
+        let rows = stmt.query_map(params![group.to_string()], row_to_repository)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    pub fn get_repository(&self, id: RepositoryId) -> Result<Option<Repository>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{REPOSITORY_COLUMNS} WHERE id=?1"))?;
+        match stmt.query_row(params![id.to_string()], row_to_repository).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// The repository one agent works in, if it has been given one.
+    ///
+    /// Read on the hot path: it decides what the turn is offered and what the
+    /// prompt says, and those two have to be one answer.
+    ///
+    /// The group is compared as well as the id, and that is not belt and
+    /// braces. An agent moved to another crew keeps the column until something
+    /// clears it, and a repository is the crew's rather than the agent's: a
+    /// link that survived the move would be one crew's source open to another
+    /// crew's agent, which is the one thing group scoping exists to stop.
+    pub fn agent_repository(&self, agent: AgentId) -> Result<Option<Repository>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "{REPOSITORY_COLUMNS}
+              WHERE id = (SELECT repository_id FROM agents WHERE id=?1)
+                AND group_id = (SELECT group_id FROM agents WHERE id=?1)"
+        ))?;
+        match stmt.query_row(params![agent.to_string()], row_to_repository).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Renames one, or rewrites the line its agents read.
+    ///
+    /// The path is not editable and that is deliberate. A different directory is
+    /// a different repository: editing it in place would move every agent's
+    /// boundary and its undo without anything on screen saying a decision had
+    /// been taken.
+    pub fn update_repository(
+        &self,
+        id: RepositoryId,
+        name: &str,
+        note: &str,
+    ) -> Result<Repository, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE repositories SET name=?2, note=?3, updated_at=?4 WHERE id=?1",
+            params![id.to_string(), name, note, now_ms()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::RepositoryNotFound(id));
+        }
+        self.get_repository(id)?.ok_or(StoreError::RepositoryNotFound(id))
+    }
+
+    /// Unlinks one.
+    ///
+    /// Guaca's record of a directory. The operator's files are their own.
+    pub fn delete_repository(&self, id: RepositoryId) -> Result<bool, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        // Whoever was working in it goes back to being an agent with no
+        // codebase, rather than the delete failing on a foreign key. The agents
+        // are not the thing being removed.
+        tx.execute(
+            "UPDATE agents SET repository_id=NULL WHERE repository_id=?1",
+            params![id.to_string()],
+        )?;
+        let gone = tx.execute("DELETE FROM repositories WHERE id=?1", params![id.to_string()])?;
+        tx.commit()?;
+        Ok(gone > 0)
+    }
+
+    /// Puts one agent in a repository, or takes it out.
+    ///
+    /// A move, not a grant, because an agent works in at most one. `None` takes
+    /// it out and leaves it in its crew, which is where an agent with no
+    /// codebase belongs.
+    ///
+    /// A repository from another crew is refused rather than stored. A column
+    /// every read filters out is a name the rail draws as assigned and the
+    /// runtime treats as absent, which is the disagreement group scoping exists
+    /// to prevent.
+    pub fn set_agent_repository(
+        &self,
+        agent: AgentId,
+        repository: Option<RepositoryId>,
+    ) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let theirs: String = conn
+            .query_row(
+                "SELECT group_id FROM agents WHERE id=?1",
+                params![agent.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or(StoreError::AgentNotFound(agent))?;
+
+        if let Some(id) = repository {
+            let owner: String = conn
+                .query_row(
+                    "SELECT group_id FROM repositories WHERE id=?1",
+                    params![id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(StoreError::RepositoryNotFound(id))?;
+            if owner != theirs {
+                return Err(StoreError::AgentNotInGroupForRepository(agent));
+            }
+        }
+
+        conn.execute(
+            "UPDATE agents SET repository_id=?2, updated_at=?3 WHERE id=?1",
+            params![agent.to_string(), repository.map(|id| id.to_string()), now_ms()],
+        )?;
+
+        self.get_agent(agent)?.ok_or(StoreError::AgentNotFound(agent))
+    }
+
+    /// Takes a retired agent out of whatever it was working in.
+    ///
+    /// Called when an agent is retired, for the reason its plugin permissions
+    /// are: a decision pointing at nobody is one the operator cannot see the
+    /// shape of. It matters more here, because the rail draws a repository's
+    /// members from this column and a terminated agent would sit under a
+    /// codebase forever.
+    pub fn clear_agent_repository(&self, agent: AgentId) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute(
+            "UPDATE agents SET repository_id=NULL WHERE id=?1",
+            params![agent.to_string()],
+        )?;
+        Ok(())
     }
 
     // ---- plugins ---------------------------------------------------------
@@ -2253,6 +2576,16 @@ impl Store {
         // them would hand another crew credentials nobody gave it, and leaving
         // them would fail the foreign key on the row below.
         conn.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
+        // And the directories it was working in. Guaca's record of them only:
+        // nothing on the operator's disk is touched by disbanding a crew. Who
+        // was named on one goes first, or the foreign key refuses the line after
+        // it, which is the same ordering the plugin tables below need.
+        conn.execute(
+            "UPDATE agents SET repository_id=NULL WHERE repository_id IN
+                 (SELECT id FROM repositories WHERE group_id=?1)",
+            params![id.to_string()],
+        )?;
+        conn.execute("DELETE FROM repositories WHERE group_id=?1", params![id.to_string()])?;
         // And its plugins, for both of those reasons and one more: the row
         // holds a grant against the operator's own Neon or Cloudflare account,
         // and a disbanded crew is not a reason to keep one. Whoever was named
@@ -2720,7 +3053,7 @@ impl Store {
     pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser
+            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
                FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid",
         )?;
         let rows = stmt.query_map(params![group.to_string()], row_to_card)?;
@@ -2862,6 +3195,12 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             browser_id: row.get(17)?,
             has_computer: row.get::<_, i64>(18)? != 0,
             has_browser: row.get::<_, i64>(19)? != 0,
+            repository_id: row
+                .get::<_, Option<String>>(20)?
+                .filter(|raw| !raw.trim().is_empty())
+                .map(|raw| raw.parse::<RepositoryId>())
+                .transpose()
+                .map_err(|e| StoreError::Corrupt(format!("bad repository id: {e}")))?,
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
@@ -3085,6 +3424,41 @@ pub enum PluginReach {
     /// nothing on it: inline, every "not for you" would carry the width of a
     /// grant it does not have.
     Granted(Box<Reached>),
+}
+
+const REPOSITORY_COLUMNS: &str =
+    "SELECT id,group_id,name,path,note,created_at,updated_at FROM repositories";
+
+/// A unique-index failure here is one directory linked twice, and the operator
+/// wants to be told which rather than told the database said no.
+fn classify_repository(err: rusqlite::Error, path: &str) -> StoreError {
+    if let rusqlite::Error::SqliteFailure(inner, _) = &err {
+        if inner.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE {
+            return StoreError::DuplicateRepository(path.to_string());
+        }
+    }
+    StoreError::Sqlite(err)
+}
+
+fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
+    let id_raw: String = row.get(0)?;
+    let group_raw: String = row.get(1)?;
+
+    Ok((|| {
+        Ok(Repository {
+            id: id_raw
+                .parse::<RepositoryId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad repository id {id_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            name: row.get(2)?,
+            path: row.get(3)?,
+            note: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    })())
 }
 
 /// What one agent's call on one plugin tool is allowed to use.
@@ -3410,8 +3784,35 @@ mod tests {
         }
     }
 
+    /// A peer-to-peer message that gives the recipient something to do, which
+    /// is the only kind `outstanding_asks` counts.
+    fn work(from: AgentId, to: AgentId, text: &str) -> Envelope {
+        let mut envelope = envelope(
+            Participant::Agent { id: from },
+            Participant::Agent { id: to },
+            text,
+            RunId::new(),
+        );
+        envelope.intent = Intent::Work;
+        envelope
+    }
+
     fn group_named(name: &str) -> CleanGroup {
         CleanGroup { name: name.into(), ..Default::default() }
+    }
+
+    /// An agent in a named crew, which every repository test needs.
+    fn draft_in(name: &str, group: GroupId) -> CleanDraft {
+        CleanDraft { group_id: Some(group), ..draft(name) }
+    }
+
+    fn repo_at(group: GroupId, path: &str) -> CleanRepository {
+        CleanRepository {
+            group_id: group,
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            path: path.into(),
+            note: String::new(),
+        }
     }
 
     fn key_for(group: GroupId, env_var: &str, secret: &str) -> CleanConnector {
@@ -6689,5 +7090,286 @@ mod tests {
             f.store.group_plugins(group).unwrap()[0].access,
             PluginAccess::Chosen { agents: vec![] }
         );
+    }
+
+    // ---- what an agent is waiting on ------------------------------------
+
+    #[test]
+    fn a_work_message_with_no_answer_is_what_the_agent_is_waiting_on() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship the readiness package by Friday.")).unwrap();
+
+        let waiting = f.store.outstanding_asks(pm.id).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert_eq!(waiting[0].peer, "SRE");
+        assert!(waiting[0].asked.contains("readiness package"));
+
+        // And it is one-sided: the agent that was asked is not waiting on
+        // anybody, which is what stops every crew reporting itself blocked.
+        assert!(f.store.outstanding_asks(sre.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn anything_back_from_the_peer_closes_it() {
+        // Anything, not a reply that names the request. Agents do not thread,
+        // so holding it open until something referenced the original leaves
+        // every finished piece of work on the list forever.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship it.")).unwrap();
+        f.store.append(&work(sre.id, pm.id, "Shipped.")).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn asking_again_after_an_answer_is_outstanding_again() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "First.")).unwrap();
+        f.store.append(&work(sre.id, pm.id, "Done.")).unwrap();
+        f.store.append(&work(pm.id, sre.id, "Second.")).unwrap();
+
+        let waiting = f.store.outstanding_asks(pm.id).unwrap();
+        assert_eq!(waiting.len(), 1);
+        assert!(waiting[0].asked.contains("Second"), "the newest ask is the live one");
+    }
+
+    #[test]
+    fn a_courtesy_is_not_something_anybody_is_waiting_for() {
+        // By definition it gives the recipient nothing to do, so counting one
+        // puts "thanks, received" on a list of things somebody owes an answer
+        // to, and a list like that is one nobody reads.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        let mut thanks = work(pm.id, sre.id, "Thanks, received.");
+        thanks.intent = Intent::Courtesy;
+        f.store.append(&thanks).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_retired_peer_drops_off_the_list() {
+        // A name pointing at nobody is a thing to chase that cannot be chased.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let pm = f.store.create_agent(&draft_in("Product", group.id)).unwrap();
+        let sre = f.store.create_agent(&draft_in("SRE", group.id)).unwrap();
+
+        f.store.append(&work(pm.id, sre.id, "Ship it.")).unwrap();
+        f.store.set_lifecycle(sre.id, Lifecycle::Terminated).unwrap();
+
+        assert!(f.store.outstanding_asks(pm.id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_line_says_how_long_rather_than_when() {
+        // Nobody chases a thing because it happened at 14:03. They chase it
+        // because it has been two hours.
+        let now = now_ms();
+        let one = Outstanding {
+            peer: "SRE".into(),
+            at: now - 2 * 3_600 * 1000,
+            asked: "Ship the readiness package".into(),
+        };
+        let line = one.line(now);
+        assert!(line.contains("SRE"), "{line}");
+        assert!(line.contains("2 hours ago"), "{line}");
+        assert!(line.contains("readiness package"), "{line}");
+    }
+
+    #[test]
+    fn a_long_ask_is_cut_to_something_recognisable() {
+        let now = now_ms();
+        let one = Outstanding { peer: "SRE".into(), at: now, asked: "x".repeat(400) };
+        assert!(one.line(now).chars().count() < 200, "the list is on every turn");
+        assert!(one.line(now).ends_with('…'));
+    }
+
+    // ---- repositories ----------------------------------------------------
+
+    #[test]
+    fn a_linked_repository_holds_nobody_until_somebody_is_put_in_it() {
+        // Linking is not handing out, and nothing is inherited: an agent hired
+        // after the fact starts in no repository, like every other capability.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+
+        let later = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        assert!(later.repository_id.is_none());
+        assert!(f.store.agent_repository(later.id).unwrap().is_none());
+        assert_eq!(f.store.group_repositories(group.id).unwrap(), vec![repo]);
+    }
+
+    #[test]
+    fn an_agent_works_in_at_most_one_and_a_second_replaces_the_first() {
+        // The rule the column exists to make unrepresentable. Two agents on one
+        // codebase coordinate in the crew they share; one agent quietly holding
+        // two is a change whose shape nobody can see until it lands in both.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let api = f.store.create_repository(&repo_at(group.id, "/dev/api")).unwrap();
+        let web = f.store.create_repository(&repo_at(group.id, "/dev/web")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+
+        let card = f.store.set_agent_repository(ada.id, Some(api.id)).unwrap();
+        assert_eq!(card.repository_id, Some(api.id));
+
+        let moved = f.store.set_agent_repository(ada.id, Some(web.id)).unwrap();
+        assert_eq!(moved.repository_id, Some(web.id), "the second is a move, not a second one");
+        assert_eq!(f.store.agent_repository(ada.id).unwrap().unwrap().id, web.id);
+    }
+
+    #[test]
+    fn taking_an_agent_out_leaves_it_in_its_crew() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+        let out = f.store.set_agent_repository(ada.id, None).unwrap();
+
+        assert!(out.repository_id.is_none());
+        assert_eq!(out.group_id, group.id, "out of the codebase, not out of the crew");
+        assert!(f.store.agent_repository(ada.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn another_crews_repository_is_refused_rather_than_stored() {
+        // A column every read filters out is a name the rail draws as assigned
+        // and the runtime treats as absent, which is the disagreement group
+        // scoping exists to prevent.
+        let f = fixture();
+        let mine = f.store.create_group(&group_named("Platform")).unwrap();
+        let theirs = f.store.create_group(&group_named("Growth")).unwrap();
+        let repo = f.store.create_repository(&repo_at(theirs.id, "/dev/growth")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", mine.id)).unwrap();
+
+        match f.store.set_agent_repository(ada.id, Some(repo.id)) {
+            Err(StoreError::AgentNotInGroupForRepository(who)) => assert_eq!(who, ada.id),
+            other => panic!("another crew's source must be refused, got {other:?}"),
+        }
+        assert!(f.store.get_agent(ada.id).unwrap().unwrap().repository_id.is_none());
+    }
+
+    #[test]
+    fn moving_an_agent_out_of_the_crew_takes_the_repository_with_it() {
+        // The column survives the move until something clears it, so the read
+        // compares the group as well as the id. A link that outlived a move
+        // would be one crew's source open to another crew's agent.
+        let f = fixture();
+        let mine = f.store.create_group(&group_named("Platform")).unwrap();
+        let theirs = f.store.create_group(&group_named("Growth")).unwrap();
+        let repo = f.store.create_repository(&repo_at(mine.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", mine.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        f.store.move_agent(ada.id, theirs.id, None).unwrap();
+        assert!(
+            f.store.agent_repository(ada.id).unwrap().is_none(),
+            "a repository belongs to the crew, not to whoever walked out with it"
+        );
+    }
+
+    #[test]
+    fn retiring_an_agent_takes_it_out_of_the_repository() {
+        // The rail draws a repository's members from this column, so a
+        // terminated agent would sit under a codebase forever.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        f.store.clear_agent_repository(ada.id).unwrap();
+        assert!(f.store.agent_repository(ada.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn unlinking_a_repository_leaves_its_agents_where_they_are() {
+        // The agents are not the thing being removed, and the delete must not
+        // fail on a foreign key pointing at them.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        assert!(f.store.delete_repository(repo.id).unwrap());
+        assert!(f.store.group_repositories(group.id).unwrap().is_empty());
+
+        let still = f.store.get_agent(ada.id).unwrap().unwrap();
+        assert!(still.repository_id.is_none());
+        assert_eq!(still.group_id, group.id);
+    }
+
+    #[test]
+    fn one_directory_is_one_repository_however_it_is_spelled() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+
+        match f.store.create_repository(&repo_at(group.id, "/dev/guaca")) {
+            Err(StoreError::DuplicateRepository(path)) => assert_eq!(path, "/dev/guaca"),
+            other => panic!("a second link on one directory must be refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_repository_in_the_workspace_comes_back_in_one_read() {
+        // The rail draws every crew from one roster; a call per crew would make
+        // the round trips the number of crews.
+        let f = fixture();
+        let one = f.store.create_group(&group_named("Platform")).unwrap();
+        let two = f.store.create_group(&group_named("Growth")).unwrap();
+        f.store.create_repository(&repo_at(one.id, "/dev/api")).unwrap();
+        f.store.create_repository(&repo_at(two.id, "/dev/site")).unwrap();
+
+        assert_eq!(f.store.repositories().unwrap().len(), 2);
+        assert_eq!(f.store.group_repositories(one.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_renamed_repository_keeps_whoever_is_in_it() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
+
+        let renamed = f.store.update_repository(repo.id, "guac", "run ./scripts/ci.sh").unwrap();
+        assert_eq!(renamed.name, "guac");
+        assert_eq!(renamed.note, "run ./scripts/ci.sh");
+        assert_eq!(
+            f.store.agent_repository(ada.id).unwrap().unwrap().id,
+            repo.id,
+            "a rename is not a decision about the crew"
+        );
+    }
+
+    #[test]
+    fn disbanding_a_crew_unlinks_what_it_was_working_in() {
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let repo = f.store.create_repository(&repo_at(group.id, "/dev/guaca")).unwrap();
+
+        f.store.delete_group(group.id).unwrap();
+        assert!(f.store.get_repository(repo.id).unwrap().is_none());
     }
 }

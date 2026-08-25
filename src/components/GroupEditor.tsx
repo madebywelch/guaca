@@ -30,6 +30,7 @@ import {
 import { CredentialList } from "./CredentialList";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
+import { RepositoryList } from "./RepositoryList";
 
 interface Props {
   /** Absent means create. */
@@ -561,6 +562,7 @@ export function GroupEditor({ group, onClose }: Props) {
                 </p>
                 <PluginList groupId={group.id} crew={members} />
                 <CredentialList groupId={group.id} />
+                <RepositoryList groupId={group.id} crew={members} />
               </>
             )}
 

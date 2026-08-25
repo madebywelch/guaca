@@ -16,16 +16,26 @@
  * crew, in every view that draws that crew, and it never lends the place back.
  */
 
-import type { Activity, AgentCard, AgentId, GroupId } from "./types";
+import type { Activity, AgentCard, AgentId, GroupId, RepositoryId } from "./types";
 
 /**
  * What a dragged row was let go over.
  *
- * Two targets, because the rail says two things. A row is a place in an
+ * Three targets, because the rail says three things. A row is a place in an
  * arrangement, and it carries whether that place is pinned. A group is a crew,
  * and dropping on one asks for membership without saying where in it.
+ *
+ * A repository is the third and it is the one that is not a move. Dropping on a
+ * crew takes the agent out of the crew it was in, because an agent is in
+ * exactly one; dropping on a repository adds a directory to what it can work
+ * in, and it can work in several. Two gestures that look identical and mean
+ * different things, which is why the sections they land on are drawn as
+ * different furniture rather than as two lists of rows.
  */
-export type DropTarget = { kind: "row"; id: AgentId } | { kind: "group"; id: GroupId };
+export type DropTarget =
+  | { kind: "row"; id: AgentId }
+  | { kind: "group"; id: GroupId }
+  | { kind: "repository"; id: RepositoryId };
 
 /**
  * How loudly a state asks for the top of its section.

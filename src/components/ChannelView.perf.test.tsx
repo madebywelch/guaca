@@ -73,6 +73,7 @@ function agent(id: string, name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     version: 1,
   };
 }

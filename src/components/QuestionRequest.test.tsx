@@ -23,6 +23,7 @@ const ANALYST: AgentCard = {
   browserId: null,
   hasComputer: false,
   hasBrowser: false,
+  repositoryId: null,
   name: "Analyst",
   avatar: "avocado",
   color: "#c7d96b",

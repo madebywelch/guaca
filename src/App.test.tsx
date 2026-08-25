@@ -51,6 +51,7 @@ vi.mock("./lib/ipc", () => ({
     // into a mixture of a group and the app's settings, with a group's own
     // `inference` block missing entirely, and nothing typechecks a mock.
     listGroups: async () => [aGroup({ agentCount: 3 })],
+    listRepositories: async () => [],
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
     approvalStates: async () => ({}),
@@ -87,6 +88,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

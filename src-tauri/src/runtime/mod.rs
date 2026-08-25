@@ -334,7 +334,7 @@ use crate::domain::envelope::{
     channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
     Trust,
 };
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::routine::{Routine, RunKind};
@@ -363,14 +363,54 @@ const PLACE_CHUNK: usize = 192 * 1024;
 
 /// What a model is told it has lost when a file it named could not be resolved.
 ///
-/// Two sentences, one per caller, because the mistake each is about to make is
-/// different: a send leaves a colleague waiting for a document, an attach
-/// leaves an answer claiming one. Silence is the worst outcome available in
-/// both cases, since agent and reader would each believe the file arrived.
+/// What a model is told after a file it named did not get handed over.
+///
+/// Two axes, so four sentences, and collapsing either one produces a turn that
+/// goes round the loop it has just come out of.
+///
+/// **Which caller.** A send leaves a colleague waiting for a document; an
+/// attach leaves an answer claiming one. Silence is the worst outcome available
+/// in both cases, since agent and reader would each believe the file arrived.
+///
+/// **Whether the agent has a computer.** With one, a failure is a wrong path
+/// and checking it is the fix. Without one, no path was ever going to resolve:
+/// [`Runtime::pull_file`] reads a file off a sandbox and there is no sandbox.
+/// Told to check the path with `run_command`, an agent that is not offered
+/// `run_command` either has been handed a dead end, and a refusal that only
+/// says no gets reworded and retried. One did exactly that, twice, and then
+/// spent two more turns recording the lesson in a memory it overflowed.
 const UNSENT_FILE: &str = "The recipient did not get it, so do not tell them it is on the way.";
+const UNSENT_FILE_NO_COMPUTER: &str =
+    "The recipient did not get it, so do not tell them it is on the way, and there is nothing \
+     to retry. You can only send on a file that is already in this conversation, by the name it \
+     has here. Anything you wrote yourself belongs in the message as text.";
 const UNATTACHED_FILE: &str =
     "It is not on your answer, so do not tell them it is attached. Check the path with \
      `run_command` and attach it again, or say plainly that you could not hand it over.";
+const UNATTACHED_FILE_NO_COMPUTER: &str =
+    "It is not on your answer, so do not tell them it is attached, and there is nothing to \
+     retry. You can only attach a file that is already in this conversation, by the name it has \
+     here. If you were asked to produce a document, put it in your answer as text and say that \
+     is what you have done.";
+
+/// A machine failure as a model should read it.
+///
+/// [`E2bError::NotGiven`] is written for the operator and names the panel they
+/// would fix it from. That sentence is correct where it is used, and it is not
+/// something a model can act on: an agent cannot give itself a computer, and it
+/// has no panel. Every other variant is a machine that failed, which is the
+/// agent's own problem and is reported as itself.
+///
+/// Phrased so it reads in both places a file meets a machine: pulling one off
+/// it, and putting one onto it.
+fn told_to_a_model(err: crate::e2b::E2bError) -> String {
+    match err {
+        crate::e2b::E2bError::NotGiven => {
+            "you have not been given a computer, so there is no filesystem here at all".to_string()
+        }
+        other => other.to_string(),
+    }
+}
 
 /// How long an agent will wait for peers that are still answering the same
 /// thing, before reading what it already has.
@@ -408,6 +448,28 @@ const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    /// Asked to code with nowhere to do it.
+    ///
+    /// Reachable even though the tool is not offered without a repository: an
+    /// agent can be taken out of one between the moment its turn was built and
+    /// the moment it called this, and a model names tools it was never offered.
+    #[error(
+        "{0} has not been put in a repository, so there is nowhere to write code. The operator \
+         puts an agent in one by dragging it onto that repository in the rail"
+    )]
+    NoRepository(String),
+    /// A coding job is already running in that work tree.
+    ///
+    /// Not a race to retry through: the sentence has to make an agent wait for
+    /// the message it is already going to get, because the alternative it will
+    /// otherwise reach for is starting the job again.
+    #[error(
+        "a coding agent is already working in {repository}, started by {who}. Two of them in one \
+         repository overwrite each other's work. Do not start another: whoever asked for the \
+         first one gets a message when it finishes, and that is when the next piece of work can \
+         begin. Say that it is already in progress"
+    )]
+    RepositoryBusy { repository: String, who: String },
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("no agent with id {0}")]
@@ -483,6 +545,17 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
+    /// Which repositories have a coding job running, and who started it.
+    ///
+    /// Keyed by repository rather than by agent, because the thing that can
+    /// only happen once is a harness working in a directory. Two `pi` processes
+    /// in one work tree interleave their edits and run git against each other,
+    /// and nothing downstream would say which of them wrote what.
+    ///
+    /// In memory rather than on the row: a job does not survive a restart, and
+    /// a stored flag would come back true forever after a crash and lock a
+    /// repository nobody was working in.
+    coding: Mutex<HashMap<RepositoryId, AgentId>>,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
     /// Where each plugin's MCP server is, when it is not where it usually is.
@@ -554,6 +627,7 @@ impl Runtime {
                 workspace,
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
+                coding: Mutex::new(HashMap::new()),
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
@@ -941,14 +1015,31 @@ impl Runtime {
                 } else if file.is_text() {
                     match self.inner.files.read_text(&file.digest, Self::FILE_TEXT_LIMIT) {
                         Ok((text, cut)) => {
+                            // The failure is its own sentence rather than
+                            // being interpolated where the path goes. Written
+                            // the other way it read as "the whole file is on
+                            // your machine at you have not been given a
+                            // computer", which is a location an agent will try
+                            // to open.
                             let tail = if cut {
-                                format!(
-                                    "\n\n[cut at {} characters. The whole file is on your \
-                                     machine at {}]",
-                                    Self::FILE_TEXT_LIMIT,
-                                    self.place(card, file).await.unwrap_or_else(|err| err)
-                                )
+                                match self.place(card, file).await {
+                                    Ok(path) => format!(
+                                        "\n\n[cut at {} characters. The whole file is on your \
+                                         machine at {path}]",
+                                        Self::FILE_TEXT_LIMIT,
+                                    ),
+                                    Err(why) => format!(
+                                        "\n\n[cut at {} characters, and the rest could not be \
+                                         put on your machine: {why}. Work from what is above, \
+                                         and say it was truncated if that matters]",
+                                        Self::FILE_TEXT_LIMIT,
+                                    ),
+                                }
                             } else {
+                                // Not placed at all when it fit. A file that
+                                // arrived whole is one the agent has already
+                                // read, and a round trip to a sandbox to write
+                                // a copy nothing will open is one per file.
                                 String::new()
                             };
                             format!("The attached file {} contains:\n\n{text}{tail}", file.name)
@@ -998,6 +1089,7 @@ impl Runtime {
         &self,
         card: &AgentCard,
         wanted: &[String],
+        made: &[Attachment],
         consequence: &str,
     ) -> (Vec<Attachment>, Vec<String>) {
         let mut found = Vec::new();
@@ -1009,6 +1101,16 @@ impl Runtime {
         let known = self.attachments_in_channel(card.id);
         for name in wanted {
             let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name).trim();
+            // What this turn has just made comes first. `write_document` is the
+            // one way to produce a file with no machine, and a document written
+            // a moment ago is not in any channel yet: the message carrying it
+            // has not landed. Looked for only in the channel, an agent that
+            // wrote a brief and sent it to a colleague in the same turn was
+            // told its own document did not exist.
+            if let Some(file) = made.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
+                found.push(file.clone());
+                continue;
+            }
             if let Some(file) = known.iter().find(|f| f.name.eq_ignore_ascii_case(leaf)) {
                 found.push(file.clone());
                 continue;
@@ -1048,7 +1150,7 @@ impl Runtime {
         if path.contains('\'') {
             return Err("a path with a quote in it cannot be read".to_string());
         }
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(told_to_a_model)?;
 
         // Size first, so a file too big to carry is refused before it is read
         // into this process twice over.
@@ -1095,7 +1197,7 @@ impl Runtime {
             ));
         }
         let bytes = self.inner.files.read(&file.digest).map_err(|e| e.to_string())?;
-        let (client, sandbox) = self.ensure_computer(card).await.map_err(|e| e.to_string())?;
+        let (client, sandbox) = self.ensure_computer(card).await.map_err(told_to_a_model)?;
 
         let path = format!("{INBOX}/{}", file.name);
         // In pieces, because the whole payload travels inside one shell
@@ -1284,6 +1386,207 @@ impl Runtime {
                 Ok(run) => self.log_routine_run(&routine, Some(run), RunKind::Scheduled, now),
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
+        }
+    }
+
+    /// Starts a coding job and returns the repository it is working in.
+    ///
+    /// Returns as soon as the process is spawned. The result comes back later
+    /// as a message, on the same path a routine firing takes: a fresh run with
+    /// a fresh budget, delivered to the agent that asked for it.
+    ///
+    /// That shape is the whole point and it is worth the paragraph. A coding
+    /// task is a few hundred tool calls over many minutes. Awaited inside the
+    /// tool call, the agent would read as `Thinking` for the length of it, its
+    /// inbox would back up behind it, every routine that came due would be
+    /// skipped, and the transcript would show one open chip and nothing else.
+    /// Started and reported, the turn ends in seconds and the agent stays
+    /// reachable while the work happens.
+    fn start_job(&self, card: &AgentCard, task: &str) -> Result<String, RuntimeError> {
+        let repository = self
+            .inner
+            .store
+            .agent_repository(card.id)?
+            .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+
+        // One harness per work tree. Taken before anything is spawned and held
+        // for the life of the job: two `pi` processes in one directory
+        // interleave their edits and run git against each other, and nothing
+        // downstream could say which of them wrote what.
+        //
+        // Reachable in the ordinary course of things, not just from a confused
+        // model: a job takes minutes, the agent that started it goes idle
+        // because its turn ended, and a coordinator reading the lane as free
+        // sends the next brief straight into the same repository.
+        {
+            let mut coding = self.inner.coding.lock();
+            if let Some(busy) = coding.get(&repository.id) {
+                let who = self
+                    .inner
+                    .store
+                    .get_agent(*busy)
+                    .ok()
+                    .flatten()
+                    .map(|card| card.name)
+                    .unwrap_or_else(|| "another agent".to_string());
+                return Err(RuntimeError::RepositoryBusy {
+                    repository: repository.name.clone(),
+                    who,
+                });
+            }
+            coding.insert(repository.id, card.id);
+        }
+
+        let runtime = self.clone();
+        let agent = card.id;
+        let name = repository.name.clone();
+        let path = repository.path.clone();
+        let task = task.to_string();
+        let note = repository.note.clone();
+        let repository_id = repository.id;
+
+        self.emit(UiEvent::CodingJobStarted {
+            agent_id: card.id,
+            repository_id,
+            repository: name.clone(),
+        });
+
+        tokio::spawn(async move {
+            // The operator's note rides in front of the brief rather than being
+            // left for the model to discover. It is the one thing they wrote to
+            // be read at exactly this moment, and the harness cannot see the
+            // conversation the note was attached to.
+            let brief = if note.trim().is_empty() {
+                task.clone()
+            } else {
+                format!("{}\n\nStanding instruction for this repository: {}", task, note.trim())
+            };
+
+            let watcher = runtime.clone();
+            let outcome = crate::pi::run(&path, &brief, move |progress| {
+                let (tool, detail) = match progress {
+                    crate::pi::Progress::Using { tool, detail } => (tool, detail),
+                    crate::pi::Progress::Said(said) => (String::new(), said),
+                };
+                watcher.emit(UiEvent::CodingProgress {
+                    agent_id: agent,
+                    repository_id,
+                    tool,
+                    detail,
+                });
+            })
+            .await;
+            // Released before the result is delivered, so the turn that reads
+            // "it finished" can start the next job in the same repository. The
+            // other order is a lane that has to wait a turn to carry on.
+            runtime.inner.coding.lock().remove(&repository_id);
+            runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
+            runtime.job_finished(agent, &name, outcome);
+        });
+
+        Ok(repository.name)
+    }
+
+    /// Hands a finished job back to the agent that started it.
+    ///
+    /// A message rather than a return value, and a new run rather than the one
+    /// that started it. The run that called `code` settled minutes ago; filing
+    /// against it would report spend on a conversation already reported
+    /// finished, which is exactly what the trajectory suite calls broken.
+    ///
+    /// A failure is delivered too. An agent that is never told is an agent
+    /// waiting forever for a message that is not coming, and an operator asking
+    /// it later gets "I started that and have not heard back", which is true
+    /// and useless.
+    fn job_finished(
+        &self,
+        agent: AgentId,
+        repository: &str,
+        outcome: Result<crate::pi::Outcome, crate::pi::PiError>,
+    ) {
+        // What the operator is told, separately from what the agent is told.
+        // Set only where the harness itself failed: a job that ran and did the
+        // wrong thing is the agent's to report.
+        let mut operator_should_know = None;
+
+        let text = match outcome {
+            // Reported before the empty case below, and that ordering is the
+            // whole of it. `pi` ends a failed turn inside its own stream and
+            // exits zero, so an expired credential arrives looking exactly like
+            // a job with nothing to do. It cost an afternoon: every coding job
+            // in the workspace became a silent no-op and the agents dutifully
+            // reported that nothing needed doing.
+            Ok(done) if done.failed.is_some() => {
+                let why = done.failed.unwrap_or_default();
+                operator_should_know = Some(why.clone());
+                format!(
+                    "The coding agent in {repository} could not run: {why}. Nothing changed and \
+                     this is not something you can fix or retry: it is the coding harness \
+                     itself, on the operator's machine. Say plainly what you asked for and that \
+                     the harness could not run, and name the reason above."
+                )
+            }
+            Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
+                "The coding agent in {repository} finished without doing anything or saying \
+                 why. Nothing changed. Say so rather than reporting the work as done."
+            ),
+            Ok(done) => {
+                let mut text = format!(
+                    "The coding agent working in {repository} has finished. In its own words:\n\n\
+                     {}\n\nIt ran {} tool call{}",
+                    done.said.trim(),
+                    done.tool_calls,
+                    if done.tool_calls == 1 { "" } else { "s" },
+                );
+                if let Some(cost) = done.cost {
+                    text.push_str(&format!(" and cost ${cost:.2}"));
+                }
+                text.push_str(
+                    ". You have not seen the code and did not write it: report what it says it \
+                     did, say it was done by the coding agent, and do not claim to have checked \
+                     anything you have not.",
+                );
+                text
+            }
+            Err(err) => {
+                operator_should_know = Some(err.to_string());
+                format!(
+                    "The coding agent in {repository} could not finish: {err}. Nothing was \
+                     necessarily left in a working state, so say what you asked for and what \
+                     happened rather than reporting it as done."
+                )
+            }
+        };
+
+        if let Some(reason) = operator_should_know {
+            self.emit(UiEvent::CodingJobFailed {
+                agent_id: agent,
+                repository: repository.to_string(),
+                reason,
+            });
+        }
+
+        let run_id = RunId::new();
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id,
+            channel_id: agent,
+            from: Participant::System,
+            to: Participant::Agent { id: agent },
+            parts: vec![Part::Text { text }],
+            // Guaca speaking about what it did, not a model's words: the
+            // harness's own sentence is quoted inside, and the trust boundary
+            // is the same one a guard notice carries.
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+
+        if let Err(err) = self.deliver(envelope) {
+            tracing::error!(%err, agent = %agent.short(), "a finished coding job reached nobody");
         }
     }
 
@@ -1943,6 +2246,21 @@ impl Runtime {
         // told it had a machine whether or not a provider was configured and
         // whether or not the operator had given it one.
         let surfaces = self.surfaces_for(&card);
+        // Read once for the turn, from the same card `surfaces` was decided
+        // from, so the section describing the repository and the tool that
+        // reaches it can never disagree about whether there is one.
+        let repository = self.inner.store.agent_repository(card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's repository for its turn");
+            None
+        });
+        // Read from the messages every turn rather than kept anywhere. A
+        // coordinator was holding this by hand in its own memory, which drifted
+        // three assignments stale and reported work as outstanding that had
+        // never been sent.
+        let waiting_on = self.inner.store.outstanding_asks(card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read what this agent is waiting on");
+            Vec::new()
+        });
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
@@ -1957,6 +2275,8 @@ impl Runtime {
             &history,
             &batch,
             mode,
+            &waiting_on,
+            repository.as_ref(),
             surfaces,
         );
         // After assembly, because what a file becomes depends on things the
@@ -2662,10 +2982,20 @@ impl Runtime {
                         // the agent is working, which is exactly when it moves.
                         self.emit(UiEvent::MemoryChanged { agent_id: card.id });
                         let summary = if stored.truncated {
+                            // Names the ceiling, not just where the cut landed.
+                            // Told only how much was kept, a model cannot tell
+                            // a limit from an accident and guesses again: one
+                            // spent four calls of a single turn overshooting.
+                            // And it is told which end goes, because the end is
+                            // where a model puts what it has just changed, so
+                            // an unlucky rewrite drops the very state the turn
+                            // was spent working out.
                             format!(
-                                "Memory saved, but it was too long and the end was cut. {} \
-                                 characters kept. Write it again shorter, keeping only what will \
-                                 still matter next week.",
+                                "Memory saved, but it was over the {} character limit and the \
+                                 end was cut off, so whatever you wrote last is gone. {} \
+                                 characters kept. Write it again inside the limit, most \
+                                 important first, keeping only what will still matter next week.",
+                                crate::workspace::MAX_NOTES,
                                 stored.characters
                             )
                         } else if stored.characters == 0 {
@@ -2821,7 +3151,13 @@ impl Runtime {
             }
 
             ToolInvocation::SendMessage { to, text, intent, files } => {
-                let (carried, missing) = self.resolve_files(card, &files, UNSENT_FILE).await;
+                let consequence = if self.surfaces_for(card).computer {
+                    UNSENT_FILE
+                } else {
+                    UNSENT_FILE_NO_COMPUTER
+                };
+                let made = attached.clone();
+                let (carried, missing) = self.resolve_files(card, &files, &made, consequence).await;
                 let deliveries = self.send_to_peers(
                     card,
                     run_id,
@@ -2880,8 +3216,71 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::SEND_MESSAGE, arguments, outcome))
             }
 
+            ToolInvocation::Code { task } => {
+                let (rendered, outcome) = match self.start_job(card, &task) {
+                    Ok(repository) => {
+                        let summary = format!("started work in {repository}");
+                        (
+                            format!(
+                                "Started. A coding agent is working in {repository} now. It will \
+                                 send you a message when it is done, which may be several \
+                                 minutes. End your turn and say you have started it: there is \
+                                 nothing to wait for and nothing to check.",
+                            ),
+                            ToolOutcome::Ok { summary },
+                        )
+                    }
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::CODE, arguments, outcome))
+            }
+
+            ToolInvocation::WriteDocument { name, content } => {
+                let (rendered, outcome) = match self.inner.files.put(&name, content.as_bytes()) {
+                    Ok(file) => {
+                        // Deduplicated by digest against the turn, exactly as
+                        // `attach_file` is. Writing the same document twice
+                        // produces one file by construction, since the contents
+                        // are the address, and the operator must not get two
+                        // cards for it.
+                        let already = attached.iter().any(|held| held.digest == file.digest);
+                        let summary = format!("wrote {} ({})", file.name, file.size());
+                        let told = format!(
+                            "{} is written and attached to your answer. The reader gets the \
+                             document itself, so say what it is rather than repeating what is in \
+                             it. To hand it to a colleague as well, name it as `{}` in \
+                             `send_message` in this same turn.",
+                            file.name, file.name
+                        );
+                        if !already {
+                            attached.push(file);
+                        }
+                        (told, ToolOutcome::Ok { summary })
+                    }
+                    // A document that could not be written is the same danger a
+                    // file that could not be attached is: an answer about to
+                    // claim something it does not carry.
+                    Err(err) => (
+                        format!(
+                            "{name} was not written: {err}. It is not on your answer, so do not \
+                             tell them it is attached."
+                        ),
+                        ToolOutcome::Failed { error: err.to_string() },
+                    ),
+                };
+                (rendered, Part::tool_call(tools::WRITE_DOCUMENT, arguments, outcome))
+            }
+
             ToolInvocation::AttachFile { files } => {
-                let (found, missing) = self.resolve_files(card, &files, UNATTACHED_FILE).await;
+                let consequence = if self.surfaces_for(card).computer {
+                    UNATTACHED_FILE
+                } else {
+                    UNATTACHED_FILE_NO_COMPUTER
+                };
+                let made = attached.clone();
+                let (found, missing) = self.resolve_files(card, &files, &made, consequence).await;
 
                 // Deduplicated against the turn rather than the call: a model
                 // that attaches the brief, writes a paragraph, then attaches
@@ -3965,6 +4364,19 @@ impl Runtime {
         tools::Surfaces {
             computer: !config.e2b.api_key.trim().is_empty(),
             browser: !config.kernel.api_key.trim().is_empty(),
+            // Always. A computer and a browser need a provider the operator has
+            // to go and sign up for, and a workspace without one can hand out
+            // neither. A repository needs a directory they already have, so
+            // there is no workspace-level precondition to fail: the only
+            // question is whether this agent was put in one, which is on the
+            // card.
+            //
+            // Whether the harness is installed is deliberately not asked here.
+            // That is a broken installation rather than an absent setting, and
+            // it is reported as a failure naming the install command, which an
+            // agent can put in its reply and an operator can act on. Asked
+            // here it would be a process spawn on the way into every turn.
+            repository: true,
         }
     }
 
@@ -4939,6 +5351,7 @@ mod tests {
             sandbox_traffic_token: None,
             has_computer: true,
             has_browser: false,
+            repository_id: None,
             browser_id: None,
             lifecycle,
             pinned: false,
@@ -5276,5 +5689,47 @@ mod tests {
             !claimed.contains("sweep-me"),
             "a terminated agent's sandbox must not shield itself from the sweep"
         );
+    }
+
+    #[test]
+    fn a_file_refusal_never_sends_an_agent_after_a_tool_it_does_not_have() {
+        // The loop this closes. An agent with no computer was offered
+        // `attach_file`, told by its description that its documents were on a
+        // machine, invented `/home/user/…`, and got back a refusal telling it
+        // to check the path with `run_command`, which it is also not offered.
+        // It tried twice and then spent two turns writing the lesson into a
+        // memory it overflowed.
+        for advice in [UNSENT_FILE_NO_COMPUTER, UNATTACHED_FILE_NO_COMPUTER] {
+            assert!(
+                !advice.contains("run_command"),
+                "an agent with no computer is not offered it either: {advice}"
+            );
+            assert!(
+                advice.contains("nothing to retry"),
+                "a refusal that only says no gets reworded and retried: {advice}"
+            );
+            assert!(
+                advice.contains("already in this conversation"),
+                "and it has to say what it can still do: {advice}"
+            );
+        }
+
+        // The version for an agent that does have one is unchanged: there, a
+        // wrong path is the likely cause and checking it is the fix.
+        assert!(UNATTACHED_FILE.contains("run_command"));
+    }
+
+    #[test]
+    fn the_operators_sentence_about_a_computer_never_reaches_a_model() {
+        // `NotGiven` names the panel the operator would fix it from. An agent
+        // cannot give itself a computer and has no panel, so read by a model it
+        // is a refusal with no action behind it.
+        let told = told_to_a_model(crate::e2b::E2bError::NotGiven);
+        assert!(!told.contains("panel"), "nothing a model can act on: {told}");
+        assert!(told.contains("no filesystem"), "it has to say what is actually absent: {told}");
+
+        // Every other variant is a machine that failed, which is the agent's
+        // own problem and is reported as itself.
+        assert!(!told_to_a_model(crate::e2b::E2bError::NoKey).is_empty());
     }
 }

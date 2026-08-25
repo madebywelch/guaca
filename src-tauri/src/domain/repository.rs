@@ -1,0 +1,273 @@
+//! Repositories: the directories an agent may write code in.
+//!
+//! A repository is one thing and carries one decision. The thing is a directory
+//! on this machine that is the root of a git work tree. The decision is which of
+//! the crew's agents works in it, and each of them works in at most one.
+//!
+//! ## There is no engineer, and that is the design
+//!
+//! The obvious shape is a tier: mark an agent a specialist, or an engineer, and
+//! let the marked ones write code. It was not built, because the mark carries
+//! no information the grant does not already carry. An engineer with no
+//! repository and an ordinary agent with no repository are the same agent: both
+//! are offered nothing that reaches a working tree and neither can make one.
+//! A tier on top of that is a second answer to "what may this agent do", and
+//! the two would have to be kept in step by hand.
+//!
+//! It also cannot be refused usefully. Every refusal in this app names what
+//! happened and what to do about it, because a model reads it mid-turn.
+//! "You are not an engineer" is a fact about a category; "no repository has
+//! been given to you, and only the operator can give you one" is a fact the
+//! agent can act on and put in its reply.
+//!
+//! What a tier feels like it would buy is already content rather than runtime.
+//! `cafeteria.ts` ships a Software Engineer, a Code Reviewer and a QA Tester,
+//! `roles.ts` scores an agent's own words into OpenRouter's `programming`
+//! category, and both work today. Designating an engineer is hiring one and
+//! giving it a repository. Nothing in the runtime has to know the word.
+//!
+//! ## An agent works in at most one, and that is about coordination
+//!
+//! Not permissions. The question a many-to-many answered was "who is allowed in
+//! here", and the question this one answers is "who owns this codebase", which
+//! is the one an operator actually has.
+//!
+//! Two agents on one repository settle a change between themselves, in the crew
+//! they already share, with messages the operator can read. One agent quietly
+//! holding two repositories is a change whose shape nobody can see until it
+//! lands in both, and there is no conversation anywhere that says it was
+//! coming. The cost is real and it is the intended one: a change that spans two
+//! codebases is now two agents talking, which is the thing this app is for.
+//!
+//! It is a column on the agent rather than a table between the two, because
+//! "at most one" is the rule and a column is the only shape that cannot
+//! represent anything else. It is also what makes the rail a tree: a repository
+//! is a heading with its agents under it, each drawn once, which a
+//! many-to-many cannot be.
+//!
+//! A repository the operator has linked and given to nobody is an ordinary
+//! state and is drawn as one. Nothing is inherited: an agent hired next week
+//! starts in no repository, like every other capability in this app.
+//!
+//! ## The path is the root, and git is why
+//!
+//! A repository has to be a git work tree, and the linked directory has to be
+//! its root. The requirement is not ceremony about tooling: git is the undo.
+//! Everything an agent does in there is recoverable exactly because a diff, a
+//! branch and a revert exist, and that is what makes handing a directory over
+//! at all defensible.
+//!
+//! The root specifically, because the boundary and the undo have to be the same
+//! directory. Linked at a subdirectory, an agent writes inside its boundary
+//! while `git status` reports a tree it cannot see all of, and a revert reaches
+//! outside the boundary to fix it. One directory, one repository, one undo.
+//! Narrowing an agent to part of a repository is a sentence in [`Repository::note`],
+//! which the model reads, not a second boundary that only half exists.
+//!
+//! The check itself is I/O and lives in [`crate::repo`]. This module holds the
+//! shape and the rules that need no filesystem.
+
+use serde::{Deserialize, Serialize};
+
+use super::ids::{GroupId, RepositoryId};
+
+/// A label longer than this is a sentence, not a name.
+pub const MAX_NAME_LEN: usize = 48;
+/// Read by a model on every turn, so it is one line, not a page. The same cap
+/// [`super::connector::Connector`]'s note carries, for the same reason.
+pub const MAX_NOTE_LEN: usize = 240;
+/// Longer than any real path and short enough that a pasted document is refused
+/// as a path rather than stored as one.
+pub const MAX_PATH_LEN: usize = 1024;
+
+/// A directory a crew may work in.
+///
+/// Who is in it is not on this type. An agent carries the repository it works
+/// in, so the roster is the answer, and a list here would be the same fact in
+/// two places with nothing keeping them in step.
+///
+/// Serializable in full. There is nothing secret on it: a path is not a
+/// credential.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Repository {
+    pub id: RepositoryId,
+    /// Scoped to a group, like everything else an agent can see. A crew works
+    /// on a codebase; another crew's repository is as unreachable as its
+    /// credentials and its agents.
+    pub group_id: GroupId,
+    /// What the operator calls it. Defaults to the directory's own name, which
+    /// is right often enough that the field is usually left alone.
+    pub name: String,
+    /// Absolute, and the root of a git work tree on this machine.
+    pub path: String,
+    /// One line for the agents that have it, in the operator's words: `run
+    /// ./scripts/ci.sh before you say you are done`, `never touch migrations`.
+    pub note: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Repository {
+    /// The line an agent is shown about a repository it has.
+    ///
+    /// The path is in it because the agent works by path and would otherwise
+    /// spend a tool call finding out where it is. The note is in it because the
+    /// operator wrote it to be read at exactly this moment.
+    pub fn own_line(&self) -> String {
+        let mut line = format!("- {} at `{}`", self.name, self.path);
+        if !self.note.trim().is_empty() {
+            line.push_str(&format!(" ({})", self.note.trim()));
+        }
+        line
+    }
+}
+
+/// What an operator submits. Cleaned before it reaches the store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryDraft {
+    pub group_id: GroupId,
+    /// Blank takes the directory's own name.
+    #[serde(default)]
+    pub name: String,
+    pub path: String,
+    #[serde(default)]
+    pub note: String,
+}
+
+/// A draft that has passed everything checkable without touching the disk.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CleanRepository {
+    pub group_id: GroupId,
+    pub name: String,
+    pub path: String,
+    pub note: String,
+}
+
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum RepositoryError {
+    #[error("a repository needs a directory; pick one to link")]
+    NoPath,
+    #[error(
+        "`{0}` is not an absolute path; link a directory by its full path, starting from the root"
+    )]
+    NotAbsolute(String),
+    #[error("that path is longer than {MAX_PATH_LEN} characters, which is not a directory")]
+    PathTooLong,
+    #[error("a repository's name is at most {MAX_NAME_LEN} characters; this one is a sentence")]
+    NameTooLong,
+    #[error(
+        "a repository's note is at most {MAX_NOTE_LEN} characters. It is read by an agent on \
+         every turn, so keep it to the one thing you would say out loud"
+    )]
+    NoteTooLong,
+}
+
+impl RepositoryDraft {
+    /// Everything that can be decided without a filesystem.
+    ///
+    /// Trailing separators are taken off so `/src/app` and `/src/app/` cannot
+    /// become two repositories pointed at one directory. The unique index in
+    /// the store is on the path, and it can only hold if the same directory
+    /// spells the same way every time.
+    pub fn clean(&self) -> Result<CleanRepository, RepositoryError> {
+        let path = self.path.trim().trim_end_matches('/');
+        if path.is_empty() {
+            return Err(RepositoryError::NoPath);
+        }
+        if path.len() > MAX_PATH_LEN {
+            return Err(RepositoryError::PathTooLong);
+        }
+        if !path.starts_with('/') {
+            return Err(RepositoryError::NotAbsolute(path.to_string()));
+        }
+
+        let name = match self.name.trim() {
+            "" => path.rsplit('/').next().unwrap_or(path).to_string(),
+            given => given.to_string(),
+        };
+        if name.chars().count() > MAX_NAME_LEN {
+            return Err(RepositoryError::NameTooLong);
+        }
+
+        let note = self.note.trim().to_string();
+        if note.chars().count() > MAX_NOTE_LEN {
+            return Err(RepositoryError::NoteTooLong);
+        }
+
+        Ok(CleanRepository { group_id: self.group_id, name, path: path.to_string(), note })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn draft(path: &str) -> RepositoryDraft {
+        RepositoryDraft {
+            group_id: GroupId::new(),
+            name: String::new(),
+            path: path.to_string(),
+            note: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_blank_name_takes_the_directorys_own() {
+        assert_eq!(draft("/Users/robert/dev/guaca").clean().unwrap().name, "guaca");
+    }
+
+    #[test]
+    fn a_trailing_slash_is_the_same_directory() {
+        // Not cosmetic. The store's unique index is on the path, so two
+        // spellings of one directory would be two repositories, each with its
+        // own reach, and the operator would fix one and wonder why nothing
+        // changed.
+        assert_eq!(draft("/dev/guaca/").clean().unwrap().path, "/dev/guaca");
+        assert_eq!(draft("/dev/guaca").clean().unwrap().path, "/dev/guaca");
+    }
+
+    #[test]
+    fn a_relative_path_is_refused_by_name() {
+        let err = draft("dev/guaca").clean().unwrap_err();
+        assert_eq!(err, RepositoryError::NotAbsolute("dev/guaca".into()));
+        assert!(err.to_string().contains("full path"), "the refusal has to say what to do");
+    }
+
+    #[test]
+    fn an_empty_path_is_refused_before_anything_else() {
+        assert_eq!(draft("   ").clean().unwrap_err(), RepositoryError::NoPath);
+    }
+
+    #[test]
+    fn a_pasted_document_is_not_a_path() {
+        assert_eq!(
+            draft(&format!("/{}", "a".repeat(MAX_PATH_LEN))).clean().unwrap_err(),
+            RepositoryError::PathTooLong
+        );
+    }
+
+    #[test]
+    fn a_note_is_one_line() {
+        let mut long = draft("/dev/guaca");
+        long.note = "x".repeat(MAX_NOTE_LEN + 1);
+        assert_eq!(long.clean().unwrap_err(), RepositoryError::NoteTooLong);
+    }
+
+    #[test]
+    fn the_line_an_agent_reads_carries_the_path_and_the_note() {
+        let repo = Repository {
+            id: RepositoryId::new(),
+            group_id: GroupId::new(),
+            name: "guaca".into(),
+            path: "/dev/guaca".into(),
+            note: "run ./scripts/ci.sh before you finish".into(),
+            created_at: 0,
+            updated_at: 0,
+        };
+        let line = repo.own_line();
+        assert!(line.contains("/dev/guaca"), "an agent works by path: {line}");
+        assert!(line.contains("./scripts/ci.sh"), "the note is written to be read here: {line}");
+    }
+}

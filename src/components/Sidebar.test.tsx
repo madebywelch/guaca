@@ -14,6 +14,7 @@ vi.mock("../lib/ipc", () => ({
   api: {
     listAgents: async () => [],
     listGroups: async () => [],
+    listRepositories: async () => [],
     // Clicking a row opens a channel, and going inside a crew can close one:
     // both read what they are about to draw.
     channelMessages: async () => [],
@@ -37,6 +38,7 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    repositoryId: null,
     name,
     avatar: "avocado",
     color: "#c7d96b",

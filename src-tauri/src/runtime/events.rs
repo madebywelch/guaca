@@ -11,7 +11,7 @@ use serde::Serialize;
 
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RunId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -197,6 +197,66 @@ pub enum UiEvent {
     ApprovalSettled {
         approval_id: ApprovalId,
         state: ApprovalState,
+    },
+
+    /// A coding job started, and the repository it is working in is now busy.
+    ///
+    /// The rail draws this because nothing else would. `code` returns as soon
+    /// as the harness is up and the turn ends, so an agent goes idle while a
+    /// coding agent works in its repository for twenty minutes: the crew looks
+    /// stopped at exactly the moment it is building. The job outlives the turn,
+    /// so it cannot be an [`Activity`], which is cleared when a turn ends.
+    CodingJobStarted {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
+        repository: String,
+    },
+    /// One line of what a running coding job is doing.
+    ///
+    /// Ephemeral by construction, exactly as a turn's thinking is: addressed to
+    /// the job rather than filed anywhere, held by the webview while the job
+    /// runs and dropped when it ends. The record of what a job did is the
+    /// message it delivers at the end; this is only what that looks like before
+    /// it exists.
+    ///
+    /// Filtered on this side rather than forwarded raw. `pi`'s stream is tens
+    /// of thousands of lines of deltas and cumulative usage, and putting that
+    /// on the event channel would be a re-render per token for a panel nobody
+    /// could read.
+    CodingProgress {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
+        /// What it is doing: a tool name, or empty when it is talking.
+        tool: String,
+        /// The command, the path, or the sentence.
+        detail: String,
+    },
+    /// That job ended, however it ended. The repository is free again.
+    CodingJobFinished {
+        agent_id: AgentId,
+        repository_id: RepositoryId,
+    },
+
+    /// A coding job could not run, for a reason only the operator can fix.
+    ///
+    /// The agent is told too, in its own channel, and that is not enough. An
+    /// expired credential on the operator's own machine is the operator's
+    /// problem, and a sentence about it inside one agent's transcript is a
+    /// sentence nobody reads: it cost a whole afternoon of silent no-ops, with
+    /// every agent in the workspace dutifully reporting that nothing needed
+    /// doing.
+    ///
+    /// Only for failures of the harness itself — it would not start, or it
+    /// ended its own turn on an error. A job that ran and did the wrong thing
+    /// is the agent's to report and belongs nowhere near a banner.
+    CodingJobFailed {
+        agent_id: AgentId,
+        /// Named, because an operator with several repositories needs to know
+        /// which one stopped.
+        repository: String,
+        /// The harness's own words. Guaca has no better description of a
+        /// failure it did not cause and cannot interpret.
+        reason: String,
     },
 
     /// One agent's schedule changed: it set a routine, edited one, canceled
