@@ -275,6 +275,17 @@ export interface ConnectorDraft {
 export type RepositoryId = string;
 
 /**
+ * Which program writes the code.
+ *
+ * Two, because a subscription is spent by the program it was issued to: `pi`
+ * holding an Anthropic credential is refused as out of usage while `claude` on
+ * the same machine and the same account runs the work off the plan. An operator
+ * whose one plan is spent needs the other program, not a different setting on
+ * the same one.
+ */
+export type Harness = "pi" | "claude";
+
+/**
  * A directory on this machine that a crew may write code in.
  *
  * There is no engineer flag beside this and there is not meant to be. An agent
@@ -294,8 +305,29 @@ export interface Repository {
   path: string;
   /** One line the agents that have it read on every turn. */
   note: string;
+  /** Which coding harness a job in this directory starts. */
+  harness: Harness;
   createdAt: number;
   updatedAt: number;
+}
+
+/** What an operator is shown for each, and what the panel offers in order. */
+export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
+  { id: "pi", label: "pi" },
+  { id: "claude", label: "Claude Code" },
+];
+
+/**
+ * One harness, as the machine reports it.
+ *
+ * The install command comes from Rust rather than being spelled here, because
+ * it is the same string a refused job quotes at an agent, and two copies of an
+ * operational fact drift the day a vendor renames a package.
+ */
+export interface HarnessOnMachine {
+  harness: Harness;
+  installed: boolean;
+  install: string;
 }
 
 /**
@@ -337,6 +369,7 @@ export interface RepositoryDraft {
   name: string;
   path: string;
   note: string;
+  harness: Harness;
 }
 
 export type PluginId = string;
@@ -873,7 +906,13 @@ export type UiEvent =
    * sentence inside one transcript is a sentence nobody reads. This is the same
    * thing said where somebody setting up is looking.
    */
-  | { type: "codingJobFailed"; agentId: AgentId; repository: string; reason: string }
+  | {
+      type: "codingJobFailed";
+      agentId: AgentId;
+      repository: string;
+      harness: string;
+      reason: string;
+    }
   /**
    * A coding job started or ended, and the repository it works in is busy or
    * free.

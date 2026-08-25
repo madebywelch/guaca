@@ -5,6 +5,9 @@ import {
   type AgentCard,
   errorMessage,
   type GroupId,
+  HARNESSES,
+  type Harness,
+  type HarnessOnMachine,
   type Repository,
   type RepositoryDraft,
   type RepositoryId,
@@ -13,6 +16,79 @@ import {
 interface Props {
   groupId: GroupId;
   crew: AgentCard[];
+}
+
+/**
+ * Which program does the writing, as two buttons and one sentence.
+ *
+ * Two buttons rather than a select, because the set is two and the whole point
+ * is seeing both at once. The same shape the surface and the scale use in
+ * settings, down to the `aria-pressed` and the label that names what is being
+ * chosen. One the operator does not have is drawn and disabled with the command
+ * that installs it, rather than hidden: the state this control exists for is a
+ * plan that has just run out, and an absent option reads as a thing the app
+ * cannot do.
+ *
+ * On an existing repository the click *is* the change, which is what a `.choice`
+ * means everywhere else in this app and is why the caller writes it through
+ * rather than staging it beside the name and the note. Staged, it sits under a
+ * Save button that an operator has every reason to press before they get to it,
+ * and the whole change is lost with nothing on screen saying so. On the link
+ * form there is no row to write to yet, so there it rides on the draft.
+ */
+function HarnessChoice({
+  chosen,
+  machine,
+  disabled,
+  onChoose,
+}: {
+  chosen: Harness;
+  machine: HarnessOnMachine[] | null;
+  disabled: boolean;
+  onChoose: (harness: Harness) => void;
+}) {
+  // Null is the check still running, and it must not disable both. The refusal
+  // a job gives already names the install command.
+  const has = (harness: Harness) =>
+    machine === null || (machine.find((row) => row.harness === harness)?.installed ?? true);
+  const missing = machine?.filter((row) => !row.installed) ?? [];
+
+  return (
+    <>
+      <div className="choices">
+        {HARNESSES.map((harness) => (
+          <button
+            key={harness.id}
+            type="button"
+            className="choice choice--tight"
+            aria-label={`Coding harness: ${harness.label}`}
+            aria-pressed={harness.id === chosen}
+            disabled={disabled || !has(harness.id)}
+            onClick={() => onChoose(harness.id)}
+          >
+            {harness.label}
+          </button>
+        ))}
+      </div>
+      <p className="field__hint">
+        The program that writes the code here, run on this machine with its own sign-in. Guaca never
+        pays for it, so a job's spend is not in this app's usage. Switch when the plan behind one of
+        them runs out: a subscription is spent by the program it was issued to, and no amount of
+        configuring the other one reaches it.
+        {missing.map((row) => (
+          <span key={row.harness}>
+            {" "}
+            {labelOf(row.harness)} is not installed: <code>{row.install}</code>.
+          </span>
+        ))}
+      </p>
+    </>
+  );
+}
+
+/** What an operator is shown for a harness, including one this build predates. */
+function labelOf(harness: Harness): string {
+  return HARNESSES.find((known) => known.id === harness)?.label ?? harness;
 }
 
 /** Who works in a repository, as a sentence. */
@@ -61,15 +137,40 @@ function worksIn(repository: Repository, crew: AgentCard[]): string {
  * There is no "every agent" button here and there is one on the plugins above.
  * An agent hired next week must not inherit the operator's own source. Names,
  * always, and only on the agent.
+ *
+ * ## Why the harness is a choice on the row and not a setting
+ *
+ * Because a subscription is spent by the program it was issued to. An operator
+ * whose ChatGPT plan is spent cannot be helped by configuring `pi`: they need
+ * Claude Code, which is a different program with a different sign-in. So the
+ * choice is between programs, it sits beside the note because it is the same
+ * kind of fact about how work happens in this directory, and one codebase can
+ * answer it differently from the next.
+ *
+ * The one it offers that is not installed is offered anyway, disabled, with the
+ * command that installs it underneath. Hiding it makes an operator whose plan
+ * has just run out conclude the app cannot do the thing it can do, and enabling
+ * it stores a choice whose only symptom is a coding job that never starts,
+ * reported to an agent forty minutes later.
  */
 export function RepositoryList({ groupId, crew }: Props) {
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [adding, setAdding] = useState(false);
-  const [draft, setDraft] = useState({ path: "", name: "", note: "" });
+  const [draft, setDraft] = useState<Omit<RepositoryDraft, "groupId">>({
+    path: "",
+    name: "",
+    note: "",
+    harness: "pi",
+  });
   const [editing, setEditing] = useState<RepositoryId | null>(null);
-  const [edit, setEdit] = useState({ name: "", note: "" });
+  const [edit, setEdit] = useState<{ name: string; note: string; harness: Harness }>({
+    name: "",
+    note: "",
+    harness: "pi",
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [machine, setMachine] = useState<HarnessOnMachine[] | null>(null);
   const pathRef = useRef<HTMLInputElement>(null);
 
   // The path is the only field that has to be filled in, so it takes the
@@ -92,6 +193,21 @@ export function RepositoryList({ groupId, crew }: Props) {
     void load();
   }, [load]);
 
+  // Two process spawns, asked once when the panel opens. It is a question about
+  // what is on the machine rather than about the workspace, so nothing in the
+  // app can invalidate it: an operator who installs one while this is open sees
+  // it the next time they open the panel.
+  useEffect(() => {
+    api
+      .codingHarnesses()
+      .then(setMachine)
+      // A check that could not run must not disable both choices. Unknown reads
+      // as installed: the refusal a job gives already names the install command,
+      // and the failure mode of guessing the other way is a panel that refuses
+      // to save the thing the operator can see working in their own terminal.
+      .catch(() => setMachine(null));
+  }, []);
+
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
     setError(null);
@@ -109,17 +225,12 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
-    setDraft({ path: "", name: "", note: "" });
+    setDraft({ path: "", name: "", note: "", harness: "pi" });
   };
 
   const add = () =>
     void run("add", () =>
-      api.createRepository({
-        groupId,
-        name: draft.name,
-        path: draft.path,
-        note: draft.note,
-      } satisfies RepositoryDraft),
+      api.createRepository({ groupId, ...draft } satisfies RepositoryDraft),
     ).then((ok) => ok && reset());
 
   if (repositories === null) return <p className="field__hint">Loading repositories…</p>;
@@ -146,7 +257,11 @@ export function RepositoryList({ groupId, crew }: Props) {
               disabled={busy !== null}
               onClick={() => {
                 setEditing(editing === repository.id ? null : repository.id);
-                setEdit({ name: repository.name, note: repository.note });
+                setEdit({
+                  name: repository.name,
+                  note: repository.note,
+                  harness: repository.harness,
+                });
               }}
             >
               {editing === repository.id ? "Done" : "Edit"}
@@ -182,13 +297,27 @@ export function RepositoryList({ groupId, crew }: Props) {
                   disabled={busy !== null || !edit.name.trim()}
                   onClick={() =>
                     void run(`${repository.id}-edit`, () =>
-                      api.updateRepository(repository.id, edit.name, edit.note),
+                      api.updateRepository(repository.id, edit.name, edit.note, edit.harness),
                     ).then((ok) => ok && setEditing(null))
                   }
                 >
                   Save
                 </button>
               </div>
+              <HarnessChoice
+                chosen={edit.harness}
+                machine={machine}
+                disabled={busy !== null}
+                onChoose={(harness) => {
+                  // The stored name and note, not the boxes above. A half-typed
+                  // rename is not a thing the operator asked to save, and this
+                  // click is not the gesture that saves it.
+                  setEdit({ ...edit, harness });
+                  void run(`${repository.id}-harness`, () =>
+                    api.updateRepository(repository.id, repository.name, repository.note, harness),
+                  );
+                }}
+              />
               {/* Said where the field is, because the field is next to a path
                   and the two look like they change the same kind of thing. */}
               <p className="field__hint">
@@ -201,9 +330,13 @@ export function RepositoryList({ groupId, crew }: Props) {
             repository.note && <p className="field__hint">{repository.note}</p>
           )}
 
+          {/* The harness is on the row and not only behind Edit, because the
+              question it answers is asked about the list: which of these
+              directories is running on the plan that has stopped paying. */}
           <p className="field__hint">
-            Worked in by {worksIn(repository, crew)}. Put an agent in it by dragging it onto this
-            repository in the rail.
+            Code here is written by {labelOf(repository.harness)}. Worked in by{" "}
+            {worksIn(repository, crew)}. Put an agent in it by dragging it onto this repository in
+            the rail.
           </p>
         </div>
       ))}
@@ -244,6 +377,12 @@ export function RepositoryList({ groupId, crew }: Props) {
               onChange={(event) => setDraft({ ...draft, note: event.target.value })}
             />
           </div>
+          <HarnessChoice
+            chosen={draft.harness}
+            machine={machine}
+            disabled={busy !== null}
+            onChoose={(harness) => setDraft({ ...draft, harness })}
+          />
           <p className="field__hint">
             The full path to the directory, which has to be the root of a git repository. Git is the
             undo: it is the reason an agent can be turned loose in there at all. The note is read by

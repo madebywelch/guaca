@@ -41,6 +41,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
+    repository.rs     A directory an agent may write code in, and which of two
+                      programs writes it.
     worknote.rs       A line about work in flight, and why it is not memory.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
@@ -60,6 +62,11 @@ src-tauri/src/
   mcp.rs              The client end of MCP, in both of its protocol eras.
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
+  repo.rs             Whether a directory is one an agent may be given. Runs git.
+  coding/             Starting something that writes code, and reading it back.
+    mod.rs            One process, one ceiling, one prompt. Read this one first.
+    pi.rs             `pi`'s argument vector and its stream.
+    claude_code.rs    Claude Code's, which are not the same and cannot be.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
@@ -100,6 +107,9 @@ repo: the frontend renders state and forwards intent.
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
+| An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
+| Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
+| An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
@@ -184,6 +194,17 @@ tools and nowhere else, so a machine with no account is a machine where that
 plugin refuses to connect and every other part of the app is unchanged. Keep it
 that way: the account is a credential for one plugin, not a thing the runtime,
 the prompt or the guard may consult.
+
+**A coding harness is a second program, and there are two of them because a
+subscription is spent by the program it was issued to.** `pi` holding an
+Anthropic OAuth credential and dialling the Messages API is refused with *You're
+out of extra usage* while `claude` on the same machine and the same account runs
+the work off the plan. So an operator whose one plan is spent needs the other
+*program*, and no amount of configuration on the first reaches it. The choice
+lives on the repository, beside the note, because it is the same shape of fact:
+how work happens in this directory. Everything inside a harness (the model, the
+thinking level, the sign-in) belongs to the harness and is never passed from
+here. `docs/CODING.md`.
 
 **A Claude subscription cannot pay for a turn, and this is not an oversight.**
 Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
@@ -320,6 +341,28 @@ the model takes a screenshot to see what `browse` did.
   against 16,000 and told operators their memory was about to be cut by a runtime
   storing it whole. A warning is read as a fact about what will happen, so the
   number is only worth drawing while it is the runtime's number.
+- **A harness is two functions, and the process around them is one.** What `pi`
+  and Claude Code share is the shape of a job: one process, in one directory,
+  whose stdout is JSON objects one per line, that ends. So the spawn, the read
+  loop, the forty-five minute ceiling, the kill and the exit handling are in
+  `coding/mod.rs` once, and each submodule holds only the argument vector and
+  the fold from an event into an `Outcome`. Two of everything would be two
+  places for `kill_on_drop` to be forgotten.
+- **`claude` refuses `--output-format stream-json` without `--verbose`, and the
+  refusal is on the command line.** So a vector that is one flag wrong is a job
+  that never starts rather than a job that fails, which is why `tests/coding.rs`
+  asserts the vector against a stand-in on `PATH` and keeps an `#[ignore]`d half
+  that asks the real program. No offline test can see a flag the vendor renamed.
+- **The two tool tables are separate and must stay separate.** `pi`'s built-ins
+  are lowercase and carry `path`; Claude Code's are capitalized and carry
+  `file_path`. Merged, one program's field name is read out of the other's
+  arguments, and a wrong guess there prints somebody's file contents into a
+  channel. A tool in neither table draws no detail at all, which is every MCP
+  tool the operator has connected.
+- **A cost from either harness is what it *said*, not money that moved.** On a
+  subscription both report the equivalent API price. They agree with each other,
+  and `Outcome::cost` claims no more than that; zero is absent rather than free,
+  for the reason it always was.
 - **A stub that branches on what was said must not read the system prompt.**
   `anyone_said` skips it. Every scripted eval keyed on a word is really asking
   "does this appear anywhere in the request", and the request opens with two
@@ -1005,7 +1048,21 @@ build expects, which is the failure no offline test can see. It reaches the inte
 ./scripts/plugins.sh
 ```
 
-A sixth, `tests/machines.rs`, is the same shape for the two providers: scripted
+`tests/coding.rs` does the same job for the coding harnesses, and its offline
+half puts real stand-in executables on `PATH` rather than mocking: the thing
+being tested is a process, and each stand-in records the argument vector it was
+handed. That is what makes "a repository set to Claude Code starts `claude`" an
+assertion rather than a code read; drop the column read in `Runtime::start_job`
+and every other suite in this repo still passes. Its `#[ignore]`d half asks the
+real programs whether they still accept those vectors and still answer in the
+shape this build reads, and it spends the operator's own plan.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --test coding
+cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
+```
+
+And `tests/machines.rs` is the same shape for the two providers: scripted
 control planes for Kernel and E2B, and the real `Runtime` provisioning against
 them. It is entirely offline and costs nothing. Nothing else in the build
 reaches a provider, so without it every suite passes with a turn renting a

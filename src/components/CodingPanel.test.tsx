@@ -18,6 +18,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
         name: "vision-ios",
         path: "/Users/you/dev/vision-ios",
         note: "",
+        harness: "pi",
         createdAt: 0,
         updatedAt: 0,
       },

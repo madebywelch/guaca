@@ -74,6 +74,25 @@ describe("IPC contract", () => {
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
 
+  it("knows the same coding harnesses on both sides", () => {
+    // A harness is a program, and adding one is two edits: a variant in Rust
+    // and a row in `HARNESSES`. Only the Rust half decides what a job starts,
+    // so a variant added there and forgotten here is a harness the operator
+    // cannot choose, and a row added here and forgotten there is a choice that
+    // stores a value the store reads back as `pi`. Neither shows up until
+    // somebody's coding job runs the wrong program.
+    const rust = new Set(
+      [
+        ...read("src-tauri/src/domain/repository.rs").matchAll(/Harness::(\w+) => "([a-z]+)",/g),
+      ].map((m) => m[2]!),
+    );
+    const web = new Set(
+      [...read("src/lib/types.ts").matchAll(/\{ id: "([a-z]+)", label: /g)].map((m) => m[1]!),
+    );
+    expect(rust.size, "the Rust harnesses did not parse").toBeGreaterThan(1);
+    expect([...web].sort(), "HARNESSES and Harness disagree").toEqual([...rust].sort());
+  });
+
   it("knows the same twelve use cases on both sides", () => {
     // A suggestion is asked for by use case, and the backend refuses anything
     // that is not one of these before it spends a request. So a category
