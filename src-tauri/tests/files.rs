@@ -81,6 +81,44 @@ async fn a_picture_is_handed_over_as_a_picture() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_picture_is_not_sent_to_a_model_that_cannot_be_shown_one() {
+    // The other half of the test above, and the reason any of this is decided
+    // rather than assumed. An operator swaps the model in the box for one that
+    // takes text only; the picture would be refused by the endpoint, which
+    // costs the whole turn rather than the attachment. So it is not sent, and
+    // the agent is told in words what it is holding and what it is not.
+    let listing = serde_json::json!({
+        "data": [{
+            "id": "test/model",
+            "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] },
+        }]
+    });
+    let stub = serve_publishing(Some(listing), |_| Script::Say("I cannot see it.".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+
+    let png: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde,
+    ];
+    let shot = h.runtime.files().put("chart.png", png).unwrap();
+    let run = h.runtime.send_from_human_with(h.id("Manager"), "What is this?", vec![shot]).unwrap();
+    h.settle(run).await;
+
+    let sent = prompts(&stub);
+    assert!(!sent.contains("image_url"), "the endpoint said it takes text only:\n{sent}");
+    assert!(!sent.contains("data:image/png;base64,"), "{sent}");
+    // Not silence. A model that finds no picture and no explanation talks about
+    // the file from its name, confidently, which is the failure this replaces.
+    assert!(sent.contains("chart.png"), "the agent has to know a file arrived:\n{sent}");
+    assert!(sent.contains("pictures do not reach the model"), "{sent}");
+    // And the prompt agrees with the delivery, rather than telling an agent it
+    // can see and then handing it nothing.
+    assert!(sent.contains("You read text, and only text"), "{sent}");
+    assert!(!sent.contains("use_screen"), "a screen it cannot be shown is not offered:\n{sent}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_picture_is_handed_over_once_and_never_again() {
     // A screenshot off a retina display is over a megabyte, and base64 is a
     // third bigger again. Attaching it to every turn that follows would make

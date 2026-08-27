@@ -94,6 +94,17 @@ the pointer is, and an action that hands work to the screen is given a moment to
 settle before the picture is taken. All three are in `e2b.rs` with the failure
 each one closes.
 
+A machine whose screen cannot be shown to the model is still a machine.
+`use_screen` is offered only when a picture reaches the model behind the turn,
+because its entire answer is one and the coordinates to click next are in it and
+nowhere else: offered to a model that cannot be sent a picture, it is a round
+trip that hands back nothing and a click aimed at a position nobody has seen.
+`run_command` and `open_on_desktop` are untouched, because a shell reads back as
+text and a program on the desktop is there for the *operator* to watch, and the
+prompt says which of the three this agent has. What decides that, and why an
+endpoint that publishes nothing leaves it exactly as it was, is *What a model
+can be sent is asked of the endpoint, not assumed* in `ARCHITECTURE.md`.
+
 ## The frame points at this app's page, not at noVNC's
 
 noVNC narrates its own transport. Every time it connects it slides a bar across
