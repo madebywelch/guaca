@@ -241,7 +241,7 @@ describe("who pays for a group's turns", () => {
     pane("Provider");
     await screen.findByText(/robert@example.com/);
 
-    fireEvent.click(button("Use it"));
+    fireEvent.click(button("Use the ChatGPT subscription"));
     expect((await save()).inference?.provider).toBe("chatgpt");
   });
 

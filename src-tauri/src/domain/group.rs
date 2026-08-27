@@ -548,6 +548,38 @@ mod tests {
     }
 
     #[test]
+    fn a_group_can_run_on_claude_while_the_app_is_on_a_key() {
+        // The case this provider exists for: one crew's plan still pays and
+        // another's does not, and a group is where that is said.
+        let resolved =
+            only(InferenceOverrides { provider: Some(Provider::Claude), ..Default::default() })
+                .apply(&InferenceConfig::default());
+
+        assert_eq!(resolved.provider, Provider::Claude);
+        // No field to read and none to invent. The model belongs to the
+        // program, so what everything downstream sees is the label saying so.
+        assert_eq!(resolved.default_model, crate::llm::claude::MODEL_LABEL);
+    }
+
+    #[test]
+    fn a_model_named_on_a_claude_group_is_kept_and_never_used() {
+        // Same rule the two providers already have between them, and it has to
+        // hold in the direction that has no field of its own: an operator who
+        // tries Claude for an hour and goes back finds their model where they
+        // left it, and while Claude is paying nothing tries to run it.
+        let resolved = only(InferenceOverrides {
+            provider: Some(Provider::Claude),
+            default_model: Some("local/qwen".into()),
+            subscription_model: Some("gpt-5.4-mini".into()),
+            ..Default::default()
+        })
+        .apply(&InferenceConfig::default());
+
+        assert_eq!(resolved.default_model, crate::llm::claude::MODEL_LABEL);
+        assert_eq!(resolved.subscription_model, "gpt-5.4-mini");
+    }
+
+    #[test]
     fn a_model_set_for_the_other_provider_is_kept_and_not_used() {
         // Each model belongs to one provider. A group holding an endpoint model
         // while the subscription is paying is a group that has been switched
