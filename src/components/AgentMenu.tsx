@@ -1,5 +1,5 @@
-import type { CSSProperties } from "react";
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { CSSProperties, FocusEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { AgentCard, Group } from "../lib/types";
 
@@ -21,8 +21,6 @@ interface Props {
   onClearHistory: (agent: AgentCard) => void;
   /** Into the compost, where it waits thirty days. */
   onDelete: (agent: AgentCard) => void;
-  /** One row up or down: the drag, without a mouse. */
-  onNudge: (agent: AgentCard, delta: -1 | 1) => void;
   onMoveToGroup: (agent: AgentCard, group: Group) => void;
 }
 
@@ -56,10 +54,10 @@ export function AgentMenu({
   onDuplicate,
   onClearHistory,
   onDelete,
-  onNudge,
   onMoveToGroup,
 }: Props) {
   const { agent } = target;
+  const elsewhere = groups.filter((group) => group.id !== agent.groupId);
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: target.x, y: target.y, origin: "top left" });
   /**
@@ -161,25 +159,18 @@ export function AgentMenu({
         {item(agent.lifecycle === "paused" ? "Resume" : "Pause", () => onTogglePause(agent))}
         {item("Edit profile", () => onEditProfile(agent))}
         {item(agent.pinned ? "Unpin" : "Pin to top", () => onTogglePin(agent))}
-        {/* The same two moves a drag makes, reachable without one. A rail that
-            can only be arranged by dragging cannot be arranged from a keyboard
-            at all, and this menu is already where everything else about an
-            agent lives. */}
-        {item("Move up", () => onNudge(agent, -1))}
-        {item("Move down", () => onNudge(agent, 1))}
         {item("Duplicate", () => onDuplicate(agent))}
         {/* Absent while there is one group, for the same reason the strip in
             the rail is: there is nowhere else to go. */}
-        {groups
-          .filter((group) => group.id !== agent.groupId)
-          .map((group) => (
-            // Keyed on the crew, not on its name: two crews may be called the
-            // same thing, and the row that moves an agent has to be the row
-            // for the crew it names.
-            <Fragment key={group.id}>
-              {item(`Move to ${group.name}`, () => onMoveToGroup(agent, group))}
-            </Fragment>
-          ))}
+        {elsewhere.length > 0 && (
+          <MoveToGroup
+            groups={elsewhere}
+            onPick={(group) => {
+              onMoveToGroup(agent, group);
+              onClose();
+            }}
+          />
+        )}
         <hr className="menu__rule" />
         {confirming === "history" ? (
           item("Delete history, keep memory", () => onClearHistory(agent), "danger")
@@ -187,7 +178,7 @@ export function AgentMenu({
           // The only kind of item that does not close the menu. Nothing has
           // been decided yet, and the next click is the one that matters.
           <button type="button" className="menu__item" onClick={() => setConfirming("history")}>
-            Clear history…
+            Clear chat history…
           </button>
         )}
         {/* Asked twice, and the second wording says where it goes rather than
@@ -206,5 +197,107 @@ export function AgentMenu({
         )}
       </div>
     </>
+  );
+}
+
+/**
+ * The crews this agent is not in, in a menu of their own to the side.
+ *
+ * A submenu rather than a row each, because the crews are the one part of this
+ * menu whose length nothing bounds: everything else is a verb on the agent and
+ * there are seven of them, while a workspace with eight crews pushed clearing a
+ * history and deleting an agent off the bottom of the window. The items are
+ * bare names because the row that opens them is the verb, and it is also the
+ * submenu's label, so a screen reader reads the sentence either way.
+ *
+ * Hover and focus open it, which are the same gesture from the two devices that
+ * can make it. Pointer and focus both leave through the wrapper rather than the
+ * row, so crossing into the submenu is not leaving.
+ */
+function MoveToGroup({ groups, onPick }: { groups: Group[]; onPick: (group: Group) => void }) {
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const sub = useRef<HTMLDivElement>(null);
+  const [at, setAt] = useState({ side: "right", shift: 0, origin: "top left" });
+
+  // Measured for the same reason the menu is, from the row it hangs off rather
+  // than from itself: the menu it opens out of may already have been pulled
+  // back from the right edge, and a submenu drawn past that edge is a list of
+  // crews nothing can click.
+  useLayoutEffect(() => {
+    const node = sub.current;
+    const row = wrap.current;
+    if (!node || !row) return;
+    const box = node.getBoundingClientRect();
+    const from = row.getBoundingClientRect();
+    const side = from.right + box.width + MARGIN <= window.innerWidth ? "right" : "left";
+    // Never downward: the top of the submenu is the row that opened it, and the
+    // only reason to move is a list that would otherwise run off the bottom.
+    const shift = Math.min(0, window.innerHeight - MARGIN - (from.top + box.height));
+    setAt({
+      side,
+      shift,
+      origin: `${shift < 0 ? "bottom" : "top"} ${side === "right" ? "left" : "right"}`,
+    });
+  }, [open]);
+
+  return (
+    <div
+      className="menu__nest"
+      ref={wrap}
+      // A box to hang the submenu off and nothing else: the row is the control
+      // and the crews are the menu, and neither is this. The hover is on the
+      // box rather than on the row because crossing from one into the other has
+      // to not be a departure.
+      role="none"
+      onPointerEnter={() => setOpen(true)}
+      onPointerLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={(event: FocusEvent<HTMLDivElement>) => {
+        // React reports a blur for every step between two children of one box,
+        // so where the focus went is what says whether it left at all.
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        className="menu__item"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        // Opens rather than toggles. A click closing it leaves the pointer on
+        // the row that opens it, which is a state nothing can get out of
+        // without moving away and coming back.
+        onClick={() => setOpen(true)}
+      >
+        Move to another group
+        <span className="menu__more" aria-hidden="true">
+          ▸
+        </span>
+      </button>
+      {open && (
+        <div
+          className="menu__sub"
+          ref={sub}
+          role="menu"
+          aria-label="Move to another group"
+          data-side={at.side}
+          style={{ top: at.shift, "--pop-origin": at.origin } as CSSProperties}
+        >
+          {groups.map((group) => (
+            // Keyed on the crew, not on its name: two crews may be called the
+            // same thing, and the row that moves an agent has to be the row for
+            // the crew it names.
+            <button
+              key={group.id}
+              type="button"
+              className="menu__item"
+              onClick={() => onPick(group)}
+            >
+              {group.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

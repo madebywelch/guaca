@@ -149,19 +149,3 @@ export function landsBefore(
   if (from >= 0 && from < to) return order[to + 1]?.id ?? null;
   return onto;
 }
-
-/**
- * Where a row goes when the operator asks for it one place up or down, which is
- * the same move without a mouse. `undefined` means there is nowhere to go.
- */
-export function nudgeTarget(
-  order: AgentCard[],
-  id: AgentId,
-  delta: -1 | 1,
-): AgentId | null | undefined {
-  const at = order.findIndex((a) => a.id === id);
-  if (at < 0) return undefined;
-  const onto = order[at + delta];
-  if (!onto) return undefined;
-  return landsBefore(order, id, onto.id);
-}

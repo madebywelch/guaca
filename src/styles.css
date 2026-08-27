@@ -4751,6 +4751,7 @@ button {
 .dialog,
 .palette,
 .menu,
+.menu__sub,
 .orb__tag {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
@@ -5707,6 +5708,53 @@ button {
 .menu__item:focus-visible {
   background: var(--sunken);
   outline: none;
+}
+
+/* The one item that opens a menu instead of doing something. Positioned, so
+   the crews hang off it rather than off the window: the menu itself is fixed
+   wherever the click landed, and the submenu's place is a fact about the row. */
+.menu__nest {
+  position: relative;
+}
+
+/* The row that leads somewhere is the one row that is not only a label, so it
+   is the one that lays itself out. The mark sits at the far edge with the whole
+   gap between it and the words, which is what says the row opens rather than
+   acts. */
+.menu__nest .menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.menu__more {
+  color: var(--faint);
+}
+
+.menu__sub {
+  position: absolute;
+  top: 0;
+  left: 100%;
+  z-index: 52;
+  min-width: 9rem;
+  /* A workspace can hold more crews than a window has room for, and a submenu
+     that runs off the bottom is the failure the parent menu measures to
+     avoid. Shifting up covers the rest; this covers a list longer than the
+     window. */
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+  background: var(--raised);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--lift-2);
+}
+
+/* The side is chosen after measuring, so a menu opened against the right edge
+   of the window puts its crews on the left. */
+.menu__sub[data-side="left"] {
+  left: auto;
+  right: 100%;
 }
 
 /* What the row makes, for the one menu whose items are not verbs on something

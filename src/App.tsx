@@ -32,7 +32,6 @@ export default function App() {
   const select = useStore((s) => s.select);
   const loadChannel = useStore((s) => s.loadChannel);
   const groups = useStore((s) => s.groups);
-  const nudgeAgent = useStore((s) => s.nudgeAgent);
   const dropAgent = useStore((s) => s.dropAgent);
   const prefs = useStore((s) => s.prefs);
 
@@ -282,10 +281,9 @@ export default function App() {
           onClose={() => setMenu(null)}
           onEditProfile={(agent) => setEditing(agent)}
           onTogglePin={(agent) => void onAgent(() => api.setAgentPinned(agent.id, !agent.pinned))}
-          // Both go through the store: it holds the roster and the activity the
-          // rail's order is computed from, so it is the only place that can say
-          // which row is above this one right now.
-          onNudge={(agent, delta) => void onAgent(() => nudgeAgent(agent.id, delta))}
+          // Through the store rather than the API: a move lands the agent at
+          // the end of a group it is not in yet, which is a placement only the
+          // roster the rail is drawn from can work out.
           onMoveToGroup={(agent, group) =>
             void onAgent(() => dropAgent(agent.id, { kind: "group", id: group.id }))
           }
