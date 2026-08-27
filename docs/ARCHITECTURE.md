@@ -152,6 +152,91 @@ what it already has. Waiting instead on "is anyone in this run still busy" was
 tried and was wrong: it made an agent sit through peers that had already
 answered and were finishing their own notes.
 
+## A working turn reads its inbox, and only what it can answer where it stands
+
+Batching decides what a turn starts with. This decides what it can still learn
+once it has started, and until it existed the answer was nothing: a turn was
+built from its batch and went deaf for as long as it ran. On a turn of three
+rounds nobody notices. On a turn of forty, which is what a crew with a raised
+`max_tool_rounds` and a coding job actually produces, it is the difference
+between an agent that can be corrected and one that cannot.
+
+Two things go wrong without it, and the second is a deadlock rather than a
+delay.
+
+**An operator cannot steer work they are watching.** They type a correction into
+the channel, it is delivered, the rail shows the agent working, and the message
+is read when the turn ends. The correction arrives after the thing it was meant
+to correct was finished and published.
+
+**A turn cannot receive the result of the job it started.** `code` does not
+block, deliberately: a coding job is a different unit of work with its own
+budget and its own forty-five minute ceiling, and a turn that waited for one
+would spend its own timeout doing nothing. So the harness's answer comes back as
+a fresh envelope on a run of its own. An actor only ever examines the envelope it
+is holding, so that answer could not reach the turn that asked for it. The agent
+would then call `code` again, and `RepositoryBusy` would tell it, correctly and
+uselessly, that *whoever asked for the first one gets a message when it
+finishes* — a message the turn being spoken to was itself the thing holding up.
+Measured on a real crew: forty-five minutes, forty-five model calls, twenty-two
+documents rewritten and thirty-one working notes, with three finished jobs and
+one operator correction stacked in an inbox nobody was free to read.
+
+`Runtime::take_in` runs at the top of every round, before the budget claims the
+step, and folds whatever has arrived into the conversation as one labeled user
+turn. `prompt::render_incoming` does the labeling, the same function the batch
+goes through, because a model that can tell `[OPERATOR]` from `[SYSTEM]` at the
+start of a turn has to be able to tell them apart in the middle of one, and a
+second way to write that label is a second thing for the injection tests to miss.
+
+**What arrives is context, and never a change of address.** Not the reply mode,
+not the reply target, not the channel the placeholder is already open in, not
+`cause`. All four are decided before the first token and the UI has been drawing
+them ever since; a turn that changed its mind about who it was answering would
+have to close a live bubble in one channel and open it in another, which is a
+worse thing to watch than a late reply.
+
+That constraint is what decides the rule, rather than the other way round. A
+turn in `ToPeer` takes in nothing at all: its answer is addressed to the agent
+that asked, so an operator message read there would be read and never answered.
+Every other mode writes into this agent's own channel to the operator, which is
+where a message from the operator or from Guaca would have been answered anyway,
+so taking one in changes what the turn knows and nothing about where it goes.
+
+Peers are refused from the other end for the same reason. A peer's message is a
+hop with a reply owed on it, and answering it as a footnote to somebody else's
+turn is not an answer. It waits and gets the turn it is owed, which is what the
+second cascade test asserts.
+
+**What the prompt already carries is taken in but not written again.**
+`deliver` writes to the store before it touches the inbox, so an envelope queued
+behind the one a turn is answering is already in the history that turn read while
+still sitting in the inbox waiting to be answered. Two operator lines typed a
+second apart are enough to reach it. Taken in without checking, the second line
+is written into the prompt twice, and a model reading one instruction twice is
+being told it was said twice. The turn keeps a set of the message ids its prompt
+already carries and intake renders against it, so such an envelope is still
+consumed, still released and still answered by this turn — it is only not
+repeated.
+
+**Each envelope is released against its own run as it is taken.** `Runtime::absorb`,
+which is `abandon`'s arithmetic under a different name because it is not the same
+fact: abandoning is work that will not happen, and this is work that just did
+inside somebody else's turn. The run that booked it has nothing further
+outstanding and settles there, which is what keeps `track_inflight` from
+reporting a run finished twice.
+
+**Nobody else's harness has this problem, and the reason is instructive.**
+Omnigent, which orchestrates Claude Code, Codex, Cursor and Pi behind one
+interface, runs `claude` as a real terminal under tmux and watches it through
+hooks and its session transcript. It never owns the agent loop, so it inherits
+Claude Code's own answer: a prompt typed while a turn is busy is recorded as a
+`queued_command` attachment and picked up at the next round rather than the next
+session, and omnigent's bridge parses those back into its transcript as user
+messages. Guaca keeps its own loop on purpose, for the reasons in
+`docs/PROTOCOL.md`, and the price of that decision is that the equivalent has to
+be built here. This is it.
+
 ## The five limits, and what each is for
 
 The guard is the backstop, not the mechanism. Each limit catches a different

@@ -104,6 +104,225 @@ async fn manager_introduces_itself_to_every_other_agent() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_that_arrives_mid_turn_reaches_the_turn_that_is_working() {
+    // The operator types a correction while an agent is working. Before the
+    // turn could see its own inbox, that correction waited for the turn to end,
+    // which on a long turn is forty minutes: the work it was meant to steer was
+    // finished and published first.
+    //
+    // The message is sent from inside the stub rather than from the test, so
+    // there is no race to lose. Answering the first model call is provably
+    // inside the turn, and provably before the round that follows it.
+    let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
+        Arc::new(std::sync::OnceLock::new());
+    let typed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let armed = hook.clone();
+    let once = typed.clone();
+    let stub = serve(move |body| {
+        if speaker(body) != "Writer" {
+            return Script::Say("ok".into());
+        }
+        if anyone_said(body, "Call it we") {
+            return Script::Say("Changed it to we.".into());
+        }
+        if !once.swap(true, Ordering::SeqCst) {
+            if let Some((runtime, writer)) = armed.get() {
+                runtime.send_from_human(*writer, "Stop writing I. Call it we.").unwrap();
+            }
+            return Script::Progress("drafting the post".into());
+        }
+        Script::Say("Draft done.".into())
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer"], GuardLimits::default());
+    let writer = h.id("Writer");
+    let _ = hook.set((h.runtime.clone(), writer));
+
+    let run = h.runtime.send_from_human(writer, "Write the post.").unwrap();
+    h.settle(run).await;
+
+    let texts = h.channel_texts("Writer");
+    assert!(
+        texts.iter().any(|t| t.contains("Changed it to we")),
+        "the turn never read what the operator typed while it worked: {texts:?}"
+    );
+    // The discriminator. Left queued, the correction becomes a turn of its own
+    // and this line is what the working turn finishes with first.
+    assert!(
+        !texts.iter().any(|t| t.contains("Draft done")),
+        "the turn finished on its own answer and read the correction afterwards: {texts:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn work_that_lands_mid_turn_is_reported_even_when_the_turn_owed_nobody_words() {
+    // A turn woken by a peer's answer owes nobody words, which is `NoteOnly`,
+    // and `NoteOnly` tells an agent that silence is usually right. That is true
+    // of what it woke up to and false of work that lands while it runs, so
+    // anything taken in that carries work moves the turn to `Assigned`, where a
+    // note the agent never writes is reported rather than looking like an agent
+    // that quietly stopped. Both modes write to the same place, so nothing the
+    // UI has already drawn moves.
+    let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
+        Arc::new(std::sync::OnceLock::new());
+
+    let armed = hook.clone();
+    let stub = serve(move |body| {
+        if speaker(body) == "Manager" {
+            // An answer, which is the one thing that never expects one back.
+            return Script::Say("Here is the answer.".into());
+        }
+        // The correction has been taken in. Say nothing at all, which is what
+        // `NoteOnly` invites and what must not pass unremarked now that work
+        // has landed in this turn.
+        if anyone_said(body, "fix the headline") {
+            return Script::Say(String::new());
+        }
+        // Woken by the Manager's answer: nobody is waiting on this agent's
+        // words. The operator types while it is working.
+        if reading_peer_replies(body) {
+            if let Some((runtime, writer)) = armed.get() {
+                runtime.send_from_human(*writer, "Also fix the headline.").unwrap();
+            }
+            return Script::Progress("tidying up".into());
+        }
+        if has_tool_result(body) {
+            return Script::Say("Asked.".into());
+        }
+        Script::SendTo { recipients: vec!["Manager".into()], text: "Quick question.".into() }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Writer"], GuardLimits::default());
+    let _ = hook.set((h.runtime.clone(), h.id("Writer")));
+
+    let run =
+        h.runtime.send_from_human(h.id("Writer"), "Ask the Manager about the launch.").unwrap();
+    h.settle(run).await;
+
+    // A notice, not text: this is Guaca speaking into the Writer's channel,
+    // which is what `plain_text` filters out.
+    h.wait_until("the silent turn to be reported", |h| {
+        h.runtime
+            .store()
+            .channel_messages(h.id("Writer"), 50)
+            .unwrap()
+            .into_iter()
+            .flat_map(|e| e.parts)
+            .any(|part| {
+                matches!(part, Part::Notice { ref text, .. } if text.contains("without reporting anything"))
+            })
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_message_the_prompt_already_carries_is_taken_in_once() {
+    // `deliver` writes to the store before it touches the inbox, so a message
+    // queued behind the one a turn is answering is already in the history that
+    // turn reads while still sitting in the inbox waiting to be answered.
+    // Taken in without checking, it is written into the prompt twice, and a
+    // model reading the same instruction twice is being told it was said twice.
+    //
+    // Pausing is what makes the window certain rather than likely: both
+    // messages are provably in the store before the agent is free to read
+    // either.
+    let seen = Arc::new(AtomicUsize::new(0));
+    let counter = seen.clone();
+    let stub = serve(move |body| {
+        let times = body["messages"]
+            .as_array()
+            .map(|messages| {
+                messages
+                    .iter()
+                    .filter(|m| m["role"] != "system")
+                    .filter_map(|m| m["content"].as_str())
+                    .filter(|c| c.contains("Second thing"))
+                    .count()
+            })
+            .unwrap_or(0);
+        counter.fetch_max(times, Ordering::SeqCst);
+        Script::Say("Both noted.".into())
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer"], GuardLimits::default());
+    let writer = h.id("Writer");
+
+    h.pause("Writer");
+    let run = h.runtime.send_from_human(writer, "First thing to do.").unwrap();
+    h.runtime.send_from_human(writer, "Second thing, while you are at it.").unwrap();
+    h.wait_until("both messages to be filed", |h| h.channel_texts("Writer").len() == 2).await;
+    h.resume("Writer");
+    h.settle(run).await;
+
+    assert_eq!(
+        seen.load(Ordering::SeqCst),
+        1,
+        "the second message reached the model more than once in the same call"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_answering_a_peer_leaves_the_operator_a_turn_of_their_own() {
+    // The other half of the rule, and the reason it is not "read everything".
+    // A turn in `ToPeer` is addressed to the agent that asked, so an operator
+    // message folded into it would be read and never answered. It waits, and
+    // gets the turn it is owed.
+    let hook: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> =
+        Arc::new(std::sync::OnceLock::new());
+    let typed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let armed = hook.clone();
+    let once = typed.clone();
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            return if has_tool_result(body) {
+                Script::Say("Asked.".into())
+            } else {
+                Script::Instruct {
+                    recipients: vec!["Writer".into()],
+                    text: "Draft the announcement.".into(),
+                }
+            };
+        }
+        if anyone_said(body, "Call it we") {
+            return Script::Say("Noted for next time: we.".into());
+        }
+        if !once.swap(true, Ordering::SeqCst) {
+            if let Some((runtime, writer)) = armed.get() {
+                runtime.send_from_human(*writer, "Stop writing I. Call it we.").unwrap();
+            }
+            return Script::Progress("drafting".into());
+        }
+        Script::Say("Here is the announcement.".into())
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Writer"], GuardLimits::default());
+    let _ = hook.set((h.runtime.clone(), h.id("Writer")));
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "Get the announcement drafted.").unwrap();
+    h.settle(run).await;
+
+    // The peer got its answer, undiluted.
+    let manager = h.channel_texts("Manager");
+    assert!(
+        manager.iter().any(|t| t.contains("Here is the announcement")),
+        "the peer that asked never got its answer: {manager:?}"
+    );
+
+    // And the operator got theirs, in a turn of its own.
+    h.wait_until("the operator's message to be answered", |h| {
+        h.channel_texts("Writer").iter().any(|t| t.contains("Noted for next time"))
+    })
+    .await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn replies_queued_together_are_read_in_a_single_turn() {
     // Batching is what stops four replies from costing four Manager turns.

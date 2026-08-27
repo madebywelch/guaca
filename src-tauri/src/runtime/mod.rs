@@ -2382,7 +2382,7 @@ impl Runtime {
 
     // ---- one agent turn --------------------------------------------------
 
-    async fn run_turn(&self, agent_id: AgentId, batch: Vec<Envelope>) {
+    async fn run_turn(&self, agent_id: AgentId, batch: Vec<Envelope>, intake: &mut Intake<'_>) {
         // Single-run by construction: the batch only ever drains envelopes
         // belonging to the same run as its first.
         let run_id = batch[0].run_id;
@@ -2415,7 +2415,7 @@ impl Runtime {
         // agent mid-task: an explicit instruction to send an email arrives with
         // no reply expected, so the turn was told nothing needed doing.
         let assigned = batch.iter().any(|e| e.intent.is_work());
-        let mode = match reply_target {
+        let mut mode = match reply_target {
             Some(Participant::Human) => ReplyMode::ToOperator,
             Some(Participant::Agent { .. }) => ReplyMode::ToPeer,
             // A routine coming due is the other way an agent is handed work
@@ -2484,6 +2484,15 @@ impl Runtime {
             // the model answer itself.
             .filter(|e| !batch.iter().any(|b| b.id == e.id))
             .collect::<Vec<_>>();
+
+        // Everything the prompt already carries, which is what stops a message
+        // this turn takes in later from being written into it twice. `deliver`
+        // writes to the store before it touches the inbox, so an envelope that
+        // was queued behind this turn's own batch when the turn started is
+        // already in the history that was just read while still sitting in the
+        // inbox waiting to be answered. Two operator lines typed a second apart
+        // are enough.
+        let mut rendered: HashSet<MessageId> = history.iter().map(|e| e.id).collect();
 
         let memory = self.inner.workspace.read(agent_id);
         // Read fresh alongside it, and a read that fails is an empty list
@@ -2651,6 +2660,27 @@ impl Runtime {
             if self.stopped(run_id) {
                 called_off = true;
                 break;
+            }
+
+            // Before the step is claimed, so what arrived is paid for by the
+            // call it is part of rather than by the one after it. A turn that
+            // is about to be cut off by the budget still reads its last
+            // message: taking it in costs nothing and releases the run holding
+            // it, and leaving it queued behind a turn that is ending buys
+            // nobody anything.
+            let arrived = self.take_in(mode, &names, &mut rendered, &mut messages, intake);
+            if !arrived.is_empty() {
+                self.deliver_files(&card, &arrived, modalities, &mut messages).await;
+                // Work taken in mid-turn carries the same obligation work in the
+                // batch does. `NoteOnly` tells an agent nothing is being asked
+                // of it and silence is usually right, which is true of what this
+                // turn woke up to and not of a finished coding job that landed
+                // while it ran. `Assigned` is the mode that says a note it never
+                // writes is a failure, and both write to the same place, so this
+                // moves nothing the UI has already drawn.
+                if mode == ReplyMode::NoteOnly && arrived.iter().any(|e| e.intent.is_work()) {
+                    mode = ReplyMode::Assigned;
+                }
             }
 
             // One claim per model call. Claiming per turn instead would let a
@@ -2917,6 +2947,109 @@ impl Runtime {
         }
 
         Err(last.expect("the loop only ends here after a failure"))
+    }
+
+    /// Takes in whatever arrived while this turn was working, as context.
+    ///
+    /// Called at the top of every round, so the model sees a correction or a
+    /// finished job on its next call rather than on its next turn. Without it a
+    /// long turn is deaf: an operator watching an agent work can type at it and
+    /// be read forty minutes later, and a `code` job's result can never reach
+    /// the turn that started it, because `code` does not block and its answer
+    /// comes back as an envelope the running actor is not free to look at. That
+    /// second one deadlocks: `RepositoryBusy` tells the agent to wait for a
+    /// message, and the turn doing the waiting is the thing holding it up.
+    ///
+    /// ## Context, and never a change of address
+    ///
+    /// What comes in is added to the conversation and changes nothing else. Not
+    /// the mode, not the reply target, not the channel the placeholder is
+    /// already open in, not `cause`. All four were decided before the first
+    /// token and the UI has been drawing them since; a turn that changed its
+    /// mind about who it was answering would have to close a live bubble in one
+    /// channel and open it in another, which is a worse thing to watch than a
+    /// late reply.
+    ///
+    /// That is also the whole reason `ToPeer` takes in nothing. Such a turn's
+    /// answer is addressed to the peer that asked, so an operator message read
+    /// there would be read and never answered. Every other mode writes into
+    /// this agent's own channel to the operator, which is where a message from
+    /// the operator or from Guaca would have been answered anyway.
+    ///
+    /// Peers are refused for the same reason from the other end: a peer's
+    /// message is a hop with a reply owed, and answering it as a footnote to
+    /// somebody else's turn is not an answer. It waits, exactly as it does now.
+    ///
+    /// Each envelope is released against its own run as it is taken, rather
+    /// than at the end of the turn with the batch. This turn is what consumed
+    /// it and no other turn is coming for it, so its run has nothing further
+    /// outstanding and settles here.
+    fn take_in(
+        &self,
+        mode: ReplyMode,
+        names: &NameTable,
+        // What the prompt already says, by message id. An envelope in here is
+        // one this turn is answering and has already been shown, not one to
+        // write out again.
+        rendered: &mut HashSet<MessageId>,
+        messages: &mut Vec<ChatMessage>,
+        intake: &mut Intake<'_>,
+    ) -> Vec<Envelope> {
+        if mode == ReplyMode::ToPeer {
+            return Vec::new();
+        }
+
+        let mut taken: Vec<Envelope> = Vec::new();
+        while taken.len() < MAX_BATCH {
+            let pulled = match intake.carry.pop_front() {
+                Some(held) => Some(held),
+                None => intake.rx.try_recv().ok(),
+            };
+            let Some(next) = pulled else { break };
+
+            // Order is the whole point of the holding queue, so the first one
+            // this turn cannot take ends the intake: anything behind it arrived
+            // later and has to stay there. A stopped run is left alone for the
+            // same reason it is left alone everywhere else — the actor's own
+            // boundary is where it gets its notice, and folding called-off work
+            // into a live turn is the one thing a stop exists to prevent.
+            let takeable = matches!(next.from, Participant::Human | Participant::System)
+                && !self.stopped(next.run_id);
+            if !takeable {
+                intake.carry.push_front(next);
+                break;
+            }
+
+            intake.depth.fetch_sub(1, Ordering::SeqCst);
+            self.absorb(next.run_id);
+            taken.push(next);
+        }
+
+        // One user turn for the lot, exactly as the batch collapses, and
+        // labeled by the same function. A model that can tell `[OPERATOR]` from
+        // `[SYSTEM]` at the top of a turn has to be able to tell them apart in
+        // the middle of one, and a second way of writing the label is a second
+        // thing for a prompt-injection test to miss.
+        let lines: Vec<String> = taken
+            .iter()
+            .filter(|e| rendered.insert(e.id))
+            .map(|e| prompt::render_incoming(e, names))
+            .collect();
+        if !lines.is_empty() {
+            messages.push(ChatMessage::user(lines.join("\n\n")));
+        }
+
+        taken
+    }
+
+    /// Releases an envelope a running turn took in, against the run that booked
+    /// it.
+    ///
+    /// The same arithmetic as [`Self::abandon`] and deliberately not the same
+    /// word. Abandoning is work that will not happen; this is work that just
+    /// did, inside somebody else's turn.
+    fn absorb(&self, run: RunId) {
+        self.track_inflight(run, -1);
     }
 
     fn finish_turn(&self, agent_id: AgentId, run_id: RunId, consumed: usize) {
@@ -5412,6 +5545,34 @@ impl Runtime {
     }
 }
 
+/// The inbox, reached from inside the turn that is already running.
+///
+/// A turn is started with a batch and, until this existed, could not see
+/// anything that arrived after it. That is right for a peer cascade and wrong
+/// for the two things a person does while watching an agent work: send it a
+/// correction, and start something whose result comes back as a message. A
+/// coding job is the second one, and it deadlocked on exactly this. `code` does
+/// not block, its result is delivered as a fresh envelope, and an actor only
+/// examines the envelope it is holding — so the turn that started the job could
+/// never receive it, and `RepositoryBusy` told the agent to wait for a message
+/// its own turn was the thing blocking.
+///
+/// Claude Code has the same problem and solves it a level down: a prompt typed
+/// while a turn is busy is recorded as a queued command and read at the next
+/// round rather than the next session. Guaca keeps its own loop, so it has to
+/// own the equivalent, and [`Runtime::take_in`] is it.
+///
+/// Borrowed rather than cloned because the receiver is the inbox. Two handles
+/// to it would be two readers of one queue, which is how an envelope goes to
+/// the wrong turn.
+struct Intake<'a> {
+    rx: &'a mut mpsc::UnboundedReceiver<Envelope>,
+    /// The actor's holding queue. Anything here arrived before whatever is
+    /// still in the channel, so it is read first and pushed back to the front.
+    carry: &'a mut VecDeque<Envelope>,
+    depth: &'a AtomicUsize,
+}
+
 async fn actor_loop(
     runtime: Runtime,
     id: AgentId,
@@ -5605,7 +5766,9 @@ async fn actor_loop(
             }
         }
 
-        runtime.run_turn(id, batch).await;
+        runtime
+            .run_turn(id, batch, &mut Intake { rx: &mut rx, carry: &mut carry, depth: &depth })
+            .await;
     }
 
     tracing::debug!(agent = %id.short(), "actor stopped");
