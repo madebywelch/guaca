@@ -652,7 +652,11 @@ pub fn system_prompt(
               brief has to carry everything: what to change, how to tell it worked, and what to \
               do with the result.\n\
              - You have not read the code yourself. When the work comes back, report what the \
-              coding agent says it did rather than claiming to have checked it.\n",
+              coding agent says it did rather than claiming to have checked it.\n\
+             - The coding agent is told the state of the work tree as it starts: the branch, \
+              whether anything is uncommitted, and whether that branch has already been merged. \
+              So do not put branch instructions in the brief and do not guess at one. Say what \
+              the work is and where it should end up.\n",
             repository.own_line().trim_start_matches("- "),
         ));
     }
