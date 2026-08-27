@@ -2,7 +2,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ACTIVITY_CHANNEL, useStore } from "../lib/store";
-import type { Activity, AgentCard, Envelope, MessageId, Part } from "../lib/types";
+import type { LiveCall } from "../lib/trail";
+import type { Activity, AgentCard, Envelope, MessageId, Part, ToolOutcome } from "../lib/types";
 import { ChannelView } from "./ChannelView";
 
 /**
@@ -314,34 +315,129 @@ describe("while an agent is working", () => {
     expect(screen.queryByRole("button", { name: /working through/ })).toBeNull();
   });
 
-  it("draws the calls the turn has already made, as the transcript will", () => {
+  /** A call that has come back, as the runtime reports it. */
+  const finished = (
+    callId: string,
+    name: string,
+    args: object,
+    outcome: ToolOutcome,
+  ): LiveCall => ({
+    callId,
+    name,
+    arguments: args,
+    done: { type: "toolCall", name, arguments: args, outcome },
+    startedAt: 0,
+  });
+
+  const browsed = (callId: string) =>
+    finished(
+      callId,
+      "browse",
+      { action: "open", url: "https://www.cnn.com/world" },
+      {
+        status: "ok",
+        summary: "read cnn.com",
+      },
+    );
+
+  it("counts the calls the turn has made, and opens them as the transcript will", () => {
     // Until this, a turn's tool calls were invisible for as long as the turn
     // ran: a browsing turn spends most of its twenty-four rounds in the
-    // browser and the operator watching had one line of prose.
+    // browser and the operator watching had one line of prose. Open, they were
+    // the other extreme: the whole record of a long turn, wrapped across four
+    // rows and reflowing under the composer every time a call came back.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() => useStore.setState({ trail: { [MANAGER]: [browsed("call_1")] } }));
+
+    expect(screen.queryByText("Opened cnn.com")).toBeNull();
+    const count = screen.getByRole("button", { name: /1 step/ });
+    fireEvent.click(count);
+    expect(screen.getByText("Opened cnn.com")).toBeTruthy();
+
+    // And the count is a count, not a name: a chip carrying the first of
+    // several kinds of work is a chip that is wrong about the rest.
+    act(() => useStore.setState({ trail: { [MANAGER]: [browsed("call_1"), browsed("call_2")] } }));
+    expect(document.querySelector(".working__steps")?.textContent).toContain("2 steps");
+  });
+
+  it("marks the count where something went wrong, and says how much", () => {
+    // The one thing on the trail the operator may have to act on. Everything
+    // else about the turn's work can wait behind the click; that it did not
+    // work cannot.
     open([envelope({})]);
     doing({ state: "thinking" });
     act(() =>
       useStore.setState({
         trail: {
           [MANAGER]: [
-            {
-              callId: "call_1",
-              name: "browse",
-              arguments: { action: "open", url: "https://www.cnn.com/world" },
-              done: {
-                type: "toolCall",
-                name: "browse",
-                arguments: { action: "open", url: "https://www.cnn.com/world" },
-                outcome: { status: "ok", summary: "read cnn.com" },
+            browsed("call_1"),
+            finished(
+              "call_2",
+              "run_command",
+              { command: "boom" },
+              {
+                status: "failed",
+                error: "no machine",
               },
-              startedAt: 0,
-            },
+            ),
           ],
         },
       }),
     );
 
-    expect(screen.getByText("Opened cnn.com")).toBeTruthy();
+    const count = screen.getByRole("button", { name: /2 steps, 1 failed/ });
+    expect(count.getAttribute("data-failed")).toBe("true");
+  });
+
+  it("keeps a spent credential on the line, never behind the click", () => {
+    // The operator's audit trail for their own tokens. A name is what tells
+    // two of them apart; the value is not here and there is no field it could
+    // arrive in.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        trail: {
+          [MANAGER]: [
+            finished(
+              "call_1",
+              "run_command",
+              { command: "curl" },
+              {
+                status: "ok",
+                summary: "used Mistral ($MISTRAL_API_KEY) · exit 0",
+              },
+            ),
+          ],
+        },
+      }),
+    );
+
+    expect(document.querySelector(".working__end .trail__spent")?.textContent).toBe(
+      "Mistral ($MISTRAL_API_KEY)",
+    );
+  });
+
+  it("gives the working and the calls one slot, so one closes the other", () => {
+    // Two disclosures stacking is the transcript giving up twice the height
+    // for a question asked once, and a composer that moves twice.
+    open([envelope({})]);
+    doing({ state: "thinking" });
+    act(() =>
+      useStore.setState({
+        reasoning: { [MANAGER]: "**Checking**\n\nthe totals agree." },
+        trail: { [MANAGER]: [browsed("call_1")] },
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /1 step/ }));
+    expect(document.querySelector(".steps")).toBeTruthy();
+    expect(document.querySelector(".thought")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /Show what Manager is working through/ }));
+    expect(document.querySelector(".thought")).toBeTruthy();
+    expect(document.querySelector(".steps")).toBeNull();
   });
 
   it("says what it is waiting on, and how long it has been", () => {
