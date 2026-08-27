@@ -105,6 +105,7 @@ repo: the frontend renders state and forwards intent.
 | Changing | Read |
 |---|---|
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
+| A message that arrives while an agent is already working, and the coding job whose answer could not reach the turn that started it | *A working turn reads its inbox, and only what it can answer where it stands* in `docs/ARCHITECTURE.md`, then `Runtime::take_in` and `Intake` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
@@ -897,6 +898,32 @@ the model takes a screenshot to see what `browse` did.
   through. It is not a standing yes. It lives on the turn's `Reading`, reaches
   no table, and `Reading::took_in` drops it the moment the turn takes in a page
   from anywhere else.
+- **A turn reads its inbox between rounds, and reads nothing that would change
+  where its answer goes.** Those are one decision, not a rule with an exception
+  bolted on. The mode, the reply target, the placeholder's channel and `cause`
+  are all fixed before the first token and the UI has been drawing them since,
+  so what a running turn may take in is exactly what it could already answer
+  from where it stands: the operator and Guaca, into a turn that is writing to
+  this agent's own channel. `ToPeer` takes in nothing, because that turn's
+  answer is addressed to the agent that asked and an operator message read there
+  would be read and never answered. A peer's message waits for the same reason
+  from the other end: it is a hop with a reply owed, and answering it as a
+  footnote to somebody else's turn is not an answer. `Runtime::take_in`.
+- **A turn remembers what its own prompt already says, and intake renders
+  against that.** `deliver` writes to the store before the inbox, so a message
+  queued behind the one being answered is in the history the turn just read and
+  in the inbox at the same time. It is consumed, released and answered by this
+  turn either way; without the set it is also written into the prompt twice, and
+  an instruction a model reads twice is one it was told twice.
+- **`code` not blocking is what made a running turn need to read its inbox at
+  all.** The job's answer comes back as a fresh envelope on a run of its own, an
+  actor only examines the envelope it is holding, and the turn that asked was
+  therefore the one thing that could not receive it. `RepositoryBusy` then told
+  that agent to wait for the message its own turn was holding up, which is an
+  instruction nothing can follow: measured on a real crew, forty-five minutes
+  and forty-five model calls of a turn filling time, with three finished jobs
+  and an operator correction stacked behind it. Neither half was wrong on its
+  own, which is why it survived review twice.
 - **An envelope booked against a run is released by whatever consumes it.** A
   path that takes one without turning it into a turn leaves the run outstanding
   for the life of the process.
