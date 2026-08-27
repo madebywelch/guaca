@@ -84,6 +84,8 @@ src-tauri/src/
   eval.rs             Reads a run and says whether it communicated sensibly.
   trajectory.rs       Reads a run's events and says whether the machinery did.
   config.rs           Operator settings, and the API key the webview never sees.
+  programs.rs         The PATH the four programs this app runs are found on,
+                      which is not the one a double-clicked app is started with.
   commands.rs         The entire IPC surface.
   menubar.rs          What the menu bar says. No Tauri, no menu, no drawing.
   tray.rs             Drawing that, and turning a click back into a decision.
@@ -114,6 +116,7 @@ repo: the frontend renders state and forwards intent.
 | An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
 | Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
 | An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |
+| A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
@@ -444,6 +447,19 @@ the model takes a screenshot to see what `browse` did.
   subscription both report the equivalent API price. They agree with each other,
   and `Outcome::cost` claims no more than that; zero is absent rather than free,
   for the reason it always was.
+- **A double-clicked app does not have the operator's `PATH`.** `launchd` starts
+  one from the Dock or the Finder with `/usr/bin:/bin:/usr/sbin:/sbin` and
+  nothing else, so `claude` under `~/.local/bin` and `pi` and `gh` under
+  `/opt/homebrew/bin` are all missing from the only list this app looks a
+  program up in. Started from a terminal it inherits that terminal's `PATH` and
+  finds every one of them, which is why the whole suite, `pnpm app` and
+  `cargo run` pass and only the built app fails, and why the first report of it
+  was an operator being told `claude is not installed` with `claude` on their
+  path in the window they had built the app in. `programs.rs` asks their shell
+  once at startup, and the shell has to be a login shell *and* an interactive
+  one: a zsh user's `PATH` is written in `.zshrc`, which `zsh -l -c` never
+  reads, so a login-only probe is a fix that changes nothing and looks like it
+  worked.
 - **A stub that branches on what was said must not read the system prompt.**
   `anyone_said` skips it. Every scripted eval keyed on a word is really asking
   "does this appear anywhere in the request", and the request opens with two
