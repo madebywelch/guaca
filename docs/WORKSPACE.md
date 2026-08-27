@@ -557,9 +557,8 @@ go away, it just stopped being the whole answer: it is what separates two lifted
 rows, and it is still the text in the right-hand column.
 
 `lib/rail.ts` holds all of it, and holds it as pure functions over a list, so the
-same rules order a section, decide where a drop lands, and decide what "one row
-up" means. The rail draws the arrangement itself while a drag is in progress,
-with nobody lifted. Dragging is arranging: a row dropped below a peer that is
+same rules order a section and decide where a drop lands. The rail draws the
+arrangement itself while a drag is in progress, with nobody lifted. Dragging is arranging: a row dropped below a peer that is
 only near the top because it happens to be mid-turn would land somewhere nobody
 aimed at, and the rail would look like it had ignored the gesture the moment that
 turn ended.
@@ -594,9 +593,15 @@ the same setting that stops `dragstart` firing inside the webview on some
 platforms. A rail that only rearranges on macOS is not a feature. A press
 becomes a drag after five pixels, because a row is a button first.
 
-Everything a drag does is also in the agent's menu: move up, move down, and move
-to a named group. A rail that can only be arranged by dragging cannot be arranged
-from a keyboard at all.
+The one thing a drag does that a hand on a trackpad should not have to aim for
+is crossing a crew boundary, so that is in the agent's menu, behind one row that
+opens the crews beside it. A row per crew was there first and is what the submenu
+replaced: the crews are the one part of that menu whose length nothing bounds, so
+a workspace with eight of them pushed clearing a history and deleting an agent
+off the bottom of the window, under the two items nobody wants to hunt for.
+Ordering within a crew has no menu item at all. "Move up" and "move down" were
+two rows spent on the gesture the rail already answers, in a menu where every
+other row is something a drag cannot do.
 
 ## A group is a place you can be inside
 

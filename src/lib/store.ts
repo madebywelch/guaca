@@ -11,7 +11,7 @@ import { create } from "zustand";
 
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
-import { type DropTarget, landsBefore, nudgeTarget, railOrder } from "./rail";
+import { type DropTarget, landsBefore, railOrder } from "./rail";
 
 /**
  * How much of a running coding job's work is kept on screen.
@@ -280,8 +280,6 @@ interface State {
   moveAgent: (id: AgentId, at: Placement) => Promise<void>;
   /** One drop, resolved against the rules that drew the rail. */
   dropAgent: (id: AgentId, target: DropTarget) => Promise<void>;
-  /** The same move one row at a time, for an operator who is not dragging. */
-  nudgeAgent: (id: AgentId, delta: -1 | 1) => Promise<void>;
   loadChannel: (key: ChannelKey, through?: MessageId) => Promise<void>;
   /** Opens a message's channel with the message itself in the window. */
   openMessage: (channel: AgentId, message: MessageId) => Promise<void>;
@@ -630,34 +628,6 @@ export const useStore = create<State>((set, get) => ({
     const before = landsBefore(order, id, onto.id);
     if (before === undefined) return;
     await get().moveAgent(id, { groupId: onto.groupId, before, pinned: onto.pinned });
-  },
-
-  /**
-   * One row up or down, for an operator who is not holding a mouse.
-   *
-   * Ordered from the same function that draws the rail, and frozen, so this
-   * moves the row within the arrangement rather than within whatever the
-   * arrangement currently looks like with somebody mid-turn on top of it.
-   */
-  async nudgeAgent(id, delta) {
-    const state = get();
-    const agent = state.agents.find((a) => a.id === id);
-    if (!agent) return;
-
-    const live = state.agents.filter((a) => a.lifecycle !== "terminated");
-    // Within its own band, because that is the list the row is drawn in. A
-    // nudge across the boundary would ask for a place the bands then take back,
-    // and the row would sit exactly where it was with a write behind it.
-    const section = live.filter((a) => a.groupId === agent.groupId && a.pinned === agent.pinned);
-
-    const order = railOrder(section, {
-      activity: state.activity,
-      lastActive: state.lastActive,
-      frozen: true,
-    });
-    const before = nudgeTarget(order, id, delta);
-    if (before === undefined) return;
-    await get().moveAgent(id, { groupId: agent.groupId, before });
   },
 
   async loadChannel(key, through) {
