@@ -25,7 +25,7 @@
 //! `coding.rs`, `subscription.rs` and `plugins.rs` each keep for the reason.
 
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use guac_lib::config::{InferenceConfig, Provider};
@@ -36,11 +36,13 @@ use guac_lib::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, T
 /// cannot pass for each other.
 const MARKER: &str = "guaca-conversation-arrived";
 
-/// Puts a stand-in `claude` on `PATH`, exactly once.
+/// Puts a stand-in `claude` on `PATH`, exactly once, and says where it is.
 ///
 /// Once, because `PATH` is process-wide and these tests run concurrently:
-/// writing it per test is a read racing a write on another thread.
-fn stand_in() {
+/// writing it per test is a read racing a write on another thread. The path
+/// comes back because what the stand-in records about its own start is written
+/// beside it.
+fn stand_in() -> PathBuf {
     static ONCE: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
     ONCE.get_or_init(|| {
         let dir = tempfile::tempdir().unwrap();
@@ -48,7 +50,9 @@ fn stand_in() {
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{path}", dir.path().display()));
         dir
-    });
+    })
+    .path()
+    .to_path_buf()
 }
 
 /// The stand-in: reads the conversation, then answers on the basis of it.
@@ -57,8 +61,15 @@ fn stand_in() {
 /// this suite is here to catch is the conversation not arriving. A stand-in
 /// that answered the same either way would pass with the write removed.
 fn write_stand_in(dir: &Path) {
+    // Where it was started, recorded before anything else. The path is absolute
+    // so that reading it back does not depend on where it was started, and
+    // `pwd -P` resolves symlinks because the answer is compared against a
+    // canonical path: on this platform the temporary directory is reached
+    // through one.
+    let record = dir.join("cwd");
     let script = format!(
         "#!/bin/sh\n\
+         pwd -P > '{cwd}'\n\
          if [ \"$1\" = '--version' ]; then echo 'stand-in'; exit 0; fi\n\
          input=$(cat)\n\
          case \"$input\" in\n\
@@ -69,7 +80,8 @@ fn write_stand_in(dir: &Path) {
            *'no-answer'*) echo 'refusing' >&2; exit 3 ;;\n\
          esac\n\
          printf '%s\\n' '{{\"type\":\"stream_event\",\"event\":{{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"thinking_delta\",\"thinking\":\"weighing it up\"}}}}}}'\n\
-         printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"stop_reason\":\"end_turn\",\"structured_output\":{{\"say\":\"told Pat\",\"calls\":[{{\"name\":\"send_message\",\"arguments\":{{\"to\":\"Pat\"}}}}]}},\"usage\":{{\"input_tokens\":7,\"cache_read_input_tokens\":3,\"output_tokens\":5}},\"total_cost_usd\":0.42}}'\n"
+         printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"stop_reason\":\"end_turn\",\"structured_output\":{{\"say\":\"told Pat\",\"calls\":[{{\"name\":\"send_message\",\"arguments\":{{\"to\":\"Pat\"}}}}]}},\"usage\":{{\"input_tokens\":7,\"cache_read_input_tokens\":3,\"output_tokens\":5}},\"total_cost_usd\":0.42}}'\n",
+        cwd = record.display()
     );
     let at = dir.join("claude");
     let mut file = std::fs::File::create(&at).unwrap();
@@ -196,6 +208,40 @@ async fn a_program_that_never_finishes_is_given_up_on() {
     // Both are bounded, and being bounded is the whole assertion: nothing here
     // may wait on a process forever.
     assert!(started.elapsed() < Duration::from_secs(20), "{result:?}");
+}
+
+#[tokio::test]
+async fn the_program_is_started_somewhere_this_app_owns() {
+    // Not where this process happens to be standing. A double-clicked app is
+    // started in `/` by `launchd` and a child inherits that, and `claude` takes
+    // the directory it is started in as the project it is working on: from `/`
+    // it asks the operating system what it may reach across the whole disk, and
+    // macOS puts that question to the operator in the name of the *responsible*
+    // process, which is this app. Measured on 2026-08-27 against 2.1.247, one
+    // turn asked for the photo library, the music library, the Desktop and the
+    // Downloads folder, and for full disk access, each dialog naming Guaca.
+    // `llm/claude.rs` has the log lines.
+    let beside = stand_in();
+    LlmClient::new().unwrap().stream_chat(&on_claude(), &asking(), |_| {}).await.unwrap();
+
+    let recorded = std::fs::read_to_string(beside.join("cwd"))
+        .expect("the stand-in records where it was started");
+    let started_in = Path::new(recorded.trim());
+
+    assert_ne!(started_in, Path::new("/"), "started in the root of the disk");
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = std::fs::canonicalize(home).unwrap();
+        assert_ne!(started_in, home, "started in the operator's home directory");
+    }
+
+    // Canonical on both sides: the temporary directory is reached through a
+    // symlink on macOS, and the two spellings of it are not equal as strings.
+    let scratch = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+    assert!(
+        started_in.starts_with(&scratch),
+        "started outside this app's own scratch space: {}",
+        started_in.display()
+    );
 }
 
 /// The live half: whether the real program still accepts that command line and
