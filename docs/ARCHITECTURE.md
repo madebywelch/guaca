@@ -337,14 +337,31 @@ be:
   turn — would reach the reply with the mode it started in and write to the peer
   that was waiting. One lock read per turn closes it.
 
-A stop does not interrupt the model call in flight. The streaming client has no
-cancellation handle, so the turn that is talking finishes talking and stops
-before it would have called again. That is also what keeps the accounting
-honest: a call that was paid for is a call that completed. The same reasoning is
-why a stop is not looked at inside the retry loop either, which is the one place
-it costs something: a step is claimed for the whole call before the first
-attempt, so abandoning it between attempts would leave the run reporting a step
-against no call. A stop landing during a backoff waits it out.
+**The model call in flight is dropped, and that is the fifth place.** The four
+boundaries above are all places a turn passes between calls, and a turn spends
+most of a long minute inside one. Waiting for it to come back was defensible
+while every provider was an endpoint that answers in seconds. It stopped being
+defensible when one of them became a program: a call on the Claude provider is a
+whole `claude` run, which thinks for as long as it wants and holds the operator's
+plan for all of it, so a stop that waited was a button that did nothing for
+minutes. `Runtime::until_stopped` races the call, and the backoff between
+attempts with it, against the agent's own `resume` — the signal `stop_run`
+already wakes on every inbox.
+
+Dropping the future is the whole of the cancellation, and no backend needed a
+line for it. A `reqwest` response closes its connection when it goes; `llm/claude.rs`
+spawns its child with `kill_on_drop`, so the program dies with the call and the
+plan stops being spent on an answer nobody will read.
+
+What that costs is one line of accounting. A step is claimed before the call,
+because the run's bill has to name calls that were really made, and `trajectory.rs`
+reads that bill as `steps == calls + failures`: a call that answered reports
+usage, a call that failed every attempt writes a notice, and both are visible
+from outside. An abandoned call is in neither bucket, so `RunState::release_step`
+gives its step back at the point the turn gives up on it. Without that, every
+stop that landed mid-call would read as a budget that miscounted. It cannot be
+used to dodge the ceiling: a run only reaches it on the way out, and the turn
+that released breaks out of its round loop on the same stop.
 
 A stopped turn keeps its words and sends them nowhere. It reports as a note, so
 whatever it managed to say lands in its own channel where the operator can read

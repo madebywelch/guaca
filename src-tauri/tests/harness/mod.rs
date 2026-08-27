@@ -113,7 +113,22 @@ pub enum Script {
     /// arrive as different `LlmError`s and all answer `is_transient`, which is
     /// the only thing the retry loop asks them.
     Unavailable,
+    /// Take the request and never answer it.
+    ///
+    /// A call in flight, which is where a turn spends most of a long minute and
+    /// is the one place a stop cannot be noticed by looking at a boundary. It
+    /// stands in for the shape that made this matter: on the Claude provider a
+    /// model call is a whole `claude` run, and one that thinks for five minutes
+    /// holds the operator's plan for all five of them.
+    ///
+    /// Held for [`HANG`], which is far longer than any stop test waits, so a
+    /// call that is not abandoned reads as a run that never settled rather than
+    /// as a slow one.
+    Hang,
 }
+
+/// How long [`Script::Hang`] holds a request open.
+pub const HANG: Duration = Duration::from_secs(30);
 
 pub fn frame(value: serde_json::Value) -> String {
     format!("data: {value}\n\n")
@@ -341,8 +356,9 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        // Never rendered: the server answers it with a status, not a body.
-        Script::Unavailable => {}
+        // Never rendered: the server answers one with a status and the other
+        // with nothing at all.
+        Script::Unavailable | Script::Hang => {}
         Script::Directory => {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_dir","type":"function",
@@ -498,6 +514,9 @@ where
                         "the model provider is having a moment",
                     )
                         .into_response();
+                }
+                if matches!(script, Script::Hang) {
+                    tokio::time::sleep(HANG).await;
                 }
                 ([("content-type", "text/event-stream")], render(&script)).into_response()
             }

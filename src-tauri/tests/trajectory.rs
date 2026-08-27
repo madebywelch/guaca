@@ -477,6 +477,64 @@ async fn stopping_a_run_ends_it_and_bills_only_the_calls_it_made() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stopping_a_run_abandons_the_model_call_it_was_waiting_on() {
+    // The window every other stop test steps over. A stop is noticed at four
+    // boundaries and a call in flight is between all of them, which is where a
+    // turn spends most of a long minute: the run was marked, the wake reached
+    // nobody that was listening, and the operator watched a button they had
+    // pressed do nothing until the provider answered. On the Claude provider
+    // that wait is a whole `claude` run holding their plan, up to the request
+    // timeout, so this was the difference between a stop and a suggestion.
+    //
+    // Two calls, because the accounting is the other half of the fix. The first
+    // answers and is counted. The second is abandoned, reports no usage and
+    // raises no error, so it belongs to neither of the two buckets the run's
+    // bill is read as — `steps == calls + failures` — and its step has to be
+    // given back or `expect_normal` reads the stop as a miscounted budget.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Hang
+        } else {
+            Script::Progress("looking into it".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "How is the prep going?").unwrap();
+
+    h.wait_until("the second call has been sent and not answered", |_| {
+        stub.calls.load(Ordering::SeqCst) >= 2
+    })
+    .await;
+
+    assert!(h.runtime.stop_run(run), "the turn is still outstanding");
+    assert!(
+        h.settled_within(run, 5).await,
+        "a stop waited out the call in flight, which {HANG:?} of provider is too long to call \
+         stopping:\n{}",
+        h.trajectory(run).ledger
+    );
+
+    let t = h.expect_normal(run, "a stop that landed while a call was in flight");
+    assert_eq!(t.calls(), 1, "the abandoned call answered nothing, so nothing was counted");
+    assert_eq!(
+        t.steps().map(|steps| steps as usize),
+        Some(t.calls()),
+        "the step claimed for the abandoned call was not given back:\n{}",
+        t.ledger
+    );
+    assert!(
+        t.records.iter().any(|r| matches!(
+            r,
+            Record::Noticed { kind: NoticeKind::GuardStop, text, .. } if text.contains("stopped")
+        )),
+        "and the channel says why it ended where it did:\n{}",
+        t.ledger
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_a_run_a_paused_agent_is_holding_still_ends_it() {
     // The same shape as deleting an agent mid-hold, and the reason a stop wakes
     // every inbox. A paused agent parks inside an await that only a resume

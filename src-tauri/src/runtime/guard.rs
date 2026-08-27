@@ -284,6 +284,25 @@ impl RunState {
         true
     }
 
+    /// Gives back the step claimed for a call the operator's stop cut short.
+    ///
+    /// The one caller is the model call a stop abandoned, and it exists because
+    /// of how the bill is read rather than to be generous about the ceiling.
+    /// `trajectory.rs` checks a run's steps against `calls + failures`: a
+    /// completed call reports usage and a call that failed every attempt writes
+    /// a notice, so both buckets are visible from outside. A call dropped
+    /// mid-flight is in neither, and a step left claimed for it makes every
+    /// stopped run read as a budget that miscounted.
+    ///
+    /// It cannot be spent against the ceiling, because a run only reaches here
+    /// on its way out: the turn that released breaks out of its round loop on
+    /// the same stop, and every other boundary is already refusing work for the
+    /// run. Nothing claims again after this.
+    pub fn release_step(&mut self) {
+        self.last_touched = now_ms();
+        self.steps_used = self.steps_used.saturating_sub(1);
+    }
+
     /// Evaluates one proposed send and, when allowed, records it.
     ///
     /// Recording on allow is what makes the per-pair and dedup limits real, so
@@ -552,6 +571,31 @@ mod tests {
         assert!(state.reserve_step());
         assert!(!state.reserve_step(), "fourth turn must be denied");
         assert_eq!(state.steps_remaining(), 0);
+    }
+
+    #[test]
+    fn a_call_the_operator_cut_short_gives_its_step_back() {
+        // The bill is read as `steps == calls + failures`. An abandoned call is
+        // in neither bucket, so a step left claimed for it is a run that looks
+        // like it billed for a call nothing can find.
+        let mut state = RunState::new(GuardLimits { max_steps_per_run: 3, ..permissive() });
+        assert!(state.reserve_step());
+        assert!(state.reserve_step());
+        state.release_step();
+        assert_eq!(state.steps_used(), 1, "only the call that answered is on the bill");
+        assert_eq!(state.steps_remaining(), 2);
+    }
+
+    #[test]
+    fn releasing_a_step_that_was_never_claimed_does_nothing() {
+        // Nothing calls it that way today, and a wrap to u32::MAX would be a
+        // run whose budget can never be spent rather than a panic anybody sees.
+        let mut state = RunState::new(GuardLimits { max_steps_per_run: 2, ..permissive() });
+        state.release_step();
+        assert_eq!(state.steps_used(), 0);
+        assert!(state.reserve_step());
+        assert!(state.reserve_step());
+        assert!(!state.reserve_step(), "the ceiling still holds");
     }
 
     #[test]
