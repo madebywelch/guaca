@@ -593,7 +593,11 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // A call this app has given up on must not leave a process holding the
-        // operator's plan open. The same reason it is set in `coding/mod.rs`.
+        // operator's plan open. The same reason it is set in `coding/mod.rs`,
+        // and it is load-bearing rather than tidy here: this is the whole of
+        // what a stop does to a call in flight. `Runtime::until_stopped` drops
+        // the future, the drop takes the child with it, and the plan stops being
+        // spent on an answer nobody is going to read.
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| match err.kind() {

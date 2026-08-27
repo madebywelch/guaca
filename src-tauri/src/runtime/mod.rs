@@ -511,7 +511,10 @@ struct Inbox {
     /// Queue depth, so the sidebar can show a backlog without draining it.
     depth: Arc<AtomicUsize>,
     /// Woken when a paused agent is resumed, or when a run it may be holding is
-    /// stopped.
+    /// stopped. Both a parked actor and a model call this agent has in flight
+    /// wait on it, so it is a nudge to go and look rather than a message: every
+    /// waiter re-reads what it was waiting for and goes back to waiting if the
+    /// answer was not for it.
     resume: Arc<Notify>,
 }
 
@@ -2113,11 +2116,12 @@ impl Runtime {
     /// going to lift. Everything else is either running, and will reach a
     /// boundary on its own, or queued, and will reach one when it is read.
     ///
-    /// A stop does not interrupt the model call in flight. There is no
-    /// cancellation handle on the streaming client, so the turn that is talking
-    /// finishes talking and stops before it would have called again. That is
-    /// the honest boundary and it is also the one that keeps the budget
-    /// truthful: a call that was paid for is a call that completed.
+    /// The model call in flight is dropped rather than waited out, which is
+    /// what the wake above buys on top of the mark. See [`Self::until_stopped`]:
+    /// on the Claude provider a call is a whole `claude` run and waiting for one
+    /// made this button do nothing for minutes. The step claimed for that call
+    /// is given back where it was claimed, so the run's bill still names only
+    /// calls it was answered by.
     ///
     /// False when the run has nothing outstanding, which is every run that has
     /// already finished. That is not an error, and it deliberately writes
@@ -2708,7 +2712,18 @@ impl Runtime {
             let completion = self.stream_with_retries(&inference, &request, &mut stream).await;
 
             let completion = match completion {
-                Ok(completion) => completion,
+                Ok(Some(completion)) => completion,
+                // The operator stopped the run while this call was in the air,
+                // so it was dropped rather than waited out. The step goes back
+                // here, next to where it was claimed: the abandoned call
+                // reported no usage and raised no error, so it is in neither
+                // bucket the run's bill is read as and a step left standing for
+                // it makes every stopped run look like a budget that miscounted.
+                Ok(None) => {
+                    self.inner.guard.lock().run_within(run_id, limits).release_step();
+                    called_off = true;
+                    break;
+                }
                 Err(err) => {
                     failure = Some(err);
                     break;
@@ -2836,9 +2851,9 @@ impl Runtime {
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
-                    "You stopped this conversation. {} finished the model call it was already in \
-                     and started nothing else, and nothing was sent on. Send it again if you want \
-                     it finished.",
+                    "You stopped this conversation. {} dropped the model call it was in, started \
+                     nothing else, and nothing was sent on. Send it again if you want it \
+                     finished.",
                     card.name
                 ),
             });
@@ -2880,23 +2895,25 @@ impl Runtime {
     /// One model call, attempted more than once when the failure is the kind
     /// that fixes itself.
     ///
-    /// The budget is not touched here. A call is one call however many times
-    /// the network dropped it, and reserving a step per attempt would bill a
-    /// run for requests that never reached a provider.
+    /// `None` is the operator stopping the run mid-call: the attempt in flight
+    /// was dropped, nothing was counted and nothing failed. The caller gives the
+    /// step back, which is the only place the budget has to know this happened.
     ///
-    /// A stop is not looked at here either, and that is the one place it costs
-    /// something. A step is claimed for the whole call before this is entered,
-    /// so abandoning it partway through would leave the run reporting a step
-    /// against no call and the two would disagree for the rest of its life. A
-    /// stop that lands during a backoff therefore waits it out — up to
-    /// `MAX_RETRY_AFTER` when a provider asked for that long — and is noticed
-    /// at the boundary after the call returns.
+    /// The budget is not touched here otherwise. A call is one call however many
+    /// times the network dropped it, and reserving a step per attempt would bill
+    /// a run for requests that never reached a provider.
+    ///
+    /// Both awaits in here are raced against the stop, and the backoff is not an
+    /// afterthought: a provider that asked for a minute would otherwise hold a
+    /// called-off run for `MAX_RETRY_AFTER` doing nothing, which reads exactly
+    /// like the hang this whole path is here to end.
     async fn stream_with_retries(
         &self,
         inference: &InferenceConfig,
         request: &ChatRequest,
         stream: &mut Stream,
-    ) -> Result<crate::llm::openrouter::Completion, LlmError> {
+    ) -> Result<Option<crate::llm::openrouter::Completion>, LlmError> {
+        let (run_id, agent_id) = (stream.run_id, stream.agent_id);
         let mut last: Option<LlmError> = None;
 
         for attempt in 0..CALL_ATTEMPTS {
@@ -2915,7 +2932,9 @@ impl Runtime {
                     wait_ms = wait.as_millis() as u64,
                     "retrying a model call"
                 );
-                tokio::time::sleep(wait).await;
+                if self.until_stopped(run_id, agent_id, tokio::time::sleep(wait)).await.is_none() {
+                    return Ok(None);
+                }
                 // Anything already on screen belongs to the attempt that broke.
                 stream.reopen(&*self.inner.events);
             }
@@ -2932,21 +2951,76 @@ impl Runtime {
             // several agents answering at once it stopped painting at all,
             // which read as the app freezing and the text arriving in a lump.
             let mut pen = Pen::new(self.inner.events.clone(), message_id, channel_id, lead);
-            let result =
-                self.inner.llm.stream_chat(inference, request, |token| pen.write(token)).await;
+            let call = self.inner.llm.stream_chat(inference, request, |token| pen.write(token));
+            let result = self.until_stopped(run_id, agent_id, call).await;
+            // Before the answer is looked at, and before the return below, so
+            // whatever the abandoned attempt drew is committed while the
+            // placeholder is still open. The turn closes it on its way out.
             pen.flush();
 
             match result {
-                Ok(completion) => return Ok(completion),
-                Err(err) if err.is_transient() => last = Some(err),
+                None => return Ok(None),
+                Some(Ok(completion)) => return Ok(Some(completion)),
+                Some(Err(err)) if err.is_transient() => last = Some(err),
                 // A rejected key or an unknown model answers the same way every
                 // time. Retrying it wastes the operator's time to reach the
                 // message they needed to read immediately.
-                Err(err) => return Err(err),
+                Some(Err(err)) => return Err(err),
             }
         }
 
         Err(last.expect("the loop only ends here after a failure"))
+    }
+
+    /// Awaits one piece of a model call, and gives up on it the moment the
+    /// operator stops the run. `None` when the stop won.
+    ///
+    /// Dropping the future is the whole of the cancellation, and every backend
+    /// behind `stream_chat` already cleans itself up that way: an HTTP response
+    /// closes its connection, and `llm::claude` spawns its child with
+    /// `kill_on_drop`. That last one is why this exists. On the other two
+    /// providers a call in flight is a request that will answer in seconds, so
+    /// waiting it out was a boundary nobody could see; on that one it is an
+    /// entire `claude` run, holding the operator's plan for as long as the model
+    /// wants to think and up to the request timeout after that. A stop that
+    /// waited was a button that did nothing for minutes, which is the one thing
+    /// this button cannot be.
+    ///
+    /// The signal is the agent's own `resume`, which [`Self::stop_run`] already
+    /// wakes on every inbox. It is a nudge and not a message, so the run is
+    /// asked again on each wake: a stop anywhere in the workspace wakes this
+    /// one too, and a call whose run was not the one called off has to go back
+    /// to waiting rather than treat the wake as its answer.
+    async fn until_stopped<T>(
+        &self,
+        run_id: RunId,
+        agent_id: AgentId,
+        work: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        let signal = { self.inner.inboxes.lock().get(&agent_id).map(|inbox| inbox.resume.clone()) };
+        // No inbox means no actor, which means nothing this could be racing.
+        let Some(signal) = signal else { return Some(work.await) };
+
+        tokio::pin!(work);
+        loop {
+            // Registered before the run is asked and not after, which is the
+            // whole reason `enable` is called by hand. A `Notified` only joins
+            // the wait list when it is first polled, so a stop landing between
+            // the question and the first poll of the select would wake nobody
+            // and this would sit out the call it exists to abandon.
+            let woken = signal.notified();
+            tokio::pin!(woken);
+            woken.as_mut().enable();
+
+            if self.stopped(run_id) {
+                return None;
+            }
+
+            tokio::select! {
+                done = &mut work => return Some(done),
+                () = woken => {}
+            }
+        }
     }
 
     /// Takes in whatever arrived while this turn was working, as context.
