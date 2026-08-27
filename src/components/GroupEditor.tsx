@@ -206,9 +206,12 @@ export function GroupEditor({ group, onClose }: Props) {
   /**
    * Start fresh: the crew stays, everything it has accumulated goes.
    *
-   * Transcripts, schedules, memories and spend together, because clearing only
-   * the transcript left agents acting on a memory of a conversation that no
-   * longer existed and keeping appointments nobody could see the reason for.
+   * Transcripts, schedules, both stores and spend together, because clearing
+   * only the transcript left agents acting on a memory of a conversation that
+   * no longer existed and keeping appointments nobody could see the reason for.
+   * The working notes go for the same reason the memories do, and they are the
+   * half that says what the crew was in the middle of: left behind, every agent
+   * opens tomorrow waiting on somebody about a conversation nobody can read.
    */
   const clear = async () => {
     if (!group) return;
@@ -607,7 +610,8 @@ export function GroupEditor({ group, onClose }: Props) {
                 <span>
                   Reset: {cleared.messages} message{cleared.messages === 1 ? "" : "s"},{" "}
                   {cleared.routines} routine{cleared.routines === 1 ? "" : "s"}, {cleared.notes}{" "}
-                  memor{cleared.notes === 1 ? "y" : "ies"}, and {cleared.calls} recorded call
+                  memor{cleared.notes === 1 ? "y" : "ies"}, {cleared.workingNotes} working note
+                  {cleared.workingNotes === 1 ? "" : "s"}, and {cleared.calls} recorded call
                   {cleared.calls === 1 ? "" : "s"}.
                 </span>
               </div>
@@ -699,7 +703,7 @@ export function GroupEditor({ group, onClose }: Props) {
                 className="btn btn--ghost"
                 disabled={busy}
                 onClick={() => setConfirmClear(true)}
-                title="Resets every agent in this group: transcripts, routines and memories, and the spend counter. The agents and their computers stay."
+                title="Resets every agent in this group: transcripts, routines, memories, working notes and the spend counter. The agents and their computers stay."
               >
                 {cleared === null ? "Start fresh" : "Reset"}
               </button>

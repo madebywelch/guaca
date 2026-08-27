@@ -437,9 +437,9 @@ Deleting an agent is a soft delete: it leaves the rail and can never be messaged
 again, its computer and browser are destroyed along with the browser profile
 holding its sign-ins, and its memory goes, but what it already said stays
 readable and its name becomes free to reuse. **Start fresh** on a group
-resets its whole crew (transcripts, routines, memories and spend) while keeping
-the agents themselves. Deleting a group takes the crew and the machines they
-were renting with it.
+resets its whole crew (transcripts, routines, memories, working notes and
+spend) while keeping the agents themselves. Deleting a group takes the crew and
+the machines they were renting with it.
 
 ## Working on it
 

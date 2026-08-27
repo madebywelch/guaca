@@ -250,6 +250,18 @@ failure this list has is an agent still waiting on something the operator
 settled in person. Editing a single line does not, because a list the operator
 half-rewrites is one neither of them can trust.
 
+**A reset takes both stores, and it has to take both.** *Start fresh* on a
+group deletes what the crew said, what it had scheduled and what it spent, and
+the memories with them, because an agent that opens tomorrow believing what it
+wrote about a conversation nobody can read has not started over. The working
+notes are the same argument one step closer in: they are what each agent
+thought it was in the middle of, and every one of them is about the
+conversation that just went. Left behind, a reset crew's first act is to chase
+work whose record it no longer has. `clear_group` takes both, reports each
+separately, and the panels are sent back to read again on `ChannelsCleared`:
+neither refreshes on its own, so the inspector would otherwise draw a memory
+and a list of notes beside the empty channel that says they are gone.
+
 **The tool is `update_memory`, and `update_notes` still parses.** `notes` meant
 memory everywhere the code named it for a year, which is exactly the ambiguity a
 second store cannot survive, so the internals took the operator's word. The old
