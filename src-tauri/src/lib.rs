@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod menubar;
 pub mod oauth;
 pub mod plugins;
+pub mod programs;
 pub mod proxy;
 pub mod repo;
 pub mod runtime;

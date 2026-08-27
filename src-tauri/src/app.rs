@@ -235,6 +235,12 @@ pub fn run() {
         )
         .init();
 
+    // Before the async runtime, and before anything else can start a thread:
+    // this writes the process environment, and the programs a turn and a coding
+    // job run are found on it. `programs.rs` says why a double-clicked app does
+    // not already have the operator's own.
+    crate::programs::adopt_operator_path();
+
     // Owned here so it outlives the app. Agent actors are spawned onto this.
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
