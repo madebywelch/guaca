@@ -52,6 +52,31 @@
 //! operator configures *for Claude* that this app does want is the part they
 //! cannot pass another way: the sign-in and the model.
 //!
+//! ## The program is started in an empty directory this app owns
+//!
+//! A child process inherits its parent's working directory, and a
+//! double-clicked app's is `/`: `launchd` starts one there, which is the same
+//! finding [`crate::programs`] is built on, from the other end. `claude` takes
+//! the directory it is started in as the project it is working on and asks the
+//! operating system what it may reach inside it. Started in `/` that question
+//! covers every protected folder on the machine, and macOS answers a child's
+//! request in the name of the *responsible* process rather than the child, so
+//! the operator is asked whether **Guaca** may read their photos, their music
+//! library, their Desktop and their Downloads, once per model call, about
+//! folders this app has never read and has no tool that could.
+//!
+//! Measured on 2026-08-27 against 2.1.247: one turn produced
+//! `kTCCServiceMediaLibrary`, `kTCCServicePhotos`,
+//! `kTCCServiceSystemPolicyDesktopFolder`,
+//! `kTCCServiceSystemPolicyDownloadsFolder` and a refused
+//! `kTCCServiceSystemPolicyAllFiles`, each logged by `tccd` as
+//! `responsible=com.madebywelch.guac, accessing=com.anthropic.claude-code`.
+//! [`scratch`] is what takes the disk back out of that question. It is not
+//! tidiness: a permission dialog naming this app for something it does not do
+//! is one an operator either denies, and then distrusts the app, or accepts,
+//! and then has granted a real reach to a program that asked under a borrowed
+//! name.
+//!
 //! ## What it does not report
 //!
 //! Money that moved. `total_cost_usd` on a plan is the equivalent API price
@@ -59,6 +84,7 @@
 //! makes and no more. It is dropped rather than recorded, so the usage table
 //! keeps meaning what it has always meant; the tokens are real and are counted.
 
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -487,6 +513,23 @@ fn refusal(frame: &ResultFrame) -> LlmError {
     }
 }
 
+/// The directory the program is started in, made if it is not there yet.
+///
+/// Empty, this app's, and about nothing. The module docs have the argument for
+/// why it is not the one this process happens to be standing in.
+///
+/// `None` is the whole error handling and it means inherit, which is where this
+/// started and is no worse than it was. Answering with a path that is not on
+/// disk would be worse than either: [`std::process::Command::spawn`] reports a
+/// missing working directory as `NotFound`, which the caller below maps to
+/// [`LlmError::ProgramMissing`], and the operator is told to install a program
+/// they already have.
+fn scratch() -> Option<PathBuf> {
+    let at = std::env::temp_dir().join("guaca-claude");
+    std::fs::create_dir_all(&at).ok()?;
+    Some(at)
+}
+
 /// Runs one model call and reads what the program says about it.
 ///
 /// The one place the third provider parts company from the other two, reached
@@ -503,7 +546,13 @@ where
     let (system, blocks) = conversation(&request.messages);
     let timeout = Duration::from_secs(cfg.request_timeout_secs.clamp(5, 900));
 
-    let mut child = tokio::process::Command::new(PROGRAM)
+    let mut command = tokio::process::Command::new(PROGRAM);
+    // Set rather than inherited, and the module docs say what inheriting costs.
+    if let Some(at) = scratch() {
+        command.current_dir(at);
+    }
+
+    let mut child = command
         .args(argv(&schema, &system))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
