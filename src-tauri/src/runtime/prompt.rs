@@ -929,7 +929,7 @@ fn body_with_files(envelope: &Envelope) -> String {
     body
 }
 
-fn render_incoming(envelope: &Envelope, names: &NameTable) -> String {
+pub(super) fn render_incoming(envelope: &Envelope, names: &NameTable) -> String {
     // Announced inside the labeled block, so a file from a peer inherits the
     // provenance of the message carrying it.
     let body = body_with_files(envelope);
