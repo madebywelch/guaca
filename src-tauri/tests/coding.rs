@@ -110,6 +110,39 @@ fn a_repository(name: &str) -> PathBuf {
     std::fs::canonicalize(&root).unwrap()
 }
 
+/// Git with an identity of its own, so the suite does not depend on what the
+/// machine running it has configured and does not try to sign.
+fn git(root: &Path, args: &[&str]) {
+    let done = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "-c",
+            "user.name=guac",
+            "-c",
+            "user.email=guac@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "git {args:?} failed: {done:?}");
+}
+
+/// A repository sitting where the last job left it: on a branch whose work is
+/// already in `main`. The state an operator finds weeks later and the reason
+/// a job is told its footing at all.
+fn a_repository_on_a_landed_branch(name: &str) -> PathBuf {
+    let root = a_repository(name);
+    git(&root, &["checkout", "-b", "main"]);
+    std::fs::write(root.join("a.txt"), "one").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-m", "one"]);
+    git(&root, &["checkout", "-b", "landed"]);
+    root
+}
+
 /// Every argument the stand-in in this repository was handed.
 fn argv_at(repository: &Path) -> Vec<String> {
     let raw = std::fs::read_to_string(repository.join(ARGV)).expect("the stand-in never ran");
@@ -312,7 +345,72 @@ async fn an_agent_is_told_what_the_harness_it_was_given_said() {
 
     let argv = argv_at(&repo);
     assert!(argv.contains(&"stream-json".to_string()), "the column was not read: {argv:?}");
-    assert!(argv.contains(&"fix the flaky test".to_string()), "{argv:?}");
+    // Contained rather than equal: the brief a job is started with carries the
+    // footing in front of it, which the test below is the test of.
+    assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A job is told where the tree is standing before it is told what to do.
+///
+/// This is the other seam nothing else in the repo can see. Drop the
+/// `repo::footing` read in `Runtime::start_job` and every suite still passes,
+/// while every job in every workspace goes on starting wherever the last one
+/// left the tree: a branch that was merged a month ago, silently, on top of
+/// work that has already landed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_is_told_which_branch_it_is_standing_on() {
+    stand_ins();
+    let repo = a_repository_on_a_landed_branch("footing");
+
+    let stub = serve(|body| {
+        if anyone_said(body, "has finished") {
+            Script::Say("The coding agent did the work.".into())
+        } else {
+            Script::Code("fix the flaky test".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+
+    let engineer = h.agent_named("Engineer").unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: engineer.group_id,
+            name: "guaca".into(),
+            path: repo.to_string_lossy().to_string(),
+            note: "run ./scripts/ci.sh before you finish".into(),
+            harness: Which::Pi,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+    h.settle(run).await;
+    h.wait_until("the coding job is reported back", |h| {
+        h.channel_texts("Engineer").iter().any(|line| line.contains("did the work"))
+    })
+    .await;
+
+    let argv = argv_at(&repo);
+    let brief = argv
+        .iter()
+        .find(|arg| arg.contains("fix the flaky test"))
+        .unwrap_or_else(|| panic!("the brief never reached the program: {argv:?}"));
+
+    // The state, the rule it resolves to, the work, and the operator's note, in
+    // that order. The footing leads because it is read before the first edit or
+    // it is not read at all.
+    assert!(brief.contains("On branch `landed`"), "{brief}");
+    assert!(brief.contains("already contained in `main`"), "{brief}");
+    assert!(brief.contains("start from `main`"), "{brief}");
+    let state = brief.find("Where you are starting from").expect("no footing: {brief}");
+    let work = brief.find("fix the flaky test").unwrap();
+    let note = brief.find("Standing instruction").expect("the note still rides along");
+    assert!(state < work && work < note, "the three parts are out of order: {brief}");
+
     let _ = std::fs::remove_dir_all(&repo);
 }
 

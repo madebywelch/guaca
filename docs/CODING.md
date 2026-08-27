@@ -124,6 +124,65 @@ arguments, and a wrong guess there prints somebody's file contents into a
 channel. Anything not in a table draws no detail at all, which is what every MCP
 tool the operator has connected falls into.
 
+## A job is told where it is standing before it is told what to do
+
+A harness handed a brief starts editing where it is standing, and where it is
+standing is wherever the last job left the tree. Nothing prompts it to look at
+the branch first, and nothing else in the app will: a job that opens a pull
+request ends on the branch it made, the operator merges it, and every job after
+that starts on a feature branch whose work has already landed. Weeks of work can
+stack on top of it before anybody notices, and the transcript reads correctly
+throughout.
+
+So `repo::footing` reads the tree at the moment a job starts, and
+`Runtime::start_job` puts it in front of the brief: the branch, whether it is
+clean, whether it tracks anything, whether that branch is already contained in
+the default one, and whether a pull request is open for it. Then one rule the
+facts resolve to.
+
+The obvious fix is the other end, a standing rule in `APPENDED_PROMPT` about
+what a job leaves behind, and it does not hold. A job killed at the ceiling
+never runs its cleanup. A job that opened a pull request should still be on its
+branch. Cleanup at the end is a step that sometimes does not happen; the footing
+at the start always does.
+
+Both halves of the preamble are load-bearing, and this is the part to keep.
+Facts alone are not enough: a model handed a branch name and a count decides for
+itself what to do with them, and the decision it makes silently is to carry on
+where it is standing. A rule alone cannot be written safely, which is the
+sharper half. *Start from the default branch* over uncommitted work destroys it,
+and this is the operator's own machine rather than a sandbox. The facts are what
+let the rule be conditional, and uncommitted work is checked before anything
+else and overrides every other case: do not switch, do not stash, do not clean,
+work from here or stop and say why.
+
+Four details are not guesses.
+
+- **The merge test runs against `origin/main`, not `main`.** A branch merged
+  upstream has landed whether or not the local copy was ever pulled, and a local
+  default nobody has updated in a month calls every landed branch work in
+  flight. `default_branch` returns a name for the prose and a ref for the test,
+  because they are two different things.
+- **`origin/HEAD` first, `main` and `master` only after it.** The repository's
+  own answer beats a guess, and where nothing published one, the preamble says
+  so and asks the harness to decide rather than sending it to a branch that does
+  not exist.
+- **Every count is against the last fetch, and the preamble says so even when
+  they are zero.** Zero is where it misleads rather than where it is safe to
+  drop: a branch merged upstream an hour ago and never fetched reads here as
+  work in flight, level with its upstream. Fetching on the operator's behalf is
+  not this app's call. The harness is the thing standing in the directory with a
+  shell.
+- **A repository with no commits says so.** Git names an unborn HEAD after the
+  branch the first commit will create, so without it the preamble says *on
+  branch `main`* and *there is no `main`* two lines apart, and a model handed a
+  contradiction resolves it by guessing. A fresh `git init` is an ordinary thing
+  to link.
+
+Where the work lands is not decided here. That is already the brief's to say,
+and a standing rule that overrode it would be a second answer to a question that
+has one. What the footing settles is only where the work starts.
+
 ## A failed turn is not a job with nothing to do
 
 Both programs report a failed turn *inside* their stream and can still exit zero

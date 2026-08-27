@@ -1682,15 +1682,33 @@ impl Runtime {
         });
 
         tokio::spawn(async move {
-            // The operator's note rides in front of the brief rather than being
-            // left for the model to discover. It is the one thing they wrote to
-            // be read at exactly this moment, and the harness cannot see the
-            // conversation the note was attached to.
-            let brief = if note.trim().is_empty() {
-                task.clone()
-            } else {
-                format!("{}\n\nStanding instruction for this repository: {}", task, note.trim())
-            };
+            // Where the tree is standing, then the work, then the operator's
+            // note. All three are things the harness cannot see for itself and
+            // would not go looking for.
+            //
+            // The footing leads because it is read before the first edit or it
+            // is not read at all: a harness handed a brief starts working where
+            // it is standing, and where it is standing is wherever the last job
+            // left it. `repo::footing` is the argument. Read here rather than
+            // before the spawn because it is several subprocesses and one
+            // network round trip, and `start_job` has already returned to a
+            // turn that must not wait on any of it.
+            //
+            // The note is last because it is the one thing the operator wrote
+            // to be read at exactly this moment, and the harness cannot see the
+            // conversation it was attached to.
+            let mut brief = String::new();
+            if let Some(footing) = crate::repo::footing(&path).await {
+                brief.push_str(&footing.brief());
+                brief.push_str("\n\n");
+            }
+            brief.push_str(&task);
+            if !note.trim().is_empty() {
+                brief.push_str(&format!(
+                    "\n\nStanding instruction for this repository: {}",
+                    note.trim()
+                ));
+            }
 
             let watcher = runtime.clone();
             let outcome = crate::coding::run(harness, &path, &brief, move |progress| {
