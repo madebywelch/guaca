@@ -60,6 +60,7 @@ src-tauri/src/
     claude.rs         The third, which is a program rather than a protocol:
                       where a Claude subscription is spent, and why it has to be.
     catalog.rs        Which models OpenRouter sees doing which kind of work.
+    modality.rs       Whether a picture reaches the model that is answering.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
   mcp.rs              The client end of MCP, in both of its protocol eras.
@@ -161,6 +162,7 @@ repo: the frontend renders state and forwards intent.
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
+| Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
 | A prompt, or anything that changes how much a crew talks | *Three test suites, asking different questions*, then run the live evals |
 | What a real crew of eight does with one directive, and what is different when you ask twice | *A crew is watched rather than asserted*, then `src-tauri/tests/crew.rs` |
 
@@ -449,6 +451,26 @@ the model takes a screenshot to see what `browse` did.
   subscription both report the equivalent API price. They agree with each other,
   and `Outcome::cost` claims no more than that; zero is absent rather than free,
   for the reason it always was.
+- **A model that cannot be shown a picture is one the endpoint said so about,
+  and nothing else.** An endpoint that publishes no modalities, and a model that
+  is not on its list, both mean what they always meant: send the picture. The
+  two errors are not equal. A wrong *it can see* is what every endpoint got
+  before this existed and costs one turn, refused with a message naming the
+  model; a wrong *it cannot see* takes `use_screen` off an agent that was using
+  it and stops delivering attachments, with nothing on screen saying why. So a
+  local server with no `architecture` on its model list changes nothing at all,
+  and only `input_modalities` without `image` in it subtracts anything.
+  `llm/modality.rs`.
+- **One value, settled once, spent in four places.** `Modalities` is resolved
+  at the top of `run_turn`: the prompt says what reaches this agent, `specs`
+  decides whether `use_screen` is offered, `deliver_files` decides what an
+  attached picture becomes, and `not_given` refuses a screen a model asked for
+  anyway. Three of four agreeing is worse than none: an agent told it is blind
+  and handed a screenshot concludes the delivery failed, and one served
+  `use_screen` gets a picture thrown away, which reads as a screen that came
+  back blank. The fourth is not belt and braces: a model naming a tool it was
+  never offered is ordinary, which is the same reason `Store::plugin_reach`
+  asks again on the call path.
 - **A double-clicked app does not have the operator's `PATH`.** `launchd` starts
   one from the Dock or the Finder with `/usr/bin:/bin:/usr/sbin:/sbin` and
   nothing else, so `claude` under `~/.local/bin` and `pi` and `gh` under
@@ -1199,4 +1221,15 @@ nothing.
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --lib \
   llm::catalog::tests::every_use_case -- --ignored --nocapture
+```
+
+Whether a model can be shown a picture is read off the same vendor's catalog and
+has the same blind spot, so it has the same test: `architecture.input_modalities`
+renamed or dropped on OpenRouter's side turns every model into one nothing was
+published about, which looks exactly like the day before any of this existed and
+fails nothing offline. Also free.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --lib \
+  llm::modality::tests::openrouter_still -- --ignored --nocapture
 ```

@@ -26,6 +26,7 @@ use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
 use crate::domain::worknote::{self, WorkingNote};
+use crate::llm::modality::Modalities;
 use crate::llm::openrouter::ChatMessage;
 use crate::llm::tools::Surfaces;
 
@@ -102,6 +103,13 @@ pub fn system_prompt(
     // describing a machine that is not configured is a promise the app cannot
     // keep, and an agent believing it spends a turn discovering otherwise.
     surfaces: Surfaces,
+    // What the model paying for this turn can actually be sent. Beside the
+    // surfaces rather than folded into them, because it is a different kind of
+    // fact: a surface is a place the operator gave this agent, and this is what
+    // the model in the box can take. They meet in one place, which is the
+    // screen: a machine whose screen cannot be shown to the model is still a
+    // machine.
+    modalities: Modalities,
 ) -> String {
     let mut out = String::new();
 
@@ -127,6 +135,44 @@ pub fn system_prompt(
         out.push('\n');
     }
 
+    // Before the places it works, because one of them depends on it. What an
+    // agent can be *sent* is a fact about the model in the box rather than
+    // about the workspace, and it is the one fact that changes under an agent
+    // without anything else about it changing: an operator swaps a model
+    // between two turns and the same agent stops being able to see. Said out
+    // loud for the same reason the surfaces are: told nothing, a model that
+    // cannot see a picture describes one anyway, from the file's name.
+    out.push_str("\n## What reaches you\n");
+    if modalities.image {
+        out.push_str(
+            "You read text, and you see pictures. A photograph or a screenshot in this \
+             conversation is really in front of you, so work from what is in it rather than \
+             asking what it shows.\n\n\
+             Nothing else arrives as itself. A sound or a video is a file you were sent, never \
+             something you have heard or watched: say so plainly rather than describing one.\n",
+        );
+    } else {
+        out.push_str(
+            "You read text, and only text. The model you are running on cannot be shown a \
+             picture, so a photograph or a screenshot in this conversation does not reach you: \
+             you are told what the file is called and that it arrived, and that is all you have \
+             of it. Never describe, quote or summarize a file whose contents you have not been \
+             given. Say you cannot see it, and ask for what is in it in words.\n\n\
+             A sound or a video is the same: a file you were sent, never something you have \
+             heard or watched.\n",
+        );
+    }
+    // Both cases, because it is the half that does not vary. An agent asked for
+    // a picture and told only what it can receive offers to make one.
+    out.push_str(if mode == ReplyMode::ToPeer {
+        "\nWhat you produce is text. You cannot draw, record or generate a picture, a sound or a \
+         video, so do not offer one.\n"
+    } else {
+        "\nWhat you produce is text. You cannot draw, record or generate a picture, a sound or a \
+         video, so do not offer one: when something is worth showing, the figures below are how \
+         you show it.\n"
+    });
+
     // Stated plainly and early, because an agent that is only handed a tool
     // schema does not connect it to what it can do: asked to check the weather,
     // one with a working machine still answered that it had no way to look
@@ -144,18 +190,33 @@ pub fn system_prompt(
              with a browser, a file manager and an editor installed, and the operator can watch \
              that screen and take control of it.\n\n\
              - `run_command` runs a shell command on it. The filesystem persists between turns \
-               and the internet works, so anything you do not already know you can go and find \
-               out rather than declining. Use it to fetch text, install what you need, and run \
-               code.\n\
+             and the internet works, so anything you do not already know you can go and find \
+             out rather than declining. Use it to fetch text, install what you need, and run \
+             code.\n\
              - `open_on_desktop` starts a program on the screen: an editor, a file manager, a \
-               document, or `google-chrome https://example.com`. The operator sees exactly what \
-               you opened.\n\
-             - `use_screen` is how you work that screen. Every action answers with a fresh \
-               picture of it, so you are always looking at the result of what you just did; \
-               `look` on its own is for when you have not seen it yet. Click, type, press keys, \
-               scroll and drag by the coordinates in the picture. This is how you use anything \
-               that is not a web page.\n",
+             document, or `google-chrome https://example.com`. The operator sees exactly what \
+             you opened.\n",
         );
+        // The screen is the one part of a machine that is only worth having if
+        // a picture of it reaches the model. Said either way rather than left
+        // out, because an agent told it has a desktop and offered no way to
+        // look at it calls for one by name and reports the machine as broken.
+        if modalities.image {
+            out.push_str(
+                "- `use_screen` is how you work that screen. Every action answers with a fresh \
+                 picture of it, so you are always looking at the result of what you just did; \
+                 `look` on its own is for when you have not seen it yet. Click, type, press \
+                 keys, scroll and drag by the coordinates in the picture. This is how you use \
+                 anything that is not a web page.\n",
+            );
+        } else {
+            out.push_str(
+                "\nYou cannot look at that screen yourself: a picture of it would not reach \
+                 you, so there is no tool for it and there is no point asking for one. Work the \
+                 machine with `run_command`, which answers in text, and use `open_on_desktop` \
+                 when the point is for the operator to watch something happen.\n",
+            );
+        }
         if surfaces.browser {
             out.push_str(
                 "\nThe browser on this machine's screen is not the browser `browse` uses. They \
@@ -895,6 +956,7 @@ pub fn build_messages(
     waiting_on: &[Outstanding],
     repository: Option<&Repository>,
     surfaces: Surfaces,
+    modalities: Modalities,
 ) -> Vec<ChatMessage> {
     let mut messages = vec![ChatMessage::system(system_prompt(
         card,
@@ -910,6 +972,7 @@ pub fn build_messages(
         waiting_on,
         repository,
         surfaces,
+        modalities,
     ))];
 
     for envelope in history {
@@ -960,6 +1023,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         )
     }
 
@@ -980,6 +1044,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         )
     }
 
@@ -1003,6 +1068,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         )
     }
 
@@ -1033,6 +1099,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         )
     }
 
@@ -1271,6 +1338,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
 
         assert!(prompt.contains("- LinkedIn"), "a detected session has to be named");
@@ -1329,6 +1397,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
 
         assert!(prompt.contains("- Neon — 2 tools, called as `neon__…`"), "{prompt}");
@@ -1363,6 +1432,7 @@ mod tests {
             &[],
             None,
             Surfaces::none(),
+            Modalities::seeing(),
         );
 
         assert!(prompt.contains("- Stripe — 1 tool, called as `stripe__…`"), "{prompt}");
@@ -1398,6 +1468,7 @@ mod tests {
             &[],
             None,
             Surfaces::none(),
+            Modalities::seeing(),
         );
 
         assert!(prompt.contains("Switched off by the operator"), "{prompt}");
@@ -1430,6 +1501,7 @@ mod tests {
             &[],
             None,
             Surfaces::none(),
+            Modalities::seeing(),
         );
 
         assert!(!prompt.contains("You are not signed in to anything"), "{prompt}");
@@ -1469,6 +1541,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(prompt.contains("may also be signed in"), "a guess has to read as one");
         assert!(
@@ -1503,6 +1576,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
 
         assert!(prompt.contains("GITHUB_TOKEN"), "the name is what it needs");
@@ -1540,6 +1614,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(prompt.contains("that session has ended"), "name what a login wall means");
         assert!(prompt.contains("do not ask anyone for a password"));
@@ -1572,6 +1647,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(prompt.contains("- Researcher (web research) — signed in to LinkedIn"));
         assert!(
@@ -1890,6 +1966,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         let assistant = messages
             .iter()
@@ -1987,6 +2064,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(prompt.contains("Robert"), "the operator's name belongs in every prompt");
 
@@ -2005,6 +2083,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(!anonymous.contains("is called"), "no name means no claim about one");
     }
@@ -2088,6 +2167,7 @@ mod tests {
             &waiting,
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         let progress = section(&prompt, "## Your working notes");
 
@@ -2247,6 +2327,7 @@ mod tests {
             &[],
             None,
             Surfaces::none(),
+            Modalities::seeing(),
         );
         assert!(!neither.contains("## Your computer"), "{neither}");
         assert!(!neither.contains("## Your browser"), "{neither}");
@@ -2268,12 +2349,86 @@ mod tests {
             &[],
             None,
             Surfaces { computer: true, browser: false, repository: false },
+            Modalities::seeing(),
         );
         assert!(computer_only.contains("## Your computer"), "{computer_only}");
         assert!(!computer_only.contains("## Your browser"), "{computer_only}");
         // With no browser there is no second place to disclaim, and saying
         // there is would be the overclaim wearing a warning label.
         assert!(!computer_only.contains("not the browser `browse` uses"), "{computer_only}");
+    }
+
+    /// The prompt for an agent whose model can, or cannot, be shown a picture.
+    fn prompt_taking(modalities: Modalities, mode: ReplyMode) -> String {
+        system_prompt(
+            &card("Analyst"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            mode,
+            &[],
+            None,
+            Surfaces::both(),
+            modalities,
+        )
+    }
+
+    #[test]
+    fn an_agent_is_told_what_reaches_it_and_what_it_can_produce() {
+        let prompt = prompt_taking(Modalities::seeing(), ReplyMode::ToOperator);
+        let reaches = section(&prompt, "## What reaches you");
+
+        assert!(reaches.contains("you see pictures"), "{reaches}");
+        // The half that does not vary. Told only what it can receive, an agent
+        // asked for a picture offers to make one.
+        assert!(reaches.contains("What you produce is text"), "{reaches}");
+        // And what it cannot receive, or it describes a recording from the
+        // file's name rather than saying it never heard one.
+        assert!(reaches.contains("A sound or a video"), "{reaches}");
+
+        // Figures are how a reply shows something, and a peer is never told
+        // about them: pointing one at a section it does not have is an
+        // instruction it cannot follow.
+        let peer = prompt_taking(Modalities::seeing(), ReplyMode::ToPeer);
+        assert!(section(&peer, "## What reaches you").contains("What you produce is text"));
+        assert!(!section(&peer, "## What reaches you").contains("figures below"), "{peer}");
+    }
+
+    /// The case the whole thing exists for: an operator swaps the model in the
+    /// box for one that takes text only, and nothing else about the agent
+    /// changes.
+    #[test]
+    fn a_model_that_cannot_be_shown_a_picture_is_told_so_and_offered_no_screen() {
+        let prompt = prompt_taking(Modalities::text_only(), ReplyMode::ToOperator);
+        let reaches = section(&prompt, "## What reaches you");
+
+        assert!(reaches.contains("only text"), "{reaches}");
+        assert!(reaches.contains("does not reach you"), "{reaches}");
+        // The failure this closes. Handed a file it cannot open and told
+        // nothing, a model writes a confident description of a picture it has
+        // never seen, from the file's name.
+        assert!(reaches.contains("Never describe"), "{reaches}");
+        assert!(reaches.contains("ask for what is in it in words"), "{reaches}");
+
+        // The machine is still a machine. What goes is the one tool whose
+        // entire answer is a picture, and the section has to say so: an agent
+        // told it has a desktop and offered no way to look at it calls for one
+        // by name and reports the machine as broken.
+        let computer = section(&prompt, "## Your computer");
+        assert!(!computer.contains("`use_screen`"), "{computer}");
+        assert!(computer.contains("cannot look at that screen"), "{computer}");
+        assert!(computer.contains("`run_command`"), "the shell reads back as text: {computer}");
+        assert!(computer.contains("`open_on_desktop`"), "the operator can watch: {computer}");
+
+        // And a model that can see is still told how to work it, or the fix
+        // for one operator is a regression for everybody else.
+        let seeing = prompt_taking(Modalities::seeing(), ReplyMode::ToOperator);
+        assert!(section(&seeing, "## Your computer").contains("`use_screen`"), "{seeing}");
     }
 
     #[test]
@@ -2320,6 +2475,7 @@ mod tests {
             &[],
             None,
             Surfaces::none(),
+            Modalities::seeing(),
         );
         assert!(!nowhere.contains("request_permission"), "{nowhere}");
         // And the peer-claim paragraph still ends somewhere, rather than
@@ -2347,6 +2503,7 @@ mod tests {
             &[],
             None,
             Surfaces { computer: false, browser: true, repository: false },
+            Modalities::seeing(),
         );
         assert!(somewhere.contains("request_permission"), "{somewhere}");
         assert!(somewhere.contains("Declining is the correct response"), "{somewhere}");
@@ -2626,6 +2783,7 @@ mod tests {
             &waiting,
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
 
         // The heading, not the phrase. The memory section says "What you are
@@ -2657,6 +2815,7 @@ mod tests {
             &[],
             None,
             Surfaces::both(),
+            Modalities::seeing(),
         );
         assert!(!prompt.contains("## What you are waiting on"), "{prompt}");
     }

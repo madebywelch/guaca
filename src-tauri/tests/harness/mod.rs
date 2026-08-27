@@ -96,6 +96,10 @@ pub enum Script {
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
     Shell(String),
+    /// Emit a `use_screen` tool call that looks at the screen. The same reach
+    /// at the one place whose entire answer is a picture, which is what a model
+    /// running on an endpoint that takes text only must not be served.
+    Look,
     /// Emit a `code` tool call: a brief handed to whichever coding harness the
     /// agent's repository names.
     Code(String),
@@ -272,6 +276,16 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
+        Script::Look => {
+            let args = serde_json::json!({ "action": "look" }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_screen","type":"function",
+                 "function":{"name":"use_screen","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
         Script::Code(task) => {
             let args = serde_json::json!({ "task": task }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
@@ -437,12 +451,38 @@ pub async fn serve<F>(decide: F) -> Stub
 where
     F: Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static,
 {
+    // No `/v1/models` route, which is most OpenAI-compatible servers and is
+    // what every test in this repo but one runs against: an endpoint that
+    // publishes nothing about its models leaves everything exactly as it was.
+    serve_publishing(None, decide).await
+}
+
+/// The same endpoint, publishing what its models take.
+///
+/// OpenRouter's shape, which is where the field comes from. Only a test about
+/// modalities wants this: `listing` is the whole `/v1/models` body, so a test
+/// can say a model takes text and nothing else and watch a picture stop being
+/// sent to it.
+pub async fn serve_publishing<F>(listing: Option<serde_json::Value>, decide: F) -> Stub
+where
+    F: Fn(&serde_json::Value) -> Script + Clone + Send + Sync + 'static,
+{
     let calls = Arc::new(AtomicUsize::new(0));
     let transcript = Arc::new(parking_lot::Mutex::new(Vec::new()));
     let call_counter = calls.clone();
     let recorder = transcript.clone();
 
-    let app = Router::new().route(
+    let mut app = Router::new();
+    if let Some(listing) = listing {
+        app = app.route(
+            "/v1/models",
+            axum::routing::get(move || {
+                let listing = listing.clone();
+                async move { axum::Json(listing) }
+            }),
+        );
+    }
+    let app = app.route(
         "/v1/chat/completions",
         post(move |body: axum::extract::Json<serde_json::Value>| {
             let decide = decide.clone();

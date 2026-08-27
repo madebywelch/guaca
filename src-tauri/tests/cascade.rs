@@ -3069,6 +3069,53 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_screen_is_neither_offered_nor_served_to_a_model_that_cannot_be_shown_one() {
+    // The agent has the machine. What it does not have is a model that can be
+    // sent a picture, and `use_screen` hands back nothing else: the coordinates
+    // to click next are in the picture and nowhere else. Both halves are
+    // tested, because a model names tools it was never offered and the tool
+    // list alone is decoration.
+    let listing = serde_json::json!({
+        "data": [{
+            "id": "test/model",
+            "architecture": { "input_modalities": ["text"], "output_modalities": ["text"] },
+        }]
+    });
+    let stub = serve_publishing(Some(listing), |body| {
+        if has_tool_result(body) {
+            Script::Say("I cannot look at that screen, so here is what I did instead.".into())
+        } else {
+            Script::Look
+        }
+    })
+    .await;
+
+    let h = harness_with_computer(&stub, &["Runner"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Runner"), "What is on the screen?").unwrap();
+    h.settle(run).await;
+
+    // Decided before the first token, which is the half that costs nothing.
+    let offered = tools_by_agent(&stub);
+    assert!(!offered["Runner"].contains(&"use_screen".to_string()), "{offered:?}");
+    // And the rest of the machine is untouched: a shell answers in text, and a
+    // program on the desktop is there for the operator to watch.
+    assert!(offered["Runner"].contains(&"run_command".to_string()), "{offered:?}");
+    assert!(offered["Runner"].contains(&"open_on_desktop".to_string()), "{offered:?}");
+
+    // The load-bearing half. Served, the machine would be worked, the screen
+    // captured and the picture thrown away, which reads to the model as a
+    // screen that came back blank.
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("a picture cannot reach the model"), "{told}");
+    assert!(told.contains("`run_command`"), "a refusal needs a way forward: {told}");
+    assert!(
+        h.agent_named("Runner").unwrap().sandbox_id.is_none(),
+        "a refused call must not have rented a machine anyway"
+    );
+    h.expect_normal(run, "a refused tool call is an ordinary turn");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_browser_is_given_the_same_way_and_refused_the_same_way() {
     // The other place, and a separate decision: a crew where one agent reads
     // the web and nobody else leaves the workspace is the ordinary shape. The

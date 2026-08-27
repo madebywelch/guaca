@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::envelope::Intent;
 use crate::domain::plugin::{PluginKind, PluginToolset};
 use crate::domain::routine::{Cadence, Trigger};
+use crate::llm::modality::Modalities;
 use crate::llm::openrouter::{ToolCall, ToolSpec};
 
 pub const DIRECTORY: &str = "directory";
@@ -180,11 +181,23 @@ pub fn plugin_specs(connected: &[PluginToolset]) -> Vec<ToolSpec> {
     out
 }
 
-pub fn specs(surfaces: Surfaces) -> Vec<ToolSpec> {
+/// The tools one agent is offered: what it has been given, narrowed to what the
+/// model behind it can be shown.
+///
+/// The second question only reaches one tool. `use_screen` answers every action
+/// with a picture of the screen, and that picture is the whole of what it
+/// returns: the coordinates to click next are in it and nowhere else. Offered
+/// to a model that cannot be sent one, it is a tool that costs a round trip to
+/// hand back nothing, and the model's next click is a guess at a position it
+/// has never seen. The rest of the computer is unaffected: `run_command` reads
+/// back as text, and `open_on_desktop` puts a program where the *operator* can
+/// watch it, which is a thing worth doing whether or not the agent can see.
+pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
     all_specs(surfaces)
         .into_iter()
         .filter(|spec| match spec.name.as_str() {
-            RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN => surfaces.computer,
+            USE_SCREEN => surfaces.computer && modalities.image,
+            RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
             BROWSE => surfaces.browser,
             CODE => surfaces.repository,
             REQUEST_PERMISSION => surfaces.computer || surfaces.browser,
@@ -1981,13 +1994,20 @@ mod tests {
     fn the_desktop_tool_names_a_browser_so_the_agent_knows_it_has_one() {
         // The failure this exists to stop: an agent with a working desktop
         // replying that it has no graphical browser.
-        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == OPEN_ON_DESKTOP).unwrap();
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == OPEN_ON_DESKTOP)
+            .unwrap();
         assert!(spec.description.contains("google-chrome"), "{}", spec.description);
     }
 
     /// The one description under test, by name.
     fn description(name: &str) -> String {
-        specs(Surfaces::both()).into_iter().find(|s| s.name == name).unwrap().description
+        specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .description
     }
 
     #[test]
@@ -2017,7 +2037,7 @@ mod tests {
             "an announcement is legitimate, so the rule has to leave room for one: {spec}"
         );
 
-        let to = specs(Surfaces::both())
+        let to = specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
             .find(|s| s.name == SEND_MESSAGE)
             .unwrap()
@@ -2376,7 +2396,7 @@ mod tests {
         // turn to discover, and the agent reports the capability as broken
         // rather than absent.
         let names = |surfaces: Surfaces| -> Vec<String> {
-            specs(surfaces).into_iter().map(|spec| spec.name).collect()
+            specs(surfaces, Modalities::seeing()).into_iter().map(|spec| spec.name).collect()
         };
 
         let computer_only = names(Surfaces { computer: true, browser: false, repository: false });
@@ -2418,6 +2438,29 @@ mod tests {
         assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
     }
 
+    /// The one tool the model's own modalities decide.
+    ///
+    /// `use_screen` hands back a picture and nothing else: what to click next
+    /// is in it, and a model that cannot be sent one would be clicking at
+    /// coordinates it has never seen. The rest of the machine is untouched,
+    /// because a shell reads back as text and a program opened on the desktop
+    /// is there for the operator to watch.
+    #[test]
+    fn a_screen_is_not_offered_to_a_model_that_cannot_be_shown_one() {
+        let blind: Vec<String> = specs(Surfaces::both(), Modalities::text_only())
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect();
+
+        assert!(!blind.contains(&USE_SCREEN.to_string()), "{blind:?}");
+        assert!(blind.contains(&RUN_COMMAND.to_string()), "the shell still reads back: {blind:?}");
+        assert!(
+            blind.contains(&OPEN_ON_DESKTOP.to_string()),
+            "the operator can still watch the screen: {blind:?}"
+        );
+        assert!(blind.contains(&BROWSE.to_string()), "the browser answers in text: {blind:?}");
+    }
+
     #[test]
     fn the_code_tool_says_it_does_not_block_and_that_the_brief_is_everything() {
         // Two ways this gets used wrongly, and neither is obvious from the
@@ -2425,10 +2468,13 @@ mod tests {
         // backs up and whose routines are skipped for the length of a change to
         // a codebase. And the harness cannot see the conversation, so a task
         // saying "do what we discussed" is a task nobody can do.
-        let spec = specs(Surfaces { computer: false, browser: false, repository: true })
-            .into_iter()
-            .find(|spec| spec.name == CODE)
-            .unwrap();
+        let spec = specs(
+            Surfaces { computer: false, browser: false, repository: true },
+            Modalities::seeing(),
+        )
+        .into_iter()
+        .find(|spec| spec.name == CODE)
+        .unwrap();
         let text = spec.description.to_lowercase();
 
         assert!(text.contains("not when it is done"), "{text}");
@@ -2465,7 +2511,7 @@ mod tests {
         // The tool stays, because a file already in the channel is attachable
         // with no machine anywhere. What has to go is the half of its
         // description that is about a machine this agent does not have.
-        let without = specs(Surfaces::none())
+        let without = specs(Surfaces::none(), Modalities::seeing())
             .into_iter()
             .find(|spec| spec.name == ATTACH_FILE)
             .expect("a channel file needs no computer, so the tool stays");
@@ -2550,7 +2596,7 @@ mod tests {
 
     /// One tool's definition, with both places available.
     fn spec(name: &str) -> ToolSpec {
-        specs(Surfaces::both())
+        specs(Surfaces::both(), Modalities::seeing())
             .into_iter()
             .find(|spec| spec.name == name)
             .unwrap_or_else(|| panic!("no tool named {name}"))
@@ -2564,8 +2610,10 @@ mod tests {
         // asker could not take, and the grant landed on the wrong agent. A
         // permission obtained and then relayed is a peer's claim again, which
         // is the thing the agent holding the account was right to refuse.
-        let spec =
-            specs(Surfaces::both()).into_iter().find(|s| s.name == REQUEST_PERMISSION).unwrap();
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == REQUEST_PERMISSION)
+            .unwrap();
         assert!(spec.description.contains("what you will do yourself"), "{}", spec.description);
         assert!(
             spec.description.contains("send it the work and let it ask"),
@@ -2669,7 +2717,7 @@ mod tests {
 
     #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
-        let specs = specs(Surfaces::both());
+        let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
             15,
@@ -2693,7 +2741,10 @@ mod tests {
 
     #[test]
     fn send_message_description_tells_the_model_not_to_block() {
-        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == SEND_MESSAGE)
+            .unwrap();
         let text = spec.description.to_lowercase();
         assert!(text.contains("non-blocking") || text.contains("asynchronous"));
         assert!(text.contains("do not wait"), "blocking on a reply is the failure mode to prevent");
@@ -2770,7 +2821,10 @@ mod tests {
 
     #[test]
     fn the_send_message_schema_offers_intent_as_a_closed_choice() {
-        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == SEND_MESSAGE).unwrap();
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == SEND_MESSAGE)
+            .unwrap();
         let intent = &spec.parameters["properties"]["intent"];
         assert_eq!(intent["enum"], serde_json::json!(["work", "courtesy"]));
         assert!(
@@ -3145,7 +3199,10 @@ mod tests {
     fn creating_an_agent_offers_no_choice_of_model() {
         // What a new agent costs to run is the operator's call, not a field a
         // model can set on its own behalf.
-        let spec = specs(Surfaces::both()).into_iter().find(|s| s.name == CREATE_AGENT).unwrap();
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|s| s.name == CREATE_AGENT)
+            .unwrap();
         let properties = spec.parameters["properties"].as_object().unwrap();
         assert!(!properties.contains_key("model"), "{properties:?}");
         assert!(!properties.contains_key("group_id"), "an agent must not place one elsewhere");
@@ -3246,8 +3303,10 @@ mod tests {
         // Forwarding a file already in the channel is host-side and needs no
         // machine at all, and an operator with no provider configured is
         // exactly the person who still wants the document.
-        let offered: Vec<String> =
-            specs(Surfaces::none()).into_iter().map(|spec| spec.name).collect();
+        let offered: Vec<String> = specs(Surfaces::none(), Modalities::seeing())
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect();
         assert!(offered.contains(&ATTACH_FILE.to_string()), "{offered:?}");
     }
 
