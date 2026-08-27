@@ -224,6 +224,34 @@ appended with `note_progress`, never revised. The agent is shown them with an
 age against each, which is what turns *waiting on the legal read* into something
 it can act on: the same line marked six days old says the thing is not coming.
 
+**A note is written when the next turn would go wrong without it.** That test,
+and not "note freely", which is what the tool and the prompt said first. It is
+true about what one note costs and it was read as a reason to write one: agents
+noted what they were about to do, what they had just said, and each step of a
+task they finished inside the same turn, so a list of sixteen ran on a turn
+narrating itself while what the agent was waiting on aged off the end of it.
+Cheap is a fact about the shape of the write, one line against memory's whole
+page, and it has to stay true or the impulse goes back to memory where it came
+from. It is not an invitation. The rule is now a question about the *next* turn
+— work you would repeat, something you would carry on waiting for, a decision
+you would make differently — with the three cases that produced the volume named
+as exclusions, because a model given only a positive rule reads every borderline
+call as inside it.
+
+**A line the agent already holds is not stored again.** The one mechanical
+brake, and the only one this store can have: it cannot ask the agent to prune,
+for the reason below. *Still waiting on the legal read*, noted on four turns, is
+four of sixteen slots spent on one fact and three notes that record nothing. The
+repeat is refused with the age of the note that already says it, which is both
+what the agent was reaching for and what it needs in order to chase or give up.
+The stamp is deliberately not moved forward: refreshing it would hide staleness
+at exactly the moment the age is worth reading. This is not a revision either,
+which is the rule the store does keep — nothing is edited and nothing is
+dropped, the second write simply never happens. The match is exact, per agent,
+and against the notes that survived the trim: a line that has aged out is one
+the agent can no longer see, so writing it again is recording rather than
+repeating.
+
 **The write rules are deliberately not symmetric.** Consolidating a memory after
 every interaction degrades it, and past a point below having no memory at all
 (arXiv 2605.12978); localized maintenance holds up better than global
@@ -240,6 +268,16 @@ edit or delete one. A stale note does not sit inert, it steers the next turn
 toward work that is already done (arXiv 2505.16067), and deciding what to drop
 is the operation these models are measurably worst at. This is the one store
 that never asks.
+
+**The panel draws the newest four and keeps the rest behind a button.** Its
+bound and the store's answer different questions: sixteen is what an agent may
+carry, four is what one section of a shared column can show. A note wraps to
+three lines in a sidebar that narrow, so a full list is a screen of text with
+the schedule and the memory below it, and the operator scrolls past what the
+agent is doing now to reach anything else. The newest are what stay, because
+the list reads oldest first and the tail is where the work got to; the button
+carries the count of what it hides, since a list of six and a list of sixteen
+are otherwise the same closed section.
 
 **The panel below the memory is read-only apart from Clear.** That asymmetry is
 the design and not an unfinished half of it. Memory is a page two parties

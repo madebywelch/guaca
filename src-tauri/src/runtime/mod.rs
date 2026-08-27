@@ -3348,7 +3348,28 @@ impl Runtime {
             ToolInvocation::NoteProgress { note } => {
                 let (body, cut) = worknote::store_as(&note);
                 match self.inner.store.append_working_note(card.id, &body, now_ms()) {
-                    Ok(()) => {
+                    // A line the agent already holds. Told "noted" it learns
+                    // that restating a note is how you say something is still
+                    // true, and a list of sixteen fills with one fact. The age
+                    // of the note it already has is the whole answer: it is
+                    // what the repeat was reaching for, and it is also the
+                    // thing the agent needs in order to chase or give up.
+                    Ok(worknote::Appended::AlreadyHeld { at }) => {
+                        let summary = format!(
+                            "You noted that already, {}, and nothing was added. Note what has \
+                             changed since, or chase it if it has not moved.",
+                            worknote::how_long_ago(at, now_ms())
+                        );
+                        (
+                            summary.clone(),
+                            Part::tool_call(
+                                tools::NOTE_PROGRESS,
+                                arguments,
+                                ToolOutcome::Ok { summary },
+                            ),
+                        )
+                    }
+                    Ok(worknote::Appended::Stored) => {
                         self.emit(UiEvent::WorkingNotesChanged { agent_id: card.id });
                         // The count is the whole answer. It is how an agent
                         // learns the list is bounded without being lectured

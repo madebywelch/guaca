@@ -270,24 +270,40 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: NOTE_PROGRESS.to_string(),
-            // Deliberately cheap to reach for. This tool competes with
-            // `update_memory` for the same impulse, and it wins only if it is
-            // obviously the smaller thing to do: one line, no rewrite, nothing
-            // to reconcile. Anything that made an agent stop and think would
-            // send the thought back to memory, which is where it used to go.
-            description: "Note one line about what you are doing right now: what you have just \
-                          done, what you have handed over, what you are waiting on and from \
-                          whom. These are your working notes. You are shown them at the start of \
-                          every turn with how long ago each was written, which is how you know \
-                          whether you are still waiting or have been forgotten about. Use this \
-                          whenever the state of your work changes and you would otherwise lose \
-                          it: it is cheap, so note freely. Each note is added to the list; you \
-                          cannot edit or delete one, and the oldest drop off by themselves, so \
-                          write what is true now rather than trying to keep the list tidy. When \
-                          something you noted stops being true, note the new state and let the \
-                          old one age out. Keep it to a line. Durable facts about how you work \
-                          or what you have been told to prefer are memory, not progress, and go \
-                          in `update_memory`."
+            // Still the smaller thing to do than `update_memory`, which is what
+            // it has to be: the two compete for one impulse, and if writing a
+            // note made an agent stop and think the thought would go back into
+            // memory, which is where it used to go and the whole reason this
+            // store exists. Cheap is about the shape of the write — one line,
+            // no rewrite, nothing to reconcile — and this said so by inviting
+            // volume: "it is cheap, so note freely". Agents took the invitation
+            // and noted what they were about to do, what they had just said and
+            // each step of a task they finished in the same turn, which fills a
+            // list of sixteen with a turn's narration and pushes the four lines
+            // that were state off the end of it. So the invitation is replaced
+            // by a test the model can actually apply, which is about the next
+            // turn rather than about this one, and the cases that produced the
+            // volume are named as exclusions: a model given only a positive
+            // rule reads every borderline call as inside it.
+            description: "Note one line about where your work stands: what you handed over, what \
+                          you are waiting on and from whom, what you decided, what is still \
+                          open. These are your working notes, and you are shown them at the \
+                          start of every turn with how long ago each was written, which is how \
+                          you know whether you are still waiting or have been forgotten about. \
+                          Write one when a later turn would go wrong without it: work you would \
+                          repeat, something you would carry on waiting for, a decision you would \
+                          make differently. Nothing else belongs here. What you have just said \
+                          is already in the conversation you are shown; what you are about to do \
+                          is not progress; a step you will finish before this turn ends never \
+                          needed recording; and a message to a peer that has not come back is \
+                          worked out for you and listed separately. Most turns change nothing \
+                          about where the work stands and need no note. Each note is added to \
+                          the list; you cannot edit or delete one, and the oldest drop off by \
+                          themselves, so when something you noted stops being true, note the new \
+                          state and let the old one age out. Writing the same line again adds \
+                          nothing and does not refresh it. Keep it to a line. Durable facts \
+                          about how you work or what you have been told to prefer are memory, \
+                          not progress, and go in `update_memory`."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -3056,12 +3072,25 @@ mod tests {
     }
 
     #[test]
-    fn the_progress_tool_is_the_cheap_one_and_says_it_forgets_by_itself() {
+    fn the_progress_tool_says_when_a_note_is_worth_writing() {
         let text = spec(NOTE_PROGRESS).description.to_lowercase();
-        // Cheap to reach for, or the impulse goes back to memory where it came
-        // from. "Note freely" is doing more work here than any refusal could.
-        assert!(text.contains("note freely"), "{text}");
+        // The test is about the next turn, which is the only version of "is
+        // this worth a note" a model can actually answer while it is mid-turn.
+        assert!(text.contains("later turn would go wrong"), "{text}");
         assert!(text.contains("one line"), "{text}");
+
+        // And the cases that filled the list, named as exclusions. A model
+        // given only a positive rule reads every borderline call as inside it,
+        // and these three are what a narrating turn reaches for.
+        assert!(text.contains("already in the conversation"), "{text}");
+        assert!(text.contains("not progress"), "{text}");
+        assert!(text.contains("before this turn ends"), "{text}");
+
+        // The invitation this replaced. It is true about the cost of one note
+        // and was read as a reason to write one, and a crew took it: sixteen
+        // slots of a turn narrating itself, with what the agent was waiting on
+        // pushed off the end. Pinned so it cannot come back as a tidy-up.
+        assert!(!text.contains("note freely"), "the invitation is back: {text}");
 
         // That it forgets on its own is the sentence that stops an agent trying
         // to curate the list, which is the operation this store exists to avoid

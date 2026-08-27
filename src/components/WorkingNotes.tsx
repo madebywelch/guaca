@@ -29,6 +29,19 @@ export function ago(at: number, now: number): string {
   return "just now";
 }
 
+/**
+ * How many notes the panel draws before it is asked for the rest.
+ *
+ * The list is bounded at `KEPT` and not at this, and the two answer different
+ * questions. Sixteen is what an agent may carry; four is what the panel can
+ * show without becoming the column. A note runs to three wrapped lines in a
+ * sidebar this narrow, so a full list is a screen of text sitting above the
+ * schedule and the memory, and the operator scrolls past it to reach anything
+ * else. Four is where the section stops being a wall and still answers the
+ * question it is for, which is what this agent is in the middle of right now.
+ */
+const SHOWN = 4;
+
 interface Props {
   agentId: AgentId;
 }
@@ -52,6 +65,11 @@ export function WorkingNotes({ agentId }: Props) {
   const [notes, setNotes] = useState<WorkingNote[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Collapsed until asked. Not remembered across agents, because the inspector
+  // remounts this under each one and "opened for the agent I was reading" is
+  // not a preference about how the operator works, which is the bar the panel
+  // itself is remembered against.
+  const [all, setAll] = useState(false);
   // The agent appended one. Its own counter, because notes move far more often
   // than memory does and sharing one would refetch a page that has not changed.
   const changed = useStore((state) => state.workingNotesVersion[agentId] ?? 0);
@@ -86,6 +104,13 @@ export function WorkingNotes({ agentId }: Props) {
   // One clock for the whole list, taken at render. Per-row `Date.now()` would
   // let two notes written in the same second render a minute apart.
   const now = Date.now();
+  // The newest, and the older ones behind a button. Which end is cut is the
+  // decision: the notes read oldest first, so the tail is where the work is
+  // now, and a panel that showed the first four would answer with the state
+  // the agent has already moved on from.
+  const held = notes ?? [];
+  const hidden = all ? 0 : Math.max(0, held.length - SHOWN);
+  const drawn = hidden > 0 ? held.slice(hidden) : held;
 
   return (
     <section className="worknotes">
@@ -112,7 +137,22 @@ export function WorkingNotes({ agentId }: Props) {
         </p>
       ) : (
         <ol className="worknotes__list">
-          {notes.map((note) => (
+          {held.length > SHOWN && (
+            // Above the list because that is where the notes it hides are: they
+            // are the older ones, and a control under the list would point the
+            // operator the wrong way down it.
+            <li className="worknotes__rest">
+              <button
+                type="button"
+                className="worknotes__more"
+                aria-expanded={all}
+                onClick={() => setAll((open) => !open)}
+              >
+                {all ? "Show fewer" : `Show ${hidden} older`}
+              </button>
+            </li>
+          )}
+          {drawn.map((note) => (
             // Keyed on the stamp because it is unique: the runtime's clock is
             // strictly increasing, so two notes cannot share one. An index key
             // would redraw every row each time the oldest falls off the end.

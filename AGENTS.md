@@ -369,6 +369,17 @@ the model takes a screenshot to see what `browse` did.
   operation these models are worst at: this is the one store that never asks.
   Adding a `revise` or a `clear` to the tool surface hands that decision straight
   back.
+- **A line an agent already holds is not stored twice, and its stamp does not
+  move.** The only brake a store that never asks the agent to prune can have.
+  *Still waiting on the legal read* on four turns is four of sixteen slots on
+  one fact, and told "noted" the agent learns that restating is how you say
+  something is still true. The repeat comes back with the age of the note that
+  already says it, which is what it was reaching for; refreshing the stamp
+  instead would hide staleness at the moment the age is worth reading. It is
+  still not a revision: nothing is edited and nothing is dropped, the second
+  write never happens. The same reasoning is why the tool and the prompt ask
+  whether the *next* turn would go wrong without the note, rather than saying
+  "note freely", which is what they said first and what filled the lists.
 - **Working notes are a table because an append is a read-modify-write.** An
   agent's stores are written from every thread it holds, so appending to a file
   loses notes under exactly the concurrency this app has. The insert and the
