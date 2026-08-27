@@ -5148,6 +5148,22 @@ button {
   min-width: 0;
 }
 
+/* The older notes are behind this, so it sits above them and reads as the top
+   of the list rather than as a footer under it. */
+.worknotes__rest {
+  display: flex;
+}
+
+.worknotes__more {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--flesh);
+  font-size: var(--type-fine);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .worknotes__age {
   flex: none;
   font-size: var(--type-meta);

@@ -33,7 +33,7 @@ use crate::domain::search::{
 };
 use crate::domain::signin::{Signin, Surface};
 use crate::domain::usage::{Tokens, UsageEntry};
-use crate::domain::worknote::{WorkingNote, KEPT};
+use crate::domain::worknote::{Appended, WorkingNote, KEPT};
 
 pub type Conn = PooledConnection<SqliteConnectionManager>;
 
@@ -977,7 +977,8 @@ impl Store {
 
     // ---- working notes ---------------------------------------------------
 
-    /// Appends a note and drops whatever that pushed past `KEPT`.
+    /// Appends a note the agent does not already hold, and drops whatever that
+    /// pushed past `KEPT`.
     ///
     /// Both halves in one transaction, because the trim is not housekeeping
     /// that can run later: between the insert and the delete the agent is over
@@ -993,9 +994,27 @@ impl Store {
         agent: AgentId,
         body: &str,
         at: i64,
-    ) -> Result<(), StoreError> {
+    ) -> Result<Appended, StoreError> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        // A line the agent already holds is not stored again. Asked inside the
+        // same transaction as the insert for the reason the trim is: an agent
+        // writes from every thread it holds, and a check outside lets two turns
+        // land the same line twice. Only the rows that survived the trim are
+        // here to match against, which is the right set: a note that fell off
+        // the end is one the agent can no longer see, and writing it again is
+        // recording something rather than repeating it.
+        let held: Option<i64> = tx
+            .query_row(
+                "SELECT at FROM working_notes WHERE agent_id=?1 AND body=?2 ORDER BY id DESC \
+                 LIMIT 1",
+                params![agent.to_string(), body],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(at) = held {
+            return Ok(Appended::AlreadyHeld { at });
+        }
         tx.execute(
             "INSERT INTO working_notes (agent_id,at,body) VALUES (?1,?2,?3)",
             params![agent.to_string(), at, body],
@@ -1009,7 +1028,7 @@ impl Store {
             params![agent.to_string(), KEPT as i64],
         )?;
         tx.commit()?;
-        Ok(())
+        Ok(Appended::Stored)
     }
 
     /// An agent's working notes, oldest first.
@@ -7519,6 +7538,66 @@ mod tests {
             f.store.working_notes(agent.id).unwrap().into_iter().map(|n| n.body).collect();
         assert_eq!(bodies.first().unwrap(), "note 2");
         assert_eq!(bodies.last().unwrap(), &format!("note {}", KEPT + 1));
+    }
+
+    #[test]
+    fn a_line_the_agent_already_holds_is_not_stored_again() {
+        // The one mechanical brake on a list that fills with one fact. An agent
+        // saying "still waiting on Robert" for the fourth time is not recording
+        // anything, and acknowledging it teaches that repeating is how you say
+        // something is still true.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        assert_eq!(
+            f.store.append_working_note(agent.id, "waiting on Robert", 1_000).unwrap(),
+            Appended::Stored
+        );
+        assert_eq!(
+            f.store.append_working_note(agent.id, "waiting on Robert", 9_000).unwrap(),
+            Appended::AlreadyHeld { at: 1_000 },
+            "the repeat has to come back with the stamp of the note that already says it"
+        );
+
+        let notes = f.store.working_notes(agent.id).unwrap();
+        assert_eq!(notes.len(), 1, "the repeat was stored anyway");
+        assert_eq!(
+            notes[0].at, 1_000,
+            "the stamp moved forward, which is the age hiding exactly when it matters"
+        );
+    }
+
+    #[test]
+    fn one_agents_note_does_not_block_anothers() {
+        // Two agents on one errand write the same line, and each is recording
+        // its own state. Deduping across the crew would leave the second with
+        // no note of work it is genuinely in the middle of.
+        let f = fixture();
+        let a = f.store.create_agent(&draft("Manager")).unwrap();
+        let b = f.store.create_agent(&draft("Chef")).unwrap();
+        f.store.append_working_note(a.id, "waiting on the vendor", 1_000).unwrap();
+
+        assert_eq!(
+            f.store.append_working_note(b.id, "waiting on the vendor", 1_000).unwrap(),
+            Appended::Stored
+        );
+    }
+
+    #[test]
+    fn a_note_that_has_already_fallen_off_the_end_can_be_written_again() {
+        // The match is against what the agent still holds, which is the set it
+        // can see. A line that aged out is one the next turn is not being told
+        // about, so writing it is recording something rather than repeating it.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Manager")).unwrap();
+        f.store.append_working_note(agent.id, "the first thing", 1).unwrap();
+        for i in 0..KEPT {
+            f.store.append_working_note(agent.id, &format!("note {i}"), 1_000 + i as i64).unwrap();
+        }
+
+        assert_eq!(
+            f.store.append_working_note(agent.id, "the first thing", 9_000).unwrap(),
+            Appended::Stored
+        );
     }
 
     #[test]

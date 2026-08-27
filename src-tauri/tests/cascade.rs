@@ -586,6 +586,40 @@ async fn a_progress_note_tells_the_agent_how_many_it_now_holds() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn noting_the_same_line_twice_stores_it_once_and_says_how_old_the_first_is() {
+    // The one mechanical brake on a bounded list filling with a single fact.
+    // "Still waiting on the legal read", noted on four turns, is four of
+    // sixteen slots spent on one thing and three notes that record nothing.
+    // Acknowledging the repeat is what teaches an agent that restating is how
+    // you say something is still true, so it is not acknowledged: it is told
+    // how old the note it already has is, which is what it was reaching for and
+    // what it needs to decide whether to chase.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say(serde_json::to_string(&body["messages"]).unwrap_or_default())
+        } else {
+            Script::Progress("waiting on the legal read".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "chase the legal read").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Manager"), "any news?").unwrap();
+    h.settle(second).await;
+
+    let notes = h.runtime.store().working_notes(h.id("Manager")).unwrap();
+    assert_eq!(notes.len(), 1, "the repeat was stored as a second note");
+
+    let said = h.channel_texts("Manager").join("\n");
+    assert!(
+        said.contains("You noted that already"),
+        "the repeat came back as an ordinary note: {said}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_can_write_its_memory_and_reads_it_back_next_turn() {
     // The write-manage-read loop, end to end: an agent records something on one
     // turn and finds it in its own prompt on the next.

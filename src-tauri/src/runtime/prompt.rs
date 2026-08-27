@@ -449,16 +449,25 @@ pub fn system_prompt(
         out.push('\n');
     }
 
+    // The write rule here is a test about the *next* turn, and it is deliberately
+    // not an invitation. This section used to open with "note freely", which is
+    // true about the cost of one note and wrong about what to do with that: a
+    // crew took it and narrated itself, so a bounded list ran on what an agent
+    // was about to do while what it was waiting on aged off the end. Cheap is a
+    // fact about the write, not a reason to make one.
     out.push_str("\n## Your working notes\n");
     out.push_str(
         "Where your work stands, as lines you add with `note_progress`. This is the other half \
-         of what you carry between conversations, and it is the half that expires: what you have \
-         just done, what you have handed over, what you are waiting on and from whom.\n\n\
-         Note freely. A note is one line and costs nothing, and these are what stop you redoing \
-         work or waiting on something that already arrived. You cannot edit or delete one, and \
-         the oldest drop off by themselves once there are more than a page of them, so when \
-         something you noted stops being true, note the new state rather than trying to tidy the \
-         list.\n\n\
+         of what you carry between conversations, and it is the half that expires: where the \
+         work got to, what you are waiting on and from whom, and what is still open.\n\n\
+         Write one when a later turn would go wrong without it: work you would repeat, something \
+         you would carry on waiting for, a decision you would make differently. Most turns \
+         change nothing about where the work stands and need none. What you have just said is \
+         already in the conversation you are shown, and what you are about to do next is not \
+         progress. You cannot edit or delete a note, and the oldest drop off by themselves once \
+         there are more than a page of them, so when something you noted stops being true, note \
+         the new state rather than trying to tidy the list; writing the same line again adds \
+         nothing.\n\n\
          One thing needs no note: a message you sent a peer that has not come back is worked out \
          from your own sent messages and listed for you further down. Spend these on what nothing \
          else can see, which is everything off that path: what the operator owes you, what you \
@@ -2099,6 +2108,31 @@ mod tests {
         assert!(
             derived.contains("working notes above do not need to carry it"),
             "and the derived one has to say why the other is short: {derived}"
+        );
+    }
+
+    #[test]
+    fn the_progress_section_says_when_a_note_is_worth_writing() {
+        // This section used to say "note freely", which is true about what one
+        // note costs and was read as a reason to write one. A crew took it:
+        // agents noted what they were about to do and what they had just said,
+        // and a list of sixteen ran on a turn narrating itself while what the
+        // agent was waiting on aged off the end of it.
+        let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        let progress = section(&prompt, "## Your working notes");
+
+        assert!(
+            progress.contains("later turn would go wrong"),
+            "the test has to be about the next turn, which is the one a model can apply: \
+             {progress}"
+        );
+        assert!(
+            progress.contains("not progress"),
+            "and the case that produced the volume has to be named: {progress}"
+        );
+        assert!(
+            !progress.contains("note freely"),
+            "the invitation is back in the prompt: {progress}"
         );
     }
 

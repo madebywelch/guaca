@@ -95,6 +95,45 @@ describe("WorkingNotes", () => {
     expect(agentWorkingNotes).toHaveBeenCalledTimes(1);
   });
 
+  it("draws the newest few and keeps the older ones behind a button", async () => {
+    // The panel shares one column with the agent's screen, its schedule and
+    // its memory. A full list of sixteen notes, each wrapping to three lines in
+    // a sidebar this narrow, is a screen of text everything else sits below.
+    // Which end is kept is the decision: the notes read oldest first, so the
+    // tail is where the work is now.
+    agentWorkingNotes.mockResolvedValue([
+      note(6 * DAY, "asked the paralegal for the read"),
+      note(5 * DAY, "chased the vendor"),
+      note(4 * DAY, "handed the scope over"),
+      note(3 * DAY, "started the summary"),
+      note(2 * DAY, "sent the summary to Robert"),
+      note(HOUR, "waiting on Robert"),
+    ]);
+    render(<WorkingNotes agentId="a1" />);
+
+    expect(await screen.findByText("waiting on Robert")).toBeTruthy();
+    expect(screen.getByText("handed the scope over")).toBeTruthy();
+    expect(screen.queryByText("asked the paralegal for the read")).toBeNull();
+
+    // The count is on the button because the alternative is an operator who
+    // cannot tell a list of six from a list of sixteen without opening it.
+    fireEvent.click(screen.getByRole("button", { name: "Show 2 older" }));
+
+    expect(screen.getByText("asked the paralegal for the read")).toBeTruthy();
+    expect(screen.getByText("chased the vendor")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show fewer" }));
+    expect(screen.queryByText("asked the paralegal for the read")).toBeNull();
+  });
+
+  it("offers nothing to open on a list that already fits", async () => {
+    agentWorkingNotes.mockResolvedValue([note(HOUR, "waiting on Robert")]);
+    render(<WorkingNotes agentId="a1" />);
+    await screen.findByText("waiting on Robert");
+
+    expect(screen.queryByRole("button", { name: /older/ })).toBeNull();
+  });
+
   it("offers no way to clear a list that is already empty", async () => {
     render(<WorkingNotes agentId="a1" />);
     await screen.findByText(/Nothing in flight/);
