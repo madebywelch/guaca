@@ -51,6 +51,28 @@ pub const KEPT: usize = 16;
 /// sixteen paragraphs is the page this store exists to stop being written.
 pub const MAX_NOTE: usize = 240;
 
+/// What became of a note the agent wrote.
+///
+/// A line the agent already holds is not stored a second time, and the agent is
+/// told so rather than told "noted". The difference is the whole point: an
+/// agent that gets an acknowledgment for restating a note learns that restating
+/// is how you say something is still true, and a bounded list then fills with
+/// one fact written six ways. It is not a revision either, which is the rule
+/// this store does keep: nothing is edited and nothing is dropped, the second
+/// write simply never happens.
+///
+/// The stamp carried here is the note's original one, and it is deliberately
+/// not moved forward. The age is what makes the list worth reading, so an agent
+/// that renotes what it noted three days ago must be told it has been three
+/// days, not handed a fresh clock that hides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Appended {
+    /// The note is new and is now in the list.
+    Stored,
+    /// The agent already holds this exact line, written at this stamp.
+    AlreadyHeld { at: i64 },
+}
+
 /// One note, as it is stored and as it is read back.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
