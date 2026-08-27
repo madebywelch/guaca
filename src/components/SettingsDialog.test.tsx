@@ -296,8 +296,11 @@ describe("when the runtime refuses", () => {
           settle = resolve;
         }),
     );
-    // On Provider so both of the buttons a press could double up are on screen.
+    // On Provider so both of the buttons a press could double up are on screen,
+    // and with the endpoint typed into because the Save is only drawn while
+    // something is waiting for it.
     open(stored(), DEFAULT_PREFS, "provider");
+    type(/^Inference endpoint/, "http://localhost:1234/v1");
     fireEvent.click(save());
 
     // Two config writes racing each other is the failure this prevents, and the
@@ -315,6 +318,10 @@ describe("when the runtime refuses", () => {
 describe("what a save sends", () => {
   it("leaves a blank key, timer and timeout out of the patch entirely", async () => {
     open();
+    // The name is touched and nothing else is, because the Save is only drawn
+    // while something is waiting for it. Every box below opens blank and is
+    // left blank, which is the state this is about.
+    type(/^Your name/, "Robert W");
     fireEvent.click(save());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
@@ -328,7 +335,7 @@ describe("what a save sends", () => {
     expect("browserIdleMinutes" in patch).toBe(false);
     expect("requestTimeoutSecs" in patch).toBe(false);
     expect(patch).toEqual({
-      operatorName: "Robert",
+      operatorName: "Robert W",
       // Both models go every time, and so does the provider. Each model belongs
       // to one provider, so sending only the active one would leave the other
       // to be overwritten by whatever the next save happened to be looking at.
@@ -350,6 +357,10 @@ describe("what a save sends", () => {
     pane("Machines");
     type(/^E2B API key/, " ");
     type(/^Kernel API key/, "   ");
+    // Spaces are not an edit either, by the same rule that keeps them out of
+    // the patch, so the Save is reached through a field that is one.
+    pane("General");
+    type(/^Your name/, "Robert W");
     fireEvent.click(save());
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
@@ -475,35 +486,116 @@ describe("what a save sends", () => {
     expect(sentPatch().browserIdleMinutes).toBe(5);
   });
 
-  it("clears the API key box afterward and leaves every other box alone", async () => {
+  it("puts every staged box back to blank, saying what was actually stored", async () => {
     open();
     pane("Provider");
     type(/^API key/, "sk-or-v1-typed");
     type(/^Give up on a call after/, "30");
     pane("Machines");
     type(/^E2B API key/, "e2b_typed");
-    type(/^Sleep computers after/, "45");
+    // Past the ceiling the runtime clamps to, which is the case a box left
+    // reading what was typed gets wrong.
+    type(/^Sleep computers after/, "2000");
 
-    updateSettings.mockResolvedValue(stored({ apiKeySet: true, apiKeyHint: "…yped" }));
+    updateSettings.mockResolvedValue(
+      stored({ apiKeySet: true, apiKeyHint: "…yped", computerIdleMinutes: 1440 }),
+    );
     fireEvent.click(save());
     await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
 
-    // The asymmetry is asserted as it stands: one secret is dropped from the
-    // webview and the other is left on screen.
-    expect(field(/^E2B API key/).value).toBe("e2b_typed");
-    expect(field(/^Sleep computers after/).value).toBe("45");
+    // Blank is the resting state of every box that stages something, and the
+    // placeholder beside each one is read from what came back. Left as it was
+    // typed, a key is indistinguishable from an edit nobody saved and a
+    // duration is a number under "Saved." that the runtime did not store.
+    expect(field(/^E2B API key/).value).toBe("");
+    expect(field(/^Sleep computers after/).value).toBe("");
+    expect(field(/^Sleep computers after/).placeholder).toBe("1440 minutes");
     pane("Provider");
     expect(field(/^API key/).value).toBe("");
-    expect(field(/^Give up on a call after/).value).toBe("30");
+    expect(field(/^API key/).placeholder).toBe("Stored …yped");
+    expect(field(/^Give up on a call after/).value).toBe("");
   });
 
   it("stays open on a save, because saving is not finishing", async () => {
     open();
+    type(/^Your name/, "Robert W");
     fireEvent.click(save());
     await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
     expect(banner().className).toContain("banner--ok");
     expect(onClose).not.toHaveBeenCalled();
     expect(useStore.getState().settings?.operatorName).toBe("Robert");
+  });
+});
+
+describe("the Save in the foot", () => {
+  const saveButton = () => screen.queryByRole("button", { name: "Save" });
+
+  it("is not there until something is waiting for it", () => {
+    open();
+    expect(saveButton()).toBeNull();
+    type(/^Your name/, "Robert W");
+    expect(saveButton()).toBeTruthy();
+  });
+
+  it("offers nothing on the panes that write as they are clicked", () => {
+    // Appearance and Notifications are kept the moment they are pressed, and a
+    // Save under them said the opposite about settings that were already saved.
+    open(stored(), DEFAULT_PREFS, "appearance");
+    fireEvent.click(screen.getByRole("button", { name: "Reading surface: Ink" }));
+    expect(saveButton()).toBeNull();
+
+    pane("Notifications");
+    fireEvent.click(switchOn("Notify me at all"));
+    expect(saveButton()).toBeNull();
+  });
+
+  it("offers nothing on the panes there is nothing to save on", () => {
+    open(stored(), DEFAULT_PREFS, "shortcuts");
+    expect(saveButton()).toBeNull();
+    pane("About");
+    expect(saveButton()).toBeNull();
+  });
+
+  it("is still reachable from a pane that stages nothing", () => {
+    // Every pane's state is held by the shell, so an endpoint typed on Provider
+    // is still unsaved from Shortcuts. A Save that went missing on the way past
+    // is how it would get lost.
+    open();
+    pane("Provider");
+    type(/^Inference endpoint/, "http://localhost:1234/v1");
+    pane("Shortcuts");
+    expect(saveButton()).toBeTruthy();
+  });
+
+  it("goes once what was typed has been saved", async () => {
+    open();
+    type(/^Your name/, "Robert W");
+    updateSettings.mockResolvedValue(stored({ operatorName: "Robert W" }));
+
+    fireEvent.click(save());
+    await waitFor(() => expect(screen.getByText("Saved.")).toBeTruthy());
+    expect(saveButton()).toBeNull();
+  });
+
+  it("stays after a refusal, because the edit is still unsaved", async () => {
+    updateSettings.mockRejectedValue({ kind: "config", message: "config.json is read-only" });
+    open();
+    type(/^Your name/, "Robert W");
+
+    fireEvent.click(save());
+    await waitFor(() => expect(screen.getByText(/config\.json is read-only/i)).toBeTruthy());
+    expect(saveButton()).toBeTruthy();
+  });
+
+  it("does not count a duration retyped as what is already stored", () => {
+    // The box is blank while it inherits and the placeholder says what that is,
+    // so typing the number back in changes nothing and offers nothing.
+    open();
+    pane("Machines");
+    type(/^Sleep computers after/, "15");
+    expect(saveButton()).toBeNull();
+    type(/^Sleep computers after/, "45");
+    expect(saveButton()).toBeTruthy();
   });
 });
 
@@ -808,10 +900,24 @@ describe("the ChatGPT subscription", () => {
     expect(row().textContent).toContain("robert@example.com");
     expect(row().textContent).toContain("Pro");
 
-    // And the save that follows carries it.
+    // And the save that follows carries it, which is what the message says.
+    expect(banner().textContent).toContain("Save to start using it");
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(sentPatch().provider).toBe("chatgpt");
+  });
+
+  it("does not send an operator to a Save that is not there", async () => {
+    // A sign-in that stopped working leaves the provider where it was, so
+    // signing back in changes nothing: there is no Save, and a message naming
+    // one sends the operator looking for a button that is not on screen.
+    open(stored({ provider: "chatgpt" }));
+    pane("Provider");
+    fireEvent.click(button("Sign in"));
+
+    await waitFor(() => expect(screen.getByText(/Signed in as robert@example\.com/)).toBeTruthy());
+    expect(banner().textContent).not.toContain("Save to start using it");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
   });
 
   it("says so when the plan signed in to cannot run Codex", async () => {
@@ -878,6 +984,10 @@ describe("the ChatGPT subscription", () => {
     open(stored({ provider: "chatgpt" }));
     pane("Provider");
     await waitFor(() => expect(field(/^Model/)).toBeTruthy());
+    // Saved for a reason that has nothing to do with either model, which is the
+    // case where one of them going missing would not be noticed.
+    pane("General");
+    type(/^Your name/, "Robert W");
 
     fireEvent.click(save());
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));

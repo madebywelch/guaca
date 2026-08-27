@@ -7,10 +7,16 @@
  * changed section, and typing an endpoint, glancing at Limits and coming back
  * would silently lose the endpoint.
  *
- * Save and Test stay in the foot, outside the scrolling half, for the same
- * reason they used to be at the bottom of one column: they act on everything,
- * not on the section that happens to be open. Test deliberately sends what is
- * on screen rather than what is stored, and Save deliberately does not close.
+ * Save stays in the foot, outside the scrolling half, for the same reason it
+ * used to be at the bottom of one column: it acts on everything, not on the
+ * section that happens to be open. It is drawn only while something is waiting
+ * for it, which is what keeps that from being a lie. Five of the nine panes
+ * stage nothing at all — Appearance and Notifications write as they are
+ * clicked, Account acts at once, Shortcuts and About are read-only — so a Save
+ * pinned there regardless spent most of its life offering to save settings that
+ * were already saved, which reads as the opposite. Test is in the Provider pane
+ * because it reads that pane and acts on none of the others, and it deliberately
+ * sends what is on screen rather than what is stored. Save does not close.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -91,6 +97,15 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
     hint: "The model call failed after its retries. Same channel rule as above.",
   },
 };
+
+/**
+ * A duration box, which is blank while it is inheriting what is stored.
+ *
+ * So an edit is a number that is not the stored one, and retyping what the
+ * placeholder already says is not one.
+ */
+const differs = (text: string, stored: number | undefined) =>
+  text.trim() !== "" && Number(text) !== stored;
 
 export function SettingsDialog({ onClose, section: opening }: Props) {
   const settings = useStore((s) => s.settings);
@@ -196,6 +211,33 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     ...(timeout.trim() ? { requestTimeoutSecs: Number(timeout) } : {}),
   });
 
+  /**
+   * Whether anything on this dialog is waiting to be saved.
+   *
+   * Read across every pane rather than the open one, because the shell holds
+   * all of their state: an endpoint typed on Provider and left there while the
+   * operator reads Limits is still unsaved, and a Save that went missing on the
+   * way past is how it would get lost.
+   *
+   * A key is compared with blank rather than with what is stored, because what
+   * is stored cannot be read back. A blank box is not an edit, and a box of
+   * spaces is not one either: that is exactly what `patch` omits.
+   */
+  const dirty =
+    operatorName !== (settings?.operatorName ?? "") ||
+    provider !== (settings?.provider ?? "compatible") ||
+    baseUrl !== (settings?.baseUrl ?? "") ||
+    model !== (settings?.defaultModel ?? "") ||
+    subscriptionModel !== (settings?.subscriptionModel ?? "") ||
+    stealth !== (settings?.browserStealth ?? false) ||
+    apiKey.trim() !== "" ||
+    e2bKey.trim() !== "" ||
+    kernelKey.trim() !== "" ||
+    differs(idleMinutes, settings?.computerIdleMinutes) ||
+    differs(browserIdleMinutes, settings?.browserIdleMinutes) ||
+    differs(timeout, settings?.requestTimeoutSecs) ||
+    LIMITS.some((field) => limits[field.key] !== settings?.limits[field.key]);
+
   const save = async () => {
     setBusy(true);
     setStatus(null);
@@ -208,8 +250,21 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       // 16. Saying "Saved." over a box still reading 40 tells the operator
       // something untrue about what is running.
       setLimits(next.limits);
+      // And every box that stages something goes back to blank, which is the
+      // same argument one field further. A key box left holding a key the
+      // runtime already has is indistinguishable from an edit nobody saved, and
+      // a duration box is worse than that: those three are clamped on the way
+      // in, so a box still reading 2000 sits under "Saved." claiming a machine
+      // sleeps after thirty-three hours when the runtime stored twenty-four.
+      // Blank is these boxes' resting state and the placeholder beside each one
+      // is read from what came back, so what is on screen after this is what is
+      // running.
       setApiKey("");
+      setE2bKey("");
       setKernelKey("");
+      setIdleMinutes("");
+      setBrowserIdleMinutes("");
+      setTimeoutSecs("");
       setStatus({ tone: "ok", text: "Saved." });
     } catch (error) {
       setStatus({ tone: "error", text: errorMessage(error) });
@@ -385,7 +440,13 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       setStatus({
         tone: next.includesCodex ? "ok" : "error",
         text: next.includesCodex
-          ? `Signed in as ${next.email || "your ChatGPT account"}. Save to start using it.`
+          ? // The second sentence only where there is a Save to press. An
+            // operator whose sign-in expired is already on the subscription, so
+            // signing back in leaves nothing waiting to be saved and the button
+            // is not drawn: sending them to it would be sending them nowhere.
+            `Signed in as ${next.email || "your ChatGPT account"}.${
+              settings?.provider === "chatgpt" ? "" : " Save to start using it."
+            }`
           : `Signed in as ${next.email || "your ChatGPT account"}, but a ${planLabel(next.plan)} plan does not include Codex. Use an API key instead.`,
       });
     } catch (error) {
@@ -1148,14 +1209,16 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
           <button type="button" className="btn" onClick={onClose}>
             Close
           </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={busy}
-            onClick={() => void save()}
-          >
-            Save
-          </button>
+          {dirty && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy}
+              onClick={() => void save()}
+            >
+              Save
+            </button>
+          )}
         </div>
       </div>
     </div>
