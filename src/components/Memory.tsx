@@ -242,7 +242,7 @@ export function Memory({ agentId }: Props) {
         <p className="memory__note">
           The agent writes here with <code>update_memory</code> when it learns something durable,
           and is shown it at the start of every turn. Where its work stands goes in the working
-          notes below instead. Seed a persona if you like.
+          notes above instead. Seed a persona if you like.
         </p>
       )}
 
