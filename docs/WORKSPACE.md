@@ -396,7 +396,7 @@ server holds a copy of the last two dozen while a transcript is drawing them,
 and a restart re-registers whatever is on screen.
 
 **The page reports its own height, because nothing outside it can measure it.**
-A cross-origin frame cannot be read, so `artifact.rs` prepends a reporter that
+A cross-origin frame cannot be read, so `artifact.rs` prepends a bridge that
 posts its height on every change. Prepended rather than appended: a model's page
 is exactly where an unclosed tag lives, and an unclosed tag swallows everything
 after it. The parent trusts the message by the window that sent it and by
@@ -404,6 +404,65 @@ nothing else, because an opaque origin reports itself as `"null"` and checking
 the origin would either reject every real message or accept every forged one. It
 clamps what it is told, too: a page claiming a height of a hundred thousand has
 made itself the whole channel.
+
+**A page is framed once, whole, and not while the reply is still arriving.**
+This is where the two figures come apart. A chart is a pure function from a spec
+to coordinates, so redrawing it on every token is free and is what makes one
+assemble itself on screen; that is the feature. A page is drawn by registering a
+document and pointing a frame at the address that comes back, so the same
+treatment is a reload per token: a round trip each, a fresh entry each in a store
+that holds two dozen, and a frame that throws away whatever the operator had done
+in it every sixteen milliseconds. So a `html` fence in a live bubble says
+*Drawing…* until the reply settles. `live` is a prop on `Markdown`, set by the
+one component that draws a body still being written.
+
+## A page can hand one value back, and Guaca is what carries it
+
+A page that can be worked and cannot answer is a dead end. The operator picks one
+plan out of four, drags a range to $450K, ticks six of the nine rows, and none of
+it reaches the agent that drew the page: they are left retyping in the composer
+what they just expressed by clicking, which is the work the page was supposed to
+save.
+
+So the bridge defines one more thing, `guaca.answer(value)`, and it is not a hole
+in the paragraph above. It reaches no network. It posts to the window that framed
+it, which is the one channel an opaque origin has and the one the height reporter
+has always used, and **what happens next is Guaca's decision rather than the
+page's**: the renderer draws the value below the frame, in the app's own chrome,
+and waits. The page fills a form in. A person sends it.
+
+That ordering is the whole safety argument and it is not ceremony. A transcript
+re-frames a page whenever it draws one, so a page that could send by itself would
+send again every time it was scrolled past, and every send is a turn the operator
+did not ask for and does pay for. It is also the rule this app applies everywhere
+a model's words would travel under the operator's name: shown before they go,
+drawn as text, never as markup. Same line `domain::approval` draws between a
+permission and a question, one level out.
+
+**The page hands back a value, never a sentence.** `answerMessage` is Guaca's
+wording around the page's JSON, so nothing the page wrote can arrive as an
+instruction in the operator's voice. What is sent is an ordinary operator
+message: `Trust::Operator`, in the record, searchable, readable back by the agent
+that drew the page. It is theirs because they read the value in the strip and
+pressed the button, and what they are vouching for is a value they could see.
+
+The value crosses as JSON *text* rather than as a structured-cloned object,
+because the string is what is shown, what is capped and what is sent. A value
+that will not survive `JSON.stringify` fails inside the page, where the page is
+told about it by the `false` coming back, instead of arriving as something the
+app has to decide about. It is capped at 4,000 characters, with the refusal
+saying so: an answer is a choice, not a document.
+
+**Answering replaces, and never queues.** A page that calls `guaca.answer` on
+every drag of a slider is doing exactly the right thing, and what the operator
+sends is what the page last handed back, which is what they are looking at.
+
+**Nobody to answer means no strip at all.** `Answering` is a context that is null
+everywhere and provided by one surface: the channel, where the operator is one of
+the two participants and their next message has an obvious recipient. A page
+behind a search hit, inside a pair's thread or in a document preview draws and
+runs exactly as before; a Send button in those places would be a control that
+cannot say who it sends to.
 
 ## A transcript is a log, and says one thing out loud
 

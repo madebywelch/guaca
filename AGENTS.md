@@ -144,6 +144,7 @@ repo: the frontend renders state and forwards intent.
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
+| A page the operator can work, and what it may hand back | *A page can hand one value back* in `docs/WORKSPACE.md`, then `BRIDGE` in `src-tauri/src/artifact.rs` and `Answering` in `src/components/HtmlArtifact.tsx` |
 | A turn's tool calls in a channel: what folds, what a chip says, what opens | *A turn's own work is chips* in `docs/WORKSPACE.md`, then `src/lib/trail.ts` |
 | What an agent changed about its own memory, and where the version before it came from | *A memory rewrite opens as a diff* in `docs/WORKSPACE.md`, then `Workspace::write` and `src/lib/diff.ts` |
 | What an agent currently remembers, and editing it by hand | *An agent's memory is in the panel* in `docs/WORKSPACE.md`, then `src/components/Memory.tsx` and `src-tauri/src/workspace.rs` |
@@ -530,6 +531,23 @@ the model takes a screenshot to see what `browse` did.
   and its script would silently never run: an empty rectangle that passes every
   test, which is the same failure `FileCard` has a note about. So it gets an
   origin of its own, and the round trip through `frame_artifact` is what buys it.
+- **A page hands a value back and never a message, and the two clicks are the
+  lock.** `guaca.answer` posts to the window that framed the page, which is the
+  one channel an opaque origin has and the one the height reporter already used;
+  the renderer draws the value in Guaca's own chrome and waits for the operator.
+  Letting the page send directly is a page that sends again every time it is
+  scrolled past, because a transcript re-frames one whenever it draws it, and
+  every send is a turn nobody asked for and somebody paid for. The value is also
+  JSON and never a sentence, so nothing the page wrote can arrive as an
+  instruction in the operator's voice: `answerMessage` is the wording around it.
+  Same line `domain::approval` draws between a permission and a question.
+- **A page is framed once, whole; a chart is redrawn every token.** They look
+  like the same decision and are opposite ones. A chart is a pure function to
+  coordinates, so redrawing it is free and is what makes one assemble itself on
+  screen. A page is registered and then pointed at, so redrawing it is a reload:
+  a round trip per token, an entry per token in a store that holds two dozen, and
+  a frame that throws away whatever the operator had done in it. `live` on
+  `Markdown` is the whole mechanism, and `StreamingMessage` is its one caller.
 - **`allow-scripts` and `allow-same-origin` must never appear together.** On the
   frame or in `ARTIFACT_CSP`. Together they let the page remove its own sandbox
   attribute and reload out of the box, which is the whole lock. `default-src
