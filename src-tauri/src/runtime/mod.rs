@@ -344,6 +344,7 @@ use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
 use crate::domain::worknote;
 use crate::files::FileStore;
+use crate::llm::modality::{self, Modalities};
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::plugins;
@@ -584,6 +585,14 @@ struct Inner {
     /// account makes that plugin refuse with a sentence rather than making the
     /// runtime behave differently. See `PluginKind::account_backed`.
     account: std::sync::OnceLock<Arc<crate::account::Account>>,
+    /// What each endpoint publishes about what its models can be sent.
+    ///
+    /// On the runtime rather than beside the model picker's catalog, because
+    /// unlike that one this is read on the turn path: what a model can be shown
+    /// decides what the prompt says, which tools are offered and what happens
+    /// to an attached picture. Read once per endpoint and kept, for the reason
+    /// a plugin's tool list is.
+    modalities: modality::Registry,
     /// Actor tasks currently running. Registration and the task are separate
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
@@ -643,6 +652,7 @@ impl Runtime {
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
+                modalities: modality::Registry::new(),
                 live_actors: Arc::new(AtomicUsize::new(0)),
                 events,
             }),
@@ -1220,15 +1230,43 @@ impl Runtime {
     /// spreadsheet, is written into `~/inbox` and the agent is told the path,
     /// because a Linux box with python on it knows more file formats than this
     /// runtime ever will.
+    ///
+    /// "Can read" is the model's answer and not this file type's. A picture
+    /// sent to a model that takes text only is refused by the endpoint, which
+    /// costs the whole turn rather than the attachment, so a model that cannot
+    /// be shown one is not shown one: the picture becomes the third case, on a
+    /// machine if there is one, and the agent is told in words what it has and
+    /// has not been given. Silently sending it anyway and letting the provider
+    /// object is the version of this that fails with an error naming neither
+    /// the file nor the reason.
     async fn deliver_files(
         &self,
         card: &AgentCard,
         batch: &[Envelope],
+        modalities: Modalities,
         messages: &mut Vec<ChatMessage>,
     ) {
         for envelope in batch {
             for file in prompt::attachments(envelope) {
-                let note = if file.is_image() {
+                let note = if file.is_image() && !modalities.image {
+                    match self.place(card, file).await {
+                        Ok(path) => format!(
+                            "The attached file {} is a picture, and pictures do not reach the \
+                             model you are running on: you have not seen it. It is on your \
+                             machine at {path}, which is the only way to get at what is in it. \
+                             Do not describe it from its name.",
+                            file.name
+                        ),
+                        Err(why) => format!(
+                            "The attached file {} is a picture, and pictures do not reach the \
+                             model you are running on: you have not seen it, and it could not be \
+                             put anywhere you could open it either ({why}). Say that plainly and \
+                             ask for what is in it in words, rather than describing a picture \
+                             from its name.",
+                            file.name
+                        ),
+                    }
+                } else if file.is_image() {
                     match self.inner.files.read(&file.digest) {
                         Ok(bytes) => {
                             let data =
@@ -2519,10 +2557,33 @@ impl Runtime {
             tracing::warn!(%err, "could not read what this agent is waiting on");
             Vec::new()
         });
+        // Settings resolve agent over group over app. An agent that names its own
+        // model keeps it; otherwise the group's choice applies; otherwise the
+        // app default. The endpoint resolves the same way, so one crew can run
+        // against a local server while another uses a hosted one.
+        //
+        // Read here rather than at the first model call, which is where it used
+        // to be: what the model can be sent decides what goes into the prompt
+        // and which tools are offered, and both of those are settled before a
+        // token is spent.
+        let config = self.config();
+        let inference = self.inference_for(&card, &config);
+        let model = if card.model.trim().is_empty() {
+            inference.default_model.clone()
+        } else {
+            card.model.clone()
+        };
+        // What Guaca will put in front of that model, decided once and used
+        // four times: the prompt says it, the tool list agrees with it,
+        // `deliver_files` obeys it, and `not_given` refuses a screen the model
+        // asked for anyway. Costs one request per endpoint per six hours, and
+        // an endpoint that says nothing leaves everything as it was.
+        let modalities = self.inner.modalities.of(&inference, &model).await;
+
         #[allow(unused_mut)]
         let mut messages = prompt::build_messages(
             &card,
-            &self.config().operator_name,
+            &config.operator_name,
             &roster,
             &credentials,
             &signins,
@@ -2537,11 +2598,12 @@ impl Runtime {
             &waiting_on,
             repository.as_ref(),
             surfaces,
+            modalities,
         );
         // After assembly, because what a file becomes depends on things the
-        // prompt cannot reach: bytes on disk, and a machine that may have to be
-        // started to hold them.
-        self.deliver_files(&card, &batch, &mut messages).await;
+        // prompt cannot reach: bytes on disk, a model that may not be able to
+        // see one, and a machine that may have to be started to hold them.
+        self.deliver_files(&card, &batch, modalities, &mut messages).await;
 
         // Where the finished message will land, and who it is for. Both are
         // known before the first token, so the UI never has to guess and then
@@ -2561,18 +2623,7 @@ impl Runtime {
         };
         stream.open(&*self.inner.events);
 
-        let config = self.config();
         let mut collected_text = String::new();
-        // Settings resolve agent over group over app. An agent that names its own
-        // model keeps it; otherwise the group's choice applies; otherwise the
-        // app default. The endpoint resolves the same way, so one crew can run
-        // against a local server while another uses a hosted one.
-        let inference = self.inference_for(&card, &config);
-        let model = if card.model.trim().is_empty() {
-            inference.default_model.clone()
-        } else {
-            card.model.clone()
-        };
 
         let mut tool_parts: Vec<Part> = Vec::new();
         // Peers written to through `send_message` during this turn.
@@ -2617,7 +2668,7 @@ impl Runtime {
                 // The crew's plugins after the app's own tools, in that order,
                 // so a provider that truncates a long list keeps the ones every
                 // agent needs to answer at all.
-                tools: tools::specs(surfaces)
+                tools: tools::specs(surfaces, modalities)
                     .into_iter()
                     .chain(tools::plugin_specs(&plugins))
                     .collect(),
@@ -2678,6 +2729,7 @@ impl Runtime {
                         &mut reading,
                         &mut attached,
                         call,
+                        modalities,
                         &named,
                     )
                     .await;
@@ -3080,6 +3132,11 @@ impl Runtime {
         // Files this turn has attached to the answer it has not written yet.
         attached: &mut Vec<Attachment>,
         call: &ToolCall,
+        // What the model behind this turn can be sent, settled once at the top
+        // of it. Passed rather than resolved again because it decides a refusal
+        // on this path, and a second reading could disagree with the tool list
+        // the model was offered.
+        modalities: Modalities,
         // The crew's servers, as the turn read them. Passed rather than read
         // again because a call to a server the operator added can only be
         // resolved against what this group has: its name and its address are on
@@ -3113,6 +3170,7 @@ impl Runtime {
                 attached,
                 call,
                 arguments,
+                modalities,
                 plugins,
             )
             .await;
@@ -3148,6 +3206,7 @@ impl Runtime {
         attached: &mut Vec<Attachment>,
         call: &ToolCall,
         arguments: serde_json::Value,
+        modalities: Modalities,
         plugins: &[PluginKind],
     ) -> (String, Part, Option<String>) {
         let invocation = match tools::parse(call, plugins) {
@@ -3169,7 +3228,7 @@ impl Runtime {
         // reaches a place this agent was not given, and this is the same rule
         // where a model that called it anyway meets it, exactly as
         // `ask_to_act` does one layer up.
-        if let Some(refusal) = self.not_given(card, &invocation) {
+        if let Some(refusal) = self.not_given(card, modalities, &invocation) {
             return (
                 refusal.clone(),
                 Part::tool_call(
@@ -3837,14 +3896,28 @@ impl Runtime {
         }
     }
 
-    /// A tool aimed at a place this agent has not been given.
+    /// A tool aimed at a place this agent has not been given, or at a screen
+    /// the model answering cannot be shown.
     ///
     /// A refusal rather than an error, and the difference is what the model
     /// does next. "Your computer is not available" reads as a machine that
     /// failed, which is a thing worth trying again in a minute; this says the
     /// access was never there, that only the operator can change it, and what
     /// to do with the rest of the turn.
-    fn not_given(&self, card: &AgentCard, invocation: &ToolInvocation) -> Option<String> {
+    ///
+    /// The screen is the one case where the agent has the place and still
+    /// cannot use it. `specs` leaves `use_screen` out when a picture would not
+    /// reach the model, and a model that names a tool it was never offered is
+    /// ordinary rather than exotic, so the same question is asked again here:
+    /// otherwise the machine is worked, the screen is captured and the picture
+    /// is thrown away, which reads to the model as a screen that came back
+    /// blank.
+    fn not_given(
+        &self,
+        card: &AgentCard,
+        modalities: Modalities,
+        invocation: &ToolInvocation,
+    ) -> Option<String> {
         let surfaces = self.surfaces_for(card);
         match invocation {
             ToolInvocation::RunCommand { .. }
@@ -3860,6 +3933,16 @@ impl Runtime {
                         .to_string(),
                 )
             }
+            // After the refusal above, because both can be true and "you have no
+            // computer" is the one with something the operator can do about it.
+            ToolInvocation::UseScreen { .. } if !modalities.image => Some(
+                "Refused: a picture cannot reach the model you are running on, so looking at \
+                 your screen would hand back nothing and nothing was done. Your machine still \
+                 works: use `run_command`, which answers in text, and `open_on_desktop` when the \
+                 point is for the operator to see something. Say plainly in your reply what \
+                 needed eyes on the screen."
+                    .to_string(),
+            ),
             ToolInvocation::Browse { .. } if !surfaces.browser => Some(
                 "Refused: you have no browser, so nothing was opened and no page was read. \
                  Nothing is broken and there is nothing to retry: you have not been given one, \

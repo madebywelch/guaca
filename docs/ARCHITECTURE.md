@@ -387,6 +387,67 @@ subscription cannot fund a third-party harness however the credential is
 obtained. Claude models reach Guaca the same way they always did: an API key, or
 OpenRouter, which is still the default. `docs/PROTOCOL.md` has the dates.
 
+## What a model can be sent is asked of the endpoint, not assumed
+
+The model is a text box. An operator types one slug this week and another next
+week, and the two do not have to be able to do the same things. The only thing
+every model can be relied on to take is text; everything else Guaca puts in
+front of one (an attached photograph, a picture of a machine's screen) is a
+capability of that particular model, and this app assumed it of all of them for
+as long as there was only one worth assuming.
+
+**Only what Guaca can send is worth asking about.** What a model accepts and
+what this app can produce are two lists, and the answer worth having is the
+intersection. Guaca produces exactly two things: text, and pictures. It records
+no audio and no video and has nothing to make either out of, so a model that
+would happily take a video still gets none, and its agent is told so rather than
+offering the operator something that cannot arrive. The other direction is a
+constant rather than a question: a reply is text. A transcript, a peer's inbox,
+an eval and this app's own record are all text, so a model that can draw a
+picture has nowhere to put one, and the way an agent shows something it drew is
+already a chart spec or a page it wrote. So there is one question, and
+`llm/modality.rs` answers only it: does a picture reach this model.
+
+**The answer comes from the endpoint, because that is the only place it is.**
+Not from a table of model names in this repo, which goes stale the week after it
+ships and is a lie about every model released since. Not from a checkbox in
+Settings either: an operator swapping a model changes one field, and a second
+field beside it that has to be changed in step is one that will not be.
+OpenRouter publishes `architecture.input_modalities` for every model it routes
+to, on the same `/models` any OpenAI-compatible endpoint answers, so the
+question is asked of whatever endpoint the turn is being paid through. Read once
+per endpoint and kept for six hours, for the reason a plugin's tool list is: it
+changes when a vendor ships, not when an agent thinks, and a round trip in front
+of every model call is one every agent in the crew pays. Both subscription
+providers are answered without asking anybody: their models are the vendor's
+rather than the operator's, and every model either of them hands a turn to takes
+pictures.
+
+**An endpoint that says nothing leaves everything as it was.** A local LM Studio
+answers `/models` with ids and no architecture, and a model that has never been
+near OpenRouter is not in its list at all. Both are answered the same way: the
+picture is sent, exactly as it was before any of this existed. The asymmetry is
+deliberate and it is the whole safety of the change. A wrong *it can see* is
+what happened on every endpoint before, and costs a turn that fails with an
+error naming the model. A wrong *it cannot see* takes `use_screen` off an agent
+that was using it and quietly stops delivering attachments, with nothing on
+screen saying why. Only an endpoint that has published a modality list without
+`image` in it is taken to have said no.
+
+**One answer, four things that have to agree.** The prompt says what reaches
+this agent, `tools::specs` decides whether `use_screen` is offered,
+`deliver_files` decides what an attached picture becomes, and `not_given`
+refuses a screen a model called for anyway. That fourth one is not belt and
+braces: a model naming a tool it was never offered is ordinary, and served it the
+machine is worked, the screen captured and the picture thrown away, which reads
+to the model as a screen that came back blank. Three of the four agreeing is worse than none,
+so the value is settled once at the top of `run_turn` and passed to all of them.
+`use_screen` is the only tool the answer reaches:
+its entire result is a picture, and the coordinates to click next are in it and
+nowhere else. The rest of the machine is untouched, because `run_command` reads
+back as text and `open_on_desktop` puts a program where the *operator* can watch
+it, which is worth doing whether or not the agent can see.
+
 ## A failed model call is retried before the operator hears about it
 
 `stream_with_retries` is the loop and `LlmError::is_transient` decides. Rate
@@ -688,10 +749,12 @@ activity view, so a proposal inlined into a message would be dragged through
 both, every time. Content addressing also makes the common case free: the same
 document sent to four agents and forwarded once is one file.
 
-**What reaches the model depends on the file.** A picture goes as a picture,
-down the same path as a screenshot from `use_screen`, because that is the one
-thing a model cannot be told about in words. Text is read into the prompt, cut
-at a limit that says it was cut. Anything else, a proposal in Word or a
+**What reaches the model depends on the file, and on the model.** A picture goes
+as a picture, down the same path as a screenshot from `use_screen`, because that
+is the one thing a model cannot be told about in words, unless the endpoint has
+said this model takes text only: then it goes down the third path below, and the
+agent is told in words that it has not seen it. Text is read into
+the prompt, cut at a limit that says it was cut. Anything else, a proposal in Word or a
 spreadsheet, is written to `~/inbox` on the agent's own machine and the agent is
 told the path. The host does not learn to parse PDF or docx: the agent has a
 Linux box and can install what it needs, which is the premise the rest of the
