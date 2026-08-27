@@ -5,7 +5,14 @@ import { api } from "../lib/ipc";
 import { thoughtNow } from "../lib/reasoning";
 import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { elapsed, useNow } from "../lib/time";
-import { callInFlight, trailStep } from "../lib/trail";
+import {
+  callInFlight,
+  type LiveCall,
+  type Step,
+  tallyLabel,
+  tallyTrail,
+  trailStep,
+} from "../lib/trail";
 import { rowStandsFor, toPeer, transcriptRows } from "../lib/transcript";
 import {
   type Activity,
@@ -290,18 +297,30 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
  * Everything about the turn that is still going, between the transcript and the
  * box you would type into.
  *
- * Three things, in the order they are read: what the model is working through,
- * when the operator has asked to see it; the calls this turn has already made;
- * and the line saying what it is doing now. Three components rather than one
- * because they change at wildly different rates. The line moves sixty times a
- * second and the chips a few times a minute, and a token arriving must not
- * re-render a chip for the same reason it must not re-render the transcript.
+ * **One line, and one slot above it.** The line says what the turn is doing
+ * now, what it has done and what it is spending, and it is the same height from
+ * the first token to the last. Behind it are two things worth a longer look —
+ * the working the model has published, and the calls it has already made — and
+ * they share one place to appear, so opening either moves the transcript by the
+ * same amount and opening the second does not stack on the first.
  *
- * This one holds only whether the working is open, which is the whole reason it
- * exists: the button is on the line and the panel is above the chips.
+ * It was three layers deep instead, and the middle one was the whole record of
+ * the turn drawn as it accumulated: a browsing turn's seven kinds of work
+ * wrapped across four rows of gray monospace, reflowing every time a call came
+ * back, with the composer moving underneath. That record is not lost by this
+ * and was never only here — the transcript draws every chip of it the moment
+ * the turn ends, from the same rules over the same values.
+ *
+ * Still three components rather than one, because they change at wildly
+ * different rates. The line moves sixty times a second and the chips a few
+ * times a minute, and a token arriving must not re-render a chip for the same
+ * reason it must not re-render the transcript.
+ *
+ * This one holds only which of the two is open, which is the whole reason it
+ * exists: both buttons are on the line and the panel is above it.
  */
 function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | undefined }) {
-  const [open, setOpen] = useState(false);
+  const [showing, setShowing] = useState<Showing | null>(null);
   const panel = useId();
 
   // Queued counts: the agent has work it has not read yet, and to the operator
@@ -313,19 +332,27 @@ function TurnFooter({ agent, state }: { agent: AgentCard; state: Activity | unde
   // standing decision to watch every turn's, and a panel that opened by itself
   // on the next one is the app deciding where the operator looks.
   useEffect(() => {
-    if (!working) setOpen(false);
+    if (!working) setShowing(null);
   }, [working]);
 
   if (!working) return null;
 
   return (
     <div className="turn">
-      {open && <ThoughtPanel id={panel} agent={agent.id} />}
-      <LiveTrail agent={agent.id} />
-      <WorkingNote agent={agent} panel={open ? panel : undefined} onToggle={() => setOpen(!open)} />
+      {showing === "working" && <ThoughtPanel id={panel} agent={agent.id} />}
+      {showing === "steps" && <StepsPanel id={panel} agent={agent.id} />}
+      <WorkingNote
+        agent={agent}
+        panel={panel}
+        showing={showing}
+        onToggle={(which) => setShowing((held) => (held === which ? null : which))}
+      />
     </div>
   );
 }
+
+/** Which of the line's two disclosures is in the slot above it, if either. */
+type Showing = "working" | "steps";
 
 /**
  * The whole of what the model has published this turn, when it is asked for.
@@ -369,7 +396,19 @@ function ThoughtPanel({ id, agent }: { id: string; agent: AgentId }) {
 }
 
 /**
- * What this turn has already done, while it is still doing it.
+ * A turn's finished calls, as the row draws them.
+ *
+ * A call still in flight is not one of them: it has no outcome to draw a chip
+ * from, and it is what the line above the composer is for.
+ */
+function liveSteps(calls: LiveCall[] | undefined): Step[] {
+  return (calls ?? []).flatMap((call, index) =>
+    call.done ? [trailStep(call.done, `${call.callId}-${index}`)] : [],
+  );
+}
+
+/**
+ * What this turn has already done, when the operator asks for it.
  *
  * The same chips the transcript will draw once the turn ends, from the same
  * rules, built from the calls the runtime reports as it makes them. Until this
@@ -378,19 +417,25 @@ function ThoughtPanel({ id, agent }: { id: string; agent: AgentId }) {
  * operator watching it had one line of prose and no way to tell work from a
  * hang. Prose is what a model says it is doing. This is what it did.
  *
- * A call still in flight is not here. It has no outcome to draw a chip from,
- * and it is the one thing the line below is for.
+ * Behind a click rather than in front of one, which is the one thing that
+ * changed: sitting open it is the whole of a long turn's record wrapped across
+ * four rows and reflowing under the composer, and what it answers — "is this
+ * doing something sensible" — is a question asked a few times in ten minutes
+ * rather than continuously. The count that says there is something to ask about
+ * is on the line, and it never wraps.
  */
-function LiveTrail({ agent }: { agent: AgentId }) {
+function StepsPanel({ id, agent }: { id: string; agent: AgentId }) {
   const calls = useStore((s) => s.trail[agent]);
-  const steps = (calls ?? []).flatMap((call, index) =>
-    call.done ? [trailStep(call.done, `${call.callId}-${index}`)] : [],
-  );
+  const steps = liveSteps(calls);
+  // Follows the end exactly as the working does and for the same reason: an
+  // operator reading back through what a turn has done must not be thrown to
+  // the floor by the next call coming back.
+  const { ref, follow } = useFollowBottom();
 
-  if (steps.length === 0) return null;
+  useLayoutEffect(follow, [follow, steps.length]);
 
   return (
-    <div className="turn__trail">
+    <div className="steps" id={id} ref={ref}>
       <TrailRow steps={steps} />
     </div>
   );
@@ -423,6 +468,14 @@ function LiveTrail({ agent }: { agent: AgentId }) {
  *   stays in the accessibility tree either way, which is why that is opacity
  *   rather than a mount.
  *
+ * At the end of it are the three things that are not the sentence: what the
+ * turn has spent, how much it has done, and the one control that stops it. The
+ * count is the whole of the trail while the turn runs and opens into the rest
+ * of it; the credentials are named rather than counted, because a name is the
+ * operator's audit trail for their own tokens and is not a thing to put behind
+ * a click; and Stop is always drawn, because it is the one thing on screen that
+ * costs money to leave alone.
+ *
  * Subscribed here rather than in the parent for the same reason `LiveStreams`
  * is: what it draws changes every sixteen milliseconds and everything around it
  * does not.
@@ -430,12 +483,15 @@ function LiveTrail({ agent }: { agent: AgentId }) {
 function WorkingNote({
   agent,
   panel,
+  showing,
   onToggle,
 }: {
   agent: AgentCard;
-  /** The open panel this line's button controls, or absent when it is shut. */
-  panel: string | undefined;
-  onToggle: () => void;
+  /** The one slot this line's two buttons open into. */
+  panel: string;
+  /** Which of them is open, if either. */
+  showing: Showing | null;
+  onToggle: (which: Showing) => void;
 }) {
   const held = useStore((s) => s.reasoning[agent.id]);
   const calls = useStore((s) => s.trail[agent.id]);
@@ -448,6 +504,10 @@ function WorkingNote({
   const now = useNow(1000);
 
   const thought = thoughtNow(held);
+  // Held against the trail rather than against the render: this component
+  // re-renders on every token of the model's working, and a tally rebuilt
+  // sixty times a second walks two dozen calls to arrive at the same number.
+  const tally = useMemo(() => tallyTrail(liveSteps(calls)), [calls]);
   // At most one: a turn makes its calls one at a time and waits for each.
   const waiting = calls?.find((call) => call.done === null && now - call.startedAt >= WAITED_MS);
   const saying = Boolean(waiting) || Boolean(thought.heading || thought.line);
@@ -491,42 +551,70 @@ function WorkingNote({
         <button
           type="button"
           className="working__label working__label--open"
-          aria-expanded={panel !== undefined}
-          aria-controls={panel}
-          aria-label={`${panel ? "Hide" : "Show"} what ${agent.name} is working through`}
-          onClick={onToggle}
+          aria-expanded={showing === "working"}
+          aria-controls={showing === "working" ? panel : undefined}
+          aria-label={`${showing === "working" ? "Hide" : "Show"} what ${agent.name} is working through`}
+          onClick={() => onToggle("working")}
         >
           {line}
         </button>
       ) : (
         <span className="working__label">{line}</span>
       )}
-      {run && (
-        // Stops the conversation, not the agent. A message that reached four
-        // agents is one run, and stopping only the one on screen would leave
-        // the other three working on the operator's bill: hence the wording,
-        // which is the same distinction the button actually makes.
-        <button
-          type="button"
-          className="btn btn--ghost btn--small working__stop"
-          disabled={stopping}
-          title="Stop this conversation and everything it set off"
-          onClick={async () => {
-            setStopping(true);
-            try {
-              // False means it had already finished, which needs no telling:
-              // the answer is on screen.
-              await api.stopRun(run);
-            } catch (error) {
-              setBanner({ tone: "error", text: errorMessage(error) });
-            } finally {
-              setStopping(false);
-            }
-          }}
-        >
-          Stop
-        </button>
-      )}
+      <div className="working__end">
+        {/* Named, never counted, and never behind the click beside it. The
+            value is not here and there is no field it could arrive in. */}
+        {tally.spent.map((credential) => (
+          <span className="trail__spent" key={credential}>
+            {credential}
+          </span>
+        ))}
+        {tally.done > 0 && (
+          // Drawn as one of the chips it opens, so the control and its contents
+          // read as one thing. Its own text is its name: "12 steps, 1 failed"
+          // is what somebody would say out loud about the button.
+          <button
+            type="button"
+            className="working__steps"
+            data-failed={tally.failed > 0 || undefined}
+            aria-expanded={showing === "steps"}
+            aria-controls={showing === "steps" ? panel : undefined}
+            title={`What ${agent.name} has done on this turn`}
+            onClick={() => onToggle("steps")}
+          >
+            <span className="working__caret" aria-hidden="true">
+              {showing === "steps" ? "▾" : "▸"}
+            </span>
+            {tallyLabel(tally)}
+          </button>
+        )}
+        {run && (
+          // Stops the conversation, not the agent. A message that reached four
+          // agents is one run, and stopping only the one on screen would leave
+          // the other three working on the operator's bill: hence the wording,
+          // which is the same distinction the button actually makes.
+          <button
+            type="button"
+            className="btn btn--ghost btn--small"
+            disabled={stopping}
+            title="Stop this conversation and everything it set off"
+            onClick={async () => {
+              setStopping(true);
+              try {
+                // False means it had already finished, which needs no telling:
+                // the answer is on screen.
+                await api.stopRun(run);
+              } catch (error) {
+                setBanner({ tone: "error", text: errorMessage(error) });
+              } finally {
+                setStopping(false);
+              }
+            }}
+          >
+            Stop
+          </button>
+        )}
+      </div>
     </div>
   );
 }

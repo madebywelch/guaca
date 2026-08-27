@@ -3107,6 +3107,11 @@ button {
   gap: var(--space-3);
   min-width: 0;
   max-width: 100%;
+  /* The one backstop under the rule that the label is never cut: a label wider
+     on its own than the pane is cut here rather than drawn over the message
+     beside it. Nothing real reaches it, and the alternative is a layout that
+     depends on nothing real ever reaching it. */
+  overflow: hidden;
   padding: var(--space-1) var(--space-2);
   margin: 0 calc(var(--space-2) * -1);
   border: 1px solid transparent;
@@ -3136,9 +3141,13 @@ button {
   color: var(--faint);
 }
 
+/* Never cut. Flex shrinks in proportion to what each item asked for, so a
+   refused call whose reason runs to a paragraph asked for twenty times what its
+   label did, took the row, and left the label as `U…`: a chip saying one
+   character about which call went wrong. What came back is the only thing on a
+   chip that yields, and the chip clips whatever is left over. */
 .trail__label {
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex-shrink: 0;
   white-space: nowrap;
 }
 
@@ -3569,18 +3578,23 @@ button {
    The turn that is still going
 
    Above the box you would type into, because that is where an operator waits.
-   Three layers, and the operator asked to see at most one of them: the working
-   the model has published, the calls this turn has already made, and the line
-   saying what it is doing now.
+   One line, and one slot above it. The line says what the turn is doing now,
+   what it has done and what it is spending, and it is the same height from the
+   first token to the last: the composer does not move while a turn runs.
 
-   Only the line is always there. The name on it is revealed on hover, because
-   whose channel this is has been established several times over by the time
-   you reach the bottom of it, so the resting state is one moving character.
+   Two things sit behind it and share the slot: the working the model has
+   published, and the chips for the calls it has already made. The chips used
+   to be a layer of their own, open, between the transcript and the line — a
+   long turn's whole record wrapping across four rows and reflowing every time a
+   call came back. One slot means opening either costs the transcript the same
+   height, and opening the second does not stack on the first.
 
-   A thought is not, and neither is a call that has not come back. Both are the
-   reason to look here at all, so both are shown without being asked for. One
-   line, clipped at the pane: it is replaced several times a second and
-   wrapping it would push the composer around the screen.
+   The name on the line is revealed on hover, because whose channel this is has
+   been established several times over by the time you reach the bottom of it,
+   so the resting state is one moving character. A thought is not, and neither
+   is a call that has not come back: both are the reason to look here at all.
+   One line, clipped at the pane, because it is replaced several times a second
+   and wrapping it would push the composer around the screen.
    ========================================================================== */
 
 .turn {
@@ -3590,32 +3604,45 @@ button {
   flex: none;
 }
 
-/* The same chips the transcript will draw, indented to the line below rather
-   than to a message body: there is no gutter down here for them to line up
-   under. Capped and scrolled, because opening one must not push the
-   conversation off the top of the pane. */
-.turn__trail {
-  max-height: 12rem;
+/* The slot. Whichever of the two is open takes the same bounds, so the
+   transcript above gives up the same height either way, and neither can push
+   the conversation off the top of the pane. */
+.thought,
+.steps {
+  max-height: 13rem;
   overflow-y: auto;
   flex: none;
-}
-
-.turn__trail .trail__chips {
-  padding-left: var(--space-8);
+  margin: 0 var(--column-inset) var(--space-3);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
 }
 
 /* The model's working, in full, when it has been asked for. Bounded so the
    transcript keeps most of the pane: this is a thing to glance into, and the
    answer it is on the way to is what the operator is actually waiting for. */
 .thought {
-  max-height: 13rem;
-  overflow-y: auto;
-  flex: none;
-  margin: 0 var(--column-inset) var(--space-3);
   padding: var(--space-4) var(--space-5);
-  border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
-  background: var(--sunken);
+}
+
+/* The same chips the transcript will draw, in a box of their own. The indents
+   they carry there are a message gutter to line up under, and there is no
+   gutter in here: left on, they draw the panel's contents as a column that
+   starts somewhere the panel has no edge. */
+.steps {
+  padding: var(--space-3) 0;
+}
+
+.steps .trail {
+  padding: 0 var(--space-5);
+}
+
+.steps .trail__chips {
+  padding-left: 0;
+}
+
+.steps .trail__steps {
+  margin-left: 0;
 }
 
 /* As the model wrote it. Wrapped rather than scrolled sideways, and not
@@ -3694,12 +3721,59 @@ button {
   color: var(--text);
 }
 
-/* Always visible, unlike the label beside it. A control that appears on hover
-   is a control nobody knows is there, and this is the one thing on screen that
-   costs money to leave alone. */
-.working__stop {
+/* Everything on the line that is not the line: what the turn has spent, how
+   much it has done, and the control that stops it. Pushed to the end as one
+   group, so the sentence in the middle is what gives up room in a narrow pane
+   and the three of them keep their order and their spacing whichever are
+   drawn.
+
+   All of it is always visible, unlike the label beside it. A control that
+   appears on hover is a control nobody knows is there, and one of these is the
+   thing on screen that costs money to leave alone. */
+.working__end {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
   margin-left: auto;
   flex: none;
+}
+
+/* What the turn has done, as one of the chips it opens: the control and its
+   contents are the same object at two sizes, rather than a button that happens
+   to reveal some chips. */
+.working__steps {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+  padding: var(--space-1) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: none;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  letter-spacing: var(--track-flat);
+  color: var(--faint);
+  cursor: pointer;
+  transition: border-color var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease), background-color var(--tempo-tap) var(--ease);
+}
+
+.working__steps:hover,
+.working__steps[aria-expanded="true"] {
+  background: var(--sunken);
+  border-color: var(--edge);
+  color: var(--text);
+}
+
+/* Something on this turn went wrong. The chip that says what is inside the
+   panel; this is the mark on the line that says to go and open it. */
+.working__steps[data-failed] {
+  color: var(--pit);
+}
+
+.working__caret {
+  flex: none;
+  line-height: var(--lead-flush);
 }
 
 /* Lighter than the answer it is on the way to, and italic so a glance can tell

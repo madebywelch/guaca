@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -205,7 +205,9 @@ describe("ChannelView under streaming load", () => {
     // The reason the line and the chips are two components. They sit next to
     // each other and change at wildly different rates: the line sixty times a
     // second, the chips a few times a minute. Written as one, every token
-    // re-rendered every chip the turn had made.
+    // re-rendered every chip the turn had made. The chips are behind the count
+    // on the line now, which makes the closed case free and leaves this one:
+    // an operator holding the panel open through a ten-minute turn.
     const id = "00000000-0000-4000-8000-0000000000d4";
     draw();
     await feed([
@@ -229,6 +231,11 @@ describe("ChannelView under streaming load", () => {
         },
       },
     ]);
+    // Nothing to re-render until somebody asks for it.
+    expect(rendersOfTrail).toBe(0);
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: /1 step/ }));
+    });
     const chips = rendersOfTrail;
     expect(chips).toBeGreaterThan(0);
 

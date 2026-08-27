@@ -448,6 +448,56 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
 }
 
 /**
+ * What a turn has done so far, as the one line that can stand for all of it.
+ *
+ * The chips are the record, and the transcript draws every one of them the
+ * moment the turn ends. While the turn is still running they are a wall: seven
+ * kinds of work wrapped across four rows directly above the composer, growing
+ * and reflowing every time a call comes back, with the box the operator is
+ * typing into moving underneath. What is worth knowing live is narrower than
+ * the record: that the work is moving, whether any of it went wrong, and what
+ * it is spending. The rest is one click away and permanent a minute later.
+ */
+export interface TrailTally {
+  /** Calls that have come back. A call still in flight is not one of them. */
+  done: number;
+  /** How many of those the runtime refused or that failed outright. */
+  failed: number;
+  /**
+   * Credentials spent, by name, first spend first.
+   *
+   * Never folded into a count and never behind a click, live or recorded: this
+   * is the operator's audit trail for their own tokens, and it is the one part
+   * of the trail that stays on the line while the turn runs.
+   */
+  spent: string[];
+}
+
+export function tallyTrail(steps: Step[]): TrailTally {
+  const spent = new Set<string>();
+  let failed = 0;
+  for (const step of steps) {
+    if (step.failed) failed += 1;
+    for (const credential of step.spent) spent.add(credential);
+  }
+  return { done: steps.length, failed, spent: [...spent] };
+}
+
+/**
+ * What the counter above the composer says.
+ *
+ * A count, because a turn's kinds of work are what the chips behind it are for
+ * and naming one of them here would be a chip that is wrong about the rest. A
+ * failure is the exception, and it is on the line rather than behind the click
+ * for the reason a failure never joins a burst: it is the one thing on the
+ * trail the operator may have to do something about.
+ */
+export function tallyLabel(tally: TrailTally): string {
+  const steps = tally.done === 1 ? "1 step" : `${tally.done} steps`;
+  return tally.failed > 0 ? `${steps}, ${tally.failed} failed` : steps;
+}
+
+/**
  * Tools whose summary is the call again, in the runtime's words.
  *
  * `browse` answers `read in the browser` beside a step that already says "Read
@@ -513,6 +563,23 @@ export function stepDiff(step: Step): DiffLine[] | null {
 }
 
 /**
+ * What a call that went wrong said, where the reason is the whole of it.
+ *
+ * A refusal is written to be acted on and runs to a paragraph, and a paragraph
+ * on a chip is a chip clipped at the pane: `U… a coding agent is already
+ * working in whizzworks-site, started by…`. So it comes off the head line and
+ * is drawn where a command is drawn — whole, wrapped, and scrolled if it runs
+ * long — and the clipped copy on the chip becomes a summary of something the
+ * operator can now open.
+ *
+ * Only where there is nothing else behind the call. A `run_command` that failed
+ * has its command to show, and that is what somebody opening it came for.
+ */
+export function stepReason(step: Step): string | null {
+  return step.failed && step.target === null && step.said.length > 0 ? step.said : null;
+}
+
+/**
  * Whether a chip has anything behind it.
  *
  * A directory lookup is one call with nothing to show but the sentence already
@@ -520,9 +587,16 @@ export function stepDiff(step: Step): DiffLine[] | null {
  * to distrust.
  *
  * A memory that was cleared has no content to show and is still worth opening:
- * what was thrown away is the whole of what happened.
+ * what was thrown away is the whole of what happened. So is a refusal with
+ * nothing but its reason, which is the one case where the sentence on the chip
+ * is a clipped copy rather than the whole thing.
  */
 export function hasDetail(group: TrailGroup): boolean {
   const only = group.steps[0]!;
-  return group.steps.length > 1 || only.target !== null || stepDiff(only) !== null;
+  return (
+    group.steps.length > 1 ||
+    only.target !== null ||
+    stepDiff(only) !== null ||
+    stepReason(only) !== null
+  );
 }
