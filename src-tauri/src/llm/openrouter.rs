@@ -296,6 +296,25 @@ pub enum LlmError {
     /// sign-in or a spent plan that only the operator can put right.
     #[error("{program} could not answer: {message}")]
     ProgramFailed { program: &'static str, message: String },
+    /// The model stopped on its own safety check instead of answering.
+    ///
+    /// Separate from [`Self::ProgramFailed`] because it is neither the program
+    /// failing nor the account: the call was answered, the tokens were spent,
+    /// and what was stopped was the draw. That is what makes it the one failure
+    /// of a program provider where a second attempt asks a different question
+    /// rather than the same one again.
+    ///
+    /// The program's own words are carried for the reason they are carried
+    /// above, and this app's sentence is the last one because theirs ends in
+    /// advice about their own chrome: a new session and `/model` are two things
+    /// an operator here does not have.
+    #[error(
+        "{program} was refused by the model: {message}\n\nThat is the model's own safety check \
+         rather than your sign-in or your plan, and it runs on the answer rather than on what \
+         you asked for, so it can fire on an ordinary request. Reword the message, or give this \
+         group another provider in its settings."
+    )]
+    ModelRefused { program: &'static str, message: String },
     #[error("rate limited by the inference endpoint: {message}")]
     RateLimited { message: String, retry_after_secs: Option<u64> },
     #[error("model {model:?} was rejected: {message}")]
@@ -323,6 +342,11 @@ impl LlmError {
             LlmError::RateLimited { .. } | LlmError::Timeout { .. } | LlmError::Truncated => true,
             LlmError::Upstream { status, .. } => *status >= 500,
             LlmError::ProgramMissing { .. } | LlmError::ProgramFailed { .. } => false,
+            // The one failure of a program provider worth asking again.
+            // Nothing about the request was rejected: the model wrote an answer
+            // and its own check stopped that answer, so the next draw is a
+            // different one rather than the same one repeated.
+            LlmError::ModelRefused { .. } => true,
             LlmError::Transport { .. } => true,
             _ => false,
         }
@@ -336,6 +360,7 @@ impl LlmError {
             LlmError::SubscriptionRejected { .. } => "sign in to ChatGPT again".into(),
             LlmError::ProgramMissing { program } => format!("{program} could not be found"),
             LlmError::ProgramFailed { program, .. } => format!("{program} could not answer"),
+            LlmError::ModelRefused { program, .. } => format!("{program} was refused by the model"),
             LlmError::RateLimited { .. } => "rate limited".into(),
             LlmError::ModelRejected { model, .. } => format!("model {model} unavailable"),
             LlmError::Upstream { status, .. } => format!("upstream HTTP {status}"),

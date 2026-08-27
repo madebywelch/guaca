@@ -310,6 +310,20 @@ the model takes a screenshot to see what `browse` did.
   there both go to `Token::Reasoning`, are shown, and are dropped, exactly as
   everywhere else. It is the one way this provider looks different on screen,
   and it is a decision rather than a gap.
+- **A refusal from that program is not a failure it had, and it is the one thing
+  there worth another draw.** The model's safety check can stop an answer on a
+  call that succeeded, and the frame then reads `subtype: "success"` with
+  `is_error` true, `api_error_status` null, no `structured_output`, and a
+  `result` that opens `API Error:` and closes with the category that fired.
+  On the report this was written from that category was `reasoning_extraction`,
+  which runs on what the model wrote rather than on what the operator asked for. Told apart by the
+  error flag alone it lands in the arm that means a dead sign-in or a spent
+  plan: never retried, and answered with a paragraph of the program's own advice
+  about rephrasing in a new session and changing `/model`, neither of which
+  exists here and the second of which this app passes on purpose. `stop_reason`
+  is the field that separates them, `LlmError::ModelRefused` is transient and so
+  gets the turn's three attempts, and the sentence after the program's words is
+  this app's.
 - **The `claude` result frame is snake case and is deliberately not renamed.**
   It mixes conventions — `modelUsage` sits beside `total_cost_usd` — so a
   blanket `rename_all` is right about the fields it was written against and
