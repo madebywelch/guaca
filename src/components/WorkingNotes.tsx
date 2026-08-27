@@ -34,10 +34,10 @@ interface Props {
 }
 
 /**
- * What an agent is in the middle of, under what it knows.
+ * What an agent is in the middle of, over what it knows.
  *
  * Read-only apart from one button, and that asymmetry against the memory panel
- * above it is the design rather than an unfinished half of it. Memory is a page
+ * below it is the design rather than an unfinished half of it. Memory is a page
  * two parties maintain, which is why it needs a draft, a held incoming version
  * and two ways out. This is the agent's own account of its work: the operator
  * either believes it or declares the work done, and there is no third thing to

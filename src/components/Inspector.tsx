@@ -50,12 +50,20 @@ function remembered(): boolean {
  * edited rarely and all at once, which is what a dialog is for; these are
  * glanced at constantly.
  *
- * Memory is first, and what the agent is in the middle of is directly under
- * it: they are the two halves of what an agent carries between conversations,
- * and read apart neither says what it means. Those two are also the only
- * sections with something to show on every agent, since a screen is usually an
- * offer rather than a picture and a new agent keeps no routines. Memory is
- * capped in height, so a long one cannot push a live desktop off the panel.
+ * The order is what is worth glancing at, most first. A screen is a picture of
+ * something happening right now, so the two of them lead; then the working
+ * notes, which are what the agent is in the middle of; then the schedule it
+ * keeps. Memory is last because it is the one section that is a text box: it
+ * is read closely rather than glanced at, edited deliberately, and at the top
+ * it spent the panel's vertical budget on a page nobody was looking at while
+ * the live desktop under it sat below the fold. Its height cap stays for the
+ * same reason it was added, one section further down.
+ *
+ * Memory and the working notes are still the two halves of what an agent
+ * carries between conversations, and they are still the only sections with
+ * something to show on every agent, since a screen is usually an offer rather
+ * than a picture and a new agent keeps no routines. Separating them costs the
+ * reading that puts them side by side; each says which the other is.
  */
 export function Inspector({ agent, onEditProfile }: Props) {
   const [open, setOpen] = useState(remembered);
@@ -171,11 +179,11 @@ export function Inspector({ agent, onEditProfile }: Props) {
             its polling still running, every switch added another, and only
             closing the panel cleared them. */}
         <div className="inspector__level" hidden={routine !== null} key={agent.id}>
-          <Memory agentId={agent.id} />
-          <WorkingNotes agentId={agent.id} />
-          <ComputerScreen agent={agent} />
           <BrowserScreen agent={agent} />
+          <ComputerScreen agent={agent} />
+          <WorkingNotes agentId={agent.id} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} />
+          <Memory agentId={agent.id} />
         </div>
 
         {routine !== null && (
