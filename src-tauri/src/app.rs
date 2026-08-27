@@ -315,6 +315,8 @@ pub fn run() {
             // And find out what their browsers are already signed in to, so the
             // roster is right before anybody asks rather than after.
             runtime.start_signin_sweep();
+            // The compost empties itself, whether or not anybody opens it.
+            runtime.start_compost();
 
             // The viewer for agents' computers. Loopback only: it holds the
             // tokens that reach a running machine.
@@ -458,6 +460,8 @@ pub fn run() {
             commands::create_agent,
             commands::update_agent,
             commands::delete_agent,
+            commands::restore_agent,
+            commands::purge_agent,
             commands::duplicate_agent,
             commands::hire_agents,
             commands::set_agent_paused,

@@ -1152,6 +1152,34 @@ CREATE INDEX working_notes_agent ON working_notes (agent_id, id DESC);
 ALTER TABLE repositories ADD COLUMN harness TEXT NOT NULL DEFAULT 'pi';
 "#,
     ),
+    (
+        41,
+        r#"
+-- When an agent was thrown out, for the thirty days it can still be pulled back.
+--
+-- Deleting used to be one act: the machines destroyed, the memory removed, the
+-- schedule, the sign-ins and every standing permission deleted, and the row
+-- marked terminated. All of it on a button an operator presses by accident, on
+-- an agent that had six months of memory in it, with nothing between the click
+-- and the loss but a menu item.
+--
+-- So the destructive half now waits. A delete stamps this column and stops the
+-- agent; everything it holds privately stays exactly where it is until the
+-- thirty days are up, at which point the old act runs in full. `NULL` is both
+-- ends of that: an agent nobody has deleted, and one whose wait is over and
+-- whose things are already gone. Which of the two a row is, its `lifecycle`
+-- says.
+--
+-- Nothing else changes about `terminated`, and that is why this is a column
+-- rather than a fourth lifecycle. An agent in the compost is unreachable,
+-- undiscoverable, out of the rail and out of every crew, exactly as a deleted
+-- one has always been: every query in the store that asks `lifecycle <>
+-- 'terminated'` is still asking the right question, including the partial
+-- index that frees the name. What the column adds is a way back, which nothing
+-- else was asking about.
+ALTER TABLE agents ADD COLUMN discarded_at INTEGER;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

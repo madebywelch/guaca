@@ -37,6 +37,7 @@ const ADA: AgentCard = {
   version: 1,
   createdAt: 0,
   updatedAt: 0,
+  discardedAt: null,
 };
 
 function repository(over: Partial<Repository> = {}): Repository {

@@ -176,6 +176,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
         version: 1,
         created_at: now,
         updated_at: now,
+        discarded_at: None,
     }
 }
 
@@ -391,11 +392,115 @@ impl Store {
         self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
     }
 
+    /// Throws an agent out, keeping everything it holds.
+    ///
+    /// The row goes to `Terminated`, which is what makes it unreachable,
+    /// undiscoverable and absent from the rail, and is stamped, which is what
+    /// makes it findable again. Nothing private is touched here: that is the
+    /// half that waits, and [`Store::forget_discard`] is where it stops
+    /// waiting.
+    ///
+    /// Refused for an agent that is already gone. Re-stamping one would restart
+    /// a wait that is most of the way through, so a double click on a delete
+    /// button would quietly buy an agent another thirty days in a list the
+    /// operator thought they had emptied.
+    pub fn discard_agent(&self, id: AgentId, at: i64) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET lifecycle='terminated', discarded_at=?2, updated_at=?2
+              WHERE id=?1 AND lifecycle <> 'terminated'",
+            params![id.to_string(), at],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    /// Pulls one back out, under whatever name is free.
+    ///
+    /// Paused rather than active, and the reason is the wait. An agent restored
+    /// three weeks after it was thrown out comes back to a schedule that has
+    /// been due every morning since, and to peers that have moved on without
+    /// it. Coming back stopped means the operator decides when it starts, on a
+    /// row that already says `paused` and already offers Resume.
+    ///
+    /// The name is settled by the caller, because a name freed while the agent
+    /// waited may have been taken by somebody hired since, and the partial
+    /// index is what would otherwise refuse the restore.
+    ///
+    /// Refused for a row that is not in the compost. That covers an agent
+    /// nobody deleted and one whose wait is over: the second has no memory, no
+    /// schedule and no machines left, so bringing it back would hand the
+    /// operator a name and a face wearing none of the work they wanted back.
+    pub fn restore_agent(&self, id: AgentId, name: &str) -> Result<AgentCard, StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET lifecycle='paused', discarded_at=NULL, name=?2, updated_at=?3
+              WHERE id=?1 AND discarded_at IS NOT NULL",
+            params![id.to_string(), name, now_ms()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        self.get_agent(id)?.ok_or(StoreError::AgentNotFound(id))
+    }
+
+    /// Ends the wait, leaving the agent terminated.
+    ///
+    /// Called once whatever the agent was holding has actually been destroyed,
+    /// so the row says what is true: terminated with no stamp is an agent whose
+    /// machines, memory, schedule and sign-ins are gone, which is every agent
+    /// deleted before the compost existed and every one whose thirty days have
+    /// run out.
+    pub fn forget_discard(&self, id: AgentId) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        conn.execute("UPDATE agents SET discarded_at=NULL WHERE id=?1", params![id.to_string()])?;
+        Ok(())
+    }
+
+    /// Whoever is in the compost, newest first.
+    ///
+    /// The order the panel draws them in: what you deleted a minute ago by
+    /// accident is what you came here for, and what has been in there for four
+    /// weeks is not.
+    pub fn discarded_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
+        self.discards(None)
+    }
+
+    /// Whoever has been in there long enough. What the sweep acts on.
+    pub fn expired_discards(&self, cutoff: i64) -> Result<Vec<AgentCard>, StoreError> {
+        self.discards(Some(cutoff))
+    }
+
+    /// One query, because the sweep and the panel are the same read with and
+    /// without a deadline on it, and two would be two places for the compost to
+    /// mean something slightly different.
+    fn discards(&self, cutoff: Option<i64>) -> Result<Vec<AgentCard>, StoreError> {
+        let conn = self.conn()?;
+        let (clause, order) = match cutoff {
+            Some(_) => ("AND discarded_at <= ?1", "discarded_at"),
+            None => ("", "discarded_at DESC"),
+        };
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AGENT_COLUMNS} FROM agents
+               WHERE discarded_at IS NOT NULL {clause} ORDER BY {order}"
+        ))?;
+        let rows = match cutoff {
+            Some(at) => stmt.query_map(params![at], row_to_card)?,
+            None => stmt.query_map([], row_to_card)?,
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
     pub fn get_agent(&self, id: AgentId) -> Result<Option<AgentCard>, StoreError> {
         let conn = self.conn()?;
         conn.query_row(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
-               FROM agents WHERE id=?1",
+            &format!("SELECT {AGENT_COLUMNS} FROM agents WHERE id=?1"),
             params![id.to_string()],
             row_to_card,
         )
@@ -410,10 +515,8 @@ impl Store {
     /// the sidebar itself.
     pub fn list_agents(&self) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
-               FROM agents ORDER BY rowid",
-        )?;
+        let mut stmt =
+            conn.prepare(&format!("SELECT {AGENT_COLUMNS} FROM agents ORDER BY rowid"))?;
         let rows = stmt.query_map([], row_to_card)?;
         let mut out = Vec::new();
         for row in rows {
@@ -3137,10 +3240,10 @@ impl Store {
     /// exists, which is the failure the operator would then be shown.
     pub fn group_crew(&self, group: GroupId) -> Result<Vec<AgentCard>, StoreError> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare(
-            "SELECT id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id
-               FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid",
-        )?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {AGENT_COLUMNS}
+               FROM agents WHERE group_id=?1 AND lifecycle <> 'terminated' ORDER BY rowid"
+        ))?;
         let rows = stmt.query_map(params![group.to_string()], row_to_card)?;
         let mut out = Vec::new();
         for row in rows {
@@ -3243,6 +3346,14 @@ fn participant_from_columns(kind: &str, agent: Option<String>) -> Result<Partici
 /// rather than being coerced into a rusqlite error with no context.
 type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 
+/// Every column [`row_to_card`] reads, in the order it reads them.
+///
+/// Spelled once because the reader is indexed by position: a column added to
+/// one of the five queries that share this mapper and not the others is four
+/// reads that silently take the wrong field, which is what a card carrying
+/// somebody else's sandbox token looks like on the way out.
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id,discarded_at";
+
 fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
     let id_raw: String = row.get(0)?;
     let skills_raw: String = row.get(6)?;
@@ -3289,6 +3400,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
+            discarded_at: row.get(21)?,
         })
     })())
 }
@@ -3982,6 +4094,172 @@ mod tests {
         // And the value is still there, on the one path that is allowed to see it.
         let env = f.store.connector_env(agent.group_id).unwrap();
         assert_eq!(env.get("GITHUB_TOKEN").map(String::as_str), Some("ghp_hunter2"));
+    }
+
+    // ---- the compost -----------------------------------------------------
+
+    #[test]
+    fn a_discarded_agent_is_terminated_and_stamped() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+
+        let gone = f.store.discard_agent(agent.id, 1_000).unwrap();
+        assert_eq!(gone.lifecycle, Lifecycle::Terminated, "it has to be unreachable at once");
+        assert_eq!(gone.discarded_at, Some(1_000));
+        assert!(gone.discarded(), "and findable again, which is the whole of the compost");
+
+        // Every question the rest of the store asks about a deleted agent still
+        // gets the answer it has always got.
+        assert!(
+            f.store.group_crew(agent.group_id).unwrap().is_empty(),
+            "a composted agent must not be handed to a disband"
+        );
+    }
+
+    #[test]
+    fn a_discarded_agent_keeps_the_name_out_of_the_way() {
+        // The partial index covers live rows only, so throwing an agent out
+        // frees its name at once. That is what lets the crew hire a
+        // replacement, and it is why a restore has to settle the name again.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.discard_agent(agent.id, 1).unwrap();
+
+        let replacement = f.store.create_agent(&draft("Researcher")).unwrap();
+        assert_eq!(replacement.name, "Researcher");
+    }
+
+    #[test]
+    fn discarding_twice_does_not_buy_another_thirty_days() {
+        // A second click on a delete button, or a restore raced from another
+        // window. Re-stamping would restart a wait most of the way through, and
+        // the operator would find an agent they thought they had finished with
+        // back at the top of a list they had just emptied.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.discard_agent(agent.id, 1_000).unwrap();
+
+        let again = f.store.discard_agent(agent.id, 9_000);
+        assert!(matches!(again, Err(StoreError::AgentNotFound(_))), "got {again:?}");
+        assert_eq!(f.store.get_agent(agent.id).unwrap().unwrap().discarded_at, Some(1_000));
+    }
+
+    #[test]
+    fn a_restore_brings_an_agent_back_paused_and_unstamped() {
+        // Paused, not active: an agent restored three weeks on comes back to a
+        // schedule that has been coming due without it, and starting it is the
+        // operator's decision rather than a side effect of undoing a delete.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.discard_agent(agent.id, 1).unwrap();
+
+        let back = f.store.restore_agent(agent.id, "Researcher").unwrap();
+        assert_eq!(back.lifecycle, Lifecycle::Paused);
+        assert_eq!(back.discarded_at, None);
+        assert!(!back.discarded());
+        assert_eq!(
+            f.store.group_crew(agent.group_id).unwrap().len(),
+            1,
+            "and is in the crew again"
+        );
+    }
+
+    #[test]
+    fn a_restore_can_take_a_name_that_was_given_away() {
+        // The name was freed the moment the agent was thrown out, so the crew
+        // may be holding it. The caller settles it; what this asserts is that
+        // the store takes the settled one rather than refusing the restore.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.discard_agent(agent.id, 1).unwrap();
+        f.store.create_agent(&draft("Researcher")).unwrap();
+
+        let back = f.store.restore_agent(agent.id, "Researcher copy").unwrap();
+        assert_eq!(back.name, "Researcher copy");
+    }
+
+    #[test]
+    fn a_restore_is_refused_for_an_agent_whose_wait_is_over() {
+        // Two rows with no stamp on them: one nobody deleted, and one whose
+        // memory, schedule and machines are already gone. Neither has anything
+        // to bring back, so both are refused by the same clause.
+        let f = fixture();
+        let live = f.store.create_agent(&draft("Researcher")).unwrap();
+        let spent = f.store.create_agent(&draft("Scribe")).unwrap();
+        f.store.discard_agent(spent.id, 1).unwrap();
+        f.store.forget_discard(spent.id).unwrap();
+
+        for id in [live.id, spent.id] {
+            let refused = f.store.restore_agent(id, "Whoever");
+            assert!(matches!(refused, Err(StoreError::AgentNotFound(_))), "got {refused:?}");
+        }
+        assert_eq!(
+            f.store.get_agent(spent.id).unwrap().unwrap().lifecycle,
+            Lifecycle::Terminated,
+            "a refused restore must not move the row"
+        );
+    }
+
+    #[test]
+    fn the_compost_reads_newest_first_and_leaves_out_whoever_has_already_gone() {
+        let f = fixture();
+        let old = f.store.create_agent(&draft("Scribe")).unwrap();
+        let new = f.store.create_agent(&draft("Researcher")).unwrap();
+        let spent = f.store.create_agent(&draft("Ghost")).unwrap();
+        let live = f.store.create_agent(&draft("Manager")).unwrap();
+
+        f.store.discard_agent(old.id, 100).unwrap();
+        f.store.discard_agent(new.id, 900).unwrap();
+        f.store.discard_agent(spent.id, 50).unwrap();
+        f.store.forget_discard(spent.id).unwrap();
+
+        let names: Vec<String> =
+            f.store.discarded_agents().unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(
+            names,
+            vec!["Researcher", "Scribe"],
+            "what was deleted a minute ago is what somebody came here for"
+        );
+        assert!(!names.contains(&live.name), "a live agent is not in the compost");
+    }
+
+    #[test]
+    fn only_agents_past_the_deadline_are_swept() {
+        let f = fixture();
+        let due = f.store.create_agent(&draft("Scribe")).unwrap();
+        let waiting = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.discard_agent(due.id, 100).unwrap();
+        f.store.discard_agent(waiting.id, 900).unwrap();
+
+        let expired: Vec<String> =
+            f.store.expired_discards(500).unwrap().into_iter().map(|c| c.name).collect();
+        assert_eq!(expired, vec!["Scribe"]);
+
+        // The boundary is inclusive, or an agent stamped exactly on the cutoff
+        // waits another whole pass for no reason anybody could explain.
+        assert_eq!(f.store.expired_discards(900).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_discarded_agent_keeps_everything_a_restore_has_to_find() {
+        // The whole argument for the compost. Deleting used to take all of this
+        // on the click; now it is what waits, and a restore that came back with
+        // an agent that had forgotten its work would not be worth offering.
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Researcher")).unwrap();
+        f.store.append_working_note(agent.id, "waiting on the vendor", 5).unwrap();
+        f.store
+            .replace_signins(
+                agent.id,
+                Surface::Computer,
+                &[signin_at(agent.id, "Gmail", "mail.google.com", 1)],
+            )
+            .unwrap();
+
+        f.store.discard_agent(agent.id, 1).unwrap();
+
+        assert_eq!(f.store.working_notes(agent.id).unwrap().len(), 1);
+        assert_eq!(f.store.agent_signins(agent.id).unwrap().len(), 1);
     }
 
     #[test]

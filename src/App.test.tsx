@@ -100,6 +100,7 @@ function agent(name: string, railOrder = 0): AgentCard {
     version: 1,
     createdAt: 1,
     updatedAt: 1,
+    discardedAt: null,
   };
 }
 

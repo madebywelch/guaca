@@ -19,6 +19,8 @@ interface Props {
   onTogglePause: (agent: AgentCard) => void;
   onDuplicate: (agent: AgentCard) => void;
   onClearHistory: (agent: AgentCard) => void;
+  /** Into the compost, where it waits thirty days. */
+  onDelete: (agent: AgentCard) => void;
   /** One row up or down: the drag, without a mouse. */
   onNudge: (agent: AgentCard, delta: -1 | 1) => void;
   onMoveToGroup: (agent: AgentCard, group: Group) => void;
@@ -53,6 +55,7 @@ export function AgentMenu({
   onTogglePause,
   onDuplicate,
   onClearHistory,
+  onDelete,
   onNudge,
   onMoveToGroup,
 }: Props) {
@@ -60,20 +63,25 @@ export function AgentMenu({
   const ref = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: target.x, y: target.y, origin: "top left" });
   /**
-   * Clearing, asked twice, and the second wording says what survives.
+   * Which of the two destructive items is armed, and never both.
    *
+   * Each is asked twice, and each second wording says what actually happens.
    * In the menu rather than in the pane behind it: a confirmation drawn where
    * the click did not happen is a confirmation the operator has to go and find,
    * and this menu opens from two places that draw nothing in common.
    *
-   * It said "Delete this history", which is accurate and is not the question
-   * the operator is actually asking. An agent has two kinds of state and this
-   * touches one of them: the channel is what its turns read as conversation,
-   * and its memory is a separate file it wrote on purpose and would have to
-   * write again. Not saying so is why this went unused by an operator who
-   * needed it and would not risk finding out.
+   * Clearing said "Delete this history", which is accurate and is not the
+   * question the operator is actually asking. An agent has two kinds of state
+   * and this touches one of them: the channel is what its turns read as
+   * conversation, and its memory is a separate file it wrote on purpose and
+   * would have to write again. Not saying so is why this went unused by an
+   * operator who needed it and would not risk finding out.
+   *
+   * One value rather than a flag each, because two flags is a state where both
+   * are armed: opening one confirmation would leave a delete button under the
+   * next click of somebody who came here to clear a history.
    */
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useState<"history" | "delete" | null>(null);
 
   // Measured after it is in the tree rather than guessed: the menu is opened
   // by a click that can land anywhere, and one hanging off the bottom of the
@@ -173,13 +181,27 @@ export function AgentMenu({
             </Fragment>
           ))}
         <hr className="menu__rule" />
-        {confirming ? (
+        {confirming === "history" ? (
           item("Delete history, keep memory", () => onClearHistory(agent), "danger")
         ) : (
-          // The only item that does not close the menu. Nothing has been
-          // decided yet, and the next click is the one that matters.
-          <button type="button" className="menu__item" onClick={() => setConfirming(true)}>
+          // The only kind of item that does not close the menu. Nothing has
+          // been decided yet, and the next click is the one that matters.
+          <button type="button" className="menu__item" onClick={() => setConfirming("history")}>
             Clear history…
+          </button>
+        )}
+        {/* Asked twice, and the second wording says where it goes rather than
+            that it is permanent, because it is not: this is the one destructive
+            item in the menu that can be taken back, and an operator who thinks
+            otherwise is one who will not press it when they should. What it
+            does not say is thirty days. The panel it lands in draws the clock,
+            and a number here would be a second place for that number to
+            drift. */}
+        {confirming === "delete" ? (
+          item(`Delete ${agent.name}, into the compost`, () => onDelete(agent), "danger")
+        ) : (
+          <button type="button" className="menu__item" onClick={() => setConfirming("delete")}>
+            Delete…
           </button>
         )}
       </div>

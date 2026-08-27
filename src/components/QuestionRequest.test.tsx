@@ -36,6 +36,7 @@ const ANALYST: AgentCard = {
   version: 1,
   createdAt: 0,
   updatedAt: 0,
+  discardedAt: null,
 };
 
 type QuestionPart = Extract<Part, { type: "question" }>;
