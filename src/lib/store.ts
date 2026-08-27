@@ -945,6 +945,19 @@ export const useStore = create<State>((set, get) => ({
         if (open && (emptied.has(open) || open === ACTIVITY_CHANNEL)) {
           void get().loadChannel(open);
         }
+        // The panels beside the transcript hold the two stores a reset also
+        // takes, and neither is read again on its own. Left alone, the inspector
+        // draws a memory and a list of working notes that no longer exist,
+        // beside the empty channel that says they should not.
+        set((state) => {
+          const memory = { ...state.memoryVersion };
+          const working = { ...state.workingNotesVersion };
+          for (const agent of event.agents) {
+            memory[agent] = (memory[agent] ?? 0) + 1;
+            working[agent] = (working[agent] ?? 0) + 1;
+          }
+          return { memoryVersion: memory, workingNotesVersion: working };
+        });
         // The meters are counting rows that no longer exist.
         void get().refreshUsage();
         break;

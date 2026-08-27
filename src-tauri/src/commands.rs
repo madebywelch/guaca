@@ -2049,6 +2049,10 @@ pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<Group
             .filter(|id| !state.runtime.workspace().read(**id).trim().is_empty())
             .inspect(|id| state.runtime.workspace().remove(**id))
             .count(),
+        // And the other store, for the same reason from the other end: what an
+        // agent is in the middle of is the half that was true about a
+        // conversation this reset just deleted.
+        working_notes: store.delete_group_working_notes(group_id)?,
     };
 
     // Named so open channels can drop what they are holding. `AgentsChanged`
@@ -2065,7 +2069,10 @@ pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<Group
 pub struct GroupReset {
     pub messages: usize,
     pub routines: usize,
+    /// Memories wiped. Named for the file each one is, which is `notes`.
     pub notes: usize,
+    /// Working notes dropped, which is the other store and a row count.
+    pub working_notes: usize,
     pub calls: usize,
 }
 

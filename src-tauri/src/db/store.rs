@@ -3103,6 +3103,22 @@ impl Store {
         )?)
     }
 
+    /// Every working note held by a group's agents.
+    ///
+    /// The other half of what a crew carries between turns, and it goes with
+    /// the memories for the same reason: an agent whose transcript and page are
+    /// gone but which still opens tomorrow waiting on a decision from a
+    /// conversation nobody can read has not started fresh, it has been left
+    /// holding the one part of its state nothing can now explain.
+    pub fn delete_group_working_notes(&self, group: GroupId) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM working_notes
+              WHERE agent_id IN (SELECT id FROM agents WHERE group_id=?1)",
+            params![group.to_string()],
+        )?)
+    }
+
     /// Everything a group has spent.
     ///
     /// Booked against the group rather than the agent, so an agent that has
@@ -4721,6 +4737,9 @@ mod tests {
             .append(&envelope(Participant::Human, agent(bystander.id), "untouched", run))
             .unwrap();
 
+        f.store.append_working_note(scholar.id, "waiting on the listings", 1_000).unwrap();
+        f.store.append_working_note(bystander.id, "waiting on Robert", 1_000).unwrap();
+
         // A deleted agent's transcript is part of what the group said, so it
         // goes too: leaving it behind is what "start fresh" is not.
         f.store.set_lifecycle(scholar.id, Lifecycle::Terminated).unwrap();
@@ -4749,8 +4768,18 @@ mod tests {
 
         assert_eq!(f.store.delete_group_messages(other.id).unwrap(), 1);
         assert_eq!(f.store.delete_group_routines(other.id).unwrap(), 1);
+        assert_eq!(f.store.delete_group_working_notes(other.id).unwrap(), 1);
         assert_eq!(f.store.delete_group_usage(other.id).unwrap(), 1);
         assert!(f.store.agent_routines(scholar.id).unwrap().is_empty());
+        assert!(
+            f.store.working_notes(scholar.id).unwrap().is_empty(),
+            "a reset crew still waiting on the conversation it can no longer read"
+        );
+        assert_eq!(
+            f.store.working_notes(bystander.id).unwrap().len(),
+            1,
+            "clearing one group must not empty another crew's notes"
+        );
         assert!(
             !f.store.usage_by_group().unwrap().contains_key(&other.id),
             "a reset group has spent nothing, or the meter keeps counting what is gone"
