@@ -66,8 +66,25 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
 
 const onClose = vi.fn();
 
-function open(groups: Group[] = [group(KITCHEN, "Kitchen")], agents: AgentCard[] = []) {
-  useStore.setState({ agents, groups, activity: {}, lastActive: {}, selected: null });
+/** Where the operator is standing when they open the dialog. */
+interface Standing {
+  railGroup?: string | null;
+  selected?: string | null;
+}
+
+function open(
+  groups: Group[] = [group(KITCHEN, "Kitchen")],
+  agents: AgentCard[] = [],
+  standing: Standing = {},
+) {
+  useStore.setState({
+    agents,
+    groups,
+    activity: {},
+    lastActive: {},
+    selected: standing.selected ?? null,
+    railGroup: standing.railGroup ?? null,
+  });
   return render(<Cafeteria onClose={onClose} />);
 }
 
@@ -191,6 +208,18 @@ describe("who is already here", () => {
     expect(tile("Chief of Staff").textContent).not.toContain("on staff");
   });
 
+  it("does not count somebody in the compost", () => {
+    // A deleted agent is out of the crew the moment it goes in there, so the
+    // room it left is empty and the badge has to say so. Its name is free
+    // again too, which is what the hire is about to take.
+    open(
+      [group(KITCHEN, "Kitchen")],
+      [{ ...agent("Executive Assistant"), lifecycle: "terminated", discardedAt: 1_000 }],
+    );
+    expect(tile("Executive Assistant").textContent).not.toContain("on staff");
+    expect(screen.getByRole("button", { name: /starter crew/i })).toBeTruthy();
+  });
+
   it("still lets a second one be hired", async () => {
     // Deliberate: two researchers is a thing operators want. The runtime is
     // what settles the name.
@@ -214,5 +243,54 @@ describe("when a hire is refused", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(tile("Chief of Staff").getAttribute("aria-pressed")).toBe("true");
     expect(hireButton().disabled).toBe(false);
+  });
+});
+
+describe("where a hire lands", () => {
+  it("hires into the crew the rail is inside", async () => {
+    open(
+      [group(KITCHEN, "Kitchen"), group(GARDEN, "Garden")],
+      [agent("Executive Assistant", KITCHEN)],
+      { railGroup: GARDEN },
+    );
+
+    // Everything on screen has to be about the Garden, not about whichever
+    // group happens to be first: the badge, the starter crew, and the hire.
+    expect(tile("Executive Assistant").textContent).not.toContain("on staff");
+    expect(screen.getByRole("button", { name: /starter crew/i })).toBeTruthy();
+
+    fireEvent.click(tile("Executive Assistant"));
+    fireEvent.click(screen.getByRole("button", { name: /hire 1 into garden/i }));
+    await waitFor(() => expect(hireAgents).toHaveBeenCalledTimes(1));
+    expect(hireAgents.mock.calls[0]![0]).toBe(GARDEN);
+  });
+
+  it("follows the open channel when the rail is in the overview", () => {
+    // No group is focused, so the agent whose channel is open is what says
+    // which crew the operator is working with.
+    open(
+      [group(KITCHEN, "Kitchen"), group(GARDEN, "Garden")],
+      [agent("Executive Assistant", KITCHEN), agent("Paralegal", GARDEN)],
+      { selected: "id-Paralegal" },
+    );
+    expect(tile("Executive Assistant").textContent).not.toContain("on staff");
+    expect(screen.getByRole("button", { name: /hire 0 into garden|nobody picked/i })).toBeTruthy();
+    fireEvent.click(tile("Executive Assistant"));
+    expect(screen.getByRole("button", { name: /hire 1 into garden/i })).toBeTruthy();
+  });
+
+  it("falls back to the first group with nothing open", () => {
+    open([group(KITCHEN, "Kitchen"), group(GARDEN, "Garden")], [], {});
+    fireEvent.click(tile("Executive Assistant"));
+    expect(screen.getByRole("button", { name: /hire 1 into kitchen/i })).toBeTruthy();
+  });
+
+  it("keeps the crew it opened on when the activity board is what is open", () => {
+    open([group(KITCHEN, "Kitchen"), group(GARDEN, "Garden")], [], {
+      railGroup: GARDEN,
+      selected: "activity",
+    });
+    fireEvent.click(tile("Executive Assistant"));
+    expect(screen.getByRole("button", { name: /hire 1 into garden/i })).toBeTruthy();
   });
 });
