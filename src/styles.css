@@ -576,6 +576,8 @@ button {
   background: var(--grail-ground);
   border-right: 1px solid var(--rail-edge);
   color: var(--rail-text);
+  /* Not selectable, for the reason the rail is not. */
+  user-select: none;
   /* The window's own buttons float over the top left corner, which is now this
      column rather than the rail. The first circle starts under them. */
   padding: var(--space-8) 0 var(--space-4);
@@ -624,6 +626,17 @@ button {
 .rail {
   --flesh: #4e6b16;
   --flesh-soft: #eef2d8;
+
+  /* A right-click leaves nothing highlighted behind it. WebKit selects the word
+     under the pointer before it dispatches `contextmenu`, for the menu it is
+     about to draw, so a row that answers with a menu of its own cannot undo
+     that by preventing a default which has already happened: the agent's name
+     is left selected underneath the menu, and stays selected after it closes.
+     Everywhere else in the column, where `main.tsx` refuses the menu outright,
+     the highlight is the whole of what the right-click did. The rail is
+     controls rather than prose, so none of it is selectable, which is also what
+     a drag across it wanted. The reading column is prose and keeps both. */
+  user-select: none;
 
   width: var(--rail-w);
   background: var(--rail-ground);
@@ -1033,11 +1046,10 @@ button {
    land. See lib/rail.ts.
    ========================================================================== */
 
-/* A rail being rearranged is not a rail being read. Selection is off for the
-   whole of it: the gesture starts on a row whose name is selectable text, and a
-   half-highlighted name left behind reads as something having gone wrong. */
+/* The fist is on the whole column rather than on the row that was picked up:
+   the pointer leaves that row almost immediately, and a cursor that turns back
+   into an arrow over the gap between two rows says the drag ended. */
 .rail[data-dragging="true"] {
-  user-select: none;
   cursor: grabbing;
 }
 

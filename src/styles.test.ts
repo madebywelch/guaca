@@ -147,6 +147,22 @@ describe("the dark columns", () => {
   });
 });
 
+describe("the navigation columns", () => {
+  /**
+   * A right-click on either of them has to leave nothing highlighted behind.
+   * WebKit selects the word under the pointer before it dispatches
+   * `contextmenu`, for the menu it is about to draw, so the row that answers
+   * with a menu of its own cannot undo that by preventing a default which has
+   * already happened. Neither column is selectable instead, and the assertion
+   * is here rather than in a DOM test because jsdom has no native selection to
+   * make: the declaration is the whole of the fix, so the declaration is what
+   * is read.
+   */
+  it.each(["rail", "grail"])("select nothing under a right-click (.%s)", (column) => {
+    expect(getComputedStyle(nest(column)).userSelect).toBe("none");
+  });
+});
+
 describe("dialog modifiers", () => {
   /**
    * A modifier declared above `.dialog` silently loses to it.
