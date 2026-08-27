@@ -971,6 +971,8 @@ export interface GroupReset {
   routines: number;
   /** Memories wiped. Named for the file on disk, which is `notes`. */
   notes: number;
+  /** Working notes dropped, which is the other store and a row count. */
+  workingNotes: number;
   calls: number;
 }
 

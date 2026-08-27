@@ -701,6 +701,20 @@ describe("channelsCleared", () => {
     // for nothing.
     expect(channelMessages).toHaveBeenCalledWith("chef", 300, undefined);
   });
+
+  it("sends the panels holding the two stores back for them", () => {
+    // A reset takes the memory and the working notes as well, and neither
+    // panel reads again on its own: without this the inspector draws both
+    // beside a transcript that says they are gone.
+    reset({ chef: [envelope()] });
+    useStore.setState({ memoryVersion: {}, workingNotesVersion: {} });
+
+    apply({ type: "channelsCleared", agents: ["chef"] });
+
+    expect(useStore.getState().memoryVersion.chef).toBe(1);
+    expect(useStore.getState().workingNotesVersion.chef).toBe(1);
+    expect(useStore.getState().workingNotesVersion.manager).toBeUndefined();
+  });
 });
 
 describe("openMessage", () => {

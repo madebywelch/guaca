@@ -61,6 +61,7 @@ const clearGroup = vi.fn<(id: string) => Promise<GroupReset>>(async () => ({
   messages: 0,
   routines: 0,
   notes: 0,
+  workingNotes: 0,
   calls: 0,
 }));
 const testGroupConnection = vi.fn<(id: string | null, draft: GroupDraft) => Promise<string>>(
@@ -398,6 +399,23 @@ describe("deleting a group", () => {
 
     expect(await screen.findByText(/cannot be deleted/)).toBeTruthy();
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("says what the reset took, both stores included", async () => {
+    // The operator is told rather than reassured, and the working notes are
+    // the half that says what the crew thought it was in the middle of.
+    clearGroup.mockResolvedValueOnce({
+      messages: 12,
+      routines: 2,
+      notes: 3,
+      workingNotes: 7,
+      calls: 41,
+    });
+    open();
+    fireEvent.click(button("Start fresh"));
+    fireEvent.click(button("Reset every agent"));
+
+    expect(await screen.findByText(/7 working notes/)).toBeTruthy();
   });
 
   it("does not offer to reset a group it is already deleting", () => {
