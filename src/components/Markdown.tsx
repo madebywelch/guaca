@@ -31,8 +31,12 @@ export const Roster = createContext<string[]>([]);
  * `rehype-raw` is added, and it is not. A fence tagged as a page is a different
  * thing entirely. It never becomes part of this document, and is run on an
  * origin of its own that can reach nothing. `artifact.rs` is the argument.
+ *
+ * `live` says this body is still being written, and only one caller sets it:
+ * the streaming bubble. It reaches exactly one decision, in {@link readFigure},
+ * which is whether a page is framed now or when the reply settles.
  */
-export function Markdown({ children }: { children: string }) {
+export function Markdown({ children, live = false }: { children: string; live?: boolean }) {
   const names = useContext(Roster);
   const plugins = useMemo(() => [remarkGfm, remarkMentions(names)], [names]);
 
@@ -74,7 +78,7 @@ export function Markdown({ children }: { children: string }) {
           pre: ({ children }) => {
             const fenced = asFence(children);
             if (fenced) {
-              const figure = readFigure(fenced.language, fenced.source);
+              const figure = readFigure(fenced.language, fenced.source, live);
               if (figure.kind !== "source") {
                 return <Figure figure={figure} source={fenced.source} />;
               }

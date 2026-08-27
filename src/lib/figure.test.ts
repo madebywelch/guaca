@@ -66,6 +66,37 @@ describe("an html fence", () => {
   });
 });
 
+describe("a fence in a reply that is still being written", () => {
+  const PAGE = "<!doctype html><html><body><h1>Plan</h1><p>Long enough to frame.</p></body></html>";
+
+  it("holds a page until the reply settles", () => {
+    // A page is drawn by registering a document and pointing a frame at the
+    // address that comes back, so drawing one per token is a reload per token:
+    // a round trip each, an entry each in a store that holds two dozen, and a
+    // frame that throws away whatever the operator did in it every sixteen
+    // milliseconds.
+    expect(readFigure("html", PAGE, true).kind).toBe("pending");
+    expect(readFigure("artifact", PAGE, true).kind).toBe("pending");
+    expect(readFigure("html", PAGE, false).kind).toBe("html");
+  });
+
+  it("says so the moment the fence opens, rather than flashing a code block", () => {
+    expect(readFigure("html", "", true).kind).toBe("pending");
+    expect(readFigure("html", "<!doc", true).kind).toBe("pending");
+  });
+
+  it("leaves a chart assembling itself, which is what it is for", () => {
+    // Pure function to coordinates, redrawn for free. This is the one figure
+    // where watching it arrive is the feature rather than the cost.
+    expect(readFigure("chart", SPEC, true).kind).toBe("chart");
+    expect(readFigure("chart", '{"type":"ba', true).kind).toBe("pending");
+  });
+
+  it("leaves every other fence exactly as it was", () => {
+    expect(readFigure("python", "print(1)", true).kind).toBe("source");
+  });
+});
+
 describe("telling a finished document from one still arriving", () => {
   it("counts braces and brackets", () => {
     expect(looksComplete("{}")).toBe(true);

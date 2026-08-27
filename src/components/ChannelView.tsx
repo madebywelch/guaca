@@ -18,6 +18,7 @@ import {
 import { ActivityFlow } from "./ActivityFlow";
 import { CodingPanel } from "./CodingPanel";
 import { Composer } from "./Composer";
+import { Answering } from "./HtmlArtifact";
 import { MessageItem, StreamingMessage, WhenRow } from "./MessageItem";
 import { PairThread } from "./PairThread";
 import { TrailRow } from "./Trail";
@@ -60,6 +61,15 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
 
   const isActivity = channel === ACTIVITY_CHANNEL;
   const agent = isActivity ? undefined : lookups.byId(channel);
+  // Held steady across renders: it is the value of a context read by every page
+  // in the transcript, and a fresh object each time would redraw all of them
+  // for every token that lands anywhere.
+  const answeringId = agent?.id;
+  const answeringName = agent?.name;
+  const answering = useMemo(
+    () => (answeringId && answeringName ? { id: answeringId, name: answeringName } : null),
+    [answeringId, answeringName],
+  );
 
   useLayoutEffect(follow, [follow, messages]);
 
@@ -184,49 +194,54 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
           aria-live="off"
           aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
         >
-          {messages === undefined ? (
-            <p className="hint" style={{ padding: "1rem 1.15rem" }}>
-              Loading…
-            </p>
-          ) : messages.length === 0 ? (
-            <div className="empty">
-              <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
-            </div>
-          ) : (
-            rows.map((row) => {
-              const stands = rowStandsFor(row);
-              return (
-                // Wrapped rather than marked on the entry itself: a row renders
-                // as several different shapes depending on who sent what to
-                // whom, and one of them is several rows.
-                <div
-                  key={row.key}
-                  data-message={stands.join(" ")}
-                  data-found={focused && stands.includes(focused) ? "true" : undefined}
-                >
-                  {row.kind === "peers" ? (
-                    <PeerBurstRow peers={row.peers} onOpen={setReading} />
-                  ) : row.kind === "refused" ? (
-                    <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
-                  ) : row.kind === "when" ? (
-                    <WhenRow at={row.at} />
-                  ) : (
-                    // Two participants, one of them named at the top of the
-                    // pane and the other reading this. Nothing here needs
-                    // telling whose words it is looking at.
-                    <MessageItem
-                      message={row.message}
-                      lookups={lookups}
-                      continued={row.continued}
-                      named={false}
-                    />
-                  )}
-                </div>
-              );
-            })
-          )}
+          {/* Who a page in this transcript may answer. Only here: the operator
+              is one of the two participants in a channel, so a value handed
+              back has an obvious next message and an obvious recipient. */}
+          <Answering.Provider value={answering}>
+            {messages === undefined ? (
+              <p className="hint" style={{ padding: "1rem 1.15rem" }}>
+                Loading…
+              </p>
+            ) : messages.length === 0 ? (
+              <div className="empty">
+                <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
+              </div>
+            ) : (
+              rows.map((row) => {
+                const stands = rowStandsFor(row);
+                return (
+                  // Wrapped rather than marked on the entry itself: a row renders
+                  // as several different shapes depending on who sent what to
+                  // whom, and one of them is several rows.
+                  <div
+                    key={row.key}
+                    data-message={stands.join(" ")}
+                    data-found={focused && stands.includes(focused) ? "true" : undefined}
+                  >
+                    {row.kind === "peers" ? (
+                      <PeerBurstRow peers={row.peers} onOpen={setReading} />
+                    ) : row.kind === "refused" ? (
+                      <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                    ) : row.kind === "when" ? (
+                      <WhenRow at={row.at} />
+                    ) : (
+                      // Two participants, one of them named at the top of the
+                      // pane and the other reading this. Nothing here needs
+                      // telling whose words it is looking at.
+                      <MessageItem
+                        message={row.message}
+                        lookups={lookups}
+                        continued={row.continued}
+                        named={false}
+                      />
+                    )}
+                  </div>
+                );
+              })
+            )}
 
-          <LiveStreams channel={channel} lookups={lookups} follow={follow} />
+            <LiveStreams channel={channel} lookups={lookups} follow={follow} />
+          </Answering.Provider>
         </div>
       )}
 
