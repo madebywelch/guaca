@@ -246,6 +246,7 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
           {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
           <Composer
             placeholder={`Message ${agent?.name ?? "agent"}`}
+            group={agent?.groupId ?? null}
             disabled={!agent || agent.lifecycle === "terminated"}
             disabledReason="This agent has been deleted."
             onSend={async (text, files) => {
