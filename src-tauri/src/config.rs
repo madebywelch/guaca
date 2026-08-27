@@ -20,12 +20,18 @@ pub const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4.5";
 
 /// How a turn is paid for.
 ///
-/// Two answers, not one with a flag: a pasted key and a signed-in subscription
-/// differ in the endpoint, the wire protocol, the auth header, the models on
-/// offer and whether a call has a price. Modeling the second as "a base URL
-/// with a different key" would put that whole disagreement behind a string an
-/// operator can type, and the first symptom would be an agent failing on a
-/// parameter nobody set.
+/// Three answers, not one with a flag: a pasted key, a signed-in subscription
+/// and a program on this machine differ in the endpoint, the wire protocol, the
+/// auth header, the models on offer and whether a call has a price. Modeling
+/// any of them as "a base URL with a different key" would put that whole
+/// disagreement behind a string an operator can type, and the first symptom
+/// would be an agent failing on a parameter nobody set.
+///
+/// The third is not an endpoint at all. `Claude` runs the `claude` program once
+/// per model call and reads its stdout, which is the only way an Anthropic
+/// subscription can pay for a turn: consumer OAuth tokens are restricted to the
+/// program they were issued to, so the way to spend one is to be that program.
+/// `docs/PROTOCOL.md` has the dates and the sources.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Provider {
@@ -36,9 +42,21 @@ pub enum Provider {
     /// A ChatGPT subscription, signed in to on this machine. Billed to the plan
     /// rather than per token.
     Chatgpt,
+    /// The `claude` program on this machine, run once per model call. Billed to
+    /// whatever that program is signed in to, which is the operator's business
+    /// and not this app's.
+    Claude,
 }
 
 impl Provider {
+    /// Every provider there is.
+    ///
+    /// A fixed-length array rather than a loose list, so a variant added
+    /// without being added here is a compile error rather than a case the
+    /// round-trip suite below silently stops covering. The same reason
+    /// [`crate::domain::repository::Harness::ALL`] is one.
+    pub const ALL: [Provider; 3] = [Provider::Compatible, Provider::Chatgpt, Provider::Claude];
+
     /// How a provider is spelled in SQLite, which is the same as on the wire.
     ///
     /// Not `Display`: the point is that the stored spelling and the IPC one
@@ -48,6 +66,7 @@ impl Provider {
         match self {
             Provider::Compatible => "compatible",
             Provider::Chatgpt => "chatgpt",
+            Provider::Claude => "claude",
         }
     }
 
@@ -59,6 +78,7 @@ impl Provider {
         match raw.trim() {
             "compatible" => Some(Provider::Compatible),
             "chatgpt" => Some(Provider::Chatgpt),
+            "claude" => Some(Provider::Claude),
             _ => None,
         }
     }
@@ -140,13 +160,14 @@ impl InferenceConfig {
 
     /// Whether a call has any chance of working, as far as settings can tell.
     ///
-    /// A subscription is not answered here. Whether one is signed in is held by
-    /// the credential store, not by settings, and a config that guessed would
-    /// report a sign-in it cannot see. The transport asks the store and produces
-    /// a refusal that names the actual problem.
+    /// Neither a subscription nor the `claude` program is answered here. Whether
+    /// one is signed in is held by the credential store or by the program's own
+    /// config, not by settings, and a config that guessed would report a sign-in
+    /// it cannot see. Each transport asks the thing that actually knows and
+    /// produces a refusal that names the actual problem.
     pub fn is_ready(&self) -> bool {
         match self.provider {
-            Provider::Chatgpt => true,
+            Provider::Chatgpt | Provider::Claude => true,
             Provider::Compatible => {
                 !self.api_key.trim().is_empty() && !self.base_url.trim().is_empty()
             }
@@ -157,6 +178,7 @@ impl InferenceConfig {
     pub fn endpoint(&self) -> &str {
         match self.provider {
             Provider::Chatgpt => crate::llm::codex::DEFAULT_BASE_URL,
+            Provider::Claude => crate::llm::claude::PROGRAM,
             Provider::Compatible => &self.base_url,
         }
     }
@@ -167,9 +189,16 @@ impl InferenceConfig {
     /// field: an agent or a group can still override it afterward, but the
     /// value being overridden has to be the one that belongs to the provider
     /// doing the work.
+    ///
+    /// `Claude` has no field to read and does not gain one. The model belongs to
+    /// the program, which is signed in, configured and updated somewhere this
+    /// app does not reach, exactly as it does for the coding harness of the same
+    /// name. What comes back is a label rather than a model id, and the model
+    /// the program actually ran is reported in its own stream.
     pub fn active_model(&self) -> &str {
         match self.provider {
             Provider::Chatgpt => &self.subscription_model,
+            Provider::Claude => crate::llm::claude::MODEL_LABEL,
             Provider::Compatible => &self.default_model,
         }
     }
@@ -488,7 +517,7 @@ mod tests {
         // nothing else would notice changing. If they ever disagree, a group's
         // stored provider reads as inherit and a whole crew quietly moves onto
         // the app's settings.
-        for provider in [Provider::Compatible, Provider::Chatgpt] {
+        for provider in Provider::ALL {
             let wire = serde_json::to_value(provider).unwrap();
             assert_eq!(wire, serde_json::Value::String(provider.as_str().to_string()));
             assert_eq!(Provider::parse(provider.as_str()), Some(provider));

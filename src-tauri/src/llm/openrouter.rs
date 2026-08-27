@@ -14,6 +14,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{InferenceConfig, Provider};
+use crate::llm::claude;
 use crate::llm::codex;
 use crate::llm::sse::SseDecoder;
 use crate::subscription::Subscription;
@@ -275,6 +276,20 @@ pub enum LlmError {
         "the ChatGPT subscription could not be used: {message}. Open Settings and sign in again."
     )]
     SubscriptionRejected { message: String },
+    /// The program a provider runs is not installed.
+    ///
+    /// Separate from `NotConfigured` because nothing in Settings fixes it and
+    /// an agent reading this mid-turn must not be sent to look for a key that
+    /// this provider never wanted.
+    #[error("{program} is not installed. Install it with `{install}`, or pick another provider in Settings.", install = crate::llm::claude::INSTALL)]
+    ProgramMissing { program: &'static str },
+    /// The program ran and would not answer.
+    ///
+    /// Its own words, because with no endpoint and no status code they are the
+    /// only account of the failure there is, and the commonest cause is a
+    /// sign-in or a spent plan that only the operator can put right.
+    #[error("{program} could not answer: {message}")]
+    ProgramFailed { program: &'static str, message: String },
     #[error("rate limited by the inference endpoint: {message}")]
     RateLimited { message: String, retry_after_secs: Option<u64> },
     #[error("model {model:?} was rejected: {message}")]
@@ -301,6 +316,7 @@ impl LlmError {
         match self {
             LlmError::RateLimited { .. } | LlmError::Timeout { .. } | LlmError::Truncated => true,
             LlmError::Upstream { status, .. } => *status >= 500,
+            LlmError::ProgramMissing { .. } | LlmError::ProgramFailed { .. } => false,
             LlmError::Transport { .. } => true,
             _ => false,
         }
@@ -312,6 +328,8 @@ impl LlmError {
             LlmError::NotConfigured => "no API key configured".into(),
             LlmError::Auth { .. } => "API key rejected".into(),
             LlmError::SubscriptionRejected { .. } => "sign in to ChatGPT again".into(),
+            LlmError::ProgramMissing { program } => format!("{program} is not installed"),
+            LlmError::ProgramFailed { program, .. } => format!("{program} could not answer"),
             LlmError::RateLimited { .. } => "rate limited".into(),
             LlmError::ModelRejected { model, .. } => format!("model {model} unavailable"),
             LlmError::Upstream { status, .. } => format!("upstream HTTP {status}"),
@@ -551,6 +569,10 @@ impl LlmClient {
                 });
             };
             return codex::stream(&self.http, subscription, cfg, request, &mut on_token).await;
+        }
+
+        if cfg.provider == Provider::Claude {
+            return claude::stream(cfg, request, &mut on_token).await;
         }
 
         let url = cfg.chat_completions_url();

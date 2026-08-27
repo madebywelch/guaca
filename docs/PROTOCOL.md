@@ -246,11 +246,9 @@ Claude Code and Claude.ai only. Server-side enforcement landed in January 2026,
 the documentation was made explicit on 19 February 2026, and on 4 April 2026
 subscription quota stopped covering third-party harnesses altogether. The policy
 names the Agent SDK specifically, so there is no sanctioned client library route
-either. A Claude subscription therefore cannot fund Guaca, and the flow is not
-implemented: it would fail at the server, breach the Consumer Terms the operator
-agreed to, and put their account at risk of revocation without notice. Claude
-models still reach Guaca the way they always have, through an API key or through
-OpenRouter, which remains the default endpoint and the default model.
+either. So the flow is not implemented, and will not be: a token of the
+operator's held by this app would fail at the server, breach the Consumer Terms
+they agreed to, and put their account at risk of revocation without notice.
 
 This is worth restating because the asymmetry is not obvious from the outside.
 The two flows look near-identical — OAuth, PKCE, a rotating bearer token, a
@@ -258,6 +256,40 @@ plan-scoped claim in an ID token — and a reasonable person assumes that
 implementing one means the other is a weekend of work. The blocker is a term of
 service and a server-side check, and neither is something this repo can engineer
 around.
+
+### What the restriction leaves open, which is the program
+
+Read the restriction again and it says something narrower than "a Claude
+subscription cannot fund Guaca". It says the token belongs to the program it was
+issued to. It does not say the work cannot be done; it says who has to do it.
+
+So `Provider::Claude` does not hold a token. It runs `claude`, once per model
+call, and reads what it writes. The credential never leaves the program it was
+issued to, because this app never has it: there is no Anthropic sign-in in
+Settings, no token in the config file, and nothing in `llm/claude.rs` that could
+carry one. The operator signs in to Claude the way they already did, in their own
+terminal, and this app spends nothing it was not given.
+
+This is the same fact the coding harness is built on, one level up. There it
+decides which program writes code in a repository, because `pi` holding an
+Anthropic credential is refused while `claude` on the same account is not:
+`docs/CODING.md`. Here it decides which program answers a turn. Both follow from
+one sentence — a consumer token is spent by the program it was issued to — and in
+both places the answer is to *be* that program rather than to hold its
+credential.
+
+What that costs is written down where the cost lands. Guaca keeps its own round
+loop, so the program is given no tools and asked for one structured answer per
+call through `--json-schema`; the five limits stay in `runtime/guard.rs` where
+they are written rather than moving inside a process this app does not control.
+The model and the sign-in are the program's and are never passed from here, for
+the reason a harness's are not. And a reply lands whole rather than a token at a
+time, because the answer is a JSON document and half a decoded escape drawn into
+a channel is worse than a message that arrives at once. `llm/claude.rs` is the
+whole of it.
+
+Claude models still reach Guaca the other two ways as well, through an API key or
+through OpenRouter, which remains the default endpoint and the default model.
 
 ## Considered and declined
 
