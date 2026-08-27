@@ -35,6 +35,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
     ...over,
   };
 }

@@ -41,6 +41,7 @@ function card(id: string, name: string, given = true): AgentCard {
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
   };
 }
 

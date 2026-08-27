@@ -63,6 +63,7 @@ const AGENTS: AgentCard[] = [
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
   },
   {
     id: "chef",
@@ -84,6 +85,7 @@ const AGENTS: AgentCard[] = [
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
   },
 ];
 

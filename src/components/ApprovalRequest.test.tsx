@@ -36,6 +36,7 @@ const MANAGER: AgentCard = {
   version: 1,
   createdAt: 0,
   updatedAt: 0,
+  discardedAt: null,
 };
 
 const REQUEST: Extract<Part, { type: "approval" }> = {

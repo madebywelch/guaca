@@ -55,6 +55,7 @@ function agent(name: string, extra: Partial<AgentCard> = {}): AgentCard {
     version: 1,
     createdAt: 1,
     updatedAt: 1,
+    discardedAt: null,
     ...extra,
   };
 }

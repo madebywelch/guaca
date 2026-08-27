@@ -643,6 +643,14 @@ export interface AgentCard {
   version: number;
   createdAt: number;
   updatedAt: number;
+  /**
+   * When this agent was thrown out, while it can still be pulled back.
+   *
+   * Set only on a terminated row, and only while the wait lasts: `null` is both
+   * an agent nobody deleted and one whose thirty days are up and whose memory,
+   * machines and schedule are already gone. See `lib/compost.ts`.
+   */
+  discardedAt: number | null;
 }
 
 export interface AgentDraft {

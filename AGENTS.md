@@ -23,6 +23,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/diff.ts         Two versions of a page, as the lines between them.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
+  lib/compost.ts      Where a deleted agent waits, and how long it has left.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
   lib/plugins.ts      A plugin's mark and color. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
@@ -146,7 +147,8 @@ repo: the frontend renders state and forwards intent.
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
 | The rail's order, dragging a row, groups as places you go inside | *The rail is arranged by hand*, *A drop is one call* and *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/rail.ts` and `src/lib/orb.ts` |
-| Deleting a group, deleting an agent, what goes with either | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `retire_agent` in `src-tauri/src/commands.rs` |
+| Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
+| Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
@@ -341,6 +343,27 @@ the model takes a screenshot to see what `browse` did.
   against 16,000 and told operators their memory was about to be cut by a runtime
   storing it whole. A warning is read as a fact about what will happen, so the
   number is only worth drawing while it is the runtime's number.
+- **A deleted agent is `Terminated` with a stamp, not a fourth lifecycle.** The
+  compost holds it for thirty days and everything it owns privately waits with
+  it, but to the rest of the app it is deleted: unreachable, undiscoverable, out
+  of the rail, out of every crew and out of the partial index that frees its
+  name. That is the point of the column. Fifteen queries ask `lifecycle <>
+  'terminated'` and every one of them is still right; a fourth state would be
+  fifteen places to remember, each failing quietly and differently — a composted
+  agent in a directory listing, in a crew count, in a disband, in the roster a
+  peer is told to ask. `NULL` is both ends of the wait, and the lifecycle tells
+  them apart. `docs/WORKSPACE.md`.
+- **A composted agent still holds its sandbox, and `claimed_sandboxes` has to
+  agree.** Deleting sleeps the machine rather than killing it, because the disk
+  is where the operator's own sign-ins live and only they can put them back.
+  Under the old rule — only a live agent holds a claim — the next sweep would
+  kill it inside the minute, and a restore three weeks later would hand back an
+  agent signed in to nothing.
+- **A restore comes back paused, and settles its name on the way.** Paused
+  because thirty days of a schedule have come due without it; renamed because
+  the name was freed the moment it was thrown out and the crew may have hired
+  into it, so `copy_name` steps around the clash rather than letting the unique
+  index refuse a button whose job is to succeed.
 - **An edit to a repository is a `RepositoryEdit`, not a draft with a stand-in
   path.** A `RepositoryDraft` validates the path before anything else, so an
   edit routed through one has to invent a path it does not have. The stand-in

@@ -97,6 +97,13 @@ export function AgentEditor({ agent, onClose }: Props) {
     }
   };
 
+  /**
+   * Into the compost, where it waits thirty days.
+   *
+   * The same act the agent menu performs, worded the same way, because two
+   * surfaces that delete the same agent and describe it differently teach two
+   * different things about what a delete costs. See `lib/compost.ts`.
+   */
   const remove = async () => {
     if (!agent) return;
     setBusy(true);
@@ -288,7 +295,7 @@ export function AgentEditor({ agent, onClose }: Props) {
                   disabled={busy}
                   onClick={() => void remove()}
                 >
-                  Delete {agent.name}
+                  Delete {agent.name}, into the compost
                 </button>
                 <button
                   type="button"
