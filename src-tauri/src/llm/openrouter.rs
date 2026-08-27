@@ -276,12 +276,18 @@ pub enum LlmError {
         "the ChatGPT subscription could not be used: {message}. Open Settings and sign in again."
     )]
     SubscriptionRejected { message: String },
-    /// The program a provider runs is not installed.
+    /// The program a provider runs could not be found.
     ///
     /// Separate from `NotConfigured` because nothing in Settings fixes it and
     /// an agent reading this mid-turn must not be sent to look for a key that
     /// this provider never wanted.
-    #[error("{program} is not installed. Install it with `{install}`, or pick another provider in Settings.", install = crate::llm::claude::INSTALL)]
+    ///
+    /// It says *or is not on this app's PATH* because both are real and they are
+    /// told apart by looking in a terminal rather than by anything this app can
+    /// see. `programs.rs` is what makes the second one rare; a bare "not
+    /// installed" said to an operator who has the program is a refusal whose
+    /// only next move is to install it again.
+    #[error("{program} is not installed, or is not on this app's PATH. Install it with `{install}`, or pick another provider in Settings.", install = crate::llm::claude::INSTALL)]
     ProgramMissing { program: &'static str },
     /// The program ran and would not answer.
     ///
@@ -328,7 +334,7 @@ impl LlmError {
             LlmError::NotConfigured => "no API key configured".into(),
             LlmError::Auth { .. } => "API key rejected".into(),
             LlmError::SubscriptionRejected { .. } => "sign in to ChatGPT again".into(),
-            LlmError::ProgramMissing { program } => format!("{program} is not installed"),
+            LlmError::ProgramMissing { program } => format!("{program} could not be found"),
             LlmError::ProgramFailed { program, .. } => format!("{program} could not answer"),
             LlmError::RateLimited { .. } => "rate limited".into(),
             LlmError::ModelRejected { model, .. } => format!("model {model} unavailable"),
