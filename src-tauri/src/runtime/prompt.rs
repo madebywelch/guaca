@@ -719,15 +719,23 @@ pub fn system_prompt(
              - A scatter's `data` is `[x, y]` pairs.\n\
              - Guaca chooses the colors, the axes, the legend and the layout. Do not describe \
              them, and do not ask for them.\n\n\
-             An ```html fence is run as a page: a diagram, a layout, a small thing the operator \
-             can click. Its own markup, style and script, and it can reach nothing at all: no \
-             network, no remote image, no font. Everything it shows it has to contain or \
-             compute.\n\n\
+             An ```html fence is run as a page, on an origin of its own: a diagram, a layout, \
+             a comparison laid out as cards, a small thing the operator can work. Its own \
+             markup, style and script, and it can reach nothing at all: no network, no remote \
+             image, no font, no library. Everything it shows it has to contain or compute.\n\n\
+             A page can hand one value back. Call `guaca.answer(value)` with any JSON value and \
+             Guaca shows it to the operator underneath the page, with a button that sends it to \
+             you as their next message. The page cannot send anything by itself, so call it \
+             again on every change if that is easiest: what they send is whatever the page last \
+             handed back. Reach for a page over a question when what you need is a shape rather \
+             than a word: several things picked at once, a number chosen off a range, a table \
+             the operator edits. Hand back an object whose keys say what each value is.\n\n\
              Reach for a figure when the shape is the point: a trend, a comparison, a breakdown, \
-             a schedule. Do not draw a single number, or three of them; write those in a \
-             sentence, where they are read at a glance instead of measured off an axis. And \
-             write the sentence either way. A figure nobody says anything about leaves the \
-             operator to work out for themselves what you concluded.\n",
+             a schedule, a choice with more to it than a list of options. Do not draw a single \
+             number, or three of them; write those in a sentence, where they are read at a \
+             glance instead of measured off an axis. Most replies are prose and should stay \
+             prose. And write the sentence either way. A figure nobody says anything about \
+             leaves the operator to work out for themselves what you concluded.\n",
         );
     }
 
@@ -1179,9 +1187,13 @@ mod tests {
         assert!(prompt.contains("```chart"), "the chart fence is never mentioned");
         assert!(prompt.contains("bar, line, area, pie, donut, scatter"));
         assert!(prompt.contains("```html"));
+        // A page nobody can answer is a dead end, and a capability an agent is
+        // not told about is one nobody uses: both halves have to be said.
+        assert!(prompt.contains("guaca.answer(value)"), "the answer channel is never mentioned");
         // And the argument against overusing it, in the same breath. An agent
         // told only that it can draw charts draws one for three numbers.
         assert!(prompt.contains("Do not draw a single number"));
+        assert!(prompt.contains("Most replies are prose"));
     }
 
     #[test]
@@ -1190,6 +1202,9 @@ mod tests {
         // is tokens spent drawing something nobody will look at.
         let prompt = prompt_for(&card("Analyst"), &[], "", ReplyMode::ToPeer);
         assert!(!prompt.contains("```chart"), "the peer path carries the figure section");
+        // And a peer has no operator to hand a value back to, so a page it
+        // could answer with is a page nobody will ever press a button on.
+        assert!(!prompt.contains("guaca.answer"), "the peer path is offered the answer channel");
     }
 
     #[test]

@@ -1,13 +1,20 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const frameArtifact = vi.fn(async () => ({ port: 9999, id: "a".repeat(64) }));
+const sendMessage = vi.fn(async (_agentId: string, _text: string) => "run-1");
 vi.mock("../lib/ipc", () => ({
-  api: { frameArtifact: () => frameArtifact() },
+  api: {
+    frameArtifact: () => frameArtifact(),
+    sendMessage: (agentId: string, text: string) => sendMessage(agentId, text),
+  },
   openExternal: vi.fn(),
 }));
 
 const { Markdown } = await import("./Markdown");
+const { Answering, answerMessage } = await import("./HtmlArtifact");
 
 const fence = (language: string, body: unknown) =>
   `\`\`\`${language}\n${typeof body === "string" ? body : JSON.stringify(body)}\n\`\`\``;
@@ -177,6 +184,203 @@ describe("a page in a message", () => {
     const { container } = render(<Markdown>{fence("html", "<div>hi</div>")}</Markdown>);
     expect(container.querySelector(".md__pre")).toBeTruthy();
     expect(container.querySelector("iframe")).toBeNull();
+  });
+});
+
+describe("a page that hands a value back", () => {
+  const PAGE =
+    "<!doctype html><html><body><h1>Plan</h1><p>Something worth framing.</p></body></html>";
+  const TO = { id: "agent-1", name: "Analyst" };
+
+  beforeEach(() => {
+    sendMessage.mockClear();
+  });
+
+  /** Renders the page in a channel and answers from inside the frame. */
+  const answering = async (to: typeof TO | null = TO) => {
+    const view = render(
+      <Answering.Provider value={to}>
+        <Markdown>{fence("html", PAGE)}</Markdown>
+      </Answering.Provider>,
+    );
+    const frame = await waitFor(() => {
+      const found = view.container.querySelector("iframe");
+      if (!found) throw new Error("no frame yet");
+      return found as HTMLIFrameElement;
+    });
+    const say = (value: unknown) =>
+      act(() => {
+        // Exactly what the bridge in `artifact.rs` posts, and delivered from
+        // the frame's own window, which is the only thing the parent trusts.
+        window.dispatchEvent(
+          new MessageEvent("message", {
+            source: frame.contentWindow,
+            data: { guaca: "artifact-answer", value },
+          }),
+        );
+      });
+    return { ...view, say };
+  };
+
+  it("shows what was handed back and sends nothing on its own", async () => {
+    // The whole safety argument. A transcript re-frames a page whenever it
+    // draws one, so a page that could send by itself would send again every
+    // time it was scrolled past, and each send is a turn nobody asked for.
+    const { say } = await answering();
+    say('{"plan":"pro","seats":12}');
+
+    expect(screen.getByText('{"plan":"pro","seats":12}')).toBeTruthy();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Send to Analyst" })).toBeTruthy();
+  });
+
+  it("sends it when the operator presses the button, and says so", async () => {
+    const { say } = await answering();
+    say('{"plan":"pro"}');
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Send to Analyst" }).click();
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("agent-1", answerMessage('{"plan":"pro"}'));
+    expect(screen.getByText("Sent to Analyst.")).toBeTruthy();
+  });
+
+  it("says why when the send is refused, and keeps the value on screen", async () => {
+    sendMessage.mockRejectedValueOnce(new Error("this agent has been deleted"));
+    const { say } = await answering();
+    say('{"plan":"pro"}');
+
+    await act(async () => {
+      screen.getByRole("button", { name: "Send to Analyst" }).click();
+    });
+
+    expect(screen.getByText("this agent has been deleted")).toBeTruthy();
+  });
+
+  it("keeps only the latest, because a page answering on every drag is right", async () => {
+    const { say } = await answering();
+    say('{"at":1}');
+    say('{"at":2}');
+
+    expect(screen.queryByText('{"at":1}')).toBeNull();
+    expect(screen.getByText('{"at":2}')).toBeTruthy();
+  });
+
+  it("refuses a document dressed as an answer, and names the cap", async () => {
+    const { say } = await answering();
+    say(JSON.stringify({ everything: "x".repeat(5000) }));
+
+    expect(screen.queryByRole("button", { name: "Send to Analyst" })).toBeNull();
+    expect(screen.getByText(/most Guaca will carry/)).toBeTruthy();
+  });
+
+  it("ignores anything that is not the string the bridge posts", async () => {
+    const { say } = await answering();
+    say({ plan: "pro" });
+
+    expect(screen.queryByText(/answer ready/)).toBeNull();
+  });
+
+  it("draws nothing where there is nobody to answer", async () => {
+    // A search hit, a pair's thread, a document preview. A Send button there
+    // is a control that cannot say who it sends to.
+    const { say } = await answering(null);
+    say('{"plan":"pro"}');
+
+    expect(screen.queryByText(/answer ready/)).toBeNull();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("fences the value clear of its own backticks", () => {
+    // A page about code hands back a snippet, and a fixed three would end the
+    // block in the middle of the value.
+    const message = answerMessage('{"snippet":"```js"}');
+    expect(message).toContain("````json");
+    expect(message.endsWith("````")).toBe(true);
+    // The plain case stays the plain case.
+    expect(answerMessage('{"plan":"pro"}')).toContain("```json");
+  });
+});
+
+/**
+ * The seam between the script `artifact.rs` prepends and the parent that reads
+ * it, checked by running the real one.
+ *
+ * Nothing else in the build can see this break. The Rust suite asserts what the
+ * bridge's text contains, the suite above asserts what the renderer accepts, and
+ * the two agree because the same literal is written in both places: renaming the
+ * message in Rust fails one test, and updating that test makes the build green
+ * with a page that can no longer answer. Same failure `ipc.contract.test.ts`
+ * exists for, so the same answer: read both sources and compare them.
+ */
+describe("the bridge the page is served with", () => {
+  /** The bridge's JavaScript, out of the Rust constant that carries it. */
+  const bridge = () => {
+    const rust = readFileSync(resolve(__dirname, "../../src-tauri/src/artifact.rs"), "utf8");
+    const held = rust.match(/const BRIDGE: &str = r#"([\s\S]*?)"#;/);
+    if (!held) throw new Error("could not find BRIDGE in artifact.rs");
+    const script = held[1]?.match(/<script>([\s\S]*)<\/script>/);
+    if (!script) throw new Error("BRIDGE is not a script");
+    return script[1] as string;
+  };
+
+  /** Runs it the way the page does, and collects what it posts to its parent. */
+  const running = () => {
+    const posted: unknown[] = [];
+    const page: Record<string, unknown> = {};
+    new Function("window", "document", "addEventListener", "parent", bridge())(page, {}, () => {}, {
+      postMessage: (said: unknown) => posted.push(said),
+    });
+    return { posted, guaca: page.guaca as { answer: (value: unknown) => boolean } };
+  };
+
+  it("defines the call the prompt tells an agent to make", () => {
+    expect(typeof running().guaca?.answer).toBe("function");
+  });
+
+  it("posts what the renderer is listening for, and the renderer draws it", async () => {
+    const { posted, guaca } = running();
+    expect(guaca.answer({ plan: "pro", seats: 12 })).toBe(true);
+    expect(posted).toEqual([{ guaca: "artifact-answer", value: '{"plan":"pro","seats":12}' }]);
+
+    // The same object, straight from the bridge into the component that reads
+    // it. Neither side is retyped here, which is the whole point.
+    const view = render(
+      <Answering.Provider value={{ id: "agent-1", name: "Analyst" }}>
+        <Markdown>
+          {fence(
+            "html",
+            "<!doctype html><html><body><h1>Plan</h1><p>Worth framing.</p></body></html>",
+          )}
+        </Markdown>
+      </Answering.Provider>,
+    );
+    const frame = await waitFor(() => {
+      const found = view.container.querySelector("iframe");
+      if (!found) throw new Error("no frame yet");
+      return found as HTMLIFrameElement;
+    });
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", { source: frame.contentWindow, data: posted[0] }),
+      );
+    });
+
+    expect(screen.getByText('{"plan":"pro","seats":12}')).toBeTruthy();
+  });
+
+  it("fails in the page, where the page can be told, rather than in the app", () => {
+    // A value that will not survive `JSON.stringify`. Arriving as something the
+    // app has to decide about is strictly worse than the page getting a false.
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const { posted, guaca } = running();
+
+    expect(guaca.answer(cyclic)).toBe(false);
+    expect(guaca.answer(() => {})).toBe(false);
+    expect(guaca.answer(undefined)).toBe(false);
+    expect(posted).toEqual([]);
   });
 });
 

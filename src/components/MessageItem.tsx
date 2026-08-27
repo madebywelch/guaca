@@ -337,7 +337,10 @@ export function StreamingMessage({ agent, text }: { agent: AgentCard | undefined
         />
       </div>
       <div className="msg__body md--streaming">
-        <Markdown>{text}</Markdown>
+        {/* Still being written, which is the one thing a body needs to know
+            about itself: a page is framed once, whole, rather than reloaded
+            on every token that lands. */}
+        <Markdown live>{text}</Markdown>
       </div>
     </article>
   );

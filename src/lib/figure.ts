@@ -94,10 +94,24 @@ export function looksComplete(source: string): boolean {
  * refusal where the text used to be. What a *valid* refusal looks like is the
  * chart's own business: {@link readChart} returns the sentence, and the figure
  * draws it under the source so the agent can be told what to change.
+ *
+ * `live` is whether the message this fence is in is still being written, and
+ * it separates the two figures rather than gating both. A chart is drawn from
+ * a value by a pure function, so redrawing it every token is what makes one
+ * assemble itself on screen and costs nothing. A page is drawn by registering
+ * a document and pointing a frame at the address that comes back, so the same
+ * treatment is a reload per token: a round trip each, a new entry each in a
+ * store that holds two dozen, and a frame that throws away whatever the
+ * operator had done in it every sixteen milliseconds.
  */
-export function readFigure(language: string, source: string): Figure {
+export function readFigure(language: string, source: string, live = false): Figure {
   const tag = language.trim().toLowerCase();
   const body = source.trim();
+
+  // Before the emptiness check, so a page announces itself the moment its
+  // fence opens instead of flashing an empty code block first.
+  if (PAGE.has(tag) && live) return { kind: "pending" };
+
   if (body.length === 0) return { kind: "source" };
 
   if (CHART.has(tag)) {

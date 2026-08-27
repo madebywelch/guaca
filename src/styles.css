@@ -2542,6 +2542,52 @@ button {
   min-height: 60vh;
 }
 
+/* What a page handed back, waiting for a person.
+
+   Outside the frame and unmistakably Guaca's, which is the whole arrangement
+   rather than a layout preference: the page draws the controls the operator
+   works, and the app draws the one that spends a turn. Nothing in here can be
+   reached, styled or pressed by the document above it. */
+.artifact__answer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+.artifact__answer-note {
+  margin: 0;
+  font-size: var(--type-aside);
+  color: var(--muted);
+}
+
+.artifact__answer-note--fault {
+  color: var(--alarm);
+}
+
+/* The value goes out under the operator's name, so it is shown before it goes
+   and shown as text. Monospace because it is JSON and reading it is the job. */
+.artifact__answer-value {
+  margin: 0;
+  padding: var(--space-3);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  color: var(--text);
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-xs);
+}
+
+.artifact__answer-acts {
+  display: flex;
+  gap: var(--space-3);
+}
+
 /* ==========================================================================
    Chips, controls, dialogs
    ========================================================================== */
