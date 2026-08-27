@@ -35,6 +35,12 @@ pnpm app          # dev, with hot reload
 pnpm app:build    # an installable bundle
 ```
 
+To build the latest checked-out branch and replace `/Applications/Guaca.app`:
+
+```sh
+./scripts/install.sh
+```
+
 macOS only, for now.
 
 ## Who pays for a turn
