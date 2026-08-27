@@ -119,6 +119,20 @@ describe("Inspector", () => {
     expect(screen.queryByText("Scribe's screen")).toBeNull();
   });
 
+  it("draws the schedule above the two stores", async () => {
+    // The order is the whole content of this panel's design and nothing else
+    // in the tree asserts it: every section renders either way, and a swap
+    // that reads as deliberate in a diff is invisible in every other test.
+    render(<Inspector agent={card("a1", "Cook")} onEditProfile={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Routines" });
+
+    const order = screen
+      .getAllByRole("heading", { level: 3 })
+      .map((heading) => heading.textContent);
+
+    expect(order).toEqual(["Routines", "Working notes", "Memory"]);
+  });
+
   it("switches the memory over with everything else, rather than under the new name", async () => {
     // One key on the level they share is the whole mechanism, and a memory
     // left behind is the worst of the three to leave: an operator editing what

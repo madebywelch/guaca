@@ -51,19 +51,22 @@ function remembered(): boolean {
  * glanced at constantly.
  *
  * The order is what is worth glancing at, most first. A screen is a picture of
- * something happening right now, so the two of them lead; then the working
- * notes, which are what the agent is in the middle of; then the schedule it
- * keeps. Memory is last because it is the one section that is a text box: it
- * is read closely rather than glanced at, edited deliberately, and at the top
- * it spent the panel's vertical budget on a page nobody was looking at while
- * the live desktop under it sat below the fold. Its height cap stays for the
- * same reason it was added, one section further down.
+ * something happening right now, so the two of them lead; then the schedule it
+ * keeps, which is what is about to happen and is the one section nothing else
+ * on screen says; then the working notes, which are what the agent is in the
+ * middle of and which the transcript beside them is already showing. Memory is
+ * last because it is the one section that is a text box: it is read closely
+ * rather than glanced at, edited deliberately, and at the top it spent the
+ * panel's vertical budget on a page nobody was looking at while the live
+ * desktop under it sat below the fold. Its height cap stays for the same
+ * reason it was added, one section further down.
  *
- * Memory and the working notes are still the two halves of what an agent
- * carries between conversations, and they are still the only sections with
- * something to show on every agent, since a screen is usually an offer rather
- * than a picture and a new agent keeps no routines. Separating them costs the
- * reading that puts them side by side; each says which the other is.
+ * Memory and the working notes are the two halves of what an agent carries
+ * between conversations, and they are the only sections with something to show
+ * on every agent, since a screen is usually an offer rather than a picture and
+ * a new agent keeps no routines. They are adjacent, which is what the schedule
+ * moving above them buys: the two stores are read against each other, and what
+ * each is for is clearest when the other is under it.
  */
 export function Inspector({ agent, onEditProfile }: Props) {
   const [open, setOpen] = useState(remembered);
@@ -181,8 +184,8 @@ export function Inspector({ agent, onEditProfile }: Props) {
         <div className="inspector__level" hidden={routine !== null} key={agent.id}>
           <BrowserScreen agent={agent} />
           <ComputerScreen agent={agent} />
-          <WorkingNotes agentId={agent.id} />
           <RoutineList agentId={agent.id} onOpen={setRoutine} />
+          <WorkingNotes agentId={agent.id} />
           <Memory agentId={agent.id} />
         </div>
 
