@@ -39,16 +39,24 @@ vi.mock("../lib/ipc", () => ({
   },
 }));
 
-/** The crew the box can complete against. Set per test where it matters. */
+/** Every live agent in the workspace, which is more than one crew. */
 let roster: AgentCard[] = [];
 
 vi.mock("../lib/store", () => ({ useLiveAgents: () => roster }));
 
+/** The crew whose channel is open in these tests. */
+const CREW = "00000000-0000-4000-8000-000000000001";
+/** Another one, whose names the box must never offer. */
+const ELSEWHERE = "00000000-0000-4000-8000-000000000002";
+
+/** Minted per card rather than per name: two crews can hold one name. */
+let minted = 0;
+
 /** An agent as the rail hands one over: only the fields the composer draws. */
-function anAgent(name: string): AgentCard {
+function anAgent(name: string, group = CREW): AgentCard {
   return {
-    id: `00000000-0000-4000-8000-${name.length.toString().padStart(12, "0")}`,
-    groupId: "00000000-0000-4000-8000-000000000001",
+    id: `00000000-0000-4000-8000-${(++minted).toString().padStart(12, "0")}`,
+    groupId: group,
     name,
     avatar: "plain",
     color: "#c7d96b",
@@ -79,7 +87,7 @@ describe("Composer", () => {
   });
 
   async function draw(onSend = vi.fn(async () => {})) {
-    render(<Composer placeholder="Message Manager" onSend={onSend} />);
+    render(<Composer placeholder="Message Manager" group={CREW} onSend={onSend} />);
     await waitFor(() => expect(dropped).not.toBeNull());
     return onSend;
   }
@@ -124,7 +132,7 @@ describe("Composer", () => {
     const onSend = vi.fn(async () => {
       throw new Error("that agent has been deleted");
     });
-    render(<Composer placeholder="Message Manager" onSend={onSend} />);
+    render(<Composer placeholder="Message Manager" group={CREW} onSend={onSend} />);
     await waitFor(() => expect(dropped).not.toBeNull());
 
     await drop(["/tmp/notes.md"]);
@@ -206,10 +214,33 @@ describe("a mention in the box", () => {
   /** The layer under the textarea, which is where a draft's mentions are drawn. */
   const painted = () => document.querySelector(".composer__mirror");
 
-  async function draw() {
-    render(<Composer placeholder="Message Manager" onSend={vi.fn(async () => {})} />);
+  async function draw(group: string | null = CREW) {
+    render(<Composer placeholder="Message Manager" group={group} onSend={vi.fn(async () => {})} />);
     await waitFor(() => expect(dropped).not.toBeNull());
   }
+
+  /** The names the typeahead is offering right now. */
+  const offered = () =>
+    [...document.querySelectorAll(".mentions__name")].map((item) => item.textContent);
+
+  it("offers the channel's own crew and nobody else", async () => {
+    // The workspace-wide list is what an operator sees after clearing a crew
+    // and hiring a new one: every agent they have ever had, on a menu where
+    // picking one writes a name `send_message` refuses as belonging to nobody.
+    roster = [anAgent("Critic"), anAgent("Scribe", ELSEWHERE)];
+    await draw();
+    await type("ask @");
+
+    expect(offered()).toEqual(["Critic"]);
+  });
+
+  it("offers nobody when the channel belongs to nobody", async () => {
+    roster = [anAgent("Critic")];
+    await draw(null);
+    await type("ask @");
+
+    expect(offered()).toEqual([]);
+  });
 
   it("marks a name the crew has, as it is typed", async () => {
     roster = [anAgent("Critic"), anAgent("Head Chef")];
@@ -245,6 +276,17 @@ describe("a mention in the box", () => {
     roster = [anAgent("Critic")];
     await draw();
     await type("mail bob@example.com about @lunch");
+
+    expect(painted()?.querySelectorAll(".mention")).toHaveLength(0);
+  });
+
+  it("marks nothing when the name belongs to another crew", async () => {
+    // The chip is the promise the menu made, one step later: drawing one
+    // around a name in a crew this channel cannot reach says the message is
+    // addressed to somebody it will never arrive at.
+    roster = [anAgent("Critic"), anAgent("Scribe", ELSEWHERE)];
+    await draw();
+    await type("ask @Scribe about it");
 
     expect(painted()?.querySelectorAll(".mention")).toHaveLength(0);
   });

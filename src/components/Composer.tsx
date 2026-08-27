@@ -5,16 +5,27 @@ import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
 import { useLiveAgents } from "../lib/store";
-import { type Attachment, errorMessage } from "../lib/types";
+import { type Attachment, errorMessage, type GroupId } from "../lib/types";
 
 interface Props {
   placeholder: string;
+  /**
+   * The crew this channel belongs to, or null when it belongs to nobody.
+   *
+   * What an `@` here is allowed to name. `send_message` resolves a recipient
+   * inside the sender's own group and refuses every name outside it, without
+   * saying whether that name belongs to anybody, so a completion offered from
+   * another crew is a delivery the runtime will not make. Two crews can also
+   * hold two agents with one name and one face, which the workspace-wide list
+   * offered twice with nothing on either row to say which was meant.
+   */
+  group: GroupId | null;
   disabled?: boolean;
   disabledReason?: string;
   onSend: (text: string, files: Attachment[]) => Promise<void>;
 }
 
-export function Composer({ placeholder, disabled, disabledReason, onSend }: Props) {
+export function Composer({ placeholder, group, disabled, disabledReason, onSend }: Props) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [caret, setCaret] = useState(0);
@@ -61,8 +72,12 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
     };
   }, [disabled]);
 
-  const agents = useLiveAgents();
-  const names = useMemo(() => agents.map((a) => a.name), [agents]);
+  const live = useLiveAgents();
+  const crew = useMemo(
+    () => (group ? live.filter((agent) => agent.groupId === group) : []),
+    [live, group],
+  );
+  const names = useMemo(() => crew.map((a) => a.name), [crew]);
   const query = dismissed ? null : mentionAt(text, caret);
   const matches = query ? matchMentions(names, query.term) : [];
   const showing = query !== null && matches.length > 0;
@@ -208,7 +223,7 @@ export function Composer({ placeholder, disabled, disabledReason, onSend }: Prop
         // the options are not themselves focusable.
         <div className="mentions" role="listbox" id="mention-list" aria-label="Agents">
           {matches.map((name, index) => {
-            const agent = agents.find((a) => a.name === name);
+            const agent = crew.find((a) => a.name === name);
             const active = index === selected;
             return (
               <div
