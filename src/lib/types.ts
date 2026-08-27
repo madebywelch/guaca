@@ -678,11 +678,14 @@ export interface GuardLimits {
  *
  * `compatible` is an endpoint and a key the operator pasted. `chatgpt` is a
  * subscription signed in to on this machine, which has its own endpoint, its own
- * models and no per-call price. They are two providers rather than one with a
- * flag for the same reason the Rust side says so: almost nothing about a call is
- * the same between them.
+ * models and no per-call price. `claude` is not an endpoint at all: it runs the
+ * `claude` program once per model call, which is the only way an Anthropic
+ * subscription can pay for a turn, and it takes its sign-in and its model from
+ * that program rather than from anything set here. They are three providers
+ * rather than one with a flag for the same reason the Rust side says so: almost
+ * nothing about a call is the same between them.
  */
-export type Provider = "compatible" | "chatgpt";
+export type Provider = "compatible" | "chatgpt" | "claude";
 
 /**
  * One model OpenRouter ranks for a kind of work, as a suggestion beside a model

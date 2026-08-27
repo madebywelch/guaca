@@ -271,9 +271,12 @@ export function GroupEditor({ group, onClose }: Props) {
   const inherited =
     settings?.provider === "chatgpt"
       ? `ChatGPT subscription · ${settings.subscriptionModel}`
-      : `${providerFor(settings?.baseUrl ?? "")?.name ?? settings?.baseUrl ?? "the app endpoint"} · ${settings?.defaultModel ?? ""}`;
+      : settings?.provider === "claude"
+        ? "Claude subscription · the model Claude is set to"
+        : `${providerFor(settings?.baseUrl ?? "")?.name ?? settings?.baseUrl ?? "the app endpoint"} · ${settings?.defaultModel ?? ""}`;
 
   const onSubscription = provider === "chatgpt";
+  const onClaude = provider === "claude";
   const onEndpoint = provider === "compatible";
 
   /**
@@ -285,9 +288,11 @@ export function GroupEditor({ group, onClose }: Props) {
    */
   const paying = onSubscription
     ? `ChatGPT subscription · ${subscriptionModel || settings?.subscriptionModel || ""}`
-    : onEndpoint
-      ? `${providerFor(baseUrl || (settings?.baseUrl ?? ""))?.name ?? baseUrl} · ${model || settings?.defaultModel || ""}`
-      : `The app settings · ${inherited}`;
+    : onClaude
+      ? "Claude subscription · the model Claude is set to"
+      : onEndpoint
+        ? `${providerFor(baseUrl || (settings?.baseUrl ?? ""))?.name ?? baseUrl} · ${model || settings?.defaultModel || ""}`
+        : `The app settings · ${inherited}`;
 
   const setLimitCount = LIMITS.filter((field) => (limits[field.key] ?? "").trim()).length;
 
@@ -425,6 +430,7 @@ export function GroupEditor({ group, onClose }: Props) {
                       <button
                         type="button"
                         className="btn btn--small"
+                        aria-label="Use the ChatGPT subscription"
                         disabled={busy}
                         onClick={() => setProvider("chatgpt")}
                       >
@@ -453,6 +459,44 @@ export function GroupEditor({ group, onClose }: Props) {
                     hint="Used by every agent in this group that does not name its own model. A subscription has an hourly quota rather than a per-token bill, and every crew spending it shares that quota."
                   />
                 )}
+
+                {/* Beside the other subscription and above the endpoint list,
+                    for the reason that one gives. No sign-in state to draw and
+                    no model to pick: both belong to the program, and a group
+                    only decides whether its turns are spent through it. */}
+                <div className="preset preset--plain" aria-current={onClaude}>
+                  <span className="preset__text">
+                    <span className="preset__name">Claude subscription</span>
+                    <span className="preset__url">
+                      Runs the claude program, on whatever it is signed in to
+                    </span>
+                  </span>
+                  {onClaude ? (
+                    <span className="preset__state" data-ready="true">
+                      In use
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      aria-label="Use the Claude subscription"
+                      disabled={busy}
+                      onClick={() => setProvider("claude")}
+                    >
+                      Use it
+                    </button>
+                  )}
+                </div>
+
+                {/* Said here rather than only in Settings, for the reason the
+                    subscription's hint above is said in both states: this row
+                    is the whole of Claude as far as a group is concerned, and
+                    an operator whose crew is ignoring its model field has
+                    nothing else on screen that would explain it. */}
+                <p className="hint">
+                  Which model runs, and which account pays, are Claude's own settings. A model named
+                  on this group or on one of its agents is not used while Claude is the provider.
+                </p>
 
                 <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
                   Or any OpenAI-compatible endpoint. The ones below are spelled correctly; choosing

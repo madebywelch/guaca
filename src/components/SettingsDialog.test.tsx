@@ -7,6 +7,7 @@ import type {
   AccountStatus,
   DeviceCode,
   GuardLimits,
+  HarnessOnMachine,
   Settings,
   SettingsPatch,
   SubscriptionStatus,
@@ -133,6 +134,13 @@ const accountStatus = vi.fn<() => Promise<AccountStatus>>(async () => noAccount(
 const signInAccount = vi.fn<() => Promise<AccountStatus>>(async () => linked());
 const accountConnectors = vi.fn<() => Promise<AccountConnectors>>(async () => held());
 const signOutAccount = vi.fn<() => Promise<AccountStatus>>(async () => noAccount());
+/** Installed by default: the provider list draws the same either way, and a
+ *  suite that had to opt in to a present program would be asserting the
+ *  refusal rather than the row. */
+const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
+  { harness: "claude", installed: true, install: "npm install -g @anthropic-ai/claude-code" },
+  { harness: "pi", installed: true, install: "npm install -g @mariozechner/pi" },
+]);
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -146,6 +154,7 @@ vi.mock("../lib/ipc", () => ({
     signInAccount: () => signInAccount(),
     accountConnectors: () => accountConnectors(),
     signOutAccount: () => signOutAccount(),
+    codingHarnesses: () => codingHarnesses(),
   },
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
@@ -909,8 +918,8 @@ describe("the ChatGPT subscription", () => {
     open(stored({ provider: "compatible" }));
     pane("Provider");
 
-    await waitFor(() => expect(button("Use it")).toBeTruthy());
-    fireEvent.click(button("Use it"));
+    await waitFor(() => expect(button("Use the ChatGPT subscription")).toBeTruthy());
+    fireEvent.click(button("Use the ChatGPT subscription"));
     expect(row().textContent).toContain("In use");
 
     fireEvent.click(save());

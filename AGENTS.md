@@ -56,6 +56,8 @@ src-tauri/src/
     events.rs         Events pushed to the UI.
   llm/                OpenAI-compatible client, SSE decoding, tool definitions.
     codex.rs          The other protocol: where a ChatGPT subscription is spent.
+    claude.rs         The third, which is a program rather than a protocol:
+                      where a Claude subscription is spent, and why it has to be.
     catalog.rs        Which models OpenRouter sees doing which kind of work.
   subscription.rs     Signing in to that subscription. A credential, not a wire.
   account.rs          The optional Guaca account. Nothing else depends on it.
@@ -103,6 +105,7 @@ repo: the frontend renders state and forwards intent.
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
+| Turns paid for by a Claude plan, the `claude` program, the structured answer it is held to | *What the restriction leaves open, which is the program* in `docs/PROTOCOL.md`, then `llm/claude.rs`, and run the live half of `tests/claude.rs` |
 | A sign-in that stopped working, refreshing, expiry, signing out | *A token's `exp` is a floor on its life, not a ceiling* in `docs/ARCHITECTURE.md`, then `Subscription::renew` and the 401 path in `codex::stream` |
 | What a group decides for itself: provider, models, timeout, limits | *A group chooses its own provider*, *Nothing about who pays is inferred* and *A run is measured against the limits of the group it happens in*, then `domain/group.rs` |
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
@@ -206,12 +209,28 @@ how work happens in this directory. Everything inside a harness (the model, the
 thinking level, the sign-in) belongs to the harness and is never passed from
 here. `docs/CODING.md`.
 
-**A Claude subscription cannot pay for a turn, and this is not an oversight.**
-Anthropic restricts consumer OAuth tokens to Claude Code and Claude.ai, enforced
-server-side since January 2026 and explicit in its terms since February 2026. The
-flow would fail at the server and put the operator's account at risk, so it is
-not implemented. Claude models arrive through an API key or OpenRouter, which is
-still the default. Dates and sources: `docs/PROTOCOL.md`.
+**A Claude subscription pays for a turn by being the program, never by holding
+its token.** Anthropic restricts consumer OAuth tokens to Claude Code and
+Claude.ai, enforced server-side since January 2026 and explicit in its terms
+since February 2026, so an Anthropic sign-in in this app is not implemented and
+will not be: there is no field for one and nothing in `llm/claude.rs` that could
+carry it. What the restriction leaves open is the program. `Provider::Claude`
+runs `claude` once per model call and reads its stdout, so the credential never
+leaves the program it was issued to, and the operator signs in where they already
+did. Same sentence the coding harness is built on, one level up: there it decides
+who writes the code, here it decides who answers the turn. Dates and sources:
+`docs/PROTOCOL.md`.
+
+Guaca keeps its own round loop on that provider, and that is the load-bearing
+half. The program is an agent harness and would happily run its own rounds, which
+would move `max_tool_rounds`, `reserve_step` and every stop check inside a process
+this app does not control. So it is given no tools at all and asked for one
+structured answer per call through `--json-schema`, built from the turn's own
+`ToolSpec`s as a discriminated union: what comes back is a thing to say and a list
+of calls, the runtime dispatches them exactly as it does for the other two, and
+`runtime/mod.rs` never learns there was a third. A coding job can afford to hand
+its loop over because it is a different unit of work with its own budget. A turn
+cannot: it is the unit the five limits are written in.
 
 **Every length is named, not spelled.** A size, a space, a radius, a duration,
 an easing and a shadow are each spelled from a closed set of tokens at the top
@@ -265,6 +284,35 @@ the model takes a screenshot to see what `browse` did.
   threw away. And a 4xx from the token endpoint is the sign-in genuinely being
   over: the file goes, so Settings offers signing in rather than signing out. A
   5xx is the service having a bad minute and costs nobody their sign-in.
+- **Every isolation flag on the `claude` command line is load-bearing, and the
+  measurement is why.** Started the ordinary way the program loads the
+  operator's own MCP servers, settings and hooks, and an agent in this app
+  inherits all of it: measured at 2.1.247, one trivial reply cost 104,371 input
+  tokens and named 200-odd tools, against 783 tokens and none with `--tools ""`,
+  `--strict-mcp-config` over an empty `--mcp-config`, and `--setting-sources ""`.
+  That is not tidiness. It is the difference between a crew and a crew that can
+  send mail from the operator's own inbox because they connected Gmail in a
+  terminal last week.
+- **A reply on that provider lands whole, and the thinking is what moves.** The
+  answer is a JSON document still being written, so streaming it would mean
+  drawing a half-decoded escape into a channel, which is worse than a message
+  that arrives at once. The thinking and the prose the model writes on its way
+  there both go to `Token::Reasoning`, are shown, and are dropped, exactly as
+  everywhere else. It is the one way this provider looks different on screen,
+  and it is a decision rather than a gap.
+- **The `claude` result frame is snake case and is deliberately not renamed.**
+  It mixes conventions — `modelUsage` sits beside `total_cost_usd` — so a
+  blanket `rename_all` is right about the fields it was written against and
+  silently wrong about the next one. Every field is optional, so wrong is not an
+  error: `structured_output` deserializes to absent, and the symptom is replies
+  going missing rather than anything failing.
+- **A model named on a group running on Claude is kept and never used.** There
+  is no third model field and there will not be one: which model runs is the
+  program's own setting, and this app passes no `--model` for the reason the
+  coding harness passes none. Kept, because an operator who tries Claude for an
+  hour and goes back has to find their model where they left it. Both panels say
+  so on the row, because a model field that is quietly ignored is the one thing
+  nothing else on screen would explain.
 - **A group's settings are two blocks, and each is all-or-nothing.** A draft
   that mentions `inference` or `limits` replaces every override in that block,
   and one that leaves it out changes none of them. Per-field "absent means leave

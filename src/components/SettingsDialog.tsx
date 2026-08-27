@@ -140,6 +140,12 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   // the account holds, and it is read rather than kept because it changes when
   // the operator authorizes something in a browser rather than when this app
   // does anything.
+  // Whether the `claude` program is on this machine. Read rather than assumed,
+  // and read from the command the repository panel already asks the same
+  // question with: it is the same binary, and a second way to ask would be a
+  // second answer to keep true. Null while it is still being asked, which is
+  // not the same as "not installed" and must not draw as it.
+  const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null);
   const [account, setAccount] = useState<AccountStatus | null>(null);
   const [connectors, setConnectors] = useState<AccountConnectors | null>(null);
   const [linking, setLinking] = useState(false);
@@ -157,6 +163,28 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   // is a choice of section, not something to type into.
   useEffect(() => {
     panelRef.current?.focus();
+  }, []);
+
+  // Asked on mount rather than when the section opens: it is a process spawn,
+  // it is wanted the moment the provider list draws, and an operator who opens
+  // Settings to change their provider should not watch a row resolve under
+  // them.
+  useEffect(() => {
+    let live = true;
+    void api
+      .codingHarnesses()
+      .then((harnesses) => {
+        if (live) {
+          setClaudeInstalled(harnesses.find((h) => h.harness === "claude")?.installed ?? false);
+        }
+      })
+      .catch(() => {
+        // Asked again next time Settings opens. A row that cannot say whether
+        // the program is there says nothing, which is what null draws as.
+      });
+    return () => {
+      live = false;
+    };
   }, []);
 
   // Read on mount rather than at startup, so nothing pays for it until the one
@@ -481,9 +509,10 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
               <>
                 <h3 className="settings__title">Provider</h3>
                 <p className="settings__lede">
-                  Two ways to pay for a turn: a subscription you sign in to, or an endpoint and a
-                  key you paste. What is chosen here is the default. Any group can pay its own way,
-                  and one that does is not affected by anything on this page.
+                  Three ways to pay for a turn: a subscription you sign in to, a program already
+                  signed in on this machine, or an endpoint and a key you paste. What is chosen here
+                  is the default. Any group can pay its own way, and one that does is not affected
+                  by anything on this page.
                 </p>
 
                 {/* Its own block, above the endpoint list, because it is not an
@@ -511,6 +540,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                         <button
                           type="button"
                           className="btn btn--small"
+                          aria-label="Use the ChatGPT subscription"
                           disabled={busy}
                           onClick={() => setProvider("chatgpt")}
                         >
@@ -555,6 +585,48 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                       code, cancel it.
                     </p>
                   </div>
+                )}
+
+                {/* No sign-in, no key and no model. All three belong to the
+                    program, which is why this row has one control on it: the
+                    only thing this app decides is whether to use it. */}
+                <div className="preset preset--plain" aria-current={provider === "claude"}>
+                  <span className="preset__text">
+                    <span className="preset__name">Claude subscription</span>
+                    <span className="preset__url">
+                      {claudeInstalled === false
+                        ? "Runs the claude program, which is not installed on this machine"
+                        : "Runs the claude program, and uses whatever it is signed in to and set to"}
+                    </span>
+                  </span>
+                  {claudeInstalled === false ? (
+                    <span className="preset__state" data-ready="false">
+                      Not installed
+                    </span>
+                  ) : provider === "claude" ? (
+                    <span className="preset__state" data-ready="true">
+                      In use
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      aria-label="Use the Claude subscription"
+                      disabled={busy || claudeInstalled === null}
+                      onClick={() => setProvider("claude")}
+                    >
+                      Use it
+                    </button>
+                  )}
+                </div>
+
+                {provider === "claude" && (
+                  <p className="hint">
+                    Which model runs, and which account pays, are Claude's own settings. This app
+                    passes neither, so a model named here or on an agent is not used while Claude is
+                    the provider. Your plan has a rolling quota rather than a per-token bill, and a
+                    crew reaches it faster than one person does.
+                  </p>
                 )}
 
                 {subscription?.signedIn && provider === "chatgpt" && (
