@@ -5,6 +5,7 @@ import { AgentEditor } from "./components/AgentEditor";
 import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Cafeteria } from "./components/Cafeteria";
 import { ChannelView } from "./components/ChannelView";
+import { Compost } from "./components/Compost";
 import { Desk } from "./components/Desk";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
@@ -71,6 +72,7 @@ export default function App() {
   const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
+  const [showCompost, setShowCompost] = useState(false);
 
   // The three shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
@@ -199,6 +201,7 @@ export default function App() {
       <Sidebar
         onEditAgent={(agent) => setEditing(agent)}
         onOpenCafeteria={() => setShowCafeteria(true)}
+        onOpenCompost={() => setShowCompost(true)}
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenSearch={() => setSearching(true)}
@@ -305,6 +308,11 @@ export default function App() {
               await loadChannel(agent.id);
             })
           }
+          // Into the compost. The rail drops the row on the next roster read,
+          // and the pane is left where it was: what the agent said is still in
+          // every channel it said it in, and a view that emptied itself would
+          // read as the transcript having gone too.
+          onDelete={(agent) => void onAgent(() => api.deleteAgent(agent.id))}
         />
       )}
 
@@ -321,6 +329,7 @@ export default function App() {
         />
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
+      {showCompost && <Compost onClose={() => setShowCompost(false)} />}
       {showSettings && (
         <SettingsDialog
           onClose={() => setShowSettings(null)}

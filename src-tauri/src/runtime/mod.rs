@@ -324,7 +324,9 @@ enum Permission {
     Failed(String),
 }
 use crate::db::{Store, StoreError};
-use crate::domain::agent::{AgentCard, CleanDraft, DirectoryEntry, Lifecycle};
+use crate::domain::agent::{
+    copy_name, AgentCard, CleanDraft, DirectoryEntry, Lifecycle, COMPOST_MS,
+};
 use crate::domain::approval::{
     Approval, ApprovalState, Decision, DetailField, ProtectedAction, Request,
 };
@@ -447,6 +449,14 @@ const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 /// be rebuilt in memory at startup. The cost of the interval is lateness, and
 /// twenty seconds is under the resolution anything here can be scheduled at.
 const SCHEDULE_TICK: Duration = Duration::from_secs(20);
+
+/// How often the compost is checked for agents whose thirty days are up.
+///
+/// Hourly, because the deadline it enforces is measured in weeks. A sweep costs
+/// one indexless scan of a table with tens of rows in it, and a pass that finds
+/// something makes provider calls, so this is paced by what it is waiting for
+/// rather than by what it costs.
+const COMPOST_TICK: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -756,6 +766,223 @@ impl Runtime {
                 }
             }
         });
+    }
+
+    /// Throws an agent out, keeping everything it holds.
+    ///
+    /// What deleting an agent used to be is now two acts with thirty days
+    /// between them. This is the first: the row goes to `Terminated`, so the
+    /// agent is out of the rail, out of the directory and unreachable exactly
+    /// as a deleted one has always been, and its actor is dropped with whatever
+    /// was queued for it, because undelivered mail to a deleted mailbox has
+    /// nowhere to go. Its memory, its working notes, its schedule, its sign-ins
+    /// and every standing permission the operator gave it are untouched. See
+    /// [`Runtime::purge_agent`] for the half that waits.
+    ///
+    /// The machines are released rather than destroyed, which is the same
+    /// distinction *take it back* already draws. A sandbox is put to sleep and
+    /// keeps its disk, because that disk holds the accounts the operator signed
+    /// it in to and nothing else can sign them in again; a browser is closed,
+    /// which is what writes its cookies back to the profile. Both are what a
+    /// restore has to find.
+    ///
+    /// The row is stamped first. Nothing here is irreversible, so a provider
+    /// having a bad minute must not cost the operator the delete they asked
+    /// for, and a machine nobody reached sleeps on its own timeout anyway.
+    pub async fn discard_agent(&self, card: &AgentCard) -> Result<(), RuntimeError> {
+        let id = card.id;
+        self.inner.store.discard_agent(id, now_ms())?;
+        self.stop_agent(id);
+
+        if let Some(sandbox) = card.sandbox_id.as_ref() {
+            match crate::e2b::E2bClient::new(&self.config().e2b.api_key) {
+                Some(client) => {
+                    if let Err(err) = client.pause(sandbox).await {
+                        tracing::warn!(%err, %sandbox, "could not sleep a discarded agent's machine");
+                    }
+                }
+                None => tracing::warn!(%sandbox, "no key to sleep a discarded agent's machine"),
+            }
+        }
+
+        if let Some(browser) = card.browser_id.as_ref() {
+            match crate::kernel::KernelClient::new(&self.config().kernel.api_key) {
+                Some(client) => {
+                    if let Err(err) = client.delete(browser).await {
+                        tracing::warn!(%err, %browser, "could not close a discarded agent's browser");
+                    } else {
+                        // Recorded so nothing goes looking for a session that
+                        // has ended. The profile behind it stays: it is where
+                        // the cookies just went, and a restore opens onto it.
+                        let _ = self.inner.store.set_agent_browser(id, None);
+                    }
+                }
+                None => tracing::warn!(%browser, "no key to close a discarded agent's browser"),
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Pulls one back out of the compost, stopped.
+    ///
+    /// Paused rather than active, because the wait is what makes it a different
+    /// question from unpausing: an agent restored after three weeks comes back
+    /// to a schedule that has been coming due every morning without it and to
+    /// peers that carried on. Starting it is one more click, on a row that is
+    /// already drawn as paused.
+    ///
+    /// The name is settled against whoever holds one now. A composted agent is
+    /// terminated, which is what frees its name for reuse, so the crew may have
+    /// hired somebody into it in the meantime and the restore would otherwise
+    /// die on a unique index. `copy_name` is the same rule a duplicate follows,
+    /// because one naming rule the operator can predict beats two.
+    pub fn restore_agent(&self, card: &AgentCard) -> Result<AgentCard, RuntimeError> {
+        let taken: Vec<String> = self
+            .inner
+            .store
+            .list_agents()?
+            .into_iter()
+            .filter(|c| c.group_id == card.group_id && c.lifecycle != Lifecycle::Terminated)
+            .map(|c| c.name)
+            .collect();
+        let free = !taken.iter().any(|held| held.trim().eq_ignore_ascii_case(card.name.trim()));
+        let name = if free { card.name.clone() } else { copy_name(&card.name, &taken) };
+
+        let restored = self.inner.store.restore_agent(card.id, &name)?;
+        self.start_agent(restored.id);
+        self.pause_agent(restored.id);
+        Ok(restored)
+    }
+
+    /// Everything one agent takes with it, in the order that leaves nothing
+    /// running and nothing billing.
+    ///
+    /// The other half of a delete, thirty days later, and what disbanding a
+    /// whole crew does immediately: those are the same act at different scales,
+    /// and a disband that only marked the rows would leave a group's worth of
+    /// sandboxes and browser profiles alive with nothing left on screen
+    /// pointing at them.
+    ///
+    /// A provider that refuses is logged and stepped over. The rows are the
+    /// record the operator sees, and stopping halfway through would leave an
+    /// agent still in the compost that has already lost its memory.
+    pub async fn purge_agent(&self, card: &AgentCard) -> Result<(), RuntimeError> {
+        let id = card.id;
+        // The machine goes first. A deleted agent cannot be asked to tidy up
+        // after itself, and a sandbox nobody holds a reference to keeps
+        // billing.
+        //
+        // A missing key means no machine was ever made through this build, so
+        // there is nothing to release.
+        if let (Some(sandbox), Some(client)) =
+            (card.sandbox_id.as_ref(), crate::e2b::E2bClient::new(&self.config().e2b.api_key))
+        {
+            if let Err(err) = client.kill(sandbox).await {
+                tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
+            }
+        }
+        // And its browser, which is a second provider with a second bill. The
+        // profile behind it goes too: it holds the cookies of accounts
+        // belonging to an agent that no longer exists, and a name is free to
+        // reuse the moment an agent is deleted, so whoever takes it next must
+        // not inherit its sessions.
+        if let Some(client) = crate::kernel::KernelClient::new(&self.config().kernel.api_key) {
+            if let Some(browser) = card.browser_id.as_ref() {
+                if let Err(err) = client.delete(browser).await {
+                    tracing::warn!(%err, %browser, "could not destroy the agent's browser");
+                }
+            }
+            // Attempted whether or not a browser was live, because the profile
+            // outlives every browser made against it and is the thing holding
+            // the cookies.
+            if let Err(err) = client.delete_profile(&id.to_string()).await {
+                tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile");
+            }
+        }
+
+        self.inner.store.set_lifecycle(id, Lifecycle::Terminated)?;
+        self.stop_agent(id);
+        // The transcript survives a deletion, but the agent's private memory is
+        // its own and goes with it.
+        self.inner.workspace.remove(id);
+        // Its schedule goes too, or it would keep coming due for an agent that
+        // can no longer act on it.
+        let _ = self.inner.store.delete_agent_routines(id);
+        // And what it was in the middle of, for the reason the memory above
+        // goes: it is the agent's own account of its work and belongs to
+        // nobody else. The row is only marked terminated rather than deleted,
+        // so the table's own cascade never fires and this is the whole cleanup.
+        let _ = self.inner.store.clear_working_notes(id);
+        // And what its browser was signed in to, which was cookies on the disk
+        // destroyed above. Left behind, the roster would keep telling the crew
+        // to ask this agent for an account nothing can reach any more.
+        let _ = self.inner.store.delete_agent_signins(id);
+        // Permission the operator gave this agent dies with it. A name is free
+        // to reuse the moment an agent is deleted, and whoever takes it next
+        // must not inherit a standing grant given to somebody else.
+        let _ = self.inner.store.delete_agent_approvals(id);
+        // And its place on any plugin the operator narrowed to named agents,
+        // for the same reason: a row naming an agent that no longer exists
+        // grants nothing and draws as nobody in the panel that lists them.
+        let _ = self.inner.store.delete_agent_plugin_access(id);
+        // And its reach into whatever the crew was working in. Same argument,
+        // and one more that only applies here: a repository is the operator's
+        // own source, so a retired agent must not leave one drawn as handed
+        // out.
+        let _ = self.inner.store.clear_agent_repository(id);
+        // Last, and only once the rest of it has actually gone: the stamp is
+        // what offers the operator a restore, and an agent still offered one
+        // after its memory has been deleted is an offer that cannot be kept.
+        let _ = self.inner.store.forget_discard(id);
+        Ok(())
+    }
+
+    /// Empties the compost of whatever has been in it long enough.
+    ///
+    /// Its own loop rather than a third statement in the scheduler's, because
+    /// the two are paced by different things. A routine is late by however long
+    /// the tick is, so that one is measured in seconds; a thirty-day deadline
+    /// is not made better by being met to the second, and this one makes
+    /// provider calls that a schedule sweep should never have to wait behind.
+    ///
+    /// Swept once before the first wait, so an app left closed for a month
+    /// empties on the next launch rather than an hour into it.
+    pub fn start_compost(&self) {
+        let runtime = self.clone();
+        self.inner.handle.spawn(async move {
+            loop {
+                runtime.sweep_compost().await;
+                tokio::time::sleep(COMPOST_TICK).await;
+            }
+        });
+    }
+
+    /// One pass: everything past its thirty days, gone for good.
+    ///
+    /// Split out of the loop for the reason [`Runtime::sweep_schedule`] is:
+    /// giving up on a pass must not also skip the wait.
+    pub async fn sweep_compost(&self) {
+        let cutoff = now_ms() - COMPOST_MS;
+        let expired = match self.inner.store.expired_discards(cutoff) {
+            Ok(expired) => expired,
+            Err(err) => {
+                tracing::warn!(%err, "could not read the compost; waiting for the next pass");
+                return;
+            }
+        };
+
+        for card in expired {
+            tracing::info!(
+                agent = %card.name,
+                "a discarded agent's thirty days are up; deleting it for good"
+            );
+            if let Err(err) = self.purge_agent(&card).await {
+                tracing::warn!(%err, agent = %card.name, "could not empty the compost of an agent");
+                continue;
+            }
+            self.emit(UiEvent::AgentsChanged);
+        }
     }
 
     /// Brings every non-terminated agent online. Called once at startup.
@@ -5390,14 +5617,21 @@ fn resolve_recipient<'a>(
 
 /// The sandboxes an agent could still be using.
 ///
-/// Only a live agent holds a claim. A deleted agent keeps its row so its
-/// transcript still reads, and that row keeps its sandbox id, but the agent can
-/// never act again. Counting it as a referrer let its machine shield itself
-/// from the sweep for as long as the row existed, which is forever.
+/// Only an agent that can still come back holds a claim. A deleted agent keeps
+/// its row so its transcript still reads, and that row keeps its sandbox id,
+/// but the agent can never act again. Counting it as a referrer let its machine
+/// shield itself from the sweep for as long as the row existed, which is
+/// forever.
+///
+/// An agent in the compost is the exception, and has to be. Its machine was put
+/// to sleep rather than destroyed, because the disk is where the operator's own
+/// sign-ins live and getting the agent back has to mean getting those back too.
+/// Swept, that machine would be killed within the minute and a restore three
+/// weeks later would hand back an agent signed in to nothing.
 fn claimed_sandboxes(cards: &[AgentCard]) -> std::collections::HashSet<String> {
     cards
         .iter()
-        .filter(|card| card.lifecycle != Lifecycle::Terminated)
+        .filter(|card| card.lifecycle != Lifecycle::Terminated || card.discarded())
         .filter_map(|card| card.sandbox_id.clone())
         .collect()
 }
@@ -5429,6 +5663,7 @@ mod tests {
             version: 1,
             created_at: 0,
             updated_at: 0,
+            discarded_at: None,
         }
     }
 

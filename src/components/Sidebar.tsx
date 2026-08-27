@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
+import { composted } from "../lib/compost";
 import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
@@ -16,6 +17,7 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
+  onOpenCompost: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
   /** The plus beside the wordmark. App-level, not any one row's. */
@@ -55,6 +57,7 @@ export function Sidebar({
   onEditAgent,
   onEditGroup,
   onOpenCafeteria,
+  onOpenCompost,
   onOpenSettings,
   onOpenSearch,
   onNewAgent,
@@ -62,6 +65,10 @@ export function Sidebar({
   onOpenMenu,
 }: Props) {
   const agents = useLiveAgents();
+  // The whole roster, not the live half: what is in the compost is exactly what
+  // `useLiveAgents` filters out, and the footer row below is the only thing in
+  // the rail that asks about it.
+  const everyone = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const repositories = useStore((s) => s.repositories);
   const building = useStore((s) => s.building);
@@ -415,6 +422,8 @@ export function Sidebar({
     </span>
   );
 
+  const inCompost = useMemo(() => composted(everyone), [everyone]);
+
   const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
 
   return (
@@ -624,6 +633,22 @@ export function Sidebar({
             </span>
             Cafeteria
           </button>
+          {/* Drawn only while there is something in it, which is what keeps the
+              footer two rows for an operator who has never deleted anybody. It
+              is also how the compost is discovered: the row appears the moment
+              it has a reason to, which is the moment somebody has just deleted
+              an agent and might want it back. The count is on it because the
+              question this row answers from across the room is whether there is
+              anything in there at all. */}
+          {inCompost.length > 0 && (
+            <button type="button" className="btn btn--rail" onClick={onOpenCompost}>
+              <span aria-hidden="true" className="rail__hash">
+                ♻
+              </span>
+              Compost
+              <span className="rail__count">{inCompost.length}</span>
+            </button>
+          )}
           <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
             <span aria-hidden="true" className="rail__hash">
               ⚙

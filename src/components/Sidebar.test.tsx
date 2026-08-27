@@ -51,6 +51,7 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
     ...over,
   };
 }
@@ -77,6 +78,7 @@ function draw(groups: Group[], agents: AgentCard[] = [], activity: Record<string
         onEditAgent={vi.fn()}
         onEditGroup={vi.fn()}
         onOpenCafeteria={vi.fn()}
+        onOpenCompost={vi.fn()}
         onOpenSettings={vi.fn()}
         onOpenSearch={vi.fn()}
         onNewAgent={onNewAgent}
@@ -576,6 +578,33 @@ describe("groups as places", () => {
     fireEvent.click(screen.getByLabelText("research, 1 agent"));
     await vi.waitFor(() => expect(useStore.getState().railGroup).toBe(RESEARCH));
     expect(useStore.getState().selected).toBe("Chief of research");
+  });
+
+  it("keeps the compost off the footer while it is empty", () => {
+    // What keeps the footer two rows for an operator who has never deleted
+    // anybody. Its counterpart below is how the compost is found by one who
+    // just has: the row turns up at the moment it has a reason to.
+    draw([group("everyone")], [agent("Manager")]);
+    expect(screen.queryByRole("button", { name: /compost/i })).toBeNull();
+  });
+
+  it("offers the compost, and its count, once somebody is in it", () => {
+    draw(
+      [group("everyone")],
+      [agent("Manager"), agent("Scribe", { lifecycle: "terminated", discardedAt: 1_000 })],
+    );
+
+    expect(screen.getByRole("button", { name: /compost/i }).textContent).toContain("1");
+    // And the agent is not in the rail itself, which is the whole point of
+    // having deleted it.
+    expect(screen.queryByText("Scribe")).toBeNull();
+  });
+
+  it("leaves an agent whose wait is already over out of the count", () => {
+    // Terminated with no stamp: deleted before the compost existed, or swept
+    // out of it. Counting one would offer a restore that cannot be kept.
+    draw([group("everyone")], [agent("Manager"), agent("Ghost", { lifecycle: "terminated" })]);
+    expect(screen.queryByRole("button", { name: /compost/i })).toBeNull();
   });
 
   it("moves an agent into the group whose circle it was dropped on", async () => {

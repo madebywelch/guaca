@@ -1265,11 +1265,18 @@ pub fn delete_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
 /// then the group, and stopping halfway left a group with three agents in it
 /// and no reason to keep any of them.
 ///
-/// Every agent goes exactly as `delete_agent` sends one: its computer killed,
-/// its browser and profile destroyed, its memory, schedule, sign-ins and
-/// standing permission gone. What each of them said stays readable, because a
-/// disband is a delete at the scale of a crew and not a different rule about
-/// history.
+/// Every agent goes the whole way, and none of them lands in the compost: its
+/// computer killed, its browser and profile destroyed, its memory, schedule,
+/// sign-ins and standing permission gone. What each of them said stays
+/// readable, because a disband is a delete at the scale of a crew and not a
+/// different rule about history.
+///
+/// The compost is a hold on one agent, and a disband takes the place it would
+/// come back to. `delete_group` files whoever is left under the default group,
+/// so a composted crew would be offered a restore into a crew that no longer
+/// exists, holding a sign-in belonging to a group whose credentials went with
+/// it. The confirmation names the count for that reason: this is the
+/// irreversible one, and it says so.
 ///
 /// Refused before anything irreversible. `group_for_removal` asks the one
 /// question that does not depend on the crew: killing four computers and then
@@ -1285,7 +1292,7 @@ pub async fn disband_group(state: State<'_, AppState>, id: GroupId) -> Reply<()>
 
     let outcome = async {
         for card in state.runtime.store().group_crew(id)? {
-            retire_agent(&state, &card).await?;
+            state.runtime.purge_agent(&card).await?;
         }
         state.runtime.store().delete_group(id)?;
         Ok(())
@@ -1327,89 +1334,48 @@ pub fn update_agent(
     Ok(card)
 }
 
-/// Everything one agent takes with it, in the order that leaves nothing
-/// running and nothing billing.
+/// Deletes an agent, into the compost.
 ///
-/// Shared by deleting a single agent and disbanding a whole crew, because the
-/// two are the same act at different scales: a disband that only marked the
-/// rows would leave a group's worth of sandboxes and browser profiles alive
-/// with nothing left on screen pointing at them.
+/// It leaves the rail and the directory immediately and can never be messaged
+/// again, and what it already said stays readable in the other agents'
+/// channels: hard-deleting would punch holes in transcripts that had nothing to
+/// do with this agent.
 ///
-/// A provider that refuses is logged and stepped over. The rows are the record
-/// the operator sees, and stopping halfway through would leave an agent that is
-/// still in the rail and has already lost its memory.
-async fn retire_agent(state: &State<'_, AppState>, card: &AgentCard) -> Reply<()> {
-    let id = card.id;
-    // The machine goes first. A deleted agent cannot be asked to tidy up after
-    // itself, and a sandbox nobody holds a reference to keeps billing.
-    //
-    // A missing key means no machine was ever made through this build, so there
-    // is nothing to release.
-    if let (Some(sandbox), Ok(client)) = (card.sandbox_id.as_ref(), computers(state)) {
-        if let Err(err) = client.kill(sandbox).await {
-            tracing::warn!(%err, %sandbox, "could not destroy the agent's computer");
-        }
-    }
-    // And its browser, which is a second provider with a second bill. The
-    // profile behind it goes too: it holds the cookies of accounts belonging to
-    // an agent that no longer exists, and a name is free to reuse the moment an
-    // agent is deleted, so whoever takes it next must not inherit its sessions.
-    if let Ok(client) = browsers(state) {
-        if let Some(browser) = card.browser_id.as_ref() {
-            if let Err(err) = client.delete(browser).await {
-                tracing::warn!(%err, %browser, "could not destroy the agent's browser");
-            }
-        }
-        // Attempted whether or not a browser was live, because the profile
-        // outlives every browser made against it and is the thing holding the
-        // cookies.
-        if let Err(err) = client.delete_profile(&id.to_string()).await {
-            tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile");
-        }
-    }
-
-    state.runtime.store().set_lifecycle(id, Lifecycle::Terminated)?;
-    state.runtime.stop_agent(id);
-    // The transcript survives a deletion, but the agent's private memory is
-    // its own and goes with it.
-    state.runtime.workspace().remove(id);
-    // Its schedule goes too, or it would keep coming due for an agent that can
-    // no longer act on it.
-    let _ = state.runtime.store().delete_agent_routines(id);
-    // And what it was in the middle of, for the reason the memory above goes:
-    // it is the agent's own account of its work and belongs to nobody else. The
-    // row is only marked terminated rather than deleted, so the table's own
-    // cascade never fires and this is the whole cleanup.
-    let _ = state.runtime.store().clear_working_notes(id);
-    // And what its browser was signed in to, which was cookies on the disk
-    // destroyed above. Left behind, the roster would keep telling the crew to
-    // ask this agent for an account nothing can reach any more.
-    let _ = state.runtime.store().delete_agent_signins(id);
-    // Permission the operator gave this agent dies with it. A name is free to
-    // reuse the moment an agent is deleted, and whoever takes it next must not
-    // inherit a standing grant given to somebody else.
-    let _ = state.runtime.store().delete_agent_approvals(id);
-    // And its place on any plugin the operator narrowed to named agents, for
-    // the same reason: a row naming an agent that no longer exists grants
-    // nothing and draws as nobody in the panel that lists them.
-    let _ = state.runtime.store().delete_agent_plugin_access(id);
-    // And its reach into whatever the crew was working in. Same argument, and
-    // one more that only applies here: a repository is the operator's own
-    // source, so a retired agent must not leave one drawn as handed out.
-    let _ = state.runtime.store().clear_agent_repository(id);
-    Ok(())
-}
-
-/// Deletes an agent.
-///
-/// A soft delete: the agent leaves the sidebar and the directory immediately
-/// and can never be messaged again, but what it already said stays readable in
-/// the other agents' channels. Hard-deleting would punch holes in transcripts
-/// that had nothing to do with this agent.
+/// What is new is that nothing it held privately is destroyed yet. For thirty
+/// days its memory, working notes, schedule, sign-ins and permissions sit
+/// exactly where they were and the operator can pull it back out;
+/// `Runtime::sweep_compost` is what eventually spends the other half.
 #[tauri::command]
 pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
     let card = agent_card(&state, id)?;
-    retire_agent(&state, &card).await?;
+    state.runtime.discard_agent(&card).await?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Pulls an agent back out of the compost, paused.
+///
+/// Refused for an agent whose thirty days are up, which is the same refusal as
+/// for one nobody deleted: both are rows with no stamp on them, and neither has
+/// anything left to bring back.
+#[tauri::command]
+pub fn restore_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCard> {
+    let card = agent_card(&state, id)?;
+    let restored = state.runtime.restore_agent(&card)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(restored)
+}
+
+/// Ends the wait early: the thirty days, now.
+///
+/// The same act the sweep performs, on the operator's own timing, and the only
+/// thing in this app that destroys an agent's memory on a click. What it leaves
+/// is what the sweep leaves: a terminated row with no stamp, whose transcript
+/// still reads.
+#[tauri::command]
+pub async fn purge_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+    let card = agent_card(&state, id)?;
+    state.runtime.purge_agent(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

@@ -30,6 +30,7 @@ function card(id: string, name: string, color = "#c7d96b"): AgentCard {
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
   };
 }
 

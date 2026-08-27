@@ -60,6 +60,7 @@ function anAgent(name: string): AgentCard {
     railOrder: 0,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
     sandboxId: null,
     browserId: null,
     hasComputer: false,

@@ -946,6 +946,96 @@ preset prompt states a stopping condition. A prompt without one makes a crew
 that talks to itself, no automated suite can see it, and the evals are what
 catch it. Run `./scripts/evals.sh` after touching a preset.
 
+## Deleting an agent is a thirty-day hold, and the compost is where it waits
+
+Deleting used to be one act. The click killed the computer, destroyed the
+browser and the profile holding its cookies, removed the memory the agent had
+spent months writing, deleted the schedule, the working notes, the sign-ins and
+every standing permission the operator had given it, and marked the row
+terminated. All of that behind one menu item, with nothing between the press and
+the loss but a confirmation. There was no way back and nothing on screen said
+there had been.
+
+So the destructive half waits thirty days. What a delete does now is stamp the
+row and stop the actor: the agent is out of the rail, out of the directory,
+unreachable by any peer, and everything it held privately is exactly where it
+was. `Runtime::discard_agent` is the first half, `Runtime::purge_agent` is the
+second, and the thirty days between them are the feature.
+
+**It is a column, not a fourth lifecycle.** An agent in the compost is
+`Terminated`, which is what every other part of the store has always meant by
+deleted, and `discarded_at` is what says it can still come back. That is not
+timidity about the type: there are fifteen queries in this app that ask
+`lifecycle <> 'terminated'` and every one of them is still asking exactly the
+right question, including the partial unique index that frees the name. A
+fourth state would have been fifteen places to remember, each failing silently
+in a different way — a composted agent in a directory listing, in a crew count,
+in a disband, in the roster a peer is told to ask. `NULL` in the column is both
+ends of the wait: an agent nobody deleted and one whose thirty days are over.
+The lifecycle tells those apart.
+
+**A restore comes back paused, and may come back renamed.** Paused because the
+wait is what makes it a different question from unpausing: an agent restored
+three weeks on returns to a schedule that has been coming due every morning
+without it and to peers that carried on, so starting it is a decision the
+operator takes on a row that is already drawn as stopped. Renamed because
+throwing an agent out frees its name at once — that is the whole point of the
+partial index — so the crew may have hired somebody into it since, and
+`copy_name` settles it exactly as a duplicate does. Refusing the restore instead
+would show the operator a unique-index violation for a button whose job is to
+succeed.
+
+**The machines are released, not destroyed, and the sweep has to know that.** A
+sandbox is put to sleep and keeps its disk, because that disk holds the accounts
+the operator signed it in to and nothing else can sign them in again; a browser
+is closed, which is what writes its cookies back to the profile. Both are what a
+restore has to find. `claimed_sandboxes` therefore counts a composted agent as
+holding its machine, which is the one exception to "only a live agent holds a
+claim": swept on the old rule, that machine would be killed inside the minute
+and a restore three weeks later would hand back an agent signed in to nothing.
+
+**Nothing about the transcript changes.** What an agent said stays readable in
+every channel it said it in, through the hold and after the sweep, for the
+reason it always did: hard-deleting punches holes in transcripts that had
+nothing to do with this agent. What goes at the end is what the agent held
+privately.
+
+**A disband does not use the compost.** Deleting a group takes the place a
+restore would come back to: `delete_group` files whatever is left under the
+default group, so a composted crew would be offered a restore into a crew that
+no longer exists, holding sign-ins belonging to a group whose credentials went
+with it. A disband purges each agent outright and its confirmation names the
+count, which is what makes it the irreversible one on screen as well as in the
+code. See *Deleting a group deletes the crew* above.
+
+**The sweep is its own loop, and runs hourly.** Not a third statement in the
+scheduler's: a routine is late by however long the tick is, so that one is paced
+in seconds, and a thirty-day deadline is not made better by being met to the
+second. It also makes provider calls when it finds something, which a schedule
+sweep should never wait behind. Swept once before the first wait, so an app left
+closed for a month empties on the next launch rather than an hour into it.
+
+The panel is the cafeteria's shape at the cafeteria's opposite end, and the two
+being alike is deliberate: one is hiring and one is letting go. Where the
+cafeteria is a grid of tiles to browse, this is a list of decisions, each with
+its clock and each saying what is still inside the agent — its memory, its
+working notes, its schedule, its sign-ins. That sentence is the reason the panel
+exists. None of it is visible at the moment somebody presses delete, and this is
+the one screen where they are deciding whether they meant it.
+
+The rail's footer draws the compost only while there is something in it. That is
+what keeps the footer two rows for an operator who has never deleted anybody,
+and it is also how the feature is discovered: the row turns up at the moment it
+has a reason to, which is the moment somebody has just deleted an agent and
+might want it back. The count is on the row because whether there is anything in
+there at all is the question it is read for.
+
+`COMPOST_DAYS` lives in `domain/agent.rs` and `Compost.test.tsx` reads it out of
+the Rust rather than restating it. The panel draws a countdown to the moment an
+operator's memory is deleted, nothing else in the build compares the two sides,
+and a mirror that has drifted is a promise the app does not keep. Same rule, and
+the same reason, as the memory cap.
+
 ## The model field suggests three, and is still a text box
 
 An agent's model is any slug its endpoint accepts, and the endpoint is the

@@ -18,7 +18,7 @@ use axum::Router;
 
 use guac_lib::config::{AppConfig, InferenceConfig};
 use guac_lib::db::Store;
-use guac_lib::domain::agent::Lifecycle;
+use guac_lib::domain::agent::{Lifecycle, COMPOST_MS};
 use guac_lib::domain::approval::{ApprovalState, Decision, ProtectedAction, Request};
 use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant, ToolOutcome};
@@ -3591,4 +3591,119 @@ async fn a_question_cannot_be_answered_with_a_verdict_and_a_permission_cannot_be
     h.runtime.answer_question(question, "Northwind").unwrap();
     h.runtime.stop_run(run);
     h.settle(run).await;
+}
+
+// ---- the compost ---------------------------------------------------------
+
+/// A crew whose model is never asked anything. The compost is entirely runtime
+/// machinery, so what the model would have said is beside the point.
+async fn quiet() -> Stub {
+    serve(|_| Script::Say("ok".into())).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_agent_keeps_its_memory_while_it_waits() {
+    // The whole argument for the compost. Deleting used to take the memory on
+    // the click, and a restore that came back with an agent that had forgotten
+    // its work would not be worth offering.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let id = h.id("Researcher");
+    h.runtime.workspace().write(id, "Researcher", "The vendor answers on Tuesdays.").unwrap();
+
+    let card = h.runtime.store().get_agent(id).unwrap().unwrap();
+    h.runtime.discard_agent(&card).await.unwrap();
+
+    assert!(h.runtime.workspace().read(id).contains("Tuesdays"), "the memory has to wait with it");
+    assert!(h.runtime.store().get_agent(id).unwrap().unwrap().discarded());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_deleted_agent_cannot_be_messaged_and_comes_back_able_to_be() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Manager", "Researcher"], GuardLimits::default());
+    let id = h.id("Researcher");
+
+    let card = h.runtime.store().get_agent(id).unwrap().unwrap();
+    h.runtime.discard_agent(&card).await.unwrap();
+    assert!(
+        h.runtime.send_from_human(id, "still there?").is_err(),
+        "an agent in the compost is as unreachable as one that is gone"
+    );
+
+    let back = h.runtime.restore_agent(&card).unwrap();
+    assert_eq!(back.lifecycle, Lifecycle::Paused, "it comes back stopped, not working");
+    // Addressable again: paused queues rather than refuses, which is the
+    // difference between a restore and a resume.
+    let run = h.runtime.send_from_human(id, "welcome back").unwrap();
+    h.runtime.stop_run(run);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restore_steps_around_a_name_the_crew_gave_away() {
+    // A composted agent frees its name at once, which is what lets the crew
+    // hire a replacement. Without settling it, the restore dies on the unique
+    // index and the operator is shown a database error for a button whose job
+    // is to succeed.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let card = h.runtime.store().get_agent(h.id("Researcher")).unwrap().unwrap();
+
+    h.runtime.discard_agent(&card).await.unwrap();
+    h.runtime.store().create_agent(&draft("Researcher", &[])).unwrap();
+
+    let back = h.runtime.restore_agent(&card).unwrap();
+    assert_eq!(back.name, "Researcher copy");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn emptying_the_compost_takes_the_memory_and_leaves_the_transcript() {
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher"], GuardLimits::default());
+    let id = h.id("Researcher");
+    h.runtime.workspace().write(id, "Researcher", "The vendor answers on Tuesdays.").unwrap();
+    let run = h.runtime.send_from_human(id, "hello").unwrap();
+    h.settle(run).await;
+
+    let card = h.runtime.store().get_agent(id).unwrap().unwrap();
+    h.runtime.discard_agent(&card).await.unwrap();
+    h.runtime.purge_agent(&card).await.unwrap();
+
+    assert!(h.runtime.workspace().read(id).is_empty(), "the memory goes with it");
+    assert!(
+        !h.runtime.store().get_agent(id).unwrap().unwrap().discarded(),
+        "and the offer of a restore goes with the memory, or it is an offer nothing can keep"
+    );
+    assert!(
+        !h.runtime.store().channel_messages(id, 50).unwrap().is_empty(),
+        "what it said stays readable: a delete must not punch holes in transcripts"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_sweep_takes_whoever_is_past_the_deadline_and_nobody_else() {
+    // The promise the panel draws a countdown against. Nothing else in the
+    // build empties the compost, so without this the feature is a list that
+    // grows forever and a memory that is never actually deleted.
+    let stub = quiet().await;
+    let h = harness(&stub, &["Researcher", "Scribe"], GuardLimits::default());
+    let (due, waiting) = (h.id("Researcher"), h.id("Scribe"));
+
+    for id in [due, waiting] {
+        h.runtime.workspace().write(id, "whoever", "something worth keeping").unwrap();
+    }
+    // Stamped through the store rather than through the runtime, because one of
+    // them has to be dated a month ago and that is the one thing a test cannot
+    // wait for. The stamp is all the sweep reads.
+    h.runtime.store().discard_agent(due, now_ms() - COMPOST_MS - 1).unwrap();
+    h.runtime.store().discard_agent(waiting, now_ms()).unwrap();
+
+    h.runtime.sweep_compost().await;
+
+    assert!(h.runtime.workspace().read(due).is_empty(), "its thirty days were up");
+    assert!(
+        h.runtime.workspace().read(waiting).contains("worth keeping"),
+        "and the other one has twenty-nine days left"
+    );
+    assert!(h.runtime.store().get_agent(waiting).unwrap().unwrap().discarded());
 }

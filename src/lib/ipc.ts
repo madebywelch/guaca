@@ -353,7 +353,23 @@ export const api = {
 
   updateAgent: (id: AgentId, draft: AgentDraft) => invoke<AgentCard>("update_agent", { id, draft }),
 
+  /**
+   * Deletes an agent into the compost, where it waits thirty days.
+   *
+   * It is out of the rail and unreachable the moment this returns, exactly as a
+   * deleted agent has always been. What is different is that its memory, notes,
+   * schedule, sign-ins and machines are all still there until the wait is up.
+   */
   deleteAgent: (id: AgentId) => invoke<void>("delete_agent", { id }),
+
+  /**
+   * Pulls one back out, paused. The name may come back settled: a composted
+   * agent frees its name, so somebody hired since may be holding it.
+   */
+  restoreAgent: (id: AgentId) => invoke<AgentCard>("restore_agent", { id }),
+
+  /** Ends the wait now. Its memory, machines and schedule go for good. */
+  purgeAgent: (id: AgentId) => invoke<void>("purge_agent", { id }),
 
   /**
    * A second agent from the same card: the look, model, skills and

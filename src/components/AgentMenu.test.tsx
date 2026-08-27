@@ -26,6 +26,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     version: 1,
     createdAt: 0,
     updatedAt: 0,
+    discardedAt: null,
     ...over,
   };
 }
@@ -42,6 +43,7 @@ function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {
     onTogglePause: vi.fn(),
     onDuplicate: vi.fn(),
     onClearHistory: vi.fn(),
+    onDelete: vi.fn(),
     onNudge: vi.fn(),
     onMoveToGroup: vi.fn(),
   };
@@ -60,6 +62,7 @@ describe("AgentMenu", () => {
       "Move down",
       "Duplicate",
       "Clear history…",
+      "Delete…",
     ]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
     }
@@ -145,6 +148,32 @@ describe("AgentMenu", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete history, keep memory" }));
     expect(handlers.onClearHistory).toHaveBeenCalledTimes(1);
     expect(handlers.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks twice before deleting an agent, and names it on the way", () => {
+    const handlers = open(card({ name: "Scribe" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete…" }));
+    expect(handlers.onDelete).not.toHaveBeenCalled();
+    expect(handlers.onClose).not.toHaveBeenCalled();
+
+    // The second wording says where it goes rather than that it is permanent,
+    // because it is not: this is the one destructive item in the menu that can
+    // be taken back, and an operator who thinks otherwise will not press it
+    // when they should.
+    fireEvent.click(screen.getByRole("button", { name: "Delete Scribe, into the compost" }));
+    expect(handlers.onDelete).toHaveBeenCalledTimes(1);
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds one confirmation at a time", () => {
+    // Two items in this menu ask twice, and both used to read the same flag.
+    // Opening one of them armed the other, so an operator who went to clear a
+    // history found a delete button under their next click.
+    const handlers = open(card());
+    fireEvent.click(screen.getByRole("button", { name: "Clear history…" }));
+
+    expect(screen.getByRole("button", { name: "Delete…" })).toBeTruthy();
+    expect(handlers.onDelete).not.toHaveBeenCalled();
   });
 
   it("stays inside the window when opened near an edge", () => {

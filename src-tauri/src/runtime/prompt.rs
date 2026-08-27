@@ -1086,6 +1086,7 @@ mod tests {
             version: 1,
             created_at: 0,
             updated_at: 0,
+            discarded_at: None,
         }
     }
 

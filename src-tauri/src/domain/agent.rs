@@ -138,9 +138,36 @@ pub struct AgentCard {
     pub version: u32,
     pub created_at: i64,
     pub updated_at: i64,
+    /// When this agent was thrown out, while it can still be pulled back.
+    ///
+    /// Set only on a `Terminated` row, and only for as long as the wait lasts:
+    /// `None` is both an agent nobody has deleted and one whose thirty days
+    /// are up and whose machines, memory and schedule are already gone. The
+    /// lifecycle is what tells those two apart, which is why this is not a
+    /// state of its own. See [`COMPOST_DAYS`].
+    pub discarded_at: Option<i64>,
 }
 
+/// How long a deleted agent waits before it is gone for good.
+///
+/// Long enough that an operator who deleted the wrong row and did not notice
+/// until the next time they went looking still has it, and short enough that
+/// the compost is not a second roster nobody empties. The number is drawn in
+/// the panel, and `Compost.test.tsx` reads it out of this file rather than
+/// restating it, because a warning is read as a fact about what will happen.
+pub const COMPOST_DAYS: i64 = 30;
+
+/// The same wait, in the milliseconds every timestamp in this app is stamped
+/// with.
+pub const COMPOST_MS: i64 = COMPOST_DAYS * 24 * 60 * 60 * 1000;
+
 impl AgentCard {
+    /// Whether this agent is in the compost: deleted, and still able to come
+    /// back. Its machines, memory, schedule and sign-ins are all still there.
+    pub fn discarded(&self) -> bool {
+        self.discarded_at.is_some()
+    }
+
     /// The directory entry a peer sees. Deliberately excludes `system_prompt`:
     /// one agent should not be able to read another's instructions just by
     /// listing the directory.
@@ -482,6 +509,7 @@ mod tests {
             version: 1,
             created_at: 0,
             updated_at: 0,
+            discarded_at: None,
         };
         let json =
             serde_json::to_string(&card.directory_entry(vec!["Gmail as robert@x".into()])).unwrap();

@@ -60,6 +60,7 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
     version: 1,
     createdAt: 1,
     updatedAt: 1,
+    discardedAt: null,
   };
 }
 
