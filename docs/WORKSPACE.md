@@ -76,6 +76,13 @@ is one the operator stops trusting the rest of. A memory that was cleared is the
 one call with no content and something to say anyway: what was thrown away is
 the whole of what happened, so it opens on that.
 
+**The two things worth a longer look share one slot.** The working the model
+has published and the chips for what it has done are both disclosures on that
+line, and they open into the same bounded panel above it rather than stacking.
+Stacked, the transcript gives up twice the height for a question asked once and
+the composer moves twice. `styles.test.ts` holds the two to one bound, because
+they are one place on screen that draws two things.
+
 **A memory rewrite opens as a diff, because the call is always the whole page.**
 `update_memory` replaces the file rather than appending to it, which is the right
 interface for an agent — it has to reconcile what it believed against what it
@@ -109,6 +116,26 @@ be, its portrait and name are at the top of the pane, and the rows this replaced
 put that name in front of every line. Same argument as *A channel names nobody*
 above, applied to the last place it had not reached.
 
+**A chip is never cut to make room for what came back.** Both are on the same
+line and only one of them yields, which is not the rule flex applies by
+default: it shrinks in proportion to what each item asked for, so a refused
+call whose reason ran to a paragraph asked for twenty times what its label did
+and took the row on the way to being clipped itself. The chip drew `U… a coding
+agent is already working in whizzworks-site, started by…`, which is one
+character about which call went wrong. A weighting is the near-miss worth
+naming and not the fix: at a hundred to one the label still gave up its last
+letter, because proportional is proportional however lopsided. So the label
+does not shrink at all, the answer takes whatever is left on the default every
+flex item has, and the chip clips anything that still will not fit.
+`styles.test.ts` holds it, because no DOM assertion sees a layout.
+
+**A refusal opens onto its reason.** It is written to be acted on and it runs
+to a paragraph, so the copy on the chip is a summary of something rather than
+the thing itself, and it is drawn where a command is drawn: whole, wrapped, and
+scrolled if it is long. Only where the call has nothing else to show — somebody
+opening a failed `run_command` came for the command. Open, the chip stops
+repeating the first line of what is directly underneath it.
+
 **The same chips are drawn while the turn is still making them**, above the
 composer rather than in the transcript, from `trail` in the store rather than
 from a message. Same rules, same file, same fold, and the same value: the
@@ -120,12 +147,31 @@ record it draws this from does not exist until the turn ends. It goes when the
 turn does. *A turn's own work is watched while it happens* in
 `docs/ARCHITECTURE.md` is why it is safe for it to be there at all.
 
+**Behind a count, though, and not in front of one.** Open, the live copy is the
+whole record of a long turn stacked between the transcript and the composer:
+seven kinds of work wrapped across four rows of gray monospace, reflowing every
+time a call comes back, with the box the operator is typing into moving
+underneath it. That is the shape a channel was collapsed to get away from,
+rebuilt in the one place nobody was looking at it. What it answers — "is this
+doing something sensible" — is a question asked a few times in ten minutes, not
+continuously, and the answer is permanent a minute later in the transcript. So
+the line carries `12 steps`, and the chips are one click behind it.
+
+Two things stay in front of the click, and each is on the line for a reason the
+count cannot cover. **A failure is counted separately and says so**, because it
+is the one part of the trail the operator may have to act on and a number that
+folded it in would report a turn that refused half its work as a turn that did
+it. **A credential is named**, not counted, for the reason it never joins a fold
+anywhere: it is the operator's audit trail for their own tokens. The value is
+not there and there is no field it could arrive in.
+
 **A call that has not come back is not a chip.** It has no outcome to draw one
-from, and it is what the line below the chips is for: `Running a command · 1m
-14s`, in the present tense, because a command still running is not a command
-that ran. That line is the one place `describe`'s vocabulary is not reused, and
-`callInFlight` is deliberately coarser than it. What is worth knowing while a
-call is in flight is which machine has not answered yet.
+from, and it is not counted either: it is what the line itself is for.
+`Running a command · 1m 14s`, in the present tense, because a command still
+running is not a command that ran. That line is the one place `describe`'s
+vocabulary is not reused, and `callInFlight` is deliberately coarser than it.
+What is worth knowing while a call is in flight is which machine has not
+answered yet.
 
 It has to have been in flight for a second first. A `directory` lookup answers
 in milliseconds, and a line that flashed its name for each of them would put

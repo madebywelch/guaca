@@ -579,6 +579,24 @@ the model takes a screenshot to see what `browse` did.
   so a round that turns out to be tool calls and nothing said leaves none
   behind, and it decides from what has been *drawn* rather than from what has
   been collected: a retry throws the bubble away and keeps the accumulator.
+- **The live trail is a count, and the chips behind it share the working's
+  slot.** Both look like the drawing being timid about what it has. Drawn open,
+  a long turn's whole record sits between the transcript and the composer,
+  seven kinds of work across four rows, reflowing every time a call comes back
+  and moving the box somebody is typing in; and stacked with the thinking, the
+  transcript gives up twice the height for a question asked once. Nothing is
+  lost: the transcript draws every chip from the same rules the moment the turn
+  ends. The two things that stay on the line are the two a count cannot carry —
+  a failure, which is the one part somebody may have to act on, and a
+  credential by name, which is their audit trail for their own tokens.
+- **A chip's label is never shrunk to make room for what came back.** Flex
+  shrinks in proportion to what each item asked for, so a refusal running to a
+  paragraph took the row and left the label as `U…`: a chip saying one
+  character about which call went wrong. A weighting is not the fix, at a
+  hundred to one it still cost the last letter. The label does not shrink, the
+  answer takes what is left, the chip clips the rest, and the refusal opens
+  underneath where a command opens. `styles.test.ts` is the gate, because no
+  DOM assertion sees a layout.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
   level higher, a single token re-renders every message in the transcript. The
   same split is why the line above the composer, the turn's chips and the open

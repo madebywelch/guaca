@@ -192,6 +192,50 @@ describe("dialog modifiers", () => {
   });
 });
 
+describe("the trail above the composer", () => {
+  /**
+   * Which of the two things on a chip gives up room, and which keeps it.
+   *
+   * Flex shrinks in proportion to what each item asked for, so a refused call
+   * whose reason runs to a paragraph asked for twenty times what its label did
+   * and took the row on the way to being clipped itself: the chip drew
+   * `U… a coding agent is already working in whizzworks-site, started by…`,
+   * which is one character about which call it was. No DOM assertion sees it,
+   * because jsdom lays nothing out and both nodes are there either way.
+   *
+   * A weighting rather than a refusal is what this replaced, and it is the
+   * near-miss worth naming: at a hundred to one the label still gave up its
+   * last character, because proportional is proportional however lopsided.
+   */
+  it("cuts what came back before it cuts the label", () => {
+    const chip = getComputedStyle(nest("trail__chip"));
+    const label = getComputedStyle(nest("trail__chip", "trail__label"));
+
+    // The answer beside it takes the shrinking, on the default every flex item
+    // has and this one gives up.
+    expect(label.flexShrink).toBe("0");
+    // And what will not fit either way is cut by the chip rather than drawn
+    // across the message beside it.
+    expect(chip.overflow).toBe("hidden");
+  });
+
+  /**
+   * The working and the turn's calls are two disclosures sharing one slot.
+   *
+   * Stacked, they were the transcript giving up twice the height for a
+   * question asked once, and a composer that moved twice. The number is a
+   * decision and not asserted; that the two agree on it is the rule, because
+   * they are one place on screen that draws two things.
+   */
+  it("bounds both of the line's panels the same", () => {
+    const thought = getComputedStyle(nest("thought"));
+    const steps = getComputedStyle(nest("steps"));
+
+    expect(steps.maxHeight).toBe(thought.maxHeight);
+    expect(steps.margin).toBe(thought.margin);
+  });
+});
+
 describe("a message's clock", () => {
   /**
    * The clock is a lane, not something laid over the corner.

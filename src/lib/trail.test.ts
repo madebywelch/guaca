@@ -7,6 +7,9 @@ import {
   readSpent,
   type Step,
   stepDiff,
+  stepReason,
+  tallyLabel,
+  tallyTrail,
   tellsMore,
   trailStep,
 } from "./trail";
@@ -355,5 +358,96 @@ describe("a progress note", () => {
       call("note_progress", { note: "waiting" }, { status: "failed", error: "database is locked" }),
     );
     expect(tellsMore(step!)).toBe(true);
+  });
+});
+
+describe("what the turn has done, on one line", () => {
+  it("counts the calls that came back, and says nothing about their kind", () => {
+    // The kinds are what the chips behind the count are for. A line naming the
+    // first of several is a line that is wrong about the rest.
+    const tally = tallyTrail(
+      steps(
+        call("browse", { action: "read" }),
+        call("run_command", { command: "ls" }, ok("exit 0")),
+      ),
+    );
+    expect(tally).toEqual({ done: 2, failed: 0, spent: [] });
+    expect(tallyLabel(tally)).toBe("2 steps");
+  });
+
+  it("says how many went wrong, because that is the part worth interrupting for", () => {
+    const tally = tallyTrail(
+      steps(
+        call("browse", { action: "read" }),
+        call("run_command", { command: "boom" }, { status: "failed", error: "no machine" }),
+        call(
+          "browse",
+          { action: "open", url: "https://example.com" },
+          {
+            status: "refused",
+            reason: "not given a browser",
+          },
+        ),
+      ),
+    );
+    expect(tally.failed).toBe(2);
+    expect(tallyLabel(tally)).toBe("3 steps, 2 failed");
+  });
+
+  it("counts one call as a step rather than as steps", () => {
+    expect(tallyLabel(tallyTrail(steps(call("directory", {}, ok("2 agent(s): Chef")))))).toBe(
+      "1 step",
+    );
+  });
+
+  it("names every credential the turn spent, once each", () => {
+    // The operator's audit trail for their own tokens, which is the one part
+    // of the trail that stays on the line while the turn runs. A name spent
+    // twice is one credential, not two.
+    const tally = tallyTrail(
+      steps(
+        call("run_command", { command: "one" }, ok("used Mistral ($MISTRAL_API_KEY) · exit 0")),
+        call("run_command", { command: "two" }, ok("used Mistral ($MISTRAL_API_KEY) · exit 0")),
+        call("run_command", { command: "three" }, ok("used Stripe ($STRIPE_KEY) · exit 0")),
+      ),
+    );
+    expect(tally.spent).toEqual(["Mistral ($MISTRAL_API_KEY)", "Stripe ($STRIPE_KEY)"]);
+  });
+});
+
+describe("a call that went wrong", () => {
+  it("opens on its reason, where the reason is the whole of what happened", () => {
+    // Clipped on the chip, because a refusal is written to be acted on and
+    // runs to a paragraph: `U… a coding agent is already working in…` is a row
+    // saying one character about which call it was.
+    const groups = foldTrail(
+      steps(
+        call(
+          "browse",
+          { action: "read" },
+          {
+            status: "refused",
+            reason:
+              "a coding agent is already working in whizzworks-site, started by Content Marketer.",
+          },
+        ),
+      ),
+    );
+    expect(hasDetail(groups[0]!)).toBe(true);
+    expect(stepReason(groups[0]!.steps[0]!)).toContain("already working in whizzworks-site");
+  });
+
+  it("opens on what it acted on where there is one, not on the reason", () => {
+    // Somebody opening a failed command came for the command.
+    const [step] = steps(
+      call("run_command", { command: "npm test" }, { status: "failed", error: "no machine" }),
+    );
+    expect(stepReason(step!)).toBeNull();
+    expect(step?.target).toBe("npm test");
+  });
+
+  it("says nothing extra about a call that worked", () => {
+    const [step] = steps(call("directory", {}, ok("2 agent(s): Chef, Scribe")));
+    expect(stepReason(step!)).toBeNull();
   });
 });

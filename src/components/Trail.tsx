@@ -7,6 +7,7 @@ import {
   type Step,
   saysMore,
   stepDiff,
+  stepReason,
   type TrailGroup,
   tellsMore,
 } from "../lib/trail";
@@ -88,6 +89,11 @@ function TrailChip({
   onToggle: () => void;
 }) {
   const only = group.steps.length === 1 ? group.steps[0]! : null;
+  // A refusal on the chip is a clipped copy of what the chip opens onto, which
+  // is the whole of it. Worth having shut, where it is the only thing saying
+  // what went wrong; a repeat of the paragraph directly under it once it is
+  // open.
+  const previewed = only && saysMore(only) && !(open && stepReason(only));
   const face = (
     <>
       <span className="trail__label">{group.label}</span>
@@ -95,7 +101,7 @@ function TrailChip({
           not already said. Several calls have several answers, and a chip
           quoting whichever happened to be first is a chip that is wrong about
           the rest. */}
-      {only && saysMore(only) && <span className="trail__said">{only.said}</span>}
+      {previewed && <span className="trail__said">{only.said}</span>}
       {group.spent.map((credential) => (
         <span className="trail__spent" key={credential}>
           {credential}
@@ -140,9 +146,13 @@ function TrailChip({
  * A call that overwrote something is drawn against what it overwrote instead,
  * however short it is: the whole reason to open a memory rewrite is to find out
  * what the agent changed its mind about, and the content alone never says.
+ *
+ * A call that went wrong and has nothing else to show is drawn as its reason,
+ * for the plainer reason that the reason is what happened.
  */
 function StepRow({ step }: { step: Step }) {
   const changed = stepDiff(step);
+  const reason = stepReason(step);
   // A url, a pair of coordinates or an element number is a few characters, and
   // a few characters in a block of their own is a gray rectangle drawn around
   // nothing. A command and a rewritten memory are the reason the block exists.
@@ -159,7 +169,11 @@ function StepRow({ step }: { step: Step }) {
             above the characters. How much of the page moved is the thing the
             operator came here to find out. */}
         {changed && <span className="trail__said">{diffSummary(changed)}</span>}
-        {step.said && tellsMore(step) && <span className="trail__said">{step.said}</span>}
+        {/* Not twice. A refusal drawn below is not also a clipped copy of
+            itself on the line above the block holding it. */}
+        {step.said && tellsMore(step) && !reason && (
+          <span className="trail__said">{step.said}</span>
+        )}
         {step.spent.map((credential) => (
           <span className="trail__spent" key={credential}>
             {credential}
@@ -167,6 +181,7 @@ function StepRow({ step }: { step: Step }) {
         ))}
       </div>
       {changed && <DiffBlock lines={changed} />}
+      {reason && <pre className="trail__target">{reason}</pre>}
       {!changed && step.target && !inline && <pre className="trail__target">{step.target}</pre>}
     </li>
   );

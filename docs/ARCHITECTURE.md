@@ -518,6 +518,14 @@ Nothing new reaches the webview. A call's name and arguments are the model's own
 words and are the same bytes the transcript draws a minute later; a credential's
 value is in neither, for the reason it is in nothing (`docs/MACHINES.md`).
 
+What the operator sees of it while the turn runs is a count and not the record.
+The chips are the record and the transcript draws every one of them the moment
+the turn ends; drawn live and open they were the whole of a long turn stacked
+between the transcript and the composer, reflowing every time a call came back.
+So the line above the composer says `12 steps`, with a failure counted out
+loud and a credential named, and the chips are one click behind it. *A turn's
+own work is chips* in `docs/WORKSPACE.md` is where that is argued.
+
 ## Trust is a property of the envelope, and it is restated in words
 
 The survey's "tool poisoning" (MCP) and "task injection" (A2A) describe the same
