@@ -805,6 +805,19 @@ would be a permission the operator believes they granted. The reasoning is in
 a plugin is currently offered to, including the honest one for a plugin
 narrowed to nobody, which is otherwise indistinguishable from a working row.
 
+The foot follows from that. A Save under a panel that has already written what it
+was told is a button offering to save work that is saved, beside a Cancel
+implying it could be taken back, and both sit there at the moment the operator is
+deciding whether the plugin they just connected went through. So the Save is
+drawn while something is genuinely waiting for it — a name, a provider, a limit,
+a key that was typed — and the button next to it says Close rather than Cancel
+when there is nothing to cancel. It is read across the whole dialog rather than
+the open section, for the reason the state lives in the shell: an endpoint typed
+on Provider is still unsaved while the operator is on Plugins, and a Save that
+went missing on the way past is how it would get lost. A group that does not
+exist yet is always waiting, because there is nothing to compare it with and
+Create is the only way out that leaves one behind.
+
 Three rows say who pays, and the first is "follow the app settings", which is
 where every group starts. The second is the ChatGPT subscription, and the group
 editor cannot sign in: there is one sign-in on this machine, it is performed in
@@ -1048,11 +1061,36 @@ to live somewhere else or not exist. `docs/ACCOUNT.md` is the long version.
 Every value lives in the shell rather than in the pane that draws it, and that is
 not tidiness. The shell is unmounted when the dialog closes, so a pane holding
 its own state would discard it on every section change: typing an endpoint,
-glancing at Limits and coming back would silently lose the endpoint. Save and
-Test stay in the foot for the same reason they used to be at the bottom of the
-one column — they act on the whole panel, not on the section that happens to be
-open — and Save still does not close, because the point of Test is to press it
-next.
+glancing at Limits and coming back would silently lose the endpoint. Save stays
+in the foot for the same reason it used to be at the bottom of the one column —
+it acts on the whole panel, not on the section that happens to be open — and it
+still does not close, because the point of Test is to press it next. Test is not
+beside it: it reads the endpoint, the key and the model, acts on none of the
+other eight sections, and sits in the pane those three are in.
+
+What the foot does not do is offer a Save when nothing is waiting for one. Five
+of the nine panes stage nothing at all: Appearance and Notifications are kept the
+moment they are clicked, Account acts at once, and Shortcuts and About are only
+there to be read. A Save pinned there regardless spent most of its life under a
+pane it could not affect, saying "not saved yet" over settings that were already
+on disk. So it is drawn while the panel differs from what is stored, and the
+whole panel is what is compared: an endpoint typed on Provider keeps the Save
+reachable from Shortcuts, which is what stops the rule from turning "there is
+nothing to save here" into a way to lose an edit.
+
+A key is the one field that cannot take part in that comparison, because a stored
+one is never read back. So a key box counts as an edit whenever it holds
+anything, spaces excepted, which is the same rule that keeps it out of the patch.
+
+Which is why a save puts every box that stages something back to blank. Blank is
+their resting state: each one means "keep what is stored" and each has a
+placeholder saying what that is, read from what the save returned. A key left on
+screen afterward is indistinguishable from an edit nobody saved, which is how the
+E2B key kept the Save up offering to send itself again. The three durations are
+worse than that, because the runtime clamps them: a box still reading 2000 sits
+under "Saved." claiming a machine sleeps after thirty-three hours when what was
+stored was twenty-four. It is the same read-back the limits have always had,
+finally applied to the fields beside them.
 
 Two things open onto a named section rather than onto the top. The banner that
 says there is no API key opens Provider, because landing on General with the key

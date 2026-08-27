@@ -140,6 +140,10 @@ beforeEach(() => {
 describe("what a group sends", () => {
   it("says inherit as null rather than as an empty string", async () => {
     open();
+    // One field is touched because the Save is only drawn while something is
+    // waiting for it. Everything else opens inheriting and is left that way,
+    // which is the state this is about.
+    type(/Name/, "Kitchenette");
     const draft = await save();
 
     expect(draft.inference).toEqual({
@@ -163,6 +167,8 @@ describe("what a group sends", () => {
     // never touched must not mention it at all: the field shows a hint, and a
     // hint written back is not a key.
     open(aGroup({ id: KITCHEN, name: "Kitchen", apiKeySet: true, apiKeyHint: "...9999" }));
+    // Renaming a crew is the everyday save that must not take the key with it.
+    type(/Name/, "Kitchenette");
     expect("apiKey" in (await save())).toBe(false);
   });
 
@@ -324,6 +330,52 @@ describe("what the operator is shown", () => {
   it("refuses to save a group with no name", () => {
     open(null);
     expect(button("Create").disabled).toBe(true);
+  });
+});
+
+describe("the Save in the foot", () => {
+  const saveButton = () => screen.queryByRole("button", { name: "Save" });
+
+  it("is not there until something is waiting for it", () => {
+    open();
+    expect(saveButton()).toBeNull();
+    type(/Name/, "Kitchenette");
+    expect(saveButton()).toBeTruthy();
+  });
+
+  it("says Close rather than Cancel while there is nothing to cancel", () => {
+    open();
+    expect(button("Close")).toBeTruthy();
+    type(/Name/, "Kitchenette");
+    expect(button("Cancel")).toBeTruthy();
+  });
+
+  it("offers nothing on the panes that save as the operator goes", async () => {
+    // A plugin is signed in and a repository is linked at the moment it is
+    // done. A Save under either offered to save work that was already saved,
+    // beside a Cancel implying it could be taken back.
+    open();
+    pane("Repositories");
+    expect(await screen.findByText("Link a repository")).toBeTruthy();
+    expect(saveButton()).toBeNull();
+  });
+
+  it("is still reachable from a pane that stages nothing", async () => {
+    // Every pane's state is held by the shell, so a rename is still unsaved
+    // from Repositories. A Save that went missing on the way past is how it
+    // would get lost.
+    open();
+    type(/Name/, "Kitchenette");
+    pane("Repositories");
+    expect(await screen.findByText("Link a repository")).toBeTruthy();
+    expect(saveButton()).toBeTruthy();
+  });
+
+  it("is always there for a group that does not exist yet", () => {
+    // Nothing to compare a new group with, and Create is the only way out of
+    // the dialog that leaves one behind.
+    open(null);
+    expect(button("Create")).toBeTruthy();
   });
 });
 

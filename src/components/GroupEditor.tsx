@@ -151,6 +151,34 @@ export function GroupEditor({ group, onClose }: Props) {
     },
   });
 
+  /**
+   * Whether anything here is waiting to be saved.
+   *
+   * Read across every pane, because the shell holds all of their state: an
+   * endpoint typed on Provider and left there while the operator signs a plugin
+   * in is still unsaved, and a Save that went missing on the way past is how it
+   * would get lost.
+   *
+   * What it buys is a foot that offers nothing on the two panes that stage
+   * nothing. A plugin is signed in and a repository is linked at the moment the
+   * operator does it, so a Save under either was a button offering to save work
+   * that had already been saved, beside a Cancel implying it could be taken
+   * back. A group that does not exist yet is always waiting: there is nothing
+   * to compare it with, and Create is the only way out that leaves one behind.
+   */
+  const dirty =
+    !group ||
+    name !== group.name ||
+    provider !== (group.inference.provider ?? INHERIT) ||
+    baseUrl !== (group.inference.baseUrl ?? "") ||
+    model !== (group.inference.defaultModel ?? "") ||
+    subscriptionModel !== (group.inference.subscriptionModel ?? "") ||
+    timeout !== asText(group.inference.requestTimeoutSecs) ||
+    // Typed at all, including typed and then emptied, which is the one
+    // instruction that puts a group back on the app's key.
+    apiKey !== null ||
+    LIMITS.some((field) => limits[field.key] !== asText(group.limits[field.key]));
+
   /** Live agents. Terminated ones are not in the count and are not deleted twice. */
   const crew = group?.agentCount ?? 0;
 
@@ -709,17 +737,23 @@ export function GroupEditor({ group, onClose }: Props) {
               </button>
             ))}
           <span style={{ flex: 1 }} />
+          {/* Cancel only while there is something to cancel. With nothing
+              staged this button closes a dialog, and saying otherwise invites
+              the operator to think the plugin they just signed in goes with
+              it. */}
           <button type="button" className="btn" onClick={onClose}>
-            Cancel
+            {dirty ? "Cancel" : "Close"}
           </button>
-          <button
-            type="button"
-            className="btn btn--primary"
-            disabled={busy || !name.trim()}
-            onClick={() => void save()}
-          >
-            {group ? "Save" : "Create"}
-          </button>
+          {dirty && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={busy || !name.trim()}
+              onClick={() => void save()}
+            >
+              {group ? "Save" : "Create"}
+            </button>
+          )}
         </div>
       </div>
     </div>
