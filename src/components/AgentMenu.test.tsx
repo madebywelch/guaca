@@ -44,7 +44,6 @@ function open(agent: AgentCard, at = { x: 40, y: 40 }, groups: Group[] = []) {
     onDuplicate: vi.fn(),
     onClearHistory: vi.fn(),
     onDelete: vi.fn(),
-    onNudge: vi.fn(),
     onMoveToGroup: vi.fn(),
   };
   render(<AgentMenu target={{ agent, ...at }} groups={groups} {...handlers} />);
@@ -58,10 +57,8 @@ describe("AgentMenu", () => {
       "Pause",
       "Edit profile",
       "Pin to top",
-      "Move up",
-      "Move down",
       "Duplicate",
-      "Clear history…",
+      "Clear chat history…",
       "Delete…",
     ]) {
       expect(screen.getByRole("button", { name })).toBeTruthy();
@@ -88,26 +85,49 @@ describe("AgentMenu", () => {
     expect(screen.queryByRole("button", { name: "Pin to top" })).toBeNull();
   });
 
-  it("arranges the rail without a mouse", () => {
-    // A rail that can only be arranged by dragging cannot be arranged from a
-    // keyboard at all, and this menu is already where everything else lives.
-    const handlers = open(card());
-    fireEvent.click(screen.getByRole("button", { name: "Move up" }));
-    expect(handlers.onNudge).toHaveBeenCalledWith(expect.objectContaining({ id: "a1" }), -1);
-  });
-
-  it("offers the crews this agent is not in, and never the one it is", () => {
+  it("keeps the crews behind one row, and opens them beside it", () => {
+    // A row per crew is the one part of this menu whose length nothing bounds,
+    // and a workspace with eight of them pushed clearing a history and
+    // deleting an agent off the bottom of the window.
     const handlers = open(card(), { x: 40, y: 40 }, [
       group("g1", "everyone"),
       group("g2", "research"),
+      group("g3", "support"),
     ]);
 
-    expect(screen.queryByRole("button", { name: "Move to everyone" })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Move to research" }));
+    const opener = screen.getByRole("button", { name: "Move to another group" });
+    expect(screen.queryByRole("button", { name: "research" })).toBeNull();
+    expect(opener.getAttribute("aria-expanded")).toBe("false");
+
+    fireEvent.pointerEnter(opener);
+    expect(opener.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByRole("menu", { name: "Move to another group" })).toBeTruthy();
+
+    // Never the crew it is already in: there is nothing for that row to do.
+    expect(screen.queryByRole("button", { name: "everyone" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "research" }));
     expect(handlers.onMoveToGroup).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a1" }),
       expect.objectContaining({ id: "g2" }),
     );
+    expect(handlers.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the crews for a keyboard too, and closes when focus leaves them", () => {
+    open(card(), { x: 40, y: 40 }, [group("g1", "everyone"), group("g2", "research")]);
+
+    const opener = screen.getByRole("button", { name: "Move to another group" });
+    fireEvent.focus(opener);
+    const inside = screen.getByRole("button", { name: "research" });
+    expect(inside).toBeTruthy();
+
+    // A blur onto something inside the same box is a step within the submenu,
+    // not a departure from it: React reports one for every step either way.
+    fireEvent.blur(opener, { relatedTarget: inside });
+    expect(screen.getByRole("button", { name: "research" })).toBeTruthy();
+
+    fireEvent.blur(inside, { relatedTarget: document.body });
+    expect(screen.queryByRole("button", { name: "research" })).toBeNull();
   });
 
   it("says nothing about groups while there is only one", () => {
@@ -138,7 +158,7 @@ describe("AgentMenu", () => {
     // Closing on it would mean the decision is taken in a menu they have to
     // open again, having already seen the word "clear" act like a button.
     const handlers = open(card());
-    fireEvent.click(screen.getByRole("button", { name: "Clear history…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat history…" }));
     expect(handlers.onClearHistory).not.toHaveBeenCalled();
     expect(handlers.onClose).not.toHaveBeenCalled();
 
@@ -170,7 +190,7 @@ describe("AgentMenu", () => {
     // Opening one of them armed the other, so an operator who went to clear a
     // history found a delete button under their next click.
     const handlers = open(card());
-    fireEvent.click(screen.getByRole("button", { name: "Clear history…" }));
+    fireEvent.click(screen.getByRole("button", { name: "Clear chat history…" }));
 
     expect(screen.getByRole("button", { name: "Delete…" })).toBeTruthy();
     expect(handlers.onDelete).not.toHaveBeenCalled();

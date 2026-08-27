@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { landsBefore, nudgeTarget, railOrder } from "./rail";
+import { landsBefore, railOrder } from "./rail";
 import type { Activity, AgentCard, AgentId } from "./types";
 
 function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
@@ -178,21 +178,5 @@ describe("where a dropped row lands", () => {
     const rows = crew();
     expect(landsBefore(rows, "Cook", "Cook")).toBeUndefined();
     expect(landsBefore(rows, "Cook", "Gone")).toBeUndefined();
-  });
-});
-
-describe("one row at a time", () => {
-  it("swaps with the row above or below", () => {
-    const rows = crew();
-    expect(nudgeTarget(rows, "Cook", -1)).toBe("Manager");
-    expect(nudgeTarget(rows, "Cook", 1)).toBeNull();
-    expect(nudgeTarget(rows, "Manager", 1)).toBe("Scribe");
-  });
-
-  it("says there is nowhere to go at either end", () => {
-    const rows = crew();
-    expect(nudgeTarget(rows, "Manager", -1)).toBeUndefined();
-    expect(nudgeTarget(rows, "Scribe", 1)).toBeUndefined();
-    expect(nudgeTarget(rows, "Nobody", -1)).toBeUndefined();
   });
 });

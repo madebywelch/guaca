@@ -600,62 +600,6 @@ describe("the channel open when the rail goes inside a crew", () => {
   });
 });
 
-describe("one row at a time", () => {
-  it("moves a row up past the one above it", async () => {
-    reset();
-    useStore.setState({
-      agents: [
-        { ...AGENTS[0]!, railOrder: 0 },
-        { ...AGENTS[1]!, railOrder: 1 },
-      ],
-    });
-
-    await useStore.getState().nudgeAgent("chef", -1);
-
-    const { moveAgent } = (await import("./ipc")).api as unknown as {
-      moveAgent: ReturnType<typeof vi.fn>;
-    };
-    expect(moveAgent).toHaveBeenCalledWith("chef", AGENTS[0]!.groupId, "manager");
-  });
-
-  it("orders from the arrangement and not from whoever is mid-turn", async () => {
-    // The keyboard path has to agree with the drag: both edit the arrangement,
-    // so neither may be measured against a rail with somebody lifted on top.
-    reset();
-    useStore.setState({
-      agents: [
-        { ...AGENTS[0]!, railOrder: 0 },
-        { ...AGENTS[1]!, railOrder: 1 },
-      ],
-      activity: { chef: { state: "thinking" } },
-    });
-
-    await useStore.getState().nudgeAgent("chef", -1);
-
-    const { moveAgent } = (await import("./ipc")).api as unknown as {
-      moveAgent: ReturnType<typeof vi.fn>;
-    };
-    expect(moveAgent).toHaveBeenCalledWith("chef", AGENTS[0]!.groupId, "manager");
-  });
-
-  it("asks for nothing at the end of a section", async () => {
-    reset();
-    useStore.setState({
-      agents: [
-        { ...AGENTS[0]!, railOrder: 0 },
-        { ...AGENTS[1]!, railOrder: 1 },
-      ],
-    });
-
-    const { moveAgent } = (await import("./ipc")).api as unknown as {
-      moveAgent: ReturnType<typeof vi.fn>;
-    };
-    moveAgent.mockClear();
-    await useStore.getState().nudgeAgent("manager", -1);
-    expect(moveAgent).not.toHaveBeenCalled();
-  });
-});
-
 describe("activity", () => {
   it("records the latest state per agent", () => {
     apply({ type: "activityChanged", agentId: "chef", activity: { state: "thinking" } });
