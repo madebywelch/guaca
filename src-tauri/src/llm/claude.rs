@@ -77,6 +77,17 @@
 //! and then has granted a real reach to a program that asked under a borrowed
 //! name.
 //!
+//! ## A refusal is not a failure of the program
+//!
+//! The model's own safety check can stop an answer on a call that succeeded,
+//! and when it does the program has nothing to report but the model's account
+//! of it. That arrives in the same place a spent plan does and has to be told
+//! apart from one, because the two want opposite handling: a plan is over until
+//! the operator does something, and a refusal ran on what the model was
+//! writing, so the next draw is a different question. [`REFUSED`] is the field
+//! that separates them and [`LlmError::ModelRefused`] is what the turn's three
+//! attempts then apply to.
+//!
 //! ## What it does not report
 //!
 //! Money that moved. `total_cost_usd` on a plan is the equivalent API price
@@ -117,6 +128,21 @@ pub const MODEL_LABEL: &str = "claude";
 const SAY: &str = "say";
 /// The field the tool calls go in.
 const CALLS: &str = "calls";
+
+/// What the program puts on the turn's stop reason when the model stopped on
+/// its own safety check rather than on an answer.
+///
+/// The one failure of this program with no status behind it, and the reason
+/// [`failure`] has to look here rather than at `is_error` alone. The request was
+/// answered, the tokens were spent, and the check ran on what was being written,
+/// so measured against 2.1.247 the frame is `subtype: "success"` with `is_error`
+/// true, `api_error_status` null, no `structured_output`, and a `result` that
+/// opens `API Error:` and closes with the category that fired. Read without
+/// this, it lands in the arm that means a dead sign-in or a spent plan: not
+/// retried, and answered with a paragraph of the program's own advice about
+/// rephrasing in a new session or changing `/model`, neither of which exists
+/// here.
+const REFUSED: &str = "refusal";
 
 /// Builds the schema the program is held to.
 ///
@@ -450,7 +476,7 @@ where
                 .map_err(|err| LlmError::Decode(format!("{PROGRAM} result frame: {err}")))?;
 
             if frame.is_error || frame.structured_output.is_none() {
-                return Err(refusal(&frame));
+                return Err(failure(&frame));
             }
 
             let answer = frame.structured_output.unwrap_or_default();
@@ -479,19 +505,28 @@ where
     }
 }
 
-/// Turns a failed result frame into the refusal an agent reads mid-turn.
+/// Turns a failed result frame into the error an agent reads mid-turn.
 ///
 /// The program's own words are carried through rather than replaced. With no
 /// endpoint and no status code, they are the only description of what went
 /// wrong that exists, and the commonest cause here is a sign-in or a spent plan
 /// that only the operator can fix.
-fn refusal(frame: &ResultFrame) -> LlmError {
+///
+/// The exception is the model refusing, which is not the program failing at
+/// all: [`REFUSED`] is what tells the two apart, and it is asked first because
+/// it is the more specific fact. A refusal comes back on an answered call, so
+/// there is no status for the arm below to find.
+fn failure(frame: &ResultFrame) -> LlmError {
     let said = frame
         .result
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("it reported no reason");
+
+    if frame.stop_reason.as_deref() == Some(REFUSED) {
+        return LlmError::ModelRefused { program: PROGRAM, message: said.to_string() };
+    }
 
     if let Some(status) = frame.api_error_status.as_ref().and_then(|s| s.as_u64()) {
         return LlmError::Upstream { status: status as u16, message: said.to_string() };
@@ -848,7 +883,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refusal_carries_the_programs_own_words() {
+    fn a_failure_carries_the_programs_own_words() {
         // With no endpoint and no status code they are the only account of the
         // failure there is, and the usual cause is a sign-in only the operator
         // can fix.
@@ -859,6 +894,47 @@ mod tests {
         let err = fold(line, &mut out, &mut sink()).unwrap_err();
         assert!(matches!(err, LlmError::ProgramFailed { .. }));
         assert!(err.to_string().contains("Credit balance is too low"), "{err}");
+        // A plan is over until somebody tops it up. Three attempts at it is
+        // four seconds in front of the sentence they needed to read at once.
+        assert!(!err.is_transient(), "{err}");
+    }
+
+    #[test]
+    fn a_model_refusal_is_not_a_spent_plan_and_is_worth_another_draw() {
+        // The frame this app actually got, at 2.1.247. The call was answered,
+        // so `api_error_status` is null and there is no status to classify by;
+        // `is_error` alone files it under the arm above, which means a sign-in
+        // the operator has to go and fix and which is never tried again.
+        let mut out = Completion::default();
+        let line = r#"{"type":"result","subtype":"success","is_error":true,
+            "api_error_status":null,"stop_reason":"refusal",
+            "result":"API Error: Opus 5's safeguards flagged this message. Details: `[reasoning_extraction]` Request ID: req_011"}"#;
+
+        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        assert!(matches!(err, LlmError::ModelRefused { .. }), "{err}");
+        // The whole point of telling it apart: the check ran on what the model
+        // was writing, so the next draw is a different question.
+        assert!(err.is_transient(), "{err}");
+        // The program's words, which is where the category and the request id
+        // an operator would quote are.
+        assert!(err.to_string().contains("reasoning_extraction"), "{err}");
+        // And this app's after them, because theirs end in advice about a
+        // session and a `/model` that nothing here has.
+        assert!(err.to_string().contains("provider"), "{err}");
+    }
+
+    #[test]
+    fn a_refusal_that_also_carries_a_status_is_still_a_refusal() {
+        // Today's frame carries one or the other, so the order these are asked
+        // in is only decided here. A refusal says what stopped the answer; a
+        // status says what the transport did, and a 401 read off one would send
+        // an operator to a sign-in that is working.
+        let mut out = Completion::default();
+        let line = r#"{"type":"result","subtype":"success","is_error":true,
+            "api_error_status":401,"stop_reason":"refusal","result":"API Error: flagged"}"#;
+
+        let err = fold(line, &mut out, &mut sink()).unwrap_err();
+        assert!(matches!(err, LlmError::ModelRefused { .. }), "{err}");
     }
 
     #[test]

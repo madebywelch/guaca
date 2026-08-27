@@ -288,6 +288,26 @@ time, because the answer is a JSON document and half a decoded escape drawn into
 a channel is worse than a message that arrives at once. `llm/claude.rs` is the
 whole of it.
 
+One failure of that arrangement is worth writing down, because it looks like
+another one and is handled the opposite way. The model's own safety check can
+stop an answer on a call that succeeded: the request is answered, the tokens are
+spent, and the program reports it with `stop_reason: "refusal"` and the model's
+account of it in `result`, which opens `API Error:` and names the category that
+fired. There is no status code, because nothing returned an error. Read by the
+error flag alone that frame is indistinguishable from a spent plan, and the two
+want opposite handling: a plan is over until the operator tops it up, while a
+refusal ran on what the model was writing, so the next draw is a different
+question. So
+`stop_reason` is what tells them apart, and `LlmError::ModelRefused` is the one
+program failure a turn's three attempts are spent on.
+
+What the operator is told is this app's sentence rather than the program's,
+which is the other half. The program's advice is written for somebody sitting in
+it: rephrase in a new session, or change the model with `/model`. Neither exists
+here, and the second is the one thing Guaca deliberately does not pass. Its
+words are still carried, because the category and the request id in them are
+what an operator would quote to the vendor.
+
 Claude models still reach Guaca the other two ways as well, through an API key or
 through OpenRouter, which remains the default endpoint and the default model.
 
