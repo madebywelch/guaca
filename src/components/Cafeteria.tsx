@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, type Hireable, pick, STARTER_CREW, STATIONS, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
-import { useStore } from "../lib/store";
+import { ACTIVITY_CHANNEL, useStore } from "../lib/store";
 import { errorMessage, type GroupId } from "../lib/types";
 
 interface Props {
@@ -27,9 +27,34 @@ export function Cafeteria({ onClose }: Props) {
   const agents = useStore((s) => s.agents);
   const select = useStore((s) => s.select);
   const refreshAgents = useStore((s) => s.refreshAgents);
+  const railGroup = useStore((s) => s.railGroup);
+  const selected = useStore((s) => s.selected);
 
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [groupId, setGroupId] = useState<GroupId | "">(() => groups[0]?.id ?? "");
+  /**
+   * The crew the operator is standing in, which is the one they came to hire
+   * into.
+   *
+   * Read once, when the dialog opens. Defaulting to the first group instead
+   * pointed everything below at somebody else's crew: an operator who had just
+   * emptied a group was told the preset they were about to hire was already
+   * "on staff", offered no starter crew for a room with nobody in it, and
+   * would have hired into a group they were not looking at. Three symptoms,
+   * one wrong id.
+   *
+   * The rail's focus is the answer when there is one, because that is the crew
+   * the rail is inside. With the rail in the overview the open channel is what
+   * says where the operator is, and `select` has already followed that agent
+   * into its crew. Neither, on a workspace with no channel open, falls back to
+   * the first group as before.
+   */
+  const [groupId, setGroupId] = useState<GroupId | "">(() => {
+    const open =
+      selected !== null && selected !== ACTIVITY_CHANNEL
+        ? agents.find((a) => a.id === selected)?.groupId
+        : undefined;
+    return railGroup ?? open ?? groups[0]?.id ?? "";
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
