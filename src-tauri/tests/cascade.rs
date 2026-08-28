@@ -3266,7 +3266,7 @@ async fn a_computer_belongs_to_an_agent_the_operator_gave_one_to_and_not_to_the_
         if has_tool_result(body) {
             Script::Say("I could not run that: I have no computer.".into())
         } else if speaker(body) == "Talker" {
-            Script::Shell("uname -a".into())
+            Script::RunCommand("uname -a".into())
         } else {
             Script::Say("Nothing needed doing.".into())
         }

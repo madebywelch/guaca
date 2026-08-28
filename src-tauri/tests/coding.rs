@@ -26,6 +26,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use guac_lib::coding::{self, Progress};
+use guac_lib::domain::approval::Decision;
 use guac_lib::domain::repository::{CleanRepository, Gate, Harness as Which};
 use guac_lib::runtime::guard::GuardLimits;
 
@@ -448,6 +449,182 @@ async fn a_job_is_told_which_branch_it_is_standing_on() {
     let note = brief.find("Standing instruction").expect("the note still rides along");
     assert!(state < work && work < note, "the three parts are out of order: {brief}");
 
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ---- the other door ------------------------------------------------------
+
+/// Links a repository to an agent and answers with where it is on disk.
+fn put_in_a_repository(h: &Harness, agent: &str, repo: &Path, gate: Gate) {
+    let card = h.agent_named(agent).unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: card.group_id,
+            name: "guaca".into(),
+            path: repo.to_string_lossy().to_string(),
+            note: String::new(),
+            harness: Which::Claude,
+            gate,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(card.id, Some(linked.id)).unwrap();
+}
+
+/// The small door, end to end: a real shell, in the operator's own repository,
+/// answering inside the turn that asked.
+///
+/// This is the seam nothing else can see. `shell` is offered on the same
+/// condition as `code` and reads the same column, and the failure it exists to
+/// stop is not a crash: it is an agent that has to spend a coding job, minutes
+/// and somebody's plan on `git status`, and that reports having no shell at all
+/// when the harness will not start.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_in_a_repository_runs_a_line_there_and_is_answered_in_the_same_turn() {
+    let repo = a_repository("shell-here");
+    let here = repo.to_string_lossy().to_string();
+
+    // Branched on the tool result rather than on a counter, because a turn can
+    // take more than one call. The needle is the repository's own path, which
+    // is the whole assertion: a shell that ran somewhere else answers with
+    // somewhere else.
+    let stub = serve(move |body| {
+        if anyone_said(body, &here) {
+            Script::Say("I am standing in the repository.".into())
+        } else {
+            Script::InRepository("git rev-parse --show-toplevel".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::Open);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "which directory are you in?").unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(
+        told.contains(&repo.to_string_lossy().to_string()),
+        "the line did not run in the repository:\n{told}"
+    );
+    assert!(
+        h.channel_texts("Engineer").iter().any(|t| t.contains("standing in the repository")),
+        "and the turn finished on it:\n{}",
+        h.transcript()
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The gate is a fact about the repository, so it cannot mean one thing through
+/// `code` and another through `shell`.
+///
+/// Both doors ask `coding::bridge::outward` about the same shell line, from the
+/// same function. A gate that read only the harness's calls would be a gate an
+/// agent walks around by picking the other tool, which is worse than no gate:
+/// the operator switched it on and would be told it was holding.
+///
+/// The line is deliberately two commands. A `deny` refuses the *call*, exactly
+/// as the `PreToolUse` hook does, so the harmless half must not have happened
+/// either — a refusal that ran the first half and stopped at the push is a
+/// tree in a state nobody asked for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_line_that_reaches_outside_a_gated_repository_asks_first_and_a_no_runs_nothing() {
+    let repo = a_repository("shell-gated");
+
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("The operator did not allow the push.".into())
+        } else {
+            Script::InRepository("touch pushed.txt && git push origin main".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::AskBeforePushing);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "ship it").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("Refused"), "the model was not told it was refused:\n{told}");
+    assert!(told.contains("waiting on them"), "a refusal needs a way forward:\n{told}");
+    assert!(
+        !repo.join("pushed.txt").exists(),
+        "the call was refused, so no part of the line may have run"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// And the gate stops nothing else.
+///
+/// Everything that is not outward-facing is what the directory and git already
+/// cover, in both doors. A gate that parked `git status` would be one the
+/// operator switches off within the hour, which is the behavior they turned it
+/// on to get.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_ordinary_line_in_a_gated_repository_runs_without_asking_anybody() {
+    let repo = a_repository("shell-ungated");
+
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Nothing is staged.".into())
+        } else {
+            Script::InRepository("git status --porcelain; echo read-the-tree".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::AskBeforePushing);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "anything uncommitted?").unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("read-the-tree"), "the line did not run:\n{told}");
+    assert!(
+        h.runtime.store().pending_approvals(10).unwrap().is_empty(),
+        "nobody should have been asked about reading the tree"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The door that stays open when the other one will not.
+///
+/// A work tree with a job already in it refuses `code`, on purpose: two
+/// harnesses in one directory interleave their edits. One line is not that, and
+/// refusing it here would take away the read an agent most wants while a job
+/// runs, which is what the job is doing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_line_still_runs_in_a_work_tree_a_coding_job_is_already_in() {
+    stand_ins();
+    let repo = a_repository("shell-alongside");
+    // Slow enough that the job is genuinely still running when the line does.
+    std::fs::write(repo.join(LINGER), "3").unwrap();
+
+    let stub = serve(|body| {
+        if anyone_said(body, "alongside-the-job") {
+            Script::Say("The job is still going.".into())
+        } else if has_tool_result(body) {
+            Script::InRepository("echo alongside-the-job".into())
+        } else {
+            Script::Code("something long".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::Open);
+
+    let run =
+        h.runtime.send_from_human(h.id("Engineer"), "start it and tell me where we are").unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    assert!(told.contains("A coding agent is working"), "the job did not start:\n{told}");
+    assert!(told.contains("alongside-the-job"), "the line was refused or never ran:\n{told}");
     let _ = std::fs::remove_dir_all(&repo);
 }
 

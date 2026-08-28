@@ -31,6 +31,112 @@ inside the tool call, the agent would read as `Thinking` for the length of a
 change to a codebase, its inbox would back up behind it, and every routine that
 came due would be skipped.
 
+## A repository has two doors, and the small one is `shell`
+
+The section above is the argument for the harness. It is not an argument for the
+harness being the *only* way in, and for a while it was, which turned out to be
+the more expensive half.
+
+An agent given a repository could do exactly one thing with it: hand a brief to
+a coding harness and wait minutes for a message. That is right for a change to a
+codebase and wrong for everything else an agent needs from a directory. `git
+status`. `git log -1`. Reading a file. `gh pr view`. `gh pr merge 98`. Each of
+those is a question with an answer, and each of them cost a whole coding job:
+its own process, its own context window, its own spend on somebody's plan, and
+an answer that arrives after the turn that wanted it has ended.
+
+The failure that made it worth fixing was not the cost. It was what an agent
+does when the one door will not open. A harness refuses to start for ordinary
+reasons — a spent plan, a program not installed, another job already in the work
+tree — and an agent holding a repository, asked to merge a pull request, then
+reports to the operator that it has no shell and no way to reach GitHub. Both
+sentences are true of a design with one door in it, and neither is true of the
+machine it is running on, where `gh` is installed and signed in.
+
+So `shell` runs one line in the repository and hands back what it printed, in
+the turn that asked. It is offered on exactly the same condition as `code` —
+`Surfaces::repository`, which is the operator having put this agent in a
+directory — and it is the same directory. `src-tauri/src/shell.rs` is the whole
+of the running; `Runtime::run_in_repository` is the gate and the lookup in front
+of it.
+
+### It adds directness, not reach
+
+The line runs as the operator, in their directory, with their credentials and
+their network. That is the same sentence *What is not here* writes below, and it
+was already true: a coding job in that directory runs arbitrary commands under
+`--permission-mode bypassPermissions`, with the operator's own MCP servers and
+hooks loaded. Nothing an agent can do through `shell` was out of reach through
+`code`. What is new is that it costs a second instead of ten minutes.
+
+That is also why there is no new operator setting. The decision was taken when
+they linked the directory and put an agent in it; a second switch would be a
+second place to say the same thing, and the first agent to find the switch off
+would report the repository as broken rather than as fenced.
+
+### The gate is asked from the same function, and that is the point
+
+`Gate::AskBeforePushing` stops a job before a push, a merge, a pull request or a
+release. It stops `shell` at the same commands, decided by the same
+`bridge::outward` call, answered on the same desk through the same
+`Runtime::ask_about_push`. Two doors into one directory that disagreed about
+what counts as outward-facing would be a gate an agent walks around by picking
+the other tool, which is worse than no gate at all: the operator switched it on
+and would be told it was holding.
+
+`Asker` is everything that differs. A job is not a turn and its agent may be
+idle or answering somebody else, so its request does not move the dot beside the
+agent's name; a `shell` call is a turn genuinely stopped mid-inference and has
+to say so. The card says which it is, because an operator deciding needs to know
+whether they are looking at a job that has been running for ten minutes or at
+the agent they are talking to.
+
+A denial refuses the *call*, not the outward-facing part of it, exactly as the
+hook's `deny` does. `touch a.txt && git push` runs neither half. A refusal that
+ran the first command and stopped at the second would leave the tree in a state
+nobody asked for and nobody was told about.
+
+### Two bounds, and neither is confinement
+
+A job gets forty-five minutes because it is its own unit of work. A `shell` call
+happens inside a turn, so it gets `shell::PATIENCE`, and its output is clipped
+to `KEPT` bytes with both ends kept and the middle counted. Those keep one call
+from taking a turn or a context window with it. They are not a boundary and must
+not be described as one: what confines this is the directory the operator chose
+and the fact that git can undo what happens inside it.
+
+Both bounds say what to do next when they bite, because a tool result an agent
+cannot act on is one it reruns unchanged. A killed line names `code` as the tool
+for work that takes minutes. A clipped stream names `head`, `tail` and `grep` in
+the gap where the middle was.
+
+### No lock, deliberately
+
+`Runtime::start_job` takes one per work tree, because two harnesses in a
+directory interleave their edits over minutes and nothing downstream could say
+which of them wrote what. One line is not that. It is the same thing as the
+operator typing in their own terminal while a job runs, which nothing here
+prevents and which is ordinary.
+
+Refusing it would also take away the read an agent most wants while a job is
+running, which is what the job is doing — and would put back a version of the
+failure the busy refusal already caused once: an agent told to wait for a
+message its own turn was holding up.
+
+### A shell and a computer are two machines
+
+An agent with both a computer and a repository is holding two tools that run
+shell commands on two unrelated filesystems, which is the `browse`/`use_screen`
+hazard one level up. So each description names the other, and only when the
+other is actually in the list: `run_command` says the repository is not on that
+machine, `shell` says the sandbox is not where the codebase is. A model reads
+one description and takes the nearest shell.
+
+A connector's value reaches a sandbox's environment and nothing else, so a
+`shell` line naming `$STRIPE_KEY` names a variable that is not set. That is why
+`credentials_named_in` is not applied here: prefixing the summary with `used
+Stripe` would put a spend in the operator's audit trail that never happened.
+
 ## There are two harnesses because a subscription is spent by one program
 
 This is the part that is not a preference and not a configuration surface.
@@ -382,6 +488,17 @@ stand-in records the argument vector it was handed, so the suite can assert that
 a repository set to Claude Code starts `claude` with Claude Code's vector, which
 is the seam nothing else can see. Drop the column read in `Runtime::start_job`
 and every other suite in this repo still passes.
+
+The four `shell` tests in the same file need no stand-in, because the program
+they run is `bash` and the repository is a real one `git init` made in the temp
+directory. They are the only place the two doors are checked against each other:
+that a line runs in the linked directory and answers inside the turn, that the
+gate stops the same commands through both and that a denial runs no part of the
+line, that an ordinary line is not stopped, and that a work tree with a job in
+it still answers one. `shell.rs` has the rest beside it, against a real shell
+for the reason the stand-ins exist: what a child prints, whether it is still
+running and what happens when it fills a pipe are only observable from outside
+it.
 
 The `#[ignore]`d half asks the real programs whether they still accept those
 vectors and still answer in the shape this build reads. That is the failure no

@@ -95,7 +95,14 @@ pub enum Script {
     AskQuestion { question: String, options: Vec<String> },
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
-    Shell(String),
+    ///
+    /// Named for the tool rather than for what it is, because there are two
+    /// shells now and they run on two machines: this one is the sandbox, and
+    /// [`Script::InRepository`] is the operator's own repository.
+    RunCommand(String),
+    /// Emit a `shell` tool call: one line in the agent's repository, on the
+    /// operator's machine, answered in the turn that asked.
+    InRepository(String),
     /// Emit a `use_screen` tool call that looks at the screen. The same reach
     /// at the one place whose entire answer is a picture, which is what a model
     /// running on an endpoint that takes text only must not be served.
@@ -281,11 +288,21 @@ pub fn render(script: &Script) -> String {
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
             ));
         }
-        Script::Shell(command) => {
+        Script::RunCommand(command) => {
+            let args = serde_json::json!({ "command": command }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_run_command","type":"function",
+                 "function":{"name":"run_command","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::InRepository(command) => {
             let args = serde_json::json!({ "command": command }).to_string();
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_shell","type":"function",
-                 "function":{"name":"run_command","arguments": args}}
+                 "function":{"name":"shell","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

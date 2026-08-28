@@ -339,7 +339,7 @@ use crate::domain::envelope::{
 use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
-use crate::domain::repository::Harness;
+use crate::domain::repository::{Gate, Harness};
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
 use crate::domain::worknote;
@@ -348,6 +348,7 @@ use crate::llm::modality::{self, Modalities};
 use crate::llm::openrouter::{ChatMessage, ChatRequest, LlmClient, LlmError, Token, ToolCall};
 use crate::llm::tools::{self, Delivery, ToolInvocation};
 use crate::plugins;
+use crate::shell::{self, Ran};
 use crate::workspace::Workspace;
 use events::{Activity, EventSink, UiEvent};
 use guard::{GuardLimits, GuardRegistry, Refusal, SendRequest, Verdict};
@@ -497,6 +498,33 @@ const SCHEDULE_TICK: Duration = Duration::from_secs(20);
 /// rather than by what it costs.
 const COMPOST_TICK: Duration = Duration::from_secs(60 * 60);
 
+/// What one `shell` call came to.
+///
+/// A refusal is not an error and must not be one. The operator answering no is
+/// the gate doing its job, and the agent has to be told so in words it can act
+/// on rather than handed something that reads like a broken repository.
+enum Line {
+    Ran(Ran),
+    /// The operator was asked about an outward-facing command and did not
+    /// allow it. Nothing ran.
+    Refused,
+}
+
+/// Who wants to reach outside the repository, which is the only thing that
+/// differs between the two askers.
+///
+/// Both are the same protected action and the same card on the same desk. What
+/// changes is the sentence: an operator deciding needs to know whether they are
+/// looking at a coding job that has been running for ten minutes or at the
+/// agent they are talking to, because those are answered differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asker {
+    /// A coding job's harness, stopped by the `PreToolUse` hook.
+    Job,
+    /// The agent itself, in `shell`, with its turn held open.
+    Agent,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
     /// Asked to code with nowhere to do it.
@@ -538,6 +566,8 @@ pub enum RuntimeError {
     JobUnreachable(String),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Shell(#[from] crate::shell::ShellError),
     #[error("no agent with id {0}")]
     UnknownAgent(AgentId),
     #[error("{0} has been deleted")]
@@ -1719,6 +1749,64 @@ impl Runtime {
         }
     }
 
+    /// One shell line in this agent's repository, run and answered here.
+    ///
+    /// The opposite of [`Runtime::start_job`] in the one way that matters to a
+    /// turn: this waits. That is the point of it. An agent asking what branch
+    /// the tree is on, or merging a pull request it has already been told to
+    /// merge, needs the answer in the sentence it is writing, and handing that
+    /// to a coding harness costs minutes and a model's whole budget to find out
+    /// something `git status` knows. It is also the door that stays open when
+    /// the other one will not: a spent plan, a harness not installed and a work
+    /// tree another job is already in all stop `code` and none of them stop
+    /// this.
+    ///
+    /// ## No lock, deliberately
+    ///
+    /// `start_job` takes one per work tree because two harnesses in a directory
+    /// interleave their edits over minutes and nothing downstream could say
+    /// which of them wrote what. One line is not that. It is the same thing as
+    /// the operator typing in their own terminal while a job runs, which
+    /// nothing here prevents and which is ordinary. Refusing it would also take
+    /// away the read an agent most wants while a job is running, which is what
+    /// the job is doing.
+    ///
+    /// ## The gate is asked from the same function the hook asks
+    ///
+    /// A repository set to [`Gate::AskBeforePushing`] stops a job before a
+    /// push, a merge or a release. It has to stop this too, from
+    /// [`crate::coding::bridge::outward`] rather than from a second reading of
+    /// the same idea: two doors into one directory that disagreed about what
+    /// counts as outward-facing would be a gate an agent walks around by
+    /// picking the other tool. It is a judgment about the ordinary case and not
+    /// a boundary, exactly as it is there, and for exactly the same reason: the
+    /// line runs as the operator either way.
+    async fn run_in_repository(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        command: &str,
+    ) -> Result<Line, RuntimeError> {
+        let repository = self
+            .inner
+            .store
+            .agent_repository(card.id)?
+            .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+
+        if repository.gate == Gate::AskBeforePushing {
+            if let Some(what) = crate::coding::bridge::outward(command) {
+                if !self
+                    .ask_about_push(card.id, run_id, &repository.name, &what, Asker::Agent)
+                    .await
+                {
+                    return Ok(Line::Refused);
+                }
+            }
+        }
+
+        Ok(Line::Ran(shell::run(&repository.path, command, shell::PATIENCE).await?))
+    }
+
     /// Starts a coding job and returns the repository it is working in.
     ///
     /// Returns as soon as the process is spawned. The result comes back later
@@ -1939,7 +2027,15 @@ impl Runtime {
                             let repository = name.clone();
                             tokio::spawn(async move {
                                 let allowed =
-                                    asking.ask_about_push(agent, job_run, &repository, &command).await;
+                                    asking
+                                        .ask_about_push(
+                                            agent,
+                                            job_run,
+                                            &repository,
+                                            &command,
+                                            Asker::Job,
+                                        )
+                                        .await;
                                 let _ = reply.send(allowed);
                             });
                         }
@@ -2477,15 +2573,23 @@ impl Runtime {
         }
     }
 
-    /// Asks the operator whether a running coding job may reach outside its
-    /// repository.
+    /// Asks the operator whether something in a repository may reach outside
+    /// it.
     ///
-    /// The gate in `coding/bridge.rs` decides *that* the question is worth
-    /// asking and names what is being asked about. This decides what happens
-    /// next, and it is a [`ProtectedAction::ActOnBehalf`] rather than a new
-    /// variant because it is exactly what that one already means: something
-    /// outside the workspace, in the operator's name, that cannot be taken
-    /// back. A push to their remote is that.
+    /// Two callers, one question. A coding job's `PreToolUse` hook is one and
+    /// [`Runtime::run_in_repository`] is the other, and both arrive here having
+    /// asked `coding::bridge::outward` the same thing about the same shape of
+    /// shell line. One row, one desk, one wording: the gate an operator
+    /// switched on is a fact about the repository, so it cannot mean one thing
+    /// through `code` and another through `shell`. [`Asker`] is the whole of
+    /// what differs.
+    ///
+    /// The gate decides *that* the question is worth asking and names what is
+    /// being asked about. This decides what happens next, and it is a
+    /// [`ProtectedAction::ActOnBehalf`] rather than a new variant because it is
+    /// exactly what that one already means: something outside the workspace, in
+    /// the operator's name, that cannot be taken back. A push to their remote
+    /// is that.
     ///
     /// Reusing it also means the standing grant means what it says. An operator
     /// who has already told this agent it may act on their behalf is not asked
@@ -2494,8 +2598,8 @@ impl Runtime {
     /// The wording is Guaca's, built from what the runtime validated, and the
     /// command appears as a quoted detail field. That is the rule every
     /// permission in this app follows and it matters more here than anywhere:
-    /// the string came out of a coding model that has been reading the web all
-    /// afternoon.
+    /// the string came out of a model that has been reading the web all
+    /// afternoon, whichever of the two it was.
     ///
     /// Anything other than a yes is a no. Unanswered, expired, a job whose
     /// agent has been deleted, a store that could not be read: none of them is
@@ -2507,16 +2611,24 @@ impl Runtime {
         run_id: RunId,
         repository: &str,
         command: &str,
+        asker: Asker,
     ) -> bool {
         let Ok(Some(card)) = self.inner.store.get_agent(agent) else {
             return false;
         };
 
-        let summary = format!(
-            "The coding agent working in {repository} for {} wants to run `{command}`, which \
-             reaches outside the repository under your name.",
-            card.name
-        );
+        let summary = match asker {
+            Asker::Job => format!(
+                "The coding agent working in {repository} for {} wants to run `{command}`, which \
+                 reaches outside the repository under your name.",
+                card.name
+            ),
+            Asker::Agent => format!(
+                "{} wants to run `{command}` in {repository}, which reaches outside the \
+                 repository under your name.",
+                card.name
+            ),
+        };
         let detail = vec![DetailField { label: "Command".to_string(), value: command.to_string() }];
 
         let settled = self
@@ -2526,7 +2638,11 @@ impl Runtime {
                 Request::Permission { action: ProtectedAction::ActOnBehalf },
                 summary,
                 detail,
-                false,
+                // A job is not a turn and its agent may be idle or answering
+                // somebody else, so the dot beside its name is not the job's to
+                // move. `shell` is the opposite: the turn that called it is
+                // genuinely stopped here, waiting, and has to say so.
+                asker == Asker::Agent,
             )
             .await;
 
@@ -4238,6 +4354,46 @@ impl Runtime {
                 (rendered, Part::tool_call(tools::CODE, arguments, outcome))
             }
 
+            ToolInvocation::Shell { command } => {
+                // No `credentials_named_in` here, and that is not an omission.
+                // A connector's value reaches a sandbox's environment and
+                // nothing else, so a line naming `$STRIPE_KEY` in a repository
+                // names a variable that is not set. Prefixing the summary with
+                // `used Stripe` would put a spend in the operator's audit trail
+                // that never happened, which is worse than the silence.
+                let (rendered, outcome) = match self.run_in_repository(card, run_id, &command).await
+                {
+                    Ok(Line::Ran(ran)) => {
+                        let summary = match ran.exit_code {
+                            None => format!("killed after {}s", shell::PATIENCE.as_secs()),
+                            Some(code) => format!(
+                                "exit {code}, {} bytes out",
+                                ran.stdout.len() + ran.stderr.len()
+                            ),
+                        };
+                        (ran.rendered(), ToolOutcome::Ok { summary })
+                    }
+                    // A no from the desk, said as the thing to do next. The
+                    // wording is the hook's, because it is the same answer
+                    // to the same question and an agent that met it through
+                    // `code` should not learn a different lesson here.
+                    Ok(Line::Refused) => (
+                        "Refused: that command reaches outside the repository under the \
+                             operator's name, and they did not allow it. Nothing ran. Do not try \
+                             it again or work around it: finish everything else you can, and say \
+                             in your reply that this step is waiting on them."
+                            .to_string(),
+                        ToolOutcome::Refused {
+                            reason: "the operator did not allow it".to_string(),
+                        },
+                    ),
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::SHELL, arguments, outcome))
+            }
+
             ToolInvocation::WriteDocument { name, content } => {
                 let (rendered, outcome) = match self.inner.files.put(&name, content.as_bytes()) {
                     Ok(file) => {
@@ -4614,15 +4770,20 @@ impl Runtime {
         arguments: serde_json::Value,
     ) -> (String, Part) {
         let surfaces = self.surfaces_for(card);
-        if !surfaces.computer && !surfaces.browser {
+        // A repository counts, and was missing here until an agent had a shell
+        // in one: `code` and `shell` both push under the operator's own name,
+        // which is the definition this refusal is written against. An agent
+        // that has one and is told nothing it can call reaches outside the
+        // workspace is told something false about the tool it is holding.
+        if !surfaces.computer && !surfaces.browser && !surfaces.repository {
             let reason = "nothing this agent can do reaches outside the workspace".to_string();
             return (
-                "Refused, and the operator was not asked: you have no computer and no browser, so \
-                 nothing you can call reaches outside this workspace and there is no action here \
-                 for them to authorize. What you are missing is access, not permission, and no \
-                 answer of theirs would give you any. Say in your reply what you could not reach \
-                 and that they can give you a computer or a browser from your panel, then carry \
-                 on with the part you can do from here."
+                "Refused, and the operator was not asked: you have no computer, no browser and no \
+                 repository, so nothing you can call reaches outside this workspace and there is \
+                 no action here for them to authorize. What you are missing is access, not \
+                 permission, and no answer of theirs would give you any. Say in your reply what \
+                 you could not reach and that they can give you a computer or a browser from your \
+                 panel, then carry on with the part you can do from here."
                     .to_string(),
                 Part::tool_call(
                     tools::REQUEST_PERMISSION,

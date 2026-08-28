@@ -57,6 +57,26 @@ describe("what one call was", () => {
     expect(step?.said).toBe("exit 0, 8 bytes out");
   });
 
+  it("tells the two shells apart, because they run on two machines", () => {
+    // An agent with a computer and a repository draws both in one turn, and the
+    // chip is the only place an operator finds out which filesystem a command
+    // touched.
+    const [inRepo] = steps(
+      call("shell", { command: "git status --short" }, ok("exit 0, 12 bytes out")),
+    );
+    expect(inRepo?.title).toBe("Ran a command in its repository");
+    expect(inRepo?.target).toBe("git status --short");
+
+    const [onSandbox] = steps(call("run_command", { command: "uname -a" }, ok("exit 0")));
+    expect(onSandbox?.title).toBe("Ran a command");
+  });
+
+  it("names the brief a coding agent was started with", () => {
+    const [step] = steps(call("code", { task: "fix the flaky test" }, ok("started work in guaca")));
+    expect(step?.title).toBe("Started a coding agent");
+    expect(step?.target).toBe("fix the flaky test");
+  });
+
   it("reads a screen action as the place it happened", () => {
     const [step] = steps(call("use_screen", { action: "click", x: 412, y: 96 }));
     expect(step?.title).toBe("Clicked on its screen");
