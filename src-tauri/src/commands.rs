@@ -28,7 +28,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{Harness, Repository, RepositoryDraft, RepositoryEdit};
+use crate::domain::repository::{Gate, Harness, Repository, RepositoryDraft, RepositoryEdit};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -129,6 +129,13 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::NoRepository(_) | RuntimeError::RepositoryBusy { .. } => {
                 CommandError::new("badRequest", err.to_string())
             }
+            // A job that ended between the panel drawing a button and the
+            // operator pressing it, and two facts about a job that is running.
+            // None of them is a failure: each says what the operator can do
+            // instead, which for the first is nothing at all.
+            RuntimeError::NoJobRunning
+            | RuntimeError::JobStillStarting
+            | RuntimeError::JobUnreachable(_) => CommandError::new("badRequest", err.to_string()),
             // All three are this side answering a request with the wrong shape
             // of answer, which is a defect here rather than something the
             // operator did. Reported as an ordinary failure so it lands in the
@@ -609,10 +616,16 @@ pub fn update_repository(
     name: String,
     note: String,
     harness: Harness,
+    gate: Gate,
 ) -> Reply<Repository> {
-    let clean = RepositoryEdit { name, note, harness }.clean()?;
-    let repository =
-        state.runtime.store().update_repository(id, &clean.name, &clean.note, clean.harness)?;
+    let clean = RepositoryEdit { name, note, harness, gate }.clean()?;
+    let repository = state.runtime.store().update_repository(
+        id,
+        &clean.name,
+        &clean.note,
+        clean.harness,
+        clean.gate,
+    )?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(repository)
 }
@@ -624,6 +637,19 @@ pub struct HarnessOnMachine {
     pub harness: Harness,
     /// Whether the program is on this app's `PATH`.
     pub installed: bool,
+    /// What it says its version is, or empty when it is not there.
+    ///
+    /// The program's own answer rather than a parse of it, so an operator
+    /// comparing this panel with their terminal sees the same string.
+    pub version: String,
+    /// Whether a job on it can be reached while it runs.
+    ///
+    /// False for `pi`, which has no second interface, and for a Claude Code
+    /// older than the one the bridge's contract was measured against. Neither
+    /// stops a job: both run exactly as every job ran before the bridge
+    /// existed, which is why this is a fact the panel states rather than a
+    /// refusal. `coding::presence` is the argument.
+    pub bridged: bool,
     /// How to get it if it is not. Sent from here rather than spelled in the
     /// webview, because it is the same string a refused job quotes at an agent,
     /// and two copies of an install command drift the day a vendor renames a
@@ -645,13 +671,51 @@ pub struct HarnessOnMachine {
 #[tauri::command]
 pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
     let asked = Harness::ALL.map(|harness| async move {
+        let (installed, version, bridged) = match crate::coding::presence(harness).await {
+            crate::coding::Presence::Missing => (false, String::new(), false),
+            crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
+        };
         HarnessOnMachine {
             harness,
-            installed: crate::coding::installed(harness).await,
+            installed,
+            version,
+            bridged,
             install: crate::coding::install(harness),
         }
     });
     Ok(futures_util::future::join_all(asked).await.into_iter().collect())
+}
+
+/// Sends a correction into a coding job that is already running.
+///
+/// The one thing an operator watching a job go the wrong way could not do. It
+/// is staged rather than delivered: the job reads it at its next tool boundary,
+/// or when it tries to finish, whichever comes first. `coding/bridge.rs` is
+/// both halves.
+///
+/// Refused rather than swallowed when nothing takes it. A job that has just
+/// ended, and a repository whose harness has no bridge, are two different
+/// sentences and both are things the operator can act on: the second is why
+/// the panel says which harness a repository runs.
+#[tauri::command]
+pub fn message_coding_job(
+    state: State<'_, AppState>,
+    repository_id: RepositoryId,
+    message: String,
+) -> Reply<()> {
+    state.runtime.message_job(repository_id, &message).map_err(Into::into)
+}
+
+/// Stops a coding job that is running, leaving whatever it has committed.
+///
+/// The process is killed. Nothing is reverted and nothing is cleaned up,
+/// because the commits a job was told to make as it went are the operator's
+/// checkpoints and throwing them away is not this button's decision to take.
+/// The agent that started the job is told, on the same path it is told about
+/// one that finished: an agent never told is an agent waiting forever.
+#[tauri::command]
+pub fn stop_coding_job(state: State<'_, AppState>, repository_id: RepositoryId) -> Reply<()> {
+    state.runtime.stop_job(repository_id).map_err(Into::into)
 }
 
 /// Unlinks a repository. Nothing on the operator's disk is touched.

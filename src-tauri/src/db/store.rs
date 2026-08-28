@@ -26,7 +26,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
-use crate::domain::repository::{CleanRepository, Harness, Repository};
+use crate::domain::repository::{CleanRepository, Gate, Harness, Repository};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -1481,8 +1481,9 @@ impl Store {
         let id = RepositoryId::new();
 
         conn.execute(
-            "INSERT INTO repositories (id,group_id,name,path,note,harness,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?7)",
+            "INSERT INTO repositories \
+             (id,group_id,name,path,note,harness,gate,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)",
             params![
                 id.to_string(),
                 clean.group_id.to_string(),
@@ -1490,6 +1491,7 @@ impl Store {
                 clean.path,
                 clean.note,
                 clean.harness.as_str(),
+                clean.gate.as_str(),
                 now,
             ],
         )
@@ -1576,11 +1578,13 @@ impl Store {
         name: &str,
         note: &str,
         harness: Harness,
+        gate: Gate,
     ) -> Result<Repository, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE repositories SET name=?2, note=?3, harness=?4, updated_at=?5 WHERE id=?1",
-            params![id.to_string(), name, note, harness.as_str(), now_ms()],
+            "UPDATE repositories SET name=?2, note=?3, harness=?4, gate=?5, updated_at=?6 \
+             WHERE id=?1",
+            params![id.to_string(), name, note, harness.as_str(), gate.as_str(), now_ms()],
         )?;
         if changed == 0 {
             return Err(StoreError::RepositoryNotFound(id));
@@ -3643,7 +3647,7 @@ pub enum PluginReach {
 }
 
 const REPOSITORY_COLUMNS: &str =
-    "SELECT id,group_id,name,path,note,harness,created_at,updated_at FROM repositories";
+    "SELECT id,group_id,name,path,note,harness,gate,created_at,updated_at FROM repositories";
 
 /// A unique-index failure here is one directory linked twice, and the operator
 /// wants to be told which rather than told the database said no.
@@ -3672,8 +3676,9 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             path: row.get(3)?,
             note: row.get(4)?,
             harness: Harness::parse(&row.get::<_, String>(5)?),
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            gate: Gate::parse(&row.get::<_, String>(6)?),
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })())
 }
@@ -4025,6 +4030,7 @@ mod tests {
 
     fn repo_at(group: GroupId, path: &str) -> CleanRepository {
         CleanRepository {
+            gate: Gate::Open,
             group_id: group,
             name: path.rsplit('/').next().unwrap_or(path).into(),
             path: path.into(),
@@ -7908,8 +7914,10 @@ mod tests {
         let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
         f.store.set_agent_repository(ada.id, Some(repo.id)).unwrap();
 
-        let renamed =
-            f.store.update_repository(repo.id, "guac", "run ./scripts/ci.sh", Harness::Pi).unwrap();
+        let renamed = f
+            .store
+            .update_repository(repo.id, "guac", "run ./scripts/ci.sh", Harness::Pi, Gate::Open)
+            .unwrap();
         assert_eq!(renamed.name, "guac");
         assert_eq!(renamed.note, "run ./scripts/ci.sh");
         assert_eq!(
@@ -7933,7 +7941,8 @@ mod tests {
         assert_eq!(made.harness, Harness::Claude);
         assert_eq!(f.store.get_repository(made.id).unwrap().unwrap().harness, Harness::Claude);
 
-        let moved = f.store.update_repository(made.id, "guaca", "", Harness::Pi).unwrap();
+        let moved =
+            f.store.update_repository(made.id, "guaca", "", Harness::Pi, Gate::Open).unwrap();
         assert_eq!(moved.harness, Harness::Pi);
         // Read back through the path a turn takes, which is a different query
         // and its own column list.

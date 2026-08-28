@@ -6,7 +6,7 @@
 //! subscription is spent by this program and by nothing else holding its
 //! credential.
 
-use super::{one_line, Outcome, Progress};
+use super::{one_line, Outcome, Progress, Wiring};
 
 pub(super) const BINARY: &str = "claude";
 
@@ -26,10 +26,38 @@ pub(super) const INSTALL: &str = "npm install -g @anthropic-ai/claude-code";
 ///
 /// No `--model`. Which model runs is Claude Code's own setting, and a second
 /// place to say it is a second place for it to be wrong. No `--continue`
-/// either: each job is its own session, and a session on disk is what lets the
-/// operator pick the work up with `claude -c` in that directory.
-pub(super) fn argv(task: &str) -> Vec<String> {
-    [
+/// either: each job is its own session.
+///
+/// # What the bridge adds, and what it deliberately does not
+///
+/// With a [`Wiring`], three more flags, and the two that are absent from it
+/// matter as much as the three that are there.
+///
+/// - **`--session-id`** names the session rather than reading it back. One
+///   value is then the job's address on the bridge, the key of its mailbox, and
+///   what an operator hands to `claude --resume` to open this job in their own
+///   terminal. That last one is the whole reason it is chosen: `claude -c`
+///   resumes whatever ran last in the directory, which after two jobs is the
+///   wrong one.
+/// - **`--settings`** carries this job's hooks, which are what make it
+///   reachable while it runs. Additive: it loads *alongside* the operator's own
+///   settings files rather than replacing them.
+/// - **`--mcp-config`** adds Guaca's own two-tool server, and is passed
+///   **without `--strict-mcp-config`** for the same reason.
+///
+/// That is the opposite choice from [`crate::llm::claude`], which switches
+/// every one of those off, and the two are right for opposite reasons. A turn
+/// there is answered by a program that should have this app's tools and nothing
+/// else. A job here is a coding agent working in the operator's own repository,
+/// where their rules file, their project settings and their MCP servers are the
+/// thing that makes it useful. `docs/CODING.md` has the measurement of what
+/// that inheritance costs and the one hazard in it.
+///
+/// No `--setting-sources` either, for the same reason: naming sources here
+/// would be this app deciding which of the operator's own files count in their
+/// own repository.
+pub(super) fn argv(task: &str, wiring: Option<&Wiring>) -> Vec<String> {
+    let mut args: Vec<String> = [
         "-p",
         task,
         "--output-format",
@@ -42,7 +70,17 @@ pub(super) fn argv(task: &str) -> Vec<String> {
     ]
     .iter()
     .map(|arg| arg.to_string())
-    .collect()
+    .collect();
+
+    if let Some(wiring) = wiring {
+        args.push("--session-id".to_string());
+        args.push(wiring.session_id.clone());
+        args.push("--settings".to_string());
+        args.push(wiring.settings.to_string_lossy().into_owned());
+        args.push("--mcp-config".to_string());
+        args.push(wiring.mcp_config.clone());
+    }
+    args
 }
 
 /// Folds one event from Claude Code's stream into the outcome.
@@ -310,21 +348,53 @@ mod tests {
 
     #[test]
     fn the_brief_is_an_argument_and_the_stream_is_asked_for() {
-        let args = argv("fix the flaky test");
+        let args = argv("fix the flaky test", None);
         assert!(args.contains(&"fix the flaky test".to_string()));
         assert!(args.contains(&"stream-json".to_string()));
         // The CLI refuses stream-json without it, and the refusal is a job that
         // never starts.
         assert!(args.contains(&"--verbose".to_string()));
         // Nobody is there to answer a prompt: stdin is /dev/null and the asking
-        // mode is a process that hangs until the ceiling kills it.
+        // mode is a process that hangs until the ceiling kills it. The gate is
+        // a hook, which overrides this per command rather than replacing it.
         assert!(args.contains(&"bypassPermissions".to_string()));
         assert!(args.contains(&super::super::APPENDED_PROMPT.to_string()));
         // Which model runs is Claude Code's own setting.
         assert!(!args.contains(&"--model".to_string()));
-        // A session on disk is what lets the operator pick the work up with
-        // `claude -c` in that directory.
         assert!(!args.contains(&"--continue".to_string()));
+    }
+
+    #[test]
+    fn a_job_without_a_bridge_is_the_job_this_app_always_ran() {
+        // `pi`, an older Claude Code, or a bridge that could not start. Every
+        // one of them has to be the vector that worked before any of this.
+        let bare = argv("do the thing", None);
+        for flag in ["--session-id", "--settings", "--mcp-config"] {
+            assert!(!bare.contains(&flag.to_string()), "{flag}");
+        }
+    }
+
+    #[test]
+    fn a_bridged_job_is_named_and_hooked_and_keeps_the_operators_own_setup() {
+        let wiring = Wiring {
+            session_id: "f96abc0a-5404-4e51-b465-b96677118cf9".into(),
+            settings: std::path::PathBuf::from("/tmp/guaca-job-x/settings.json"),
+            mcp_config: r#"{"mcpServers":{"guaca":{}}}"#.into(),
+        };
+        let args = argv("do the thing", Some(&wiring));
+
+        let after =
+            |flag: &str| args.iter().position(|arg| arg == flag).map(|at| args[at + 1].clone());
+        assert_eq!(after("--session-id").as_deref(), Some(wiring.session_id.as_str()));
+        assert_eq!(after("--settings").as_deref(), Some("/tmp/guaca-job-x/settings.json"));
+        assert_eq!(after("--mcp-config").as_deref(), Some(wiring.mcp_config.as_str()));
+
+        // The two absences are the point. A coding job wants the operator's own
+        // rules file, project settings and MCP servers: this adds to them and
+        // must never replace them, which is the opposite of what `llm/claude.rs`
+        // does and right for the opposite reason.
+        assert!(!args.contains(&"--strict-mcp-config".to_string()));
+        assert!(!args.contains(&"--setting-sources".to_string()));
     }
 
     #[test]

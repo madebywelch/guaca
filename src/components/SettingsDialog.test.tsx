@@ -138,8 +138,20 @@ const signOutAccount = vi.fn<() => Promise<AccountStatus>>(async () => noAccount
  *  suite that had to opt in to a present program would be asserting the
  *  refusal rather than the row. */
 const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>(async () => [
-  { harness: "claude", installed: true, install: "npm install -g @anthropic-ai/claude-code" },
-  { harness: "pi", installed: true, install: "npm install -g @mariozechner/pi" },
+  {
+    harness: "claude",
+    installed: true,
+    version: "2.1.247 (Claude Code)",
+    bridged: true,
+    install: "npm install -g @anthropic-ai/claude-code",
+  },
+  {
+    harness: "pi",
+    installed: true,
+    version: "0.9.0",
+    bridged: false,
+    install: "npm install -g @mariozechner/pi",
+  },
 ]);
 
 vi.mock("../lib/ipc", () => ({
