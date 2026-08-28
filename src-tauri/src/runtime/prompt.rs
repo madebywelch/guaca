@@ -712,21 +712,31 @@ pub fn system_prompt(
         out.push_str(&format!(
             "\n## Your repository\n\
              You work in one codebase: {}. It is a real git repository on the operator's own \
-             machine, with their uncommitted work and their branches in it.\n\
-             - `code` is how you reach it. Hand it a brief and a coding agent does the work \
-              there: reading, editing, running the tests, committing, pushing, opening a pull \
-              request.\n\
-             - It does not block. You get a message back when the work finishes, which may be \
-              many minutes. Start it, say you have started it, and end your turn.\n\
+             machine, with their uncommitted work and their branches in it. You reach it two \
+             ways, and picking the wrong one is the mistake worth avoiding here.\n\
+             - `shell` runs one command there and hands you what it printed, in this turn. It is \
+              for everything you want an answer to: `git status`, `git log`, `git diff`, reading \
+              a file, `gh pr view`, `gh pr merge`, `gh run list`. Reach for it first. If a \
+              question about this repository can be settled by a command, settle it rather than \
+              guessing or asking somebody.\n\
+             - `code` hands a brief to a coding agent that works there for minutes. It is for \
+              changing the codebase and for anything that means reading it properly to answer.\n\
+             - `code` does not block. You get a message back when the work finishes, which may be \
+              many minutes. Start it, say you have started it, and end your turn. `shell` is the \
+              opposite: it waits, so use it when you need the answer now.\n\
              - The coding agent cannot see this conversation and cannot ask you anything, so the \
               brief has to carry everything: what to change, how to tell it worked, and what to \
               do with the result.\n\
-             - You have not read the code yourself. When the work comes back, report what the \
-              coding agent says it did rather than claiming to have checked it.\n\
+             - When work comes back from `code`, report what it says it did. If it matters \
+              whether it landed, check with `shell` and say what you found.\n\
              - The coding agent is told the state of the work tree as it starts: the branch, \
               whether anything is uncommitted, and whether that branch has already been merged. \
               So do not put branch instructions in the brief and do not guess at one. Say what \
-              the work is and where it should end up.\n",
+              the work is and where it should end up.\n\
+             - Commands run as the operator, with their credentials. Pushing, merging, opening a \
+              pull request and cutting a release leave the repository under their name and git \
+              cannot undo them, so say afterward what you did, and ask first when you are not \
+              sure they want it.\n",
             repository.own_line().trim_start_matches("- "),
         ));
     }

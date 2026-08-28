@@ -197,6 +197,15 @@ function describe(tool: string, args: Args): Described {
     case "run_command":
       return { title: "Ran a command", target: text(args, "command") };
 
+    // Named apart from `run_command` rather than sharing its label, because
+    // the two run on different machines and the chip is where an operator
+    // finds out which. An agent that has both draws both in one turn.
+    case "shell":
+      return { title: "Ran a command in its repository", target: text(args, "command") };
+
+    case "code":
+      return { title: "Started a coding agent", target: text(args, "task") };
+
     case "open_on_desktop": {
       const command = text(args, "command");
       return {
@@ -331,6 +340,10 @@ export function callInFlight(name: string, raw: unknown): string {
   switch (name) {
     case "run_command":
       return "Running a command";
+    case "shell":
+      return "Running a command in its repository";
+    case "code":
+      return "Starting a coding agent";
     case "browse": {
       const url = text(args, "url");
       return url && text(args, "action") === "open"
@@ -377,6 +390,8 @@ function manyLabel(group: TrailGroup): string {
   switch (group.steps[0]!.tool) {
     case "run_command":
       return `Ran ${count} commands`;
+    case "shell":
+      return `Ran ${count} commands in its repository`;
     case "browse": {
       const places = new Set(group.steps.map((step) => step.where).filter(Boolean));
       const only = places.size === 1 ? [...places][0] : null;

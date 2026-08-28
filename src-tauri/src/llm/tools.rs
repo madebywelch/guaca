@@ -34,6 +34,7 @@ pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ATTACH_FILE: &str = "attach_file";
 pub const WRITE_DOCUMENT: &str = "write_document";
 pub const CODE: &str = "code";
+pub const SHELL: &str = "shell";
 
 /// Which of the two places an agent has been given, which decides which tools
 /// it is offered.
@@ -199,8 +200,8 @@ pub fn specs(surfaces: Surfaces, modalities: Modalities) -> Vec<ToolSpec> {
             USE_SCREEN => surfaces.computer && modalities.image,
             RUN_COMMAND | OPEN_ON_DESKTOP => surfaces.computer,
             BROWSE => surfaces.browser,
-            CODE => surfaces.repository,
-            REQUEST_PERMISSION => surfaces.computer || surfaces.browser,
+            CODE | SHELL => surfaces.repository,
+            REQUEST_PERMISSION => surfaces.computer || surfaces.browser || surfaces.repository,
             _ => true,
         })
         .collect()
@@ -319,12 +320,27 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: RUN_COMMAND.to_string(),
-            description: "Run a shell command on your own computer: a Linux machine with a \
-                          terminal, a filesystem and internet access, kept between turns. Use it \
-                          to look things up (`curl`), read and write files, install packages, \
-                          and run code. This is how you reach anything you do not already know. \
-                          The first call may take a few seconds while the machine starts."
-                .to_string(),
+            // The disclaimer is conditional because the tool it disclaims is:
+            // an agent with no repository has one shell and telling it about a
+            // second is a sentence about a tool that is not in its list. Both
+            // sides say it, for the reason a computer and a browser both do —
+            // a model reads one description and takes the nearest shell.
+            description: {
+                let mut said = String::from(
+                    "Run a shell command on your own computer: a Linux machine with a terminal, \
+                     a filesystem and internet access, kept between turns. Use it to look things \
+                     up (`curl`), read and write files, install packages, and run code. This is \
+                     how you reach anything you do not already know. The first call may take a \
+                     few seconds while the machine starts.",
+                );
+                if surfaces.repository {
+                    said.push_str(
+                        "\nThis machine is not where your repository is. Nothing of that \
+                         codebase is on this filesystem: for anything in it, use `shell`.",
+                    );
+                }
+                said
+            },
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -794,6 +810,67 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: SHELL.to_string(),
+            // The small door into the same repository `code` is the big door
+            // into, offered on the same condition. Two ways in, because the
+            // work genuinely comes in two sizes and a design with only the
+            // large one made an agent spend a coding job on `gh pr merge` —
+            // and, when the harness would not start, report to the operator
+            // that it had no shell at all.
+            //
+            // Three things have to be unmistakable and each is a way this gets
+            // used wrongly. It waits, which is what makes it the wrong tool for
+            // a build. It is bounded, so a model that would otherwise reach for
+            // it to run a test suite is told where the line is before it spends
+            // two minutes finding out. And on an agent that also has a computer
+            // there are now two shells in the tool list pointed at two
+            // different machines, which is the `browse`/`use_screen` hazard
+            // again: each has to name the other or a model takes the nearest
+            // one and reports that the repository is empty.
+            description: {
+                let mut said = String::from(
+                    "Run one shell command in your repository, on the operator's own machine, \
+                     and get its output back. This is how you look at the codebase and how you \
+                     do the small things to it: `git status`, `git log`, `git diff`, reading a \
+                     file, `gh pr view`, `gh pr merge`, `gh run list`, a quick script.\n\
+                     It waits for the command and hands you what it printed, so use it whenever \
+                     you need the answer in this turn. It is for commands that answer in \
+                     seconds: anything still going after two minutes is killed. For work that \
+                     takes longer than that, or that means reading the code and editing it, use \
+                     `code` instead.\n\
+                     You are running as the operator, with their credentials, in their \
+                     repository. Ordinary commands are yours to run. A command that pushes, \
+                     merges, opens a pull request or cuts a release leaves the repository under \
+                     their name and cannot be undone by git, so say what you did afterward, and \
+                     ask them first if you are not sure they want it.",
+                );
+                if surfaces.computer {
+                    said.push_str(
+                        "\nThis is not `run_command`. That one runs on your own Linux machine \
+                         somewhere else, which is a different filesystem with none of this \
+                         repository on it. Anything about this codebase is this tool.",
+                    );
+                }
+                said
+            },
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "One bash command line, e.g. `git log --oneline -10`. It \
+                                        runs at the top of the repository, so paths are relative \
+                                        to that and there is no need to `cd` there first. Long \
+                                        output is cut in the middle, so narrow it yourself when \
+                                        you can."
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: WRITE_DOCUMENT.to_string(),
             // The twelfth, and it exists because the eleventh had a hole under
             // it. `attach_file` hands over a file; until this, the only way an
@@ -926,6 +1003,18 @@ pub enum ToolInvocation {
     /// routine firing already uses.
     Code {
         task: String,
+    },
+    /// Run one line in this agent's repository and wait for it.
+    ///
+    /// The other half of [`ToolInvocation::Code`] and its opposite in the one
+    /// way that matters to a turn: this blocks and answers, that one starts
+    /// something and returns. Kept as its own variant rather than a shape of
+    /// [`ToolInvocation::RunCommand`] because the two run on different
+    /// machines, and a single variant would leave the runtime deciding which
+    /// from the agent's surfaces at dispatch time, which is a machine chosen by
+    /// inference rather than by the model.
+    Shell {
+        command: String,
     },
     /// Write a document out of the turn's own words and hand it over.
     ///
@@ -1083,6 +1172,8 @@ pub enum ToolParseError {
     MissingNote,
     #[error("run_command needs a non-empty `command` string")]
     MissingCommand,
+    #[error("shell needs a non-empty `command` string")]
+    MissingShellCommand,
     #[error("open_on_desktop needs a non-empty `command` string")]
     MissingDesktopCommand,
     #[error("use_screen needs a known `action`")]
@@ -1152,6 +1243,11 @@ impl ToolParseError {
             ToolParseError::MissingCommand => {
                 "Error: `command` must be a non-empty string, for example \
                  {\"command\": \"curl -s wttr.in/Charleston?format=3\"}."
+                    .to_string()
+            }
+            ToolParseError::MissingShellCommand => {
+                "Error: `command` must be a non-empty string: one bash command line to run in \
+                 your repository, for example {\"command\": \"git status --short\"}."
                     .to_string()
             }
             ToolParseError::MissingRecipients => {
@@ -1769,6 +1865,24 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 return Err(ToolParseError::MissingFiles);
             }
             Ok(ToolInvocation::AttachFile { files })
+        }
+        // `bash` and `terminal` are what a model calls this when it has been
+        // told it has a shell, and `run_shell_command` is what it reaches for
+        // having seen `run_command` in the same list. None of them is ambiguous
+        // with anything else here, and the alternative to matching them is a
+        // turn spent on the spelling of a tool the agent does have.
+        SHELL | "bash" | "sh" | "terminal" | "run_shell" | "run_shell_command"
+        | "shell_command" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: SHELL.to_string(),
+                detail: e.to_string(),
+            })?;
+            match first_string(&value, &["command", "cmd", "line", "script", "shell"]) {
+                Some(command) if !command.trim().is_empty() => {
+                    Ok(ToolInvocation::Shell { command })
+                }
+                _ => Err(ToolParseError::MissingShellCommand),
+            }
         }
         CODE | "write_code" | "run_coding_agent" | "delegate_code" => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -2442,14 +2556,32 @@ mod tests {
             "nothing it could do needs authorizing: {neither:?}"
         );
 
-        // A repository is the third thing an agent is given, and `code` is the
-        // only tool that reaches one. An agent in no repository must not be
-        // offered it: it costs a model call and a turn to discover, and the
-        // agent reports the capability as broken rather than as absent.
+        // A repository is the third thing an agent is given, and two tools
+        // reach one: `code` for work that takes minutes and `shell` for the
+        // answer it needs in this turn. An agent in no repository must be
+        // offered neither: either one costs a model call and a turn to
+        // discover, and the agent reports the capability as broken rather than
+        // as absent.
         let coder = names(Surfaces { computer: false, browser: false, repository: true });
-        assert!(coder.contains(&CODE.to_string()), "a repository needs no machine: {coder:?}");
-        assert!(!neither.contains(&CODE.to_string()), "nowhere to write code: {neither:?}");
-        assert!(!computer_only.contains(&CODE.to_string()), "a sandbox is not a repository");
+        for reaches in [CODE, SHELL] {
+            assert!(
+                coder.contains(&reaches.to_string()),
+                "a repository needs no machine: {coder:?}"
+            );
+            assert!(!neither.contains(&reaches.to_string()), "no repository: {neither:?}");
+            assert!(
+                !computer_only.contains(&reaches.to_string()),
+                "a sandbox is not a repository: {reaches}"
+            );
+        }
+        // And a repository is a way out of the workspace, so asking to act in
+        // the operator's name means something there. It is the same push either
+        // tool makes, and an agent holding one told nothing it can call reaches
+        // outside the workspace has been told something false.
+        assert!(
+            coder.contains(&REQUEST_PERMISSION.to_string()),
+            "a push is in the operator's name: {coder:?}"
+        );
 
         assert_eq!(names(Surfaces::both()).len(), all_specs(Surfaces::both()).len());
     }
@@ -2475,6 +2607,94 @@ mod tests {
             "the operator can still watch the screen: {blind:?}"
         );
         assert!(blind.contains(&BROWSE.to_string()), "the browser answers in text: {blind:?}");
+    }
+
+    /// The `browse`/`use_screen` hazard, one level over: an agent with both a
+    /// computer and a repository is holding two shells pointed at two
+    /// filesystems, and a model reads one description and takes the nearest
+    /// one. Each has to name the other, and only when the other is there.
+    #[test]
+    fn two_shells_on_one_agent_each_say_which_machine_they_are_not() {
+        let described = |surfaces: Surfaces, name: &str| -> String {
+            specs(surfaces, Modalities::seeing())
+                .into_iter()
+                .find(|spec| spec.name == name)
+                .unwrap_or_else(|| panic!("{name} was not offered"))
+                .description
+        };
+
+        let both = Surfaces { computer: true, browser: false, repository: true };
+        assert!(described(both, SHELL).contains("not `run_command`"), "shell says nothing of it");
+        assert!(described(both, RUN_COMMAND).contains("`shell`"), "run_command says nothing of it");
+
+        // And neither disclaims a tool the agent does not have, which would be
+        // a sentence about something absent from its list.
+        let repository_only = Surfaces { computer: false, browser: false, repository: true };
+        assert!(!described(repository_only, SHELL).contains("run_command"), "there is no other");
+        let computer_only = Surfaces { computer: true, browser: false, repository: false };
+        assert!(!described(computer_only, RUN_COMMAND).contains("`shell`"), "there is no other");
+    }
+
+    /// The two things a model gets wrong about it, and both are the opposite of
+    /// what `code` gets wrong: this one waits, and it has a ceiling low enough
+    /// that a build does not belong in it.
+    #[test]
+    fn the_shell_tool_says_it_waits_and_where_the_line_is() {
+        let spec = specs(Surfaces::both(), Modalities::seeing())
+            .into_iter()
+            .find(|spec| spec.name == SHELL)
+            .expect("offered with a repository");
+
+        assert!(spec.description.contains("waits"), "{}", spec.description);
+        assert!(spec.description.contains("two minutes"), "{}", spec.description);
+        assert!(spec.description.contains("`code`"), "the other door: {}", spec.description);
+        // And that what it does is in the operator's name, which is the whole
+        // of why the gate exists.
+        assert!(spec.description.contains("operator"), "{}", spec.description);
+    }
+
+    /// A model that has been told it has a shell calls it `bash`. Refusing that
+    /// is a turn spent on the spelling of a tool the agent does have.
+    #[test]
+    fn a_shell_call_parses_from_the_names_a_model_reaches_for() {
+        for name in ["shell", "bash", "sh", "terminal", "run_shell", "run_shell_command"] {
+            let call = ToolCall {
+                id: "1".into(),
+                name: name.into(),
+                arguments: r#"{"command": "git status --short"}"#.into(),
+            };
+            assert_eq!(
+                parse(&call).unwrap(),
+                ToolInvocation::Shell { command: "git status --short".to_string() },
+                "{name} did not parse"
+            );
+        }
+
+        // The field, and the two near misses beside it.
+        for field in ["command", "cmd", "line"] {
+            let call = ToolCall {
+                id: "1".into(),
+                name: SHELL.into(),
+                arguments: format!(r#"{{"{field}": "git log -1"}}"#),
+            };
+            assert_eq!(
+                parse(&call).unwrap(),
+                ToolInvocation::Shell { command: "git log -1".to_string() },
+                "{field} did not parse"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shell_call_with_nothing_in_it_says_what_a_correct_one_looks_like() {
+        let call = ToolCall {
+            id: "1".into(),
+            name: SHELL.into(),
+            arguments: r#"{"command": "   "}"#.into(),
+        };
+        let err = parse(&call).unwrap_err();
+        assert_eq!(err, ToolParseError::MissingShellCommand);
+        assert!(err.guidance().contains("git status"), "{}", err.guidance());
     }
 
     #[test]
@@ -2736,8 +2956,8 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            15,
-            "directory, run_command, open_on_desktop, use_screen, browse, code, schedule, \
+            16,
+            "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
              create_agent, request_permission, ask_operator, send_message, write_document, \
              attach_file, update_memory, note_progress"
         );
