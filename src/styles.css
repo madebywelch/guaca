@@ -2154,6 +2154,15 @@ button {
   border: 1px solid var(--edge);
   padding: var(--space-2) var(--space-4);
   text-align: left;
+  /* `break-word` rather than the body's `anywhere`, and the difference is the
+     whole reason this line exists. Both break a word that will not fit, but
+     `anywhere` also makes a cell's min-content width one character, and auto
+     table layout sizes a squeezed column to exactly that: a `Result` column
+     next to a wide one came out a letter wide, spelling `Re/sul/t` down three
+     lines. `break-word` leaves min-content at the longest word, so a column is
+     never narrower than a word in it, and a token genuinely longer than the
+     table gets the sideways scroller `.md__scroll` is there to give it. */
+  overflow-wrap: break-word;
 }
 
 .md th {

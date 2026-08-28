@@ -269,6 +269,41 @@ describe("a message's clock", () => {
   });
 });
 
+describe("a table in a message", () => {
+  /**
+   * A cell breaks at a word, and the body it sits in breaks anywhere.
+   *
+   * They look like the same decision and are opposite ones. Prose in a chat
+   * bubble has to break a URL mid-token or it pushes the reading column
+   * sideways, which is what `anywhere` buys. In a table it also drops every
+   * cell's min-content width to a single character, and auto layout hands a
+   * squeezed column exactly its min-content: a `Result` column beside a wide
+   * one came out one letter wide, spelling `Re/sul/t` and `Qu/eu/ed` down
+   * three lines each. The two values are indistinguishable on a paragraph,
+   * which is why this is asserted rather than left to the eye.
+   */
+  function cell(tag: "th" | "td"): HTMLElement {
+    const md = document.createElement("div");
+    md.className = "md";
+    const table = document.createElement("table");
+    const row = document.createElement("tr");
+    const at = document.createElement(tag);
+    row.append(at);
+    table.append(row);
+    md.append(table);
+    document.body.append(md);
+    return at;
+  }
+
+  it.each(["th", "td"] as const)("sizes a %s column to a word, not a letter", (tag) => {
+    expect(getComputedStyle(cell(tag)).overflowWrap).toBe("break-word");
+  });
+
+  it("still breaks anywhere in the prose around it", () => {
+    expect(getComputedStyle(nest("md")).overflowWrap).toBe("anywhere");
+  });
+});
+
 describe("the composer's mention layer", () => {
   /**
    * The pill is painted on a copy of the draft, under the operator's own text.
