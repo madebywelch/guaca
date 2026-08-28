@@ -129,6 +129,12 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::NoRepository(_) | RuntimeError::RepositoryBusy { .. } => {
                 CommandError::new("badRequest", err.to_string())
             }
+            // A `shell` failure is answered to the model inside its turn and
+            // never to the webview: no command here runs one. The arm exists
+            // because the enum is one enum, and it says what it would say if a
+            // command ever did: a directory that has moved is something the
+            // operator fixes from the repository's panel.
+            RuntimeError::Shell(_) => CommandError::new("badRequest", err.to_string()),
             // A job that ended between the panel drawing a button and the
             // operator pressing it, and two facts about a job that is running.
             // None of them is a failure: each says what the operator can do

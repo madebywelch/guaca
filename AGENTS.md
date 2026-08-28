@@ -67,6 +67,8 @@ src-tauri/src/
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
   repo.rs             Whether a directory is one an agent may be given. Runs git.
+  shell.rs            One line in that directory, run and answered in the turn
+                      that asked. The small door; `coding/` is the big one.
   coding/             Starting something that writes code, and reading it back.
     mod.rs            One process, one ceiling, one prompt. Read this one first.
     pi.rs             `pi`'s argument vector and its stream.
@@ -118,11 +120,13 @@ repo: the frontend renders state and forwards intent.
 | Stopping a conversation: what a stop marks, wakes, and must never release | *A stop marks the run and releases nothing*, then `Runtime::stop_run` |
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
+| An agent running one command in its repository, and which of the two doors a piece of work goes through | *A repository has two doors, and the small one is `shell`* in `docs/CODING.md`, then `src-tauri/src/shell.rs` and `Runtime::run_in_repository` |
 | Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
 | An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |
 | Reaching a job that is already running, stopping one, or anything a hook does | *A job can be reached while it runs* in `docs/CODING.md`, then `coding/bridge.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check any of it |
 | Whether a job stops before it pushes, and what counts as outward-facing | *The gate is a decision the operator takes per repository* in `docs/CODING.md`, then `bridge::outward` and `Runtime::park_with` |
+| Whether a `shell` line stops before it pushes, and which asker the card names | *The gate is asked from the same function* in `docs/CODING.md`, then `Runtime::ask_about_push` and `Asker`, which have to answer for both doors |
 | What a job inherits from the operator's own Claude Code, and what that costs | *A job inherits the operator's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
 | A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
@@ -492,6 +496,26 @@ the model takes a screenshot to see what `browse` did.
   `claude -c` resumes whatever ran last in the directory, which after two jobs is
   the wrong one. Chosen also means a job killed at the ceiling, and one that died
   before its first event, both still have one to hand over.
+- **A repository has two doors and one gate, and the gate is one function.**
+  `code` hands a brief to a harness for minutes; `shell` runs one line and
+  answers in the turn. The second exists because the first was the only way in,
+  which made `gh pr merge` cost a coding job and made an agent whose harness
+  would not start — a spent plan, a program missing, a work tree already busy —
+  report that it had no shell at all, on a machine where `gh` was installed and
+  signed in. It adds no reach: a job in that directory already ran arbitrary
+  commands as the operator under `bypassPermissions`. What it must not add is a
+  second answer to *what counts as outward-facing*, so both doors ask
+  `coding::bridge::outward` and both park through `Runtime::ask_about_push`. Two
+  readings of one gate is a gate an agent walks around by picking the other
+  tool, which is worse than none: the operator switched it on and would be told
+  it was holding. `docs/CODING.md`.
+- **`shell` takes no lock, and `code` takes one.** They look like the same
+  decision about one work tree and are opposite ones. Two harnesses in a
+  directory interleave their edits over minutes and nothing downstream could say
+  which of them wrote what; one line is the operator typing in their own
+  terminal while a job runs, which nothing prevents and which is ordinary.
+  Refusing it would take away the read an agent most wants while a job is going,
+  which is what the job is doing.
 - **A coding job is not a turn, so it must not move the agent's activity.**
   `Runtime::park_with` is `park` with exactly that one difference. A parked turn
   is an agent genuinely stopped mid-inference and the dot beside its name has to

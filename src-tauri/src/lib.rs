@@ -20,6 +20,7 @@ pub mod programs;
 pub mod proxy;
 pub mod repo;
 pub mod runtime;
+pub mod shell;
 pub mod subscription;
 pub mod trajectory;
 pub mod tray;
