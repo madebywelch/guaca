@@ -4,6 +4,7 @@ import { api } from "../lib/ipc";
 import {
   type AgentCard,
   errorMessage,
+  type Gate,
   type GroupId,
   HARNESSES,
   type Harness,
@@ -83,6 +84,65 @@ function HarnessChoice({
         ))}
       </p>
     </>
+  );
+}
+
+/**
+ * Whether a job here asks before it reaches outside the directory.
+ *
+ * A checkbox rather than a pair of buttons, because it is one decision with a
+ * default rather than a choice between two things: the harness above is the
+ * second shape and they should not look alike.
+ *
+ * Disabled on a harness that cannot be reached while it works, and the hint
+ * says which, because a control that silently does nothing is worse than one
+ * that is not offered. `pi` has no second interface at all.
+ */
+function GateChoice({
+  chosen,
+  harness,
+  machine,
+  disabled,
+  onChoose,
+}: {
+  chosen: Gate;
+  harness: Harness;
+  machine: HarnessOnMachine[] | null;
+  disabled: boolean;
+  onChoose: (gate: Gate) => void;
+}) {
+  // Null is the check still running, and it must not disable the control on a
+  // machine that would have supported it.
+  const row = machine?.find((known) => known.harness === harness);
+  const reachable = machine === null || (row?.bridged ?? true);
+
+  return (
+    <label className="field field--row">
+      <input
+        type="checkbox"
+        checked={chosen === "askBeforePushing"}
+        disabled={disabled || !reachable}
+        onChange={(event) => onChoose(event.target.checked ? "askBeforePushing" : "open")}
+      />
+      <span>
+        <span className="field__label">Ask me before pushing</span>
+        <span className="field__hint">
+          A push, a pull request, a merge or a release waits on your desk first. Everything else a
+          job does is what the directory and git already cover. It is not a sandbox: the program
+          runs as you, with your credentials, and a job that wanted to get around this could. What
+          it buys is that the ordinary push is one you see first. Leave it off for a repository
+          nobody is watching: a job is told nobody will answer a question, and one waiting on you is
+          one that runs out its own clock.
+          {!reachable && (
+            <>
+              {" "}
+              {labelOf(harness)} cannot be reached while it works, so nothing here can stop it.
+              {row?.version ? ` This machine has ${row.version}.` : ""}
+            </>
+          )}
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -166,12 +226,19 @@ export function RepositoryList({ groupId, crew }: Props) {
     name: "",
     note: "",
     harness: "pi",
+    gate: "open",
   });
   const [editing, setEditing] = useState<RepositoryId | null>(null);
-  const [edit, setEdit] = useState<{ name: string; note: string; harness: Harness }>({
+  const [edit, setEdit] = useState<{
+    name: string;
+    note: string;
+    harness: Harness;
+    gate: Gate;
+  }>({
     name: "",
     note: "",
     harness: "pi",
+    gate: "open",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -230,7 +297,7 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
-    setDraft({ path: "", name: "", note: "", harness: "pi" });
+    setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open" });
   };
 
   const add = () =>
@@ -257,6 +324,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                   name: repository.name,
                   note: repository.note,
                   harness: repository.harness,
+                  gate: repository.gate,
                 });
               }}
             >
@@ -293,7 +361,13 @@ export function RepositoryList({ groupId, crew }: Props) {
                   disabled={busy !== null || !edit.name.trim()}
                   onClick={() =>
                     void run(`${repository.id}-edit`, () =>
-                      api.updateRepository(repository.id, edit.name, edit.note, edit.harness),
+                      api.updateRepository(
+                        repository.id,
+                        edit.name,
+                        edit.note,
+                        edit.harness,
+                        edit.gate,
+                      ),
                     ).then((ok) => ok && setEditing(null))
                   }
                 >
@@ -310,7 +384,33 @@ export function RepositoryList({ groupId, crew }: Props) {
                   // click is not the gesture that saves it.
                   setEdit({ ...edit, harness });
                   void run(`${repository.id}-harness`, () =>
-                    api.updateRepository(repository.id, repository.name, repository.note, harness),
+                    api.updateRepository(
+                      repository.id,
+                      repository.name,
+                      repository.note,
+                      harness,
+                      repository.gate,
+                    ),
+                  );
+                }}
+              />
+              <GateChoice
+                chosen={edit.gate}
+                harness={edit.harness}
+                machine={machine}
+                disabled={busy !== null}
+                onChoose={(gate) => {
+                  // The stored name and note, for the reason the harness above
+                  // uses them: a half-typed rename is not what this click saves.
+                  setEdit({ ...edit, gate });
+                  void run(`${repository.id}-gate`, () =>
+                    api.updateRepository(
+                      repository.id,
+                      repository.name,
+                      repository.note,
+                      edit.harness,
+                      gate,
+                    ),
                   );
                 }}
               />
@@ -384,6 +484,13 @@ export function RepositoryList({ groupId, crew }: Props) {
             machine={machine}
             disabled={busy !== null}
             onChoose={(harness) => setDraft({ ...draft, harness })}
+          />
+          <GateChoice
+            chosen={draft.gate}
+            harness={draft.harness}
+            machine={machine}
+            disabled={busy !== null}
+            onChoose={(gate) => setDraft({ ...draft, gate })}
           />
           <p className="field__hint">
             The full path to the directory, which has to be the root of a git repository. Git is the

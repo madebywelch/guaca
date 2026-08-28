@@ -152,6 +152,72 @@ impl Harness {
     }
 }
 
+/// Whether a job in this directory stops before it reaches outside it.
+///
+/// A push, a merge or a release is the operator's own name going somewhere git
+/// cannot take it back from, and this is whether one of those parks on the desk
+/// first. Everything else a job does, every edit and every test run, is what the
+/// directory and git already cover and is never gated.
+///
+/// ## Why it is per repository, and why it is off
+///
+/// Per repository for the reason [`Harness`] is: it is a fact about how work
+/// happens *here*. A crew's own tooling repository and the codebase that ships
+/// to customers want opposite answers, and one global setting cannot say that.
+///
+/// Off by default, and that is not caution about a migration. `coding`'s
+/// appended prompt tells every job that it is running unattended and that
+/// nobody will answer a question. Switching this on for everybody would make
+/// that sentence false in every repository at once, and a job that believes it
+/// while a hook silently holds it is a job that reports a push it never made.
+/// An operator turning it on is an operator saying they will be there.
+///
+/// ## It is not a boundary
+///
+/// The gate reads a shell line and decides whether it looks like a push, which
+/// is a judgment about the ordinary case. A job that wanted to get around it
+/// could, and it was already running as the operator with their credentials and
+/// their network before any of this existed. `coding/bridge.rs` says the same
+/// thing where the reading happens, and `docs/CODING.md` says it at length.
+/// Neither should ever be softened into a claim about confinement.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Gate {
+    /// Nothing stops. The directory and git are the boundary, as they were
+    /// before a job could be stopped at all.
+    #[default]
+    Open,
+    /// A push, a pull request, a merge or a release asks the operator first.
+    AskBeforePushing,
+}
+
+impl Gate {
+    /// What the column holds, and what crosses IPC. One spelling for both, for
+    /// the reason [`Harness::as_str`] has one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Gate::Open => "open",
+            Gate::AskBeforePushing => "askBeforePushing",
+        }
+    }
+
+    /// What a stored row means. Anything unrecognized is [`Gate::Open`], which
+    /// is the default the column was added with and what every job before it
+    /// did. Same reasoning as [`Harness::parse`], with one addition: reading an
+    /// unknown value as the *asking* variant would park jobs on a desk over a
+    /// value a downgrade wrote.
+    pub fn parse(raw: &str) -> Gate {
+        match raw {
+            "askBeforePushing" => Gate::AskBeforePushing,
+            _ => Gate::Open,
+        }
+    }
+
+    pub fn asks(self) -> bool {
+        self == Gate::AskBeforePushing
+    }
+}
+
 /// A directory a crew may work in.
 ///
 /// Who is in it is not on this type. An agent carries the repository it works
@@ -186,6 +252,8 @@ pub struct Repository {
     /// programs is two coding agents in one work tree, which is the thing
     /// `Runtime::start_job` takes a lock to prevent.
     pub harness: Harness,
+    /// Whether a job here stops before it reaches outside the directory.
+    pub gate: Gate,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -220,6 +288,11 @@ pub struct RepositoryDraft {
     /// means and what every repository linked before it existed ran.
     #[serde(default)]
     pub harness: Harness,
+    /// Absent is `open`, for the same reason and one more: the appended prompt
+    /// tells a job nobody will answer a question, so asking has to be something
+    /// the operator said rather than something a caller forgot to mention.
+    #[serde(default)]
+    pub gate: Gate,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -230,6 +303,7 @@ pub struct CleanRepository {
     pub path: String,
     pub note: String,
     pub harness: Harness,
+    pub gate: Gate,
 }
 
 /// What an operator may change about a repository that is already linked.
@@ -254,6 +328,7 @@ pub struct RepositoryEdit {
     pub name: String,
     pub note: String,
     pub harness: Harness,
+    pub gate: Gate,
 }
 
 impl RepositoryEdit {
@@ -277,7 +352,7 @@ impl RepositoryEdit {
             return Err(RepositoryError::NoteTooLong);
         }
 
-        Ok(RepositoryEdit { name, note, harness: self.harness })
+        Ok(RepositoryEdit { name, note, harness: self.harness, gate: self.gate })
     }
 }
 
@@ -331,6 +406,7 @@ impl RepositoryDraft {
             },
             note: self.note.clone(),
             harness: self.harness,
+            gate: self.gate,
         }
         .clean()?;
 
@@ -340,6 +416,7 @@ impl RepositoryDraft {
             path: path.to_string(),
             note: edit.note,
             harness: edit.harness,
+            gate: edit.gate,
         })
     }
 }
@@ -350,6 +427,7 @@ mod tests {
 
     fn draft(path: &str) -> RepositoryDraft {
         RepositoryDraft {
+            gate: Gate::Open,
             group_id: GroupId::new(),
             name: String::new(),
             path: path.to_string(),
@@ -400,6 +478,7 @@ mod tests {
             name: "  guac  ".into(),
             note: "  never touch migrations  ".into(),
             harness: Harness::Claude,
+            gate: Gate::AskBeforePushing,
         }
         .clean()
         .expect("an edit carries no path and must not be refused for one");
@@ -407,14 +486,20 @@ mod tests {
         assert_eq!(clean.name, "guac");
         assert_eq!(clean.note, "never touch migrations");
         assert_eq!(clean.harness, Harness::Claude);
+        assert_eq!(clean.gate, Gate::AskBeforePushing);
     }
 
     #[test]
     fn an_edit_refuses_what_a_link_refuses_and_a_name_it_cannot_backfill() {
         let refused = |name: &str, note: &str| {
-            RepositoryEdit { name: name.into(), note: note.into(), harness: Harness::Pi }
-                .clean()
-                .unwrap_err()
+            RepositoryEdit {
+                name: name.into(),
+                note: note.into(),
+                harness: Harness::Pi,
+                gate: Gate::Open,
+            }
+            .clean()
+            .unwrap_err()
         };
 
         assert_eq!(refused(&"x".repeat(MAX_NAME_LEN + 1), ""), RepositoryError::NameTooLong);
@@ -444,6 +529,7 @@ mod tests {
         let repo = Repository {
             id: RepositoryId::new(),
             group_id: GroupId::new(),
+            gate: Gate::Open,
             name: "guaca".into(),
             path: "/dev/guaca".into(),
             note: "run ./scripts/ci.sh before you finish".into(),

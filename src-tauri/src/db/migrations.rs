@@ -1180,6 +1180,29 @@ ALTER TABLE repositories ADD COLUMN harness TEXT NOT NULL DEFAULT 'pi';
 ALTER TABLE agents ADD COLUMN discarded_at INTEGER;
 "#,
     ),
+    (
+        42,
+        r#"
+-- Whether a coding job in this directory stops before it reaches outside it.
+--
+-- A push, a pull request, a merge or a release is the operator's own name going
+-- somewhere git cannot take it back from. Until a job could be reached while it
+-- was running there was no way to ask about one, so every job did all of them
+-- unattended and the only boundary was the directory and the undo. There is a
+-- way now, and this is where an operator says they want it used here.
+--
+-- `'open'` is what every job before today did, so the default is a statement of
+-- fact rather than a preference. It is also the only safe default for a second
+-- reason: `coding::APPENDED_PROMPT` tells a job that nobody will answer a
+-- question, and a value that made that false everywhere at once would hold jobs
+-- on a desk in workspaces nobody is watching.
+--
+-- Unrecognized values read back as `open` rather than failing the row, which is
+-- `Harness::parse`'s reasoning plus one of its own: reading an unknown value as
+-- the asking variant would park jobs over a string a downgrade wrote.
+ALTER TABLE repositories ADD COLUMN gate TEXT NOT NULL DEFAULT 'open';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

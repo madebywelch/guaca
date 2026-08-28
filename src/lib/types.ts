@@ -307,6 +307,8 @@ export interface Repository {
   note: string;
   /** Which coding harness a job in this directory starts. */
   harness: Harness;
+  /** Whether a job here asks before it reaches outside the directory. */
+  gate: Gate;
   createdAt: number;
   updatedAt: number;
 }
@@ -318,6 +320,20 @@ export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
 ];
 
 /**
+ * Whether a coding job in a directory stops before it reaches outside it.
+ *
+ * A push, a pull request, a merge or a release is the operator's own name going
+ * somewhere git cannot take it back from. Everything else a job does is what
+ * the directory and the undo already cover, and is never gated.
+ *
+ * `open` is the default and is what every job did before a job could be reached
+ * at all. It stays the default because the prompt every job is given says
+ * nobody will answer a question: an operator turning this on is an operator
+ * saying they will be there.
+ */
+export type Gate = "open" | "askBeforePushing";
+
+/**
  * One harness, as the machine reports it.
  *
  * The install command comes from Rust rather than being spelled here, because
@@ -327,6 +343,17 @@ export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
 export interface HarnessOnMachine {
   harness: Harness;
   installed: boolean;
+  /** What it says its version is, or empty when it is not there. */
+  version: string;
+  /**
+   * Whether a job on it can be reached while it runs.
+   *
+   * False for `pi`, which has no second interface, and for a Claude Code older
+   * than the one the behavior was measured against. Neither stops a job: both
+   * run exactly as every job ran before any of this, so this is a fact the
+   * panel states rather than a reason to refuse.
+   */
+  bridged: boolean;
   install: string;
 }
 
@@ -370,6 +397,7 @@ export interface RepositoryDraft {
   path: string;
   note: string;
   harness: Harness;
+  gate: Gate;
 }
 
 export type PluginId = string;

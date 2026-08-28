@@ -1,8 +1,16 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { CodingPanel } from "./CodingPanel";
+
+vi.mock("../lib/ipc", () => ({
+  api: { messageCodingJob: vi.fn(), stopCodingJob: vi.fn() },
+}));
+
+const messageCodingJob = vi.mocked(api.messageCodingJob);
+const stopCodingJob = vi.mocked(api.stopCodingJob);
 
 const AGENT = "a1";
 const REPO = "r1";
@@ -19,6 +27,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
         path: "/Users/you/dev/vision-ios",
         note: "",
         harness: "pi",
+        gate: "open",
         createdAt: 0,
         updatedAt: 0,
       },
@@ -28,7 +37,12 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
 }
 
 describe("CodingPanel", () => {
-  beforeEach(() => seed());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    messageCodingJob.mockResolvedValue(undefined);
+    stopCodingJob.mockResolvedValue(undefined);
+    seed();
+  });
 
   it("draws nothing when no job is running", () => {
     // Furniture that is always there is furniture. This is on screen only
@@ -90,6 +104,70 @@ describe("CodingPanel", () => {
     });
     render(<CodingPanel agent={AGENT} />);
     expect(screen.getAllByText("swift test")).toHaveLength(2);
+  });
+
+  it("sends a correction into the job that is running", async () => {
+    // The gap this closes: a job runs for up to forty-five minutes and used to
+    // be write-only. An operator watching one go wrong at minute three could
+    // only wait for it to finish.
+    seed({ building: { [REPO]: AGENT } });
+    render(<CodingPanel agent={AGENT} />);
+
+    const box = screen.getByLabelText("Send a correction to the running coding job");
+    fireEvent.change(box, { target: { value: "  use the staging bucket  " } });
+    fireEvent.click(screen.getByText("Send"));
+
+    await waitFor(() =>
+      expect(messageCodingJob).toHaveBeenCalledWith(REPO, "use the staging bucket"),
+    );
+    // Said, because what was typed never becomes a message anywhere: without a
+    // word here the only evidence it arrived is the job changing course later.
+    expect(await screen.findByText(/Sent\./)).toBeTruthy();
+    expect((box as HTMLInputElement).value).toBe("");
+  });
+
+  it("says why a correction was refused rather than looking like it landed", async () => {
+    seed({ building: { [REPO]: AGENT } });
+    messageCodingJob.mockRejectedValue(new Error("pi has no way to be reached"));
+    render(<CodingPanel agent={AGENT} />);
+
+    fireEvent.change(screen.getByLabelText("Send a correction to the running coding job"), {
+      target: { value: "stop after the tests" },
+    });
+    fireEvent.click(screen.getByText("Send"));
+
+    expect(await screen.findByText(/no way to be reached/)).toBeTruthy();
+    // The text stays in the box: it was not delivered, so it is still the
+    // operator's to send somewhere.
+    expect(
+      (screen.getByLabelText("Send a correction to the running coding job") as HTMLInputElement)
+        .value,
+    ).toBe("stop after the tests");
+  });
+
+  it("arms the stop before it fires it, and says what survives", async () => {
+    // This ends work that cannot be resumed. The confirmation is drawn where
+    // the click happened rather than somewhere the operator has to go and find.
+    seed({ building: { [REPO]: AGENT } });
+    render(<CodingPanel agent={AGENT} />);
+
+    fireEvent.click(screen.getByText("Stop"));
+    expect(stopCodingJob).not.toHaveBeenCalled();
+    expect(screen.getByText(/Whatever it has committed stays/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText("Stop it"));
+    await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(REPO));
+  });
+
+  it("lets an armed stop be called off", async () => {
+    seed({ building: { [REPO]: AGENT } });
+    render(<CodingPanel agent={AGENT} />);
+
+    fireEvent.click(screen.getByText("Stop"));
+    fireEvent.click(screen.getByText("Keep going"));
+
+    expect(screen.queryByText("Stop it")).toBeNull();
+    expect(stopCodingJob).not.toHaveBeenCalled();
   });
 
   it("belongs to the agent that started the job and nobody else", () => {
