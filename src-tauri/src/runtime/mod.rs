@@ -443,6 +443,44 @@ const SIGNIN_SCAN_EVERY: Duration = Duration::from_secs(120);
 /// forever, because a turn that never ends is a run that never settles.
 const APPROVAL_WINDOW: Duration = Duration::from_secs(10 * 60);
 
+/// A coding job, while it is running.
+///
+/// Everything about a job that outlives the turn that started it and that
+/// something outside the job needs to reach: who owns it, how to stop it, where
+/// to post it a correction, and the run its permission requests are filed
+/// against.
+struct Running {
+    /// Who started it, and who gets the message when it ends.
+    agent: AgentId,
+    /// Where the operator's corrections go, once it is known.
+    mailbox: Mailbox,
+    /// Dropping this kills the process.
+    ///
+    /// A channel rather than an abort handle on the task, because it can be
+    /// made before the task exists: an operator pressing stop in the moment
+    /// between the spawn and the handle coming back would otherwise find a job
+    /// with no way to end it. What it does is drop the future holding the
+    /// child, which `kill_on_drop` turns into a killed process, which is the
+    /// one mechanism `coding/mod.rs` already documents for stopping one.
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+/// Whether a running job can be reached, and why not when it cannot.
+///
+/// Three states rather than an `Option`, because the two ways of not being
+/// reachable have opposite answers for the operator: one is worth waiting a
+/// second for, and the other is a fact about the repository that no amount of
+/// waiting changes.
+enum Mailbox {
+    /// The process is up and the bridge has not answered yet. Momentary.
+    Starting,
+    /// This job has no bridge and will not get one: `pi`, which has no second
+    /// interface, or a Claude Code older than the contract was measured on.
+    Unreachable(&'static str),
+    /// Post here.
+    At(String),
+}
+
 /// How often the schedule is swept for routines that have come due.
 ///
 /// A poll rather than a timer per routine: the next due time is what is
@@ -483,6 +521,21 @@ pub enum RuntimeError {
          begin. Say that it is already in progress"
     )]
     RepositoryBusy { repository: String, who: String },
+    /// Asked to reach a job in a repository where none is running.
+    ///
+    /// Reachable in the ordinary course of things rather than only from a
+    /// confused caller: a job ends between the panel drawing a button and the
+    /// operator pressing it, which for a job that has been running for forty
+    /// minutes is exactly when they are most likely to press one.
+    #[error("no coding job is running in that repository. It has already finished")]
+    NoJobRunning,
+    #[error(
+        "that job has only just started and is not reachable yet. Try again in a moment, or \
+         stop it if it is already going the wrong way"
+    )]
+    JobStillStarting,
+    #[error("that job cannot be reached while it works: {0}")]
+    JobUnreachable(String),
     #[error(transparent)]
     Store(#[from] StoreError),
     #[error("no agent with id {0}")]
@@ -571,7 +624,13 @@ struct Inner {
     /// In memory rather than on the row: a job does not survive a restart, and
     /// a stored flag would come back true forever after a crash and lock a
     /// repository nobody was working in.
-    coding: Mutex<HashMap<RepositoryId, AgentId>>,
+    coding: Mutex<HashMap<RepositoryId, Running>>,
+    /// The loopback end of every running coding job.
+    ///
+    /// One for the app rather than one per job: it is a socket, and a workspace
+    /// whose repositories all run `pi` never binds it at all. `coding/bridge.rs`
+    /// is the whole of it.
+    bridge: crate::coding::Bridge,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
     /// Where each plugin's MCP server is, when it is not where it usually is.
@@ -652,6 +711,7 @@ impl Runtime {
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
+                bridge: crate::coding::Bridge::new(),
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
@@ -1688,13 +1748,26 @@ impl Runtime {
         // model: a job takes minutes, the agent that started it goes idle
         // because its turn ended, and a coordinator reading the lane as free
         // sends the next brief straight into the same repository.
+        //
+        // The stop channel and the job's own run are made before the lock so
+        // the map entry is complete the moment it exists: an operator pressing
+        // stop in the window between inserting and spawning would otherwise
+        // find a job with no way to end it.
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        // The run this job's own permission requests are filed against. Minted
+        // rather than borrowed from the turn that called `code`: that run
+        // settled minutes ago, and filing against it would report work on a
+        // conversation already reported finished. A run of its own is also what
+        // makes `release_parked` the way a job ending closes whatever it was
+        // waiting on, rather than a second sweep written for this.
+        let job_run = RunId::new();
         {
             let mut coding = self.inner.coding.lock();
             if let Some(busy) = coding.get(&repository.id) {
                 let who = self
                     .inner
                     .store
-                    .get_agent(*busy)
+                    .get_agent(busy.agent)
                     .ok()
                     .flatten()
                     .map(|card| card.name)
@@ -1704,7 +1777,20 @@ impl Runtime {
                     who,
                 });
             }
-            coding.insert(repository.id, card.id);
+            coding.insert(
+                repository.id,
+                Running {
+                    agent: card.id,
+                    mailbox: match repository.harness {
+                        Harness::Claude => Mailbox::Starting,
+                        Harness::Pi => Mailbox::Unreachable(
+                            "pi has no way to be reached while it is working. A repository set \
+                             to Claude Code can be sent one",
+                        ),
+                    },
+                    stop: Some(stop),
+                },
+            );
         }
 
         let runtime = self.clone();
@@ -1715,6 +1801,7 @@ impl Runtime {
         let note = repository.note.clone();
         let repository_id = repository.id;
         let harness = repository.harness;
+        let gate = repository.gate;
 
         self.emit(UiEvent::CodingJobStarted {
             agent_id: card.id,
@@ -1751,26 +1838,143 @@ impl Runtime {
                 ));
             }
 
+            // The job's own end of the bridge, which is what makes it
+            // reachable while it runs. Opened here rather than before the spawn
+            // because it asks the program its version, which is a process, and
+            // `start_job` has already returned to a turn that must not wait.
+            //
+            // `None` is a job that runs exactly as every job ran before any of
+            // this: `pi`, a Claude Code older than the contract was measured
+            // on, or a bridge that could not start. Every one of them is a
+            // working job, so none of them is an error.
+            let (signals, mut heard) = tokio::sync::mpsc::channel(32);
+            let session = match harness {
+                Harness::Pi => None,
+                Harness::Claude => match crate::coding::presence(harness).await {
+                    crate::coding::Presence::Installed { bridged: true, .. } => {
+                        runtime.inner.bridge.open(signals, gate).await
+                    }
+                    _ => None,
+                },
+            };
+            if let Some(job) = runtime.inner.coding.lock().get_mut(&repository_id) {
+                match &session {
+                    Some(session) => job.mailbox = Mailbox::At(session.session_id().to_string()),
+                    // Only a job that was expecting one. `pi` already carries a
+                    // more specific reason, written before the process started,
+                    // and replacing it here would tell the operator to upgrade
+                    // a program they are not running.
+                    None if matches!(job.mailbox, Mailbox::Starting) => {
+                        job.mailbox = Mailbox::Unreachable(
+                            "this job is running without a bridge, so nothing can reach it until \
+                             it finishes. Claude Code has to be installed, and new enough, for one",
+                        )
+                    }
+                    None => {}
+                }
+            }
+
+            // Copied off the session rather than borrowed from it, so the
+            // session can be dropped the moment the job ends instead of at the
+            // end of this task: the mailbox and the scratch directory go with
+            // it, and neither should outlive the process by the length of a
+            // message delivery.
+            let wiring = session.as_ref().map(|session| session.wiring().clone());
+
             let watcher = runtime.clone();
-            let outcome = crate::coding::run(harness, &path, &brief, move |progress| {
-                let (tool, detail) = match progress {
-                    crate::coding::Progress::Using { tool, detail } => (tool, detail),
-                    crate::coding::Progress::Said(said) => (String::new(), said),
-                };
-                watcher.emit(UiEvent::CodingProgress {
-                    agent_id: agent,
-                    repository_id,
-                    tool,
-                    detail,
+            let running =
+                crate::coding::run(harness, &path, &brief, wiring.as_ref(), move |progress| {
+                    let (tool, detail) = match progress {
+                        crate::coding::Progress::Using { tool, detail } => (tool, detail),
+                        crate::coding::Progress::Said(said) => (String::new(), said),
+                    };
+                    watcher.emit(UiEvent::CodingProgress {
+                        agent_id: agent,
+                        repository_id,
+                        tool,
+                        detail,
+                    });
                 });
-            })
-            .await;
+
+            // What the job says about itself through its own tools, drained
+            // beside the process rather than after it: a progress note is worth
+            // nothing once the job has finished, and a permission request has
+            // a harness holding a hook open waiting for the answer.
+            let mut reported: Option<crate::coding::PullRequest> = None;
+            tokio::pin!(running);
+            tokio::pin!(stopped);
+
+            let outcome = loop {
+                tokio::select! {
+                    done = &mut running => break Some(done),
+
+                    // The operator pressed stop. Dropping the run future drops
+                    // the child, and `kill_on_drop` kills the process.
+                    _ = &mut stopped => break None,
+
+                    Some(signal) = heard.recv() => match signal {
+                        crate::coding::Signal::Note(note) => runtime.emit(UiEvent::CodingProgress {
+                            agent_id: agent,
+                            repository_id,
+                            tool: String::new(),
+                            detail: note,
+                        }),
+                        crate::coding::Signal::PullRequest { url, branch } => {
+                            runtime.emit(UiEvent::CodingProgress {
+                                agent_id: agent,
+                                repository_id,
+                                tool: "pull request".to_string(),
+                                detail: url.clone(),
+                            });
+                            reported = Some(crate::coding::PullRequest { url, branch });
+                        }
+                        // Spawned rather than awaited here, so the loop keeps
+                        // draining and a stop still lands while the operator is
+                        // deciding. The reply is sent on every path out of the
+                        // task, because a dropped sender is a deny and a job
+                        // denied by Guaca's own plumbing is the one refusal
+                        // that would be a lie.
+                        crate::coding::Signal::Permission { command, reply } => {
+                            let asking = runtime.clone();
+                            let repository = name.clone();
+                            tokio::spawn(async move {
+                                let allowed =
+                                    asking.ask_about_push(agent, job_run, &repository, &command).await;
+                                let _ = reply.send(allowed);
+                            });
+                        }
+                    },
+                }
+            };
+
+            // Whatever the job was waiting on is over, however it ended. The
+            // window would close it in ten minutes anyway; this is what keeps a
+            // card for a job that is already gone off the operator's desk.
+            runtime.release_parked(job_run);
+
             // Released before the result is delivered, so the turn that reads
             // "it finished" can start the next job in the same repository. The
             // other order is a lane that has to wait a turn to carry on.
             runtime.inner.coding.lock().remove(&repository_id);
             runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
-            runtime.job_finished(agent, &name, harness, outcome);
+
+            // Dropped before the message goes out rather than at the end of the
+            // task, so the mailbox and the scratch directory are gone by the
+            // time the agent is told the job is over.
+            drop(session);
+
+            match outcome {
+                None => runtime.job_stopped(agent, &name),
+                Some(outcome) => {
+                    let outcome = outcome.map(|mut done| {
+                        // Filled in here because it never came from the
+                        // harness's stdout: it is the job calling a tool.
+                        done.pull_request = reported;
+                        done
+                    });
+                    runtime.job_finished(agent, &name, harness, outcome);
+                }
+            }
         });
 
         Ok(repository.name)
@@ -1836,6 +2040,18 @@ impl Runtime {
                      did, say it was done by the coding agent, and do not claim to have checked \
                      anything you have not.",
                 );
+                // A link the job reported through its own tool rather than a
+                // link parsed out of the paragraph above. The difference is
+                // that this one is either right or absent: guessing a URL out
+                // of prose is how an agent reports a pull request that does not
+                // exist.
+                if let Some(pull_request) = &done.pull_request {
+                    text.push_str(&format!(
+                        "\n\nIt opened a pull request from `{}`: {}. That link is the job's own \
+                         report of it, so it is safe to pass on as it stands.",
+                        pull_request.branch, pull_request.url,
+                    ));
+                }
                 text
             }
             Err(err) => {
@@ -2261,6 +2477,168 @@ impl Runtime {
         }
     }
 
+    /// Asks the operator whether a running coding job may reach outside its
+    /// repository.
+    ///
+    /// The gate in `coding/bridge.rs` decides *that* the question is worth
+    /// asking and names what is being asked about. This decides what happens
+    /// next, and it is a [`ProtectedAction::ActOnBehalf`] rather than a new
+    /// variant because it is exactly what that one already means: something
+    /// outside the workspace, in the operator's name, that cannot be taken
+    /// back. A push to their remote is that.
+    ///
+    /// Reusing it also means the standing grant means what it says. An operator
+    /// who has already told this agent it may act on their behalf is not asked
+    /// again per push, which is the difference between a gate and a nuisance.
+    ///
+    /// The wording is Guaca's, built from what the runtime validated, and the
+    /// command appears as a quoted detail field. That is the rule every
+    /// permission in this app follows and it matters more here than anywhere:
+    /// the string came out of a coding model that has been reading the web all
+    /// afternoon.
+    ///
+    /// Anything other than a yes is a no. Unanswered, expired, a job whose
+    /// agent has been deleted, a store that could not be read: none of them is
+    /// the operator saying go ahead, and the only safe reading of all of them
+    /// is the one that leaves the push unmade.
+    async fn ask_about_push(
+        &self,
+        agent: AgentId,
+        run_id: RunId,
+        repository: &str,
+        command: &str,
+    ) -> bool {
+        let Ok(Some(card)) = self.inner.store.get_agent(agent) else {
+            return false;
+        };
+
+        let summary = format!(
+            "The coding agent working in {repository} for {} wants to run `{command}`, which \
+             reaches outside the repository under your name.",
+            card.name
+        );
+        let detail = vec![DetailField { label: "Command".to_string(), value: command.to_string() }];
+
+        let settled = self
+            .park_with(
+                &card,
+                run_id,
+                Request::Permission { action: ProtectedAction::ActOnBehalf },
+                summary,
+                detail,
+                false,
+            )
+            .await;
+
+        // A standing grant is read after the row rather than before it, which
+        // is the opposite order to `ask_permission` and deliberate: there the
+        // shortcut saves a turn from stopping, and here the job is already
+        // stopped by the time anything can be checked. Checked at all because
+        // an operator who said "always" meant it.
+        if matches!(
+            self.inner.store.has_standing_grant(card.id, ProtectedAction::ActOnBehalf),
+            Ok(true)
+        ) {
+            return true;
+        }
+
+        matches!(
+            settled,
+            Ok(Some(Approval { state: ApprovalState::Allow | ApprovalState::AlwaysAllow, .. }))
+        )
+    }
+
+    /// Tells the agent that started a job that the operator ended it.
+    ///
+    /// A message rather than silence, on the same path a finished job takes and
+    /// for the same reason: an agent never told is an agent waiting forever for
+    /// something that is not coming, and an operator asking it later gets "I
+    /// started that and have not heard back", which is true and useless.
+    ///
+    /// What it says about the tree is the important half. A stopped job was
+    /// killed wherever it happened to be, so the commits it made are real and
+    /// whatever it was in the middle of is not. An agent told only that the job
+    /// stopped reports the work as not done, and the operator is left to find
+    /// out for themselves that half of it is on a branch.
+    fn job_stopped(&self, agent: AgentId, repository: &str) {
+        let text = format!(
+            "The operator stopped the coding agent working in {repository} before it \
+             finished. Whatever it had already committed is still there and whatever it was in \
+             the middle of is not, so the work is partly done and nobody has checked which \
+             part. Do not report it as finished and do not start it again: the operator \
+             stopped it on purpose and will say what they want next. Say plainly that it was \
+             stopped."
+        );
+
+        let envelope = Envelope {
+            id: MessageId::new(),
+            run_id: RunId::new(),
+            channel_id: agent,
+            from: Participant::System,
+            to: Participant::Agent { id: agent },
+            parts: vec![Part::Text { text }],
+            trust: Trust::System,
+            hop: 0,
+            expects_reply: true,
+            intent: Intent::Work,
+            cause: None,
+            created_at: now_ms(),
+        };
+
+        if let Err(err) = self.deliver(envelope) {
+            tracing::error!(%err, agent = %agent.short(), "a stopped coding job reached nobody");
+        }
+    }
+
+    /// Sends a correction into a coding job that is already running.
+    ///
+    /// Staged rather than delivered: the job reads it at its next tool
+    /// boundary, or when it tries to finish, whichever comes first.
+    /// `coding/bridge.rs` owns both halves of that.
+    pub fn message_job(&self, repository: RepositoryId, message: &str) -> Result<(), RuntimeError> {
+        let token = {
+            let coding = self.inner.coding.lock();
+            let job = coding.get(&repository).ok_or(RuntimeError::NoJobRunning)?;
+            match &job.mailbox {
+                Mailbox::At(token) => token.clone(),
+                Mailbox::Starting => return Err(RuntimeError::JobStillStarting),
+                Mailbox::Unreachable(why) => {
+                    return Err(RuntimeError::JobUnreachable(why.to_string()))
+                }
+            }
+        };
+
+        // The bridge is the authority on whether the job is still there, and it
+        // can have ended between the read above and here. Reported rather than
+        // swallowed: a box that accepts a correction into a process that is not
+        // there to read it is worse than one that says so.
+        match self.inner.bridge.post(&token, message) {
+            true => Ok(()),
+            false => Err(RuntimeError::NoJobRunning),
+        }
+    }
+
+    /// Stops a coding job, leaving whatever it has committed.
+    ///
+    /// Taking the sender rather than dropping the whole entry: the job's own
+    /// task is what removes it, after the process has actually gone, and
+    /// removing it here would free the repository lock while a harness was
+    /// still writing in it.
+    pub fn stop_job(&self, repository: RepositoryId) -> Result<(), RuntimeError> {
+        let stop = {
+            let mut coding = self.inner.coding.lock();
+            let job = coding.get_mut(&repository).ok_or(RuntimeError::NoJobRunning)?;
+            job.stop.take()
+        };
+
+        // Already taken means somebody pressed it twice, and the second press
+        // is not an error: the job it was asked about is ending either way.
+        if let Some(stop) = stop {
+            let _ = stop.send(());
+        }
+        Ok(())
+    }
+
     /// Asks the operator a question, and holds the turn until they answer it.
     ///
     /// Nothing here grants anything, which is what makes it a different call
@@ -2301,6 +2679,34 @@ impl Runtime {
         request: Request,
         summary: String,
         detail: Vec<DetailField>,
+    ) -> Result<Option<Approval>, String> {
+        self.park_with(card, run_id, request, summary, detail, true).await
+    }
+
+    /// The same, for a request whose asker is not a turn.
+    ///
+    /// `holds_turn` is the whole difference and it is one thing: whether the
+    /// agent's own activity is this request's to move. A parked turn is an
+    /// agent that is genuinely stopped mid-inference and the dot beside its
+    /// name has to say so. A coding job is not a turn at all: it outlived the
+    /// one that started it by many minutes, and the agent that owns it may be
+    /// idle, may be answering somebody else, and is in either case not waiting
+    /// on this. Marking it `AwaitingApproval` would put a false state on a
+    /// working agent, and putting it back to `Thinking` afterward would be
+    /// worse.
+    ///
+    /// Everything else is shared on purpose. A second copy of the row, the
+    /// waker, the window and the expiry is a second place for a request to be
+    /// left waiting on nobody, which is the failure this whole mechanism exists
+    /// to make impossible.
+    async fn park_with(
+        &self,
+        card: &AgentCard,
+        run_id: RunId,
+        request: Request,
+        summary: String,
+        detail: Vec<DetailField>,
+        holds_turn: bool,
     ) -> Result<Option<Approval>, String> {
         let approval = match self.inner.store.create_approval(
             card.id,
@@ -2358,14 +2764,18 @@ impl Runtime {
         // Parked before the request is announced, so anything that reacts to
         // the announcement sees an agent that is already waiting rather than
         // one that still looks like it is thinking.
-        self.set_activity(card.id, Activity::AwaitingApproval);
+        if holds_turn {
+            self.set_activity(card.id, Activity::AwaitingApproval);
+        }
         self.inner
             .events
             .emit(UiEvent::ApprovalRequested { approval_id: approval.id, agent_id: card.id });
 
         let woken = tokio::time::timeout(APPROVAL_WINDOW, wait).await.is_ok();
         self.inner.waiting.lock().remove(&approval.id);
-        self.set_activity(card.id, Activity::Thinking);
+        if holds_turn {
+            self.set_activity(card.id, Activity::Thinking);
+        }
 
         if !woken {
             // Expiring can lose to an answer landing in this instant, and when

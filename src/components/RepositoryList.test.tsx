@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AgentCard,
+  Gate,
   Harness,
   HarnessOnMachine,
   Repository,
@@ -21,8 +22,8 @@ vi.mock("../lib/ipc", () => ({
   api: {
     groupRepositories: (groupId: string) => groupRepositories(groupId),
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
-    updateRepository: (id: string, name: string, note: string, harness: Harness) =>
-      updateRepository(id, name, note, harness),
+    updateRepository: (id: string, name: string, note: string, harness: Harness, gate: Gate) =>
+      updateRepository(id, name, note, harness, gate),
     deleteRepository: (id: string) => deleteRepository(id),
     setAgentRepository: vi.fn(),
     codingHarnesses: () => codingHarnesses(),
@@ -66,6 +67,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     path: "/Users/you/dev/guaca",
     note: "",
     harness: "pi",
+    gate: "open",
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -81,8 +83,20 @@ describe("RepositoryList", () => {
     codingHarnesses.mockReset();
     groupRepositories.mockResolvedValue([]);
     codingHarnesses.mockResolvedValue([
-      { harness: "pi", installed: true, install: "npm install -g pi" },
-      { harness: "claude", installed: true, install: "npm install -g @anthropic-ai/claude-code" },
+      {
+        harness: "pi",
+        installed: true,
+        version: "0.9.0",
+        bridged: false,
+        install: "npm install -g pi",
+      },
+      {
+        harness: "claude",
+        installed: true,
+        version: "2.1.247 (Claude Code)",
+        bridged: true,
+        install: "npm install -g @anthropic-ai/claude-code",
+      },
     ]);
   });
 
@@ -144,6 +158,7 @@ describe("RepositoryList", () => {
         path: "/Users/you/dev/guaca",
         note: "",
         harness: "pi",
+        gate: "open",
       }),
     );
   });
@@ -189,7 +204,13 @@ describe("RepositoryList", () => {
     fireEvent.click(screen.getByText("Save"));
 
     await waitFor(() =>
-      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "run ./scripts/ci.sh", "pi"),
+      expect(updateRepository).toHaveBeenCalledWith(
+        "r1",
+        "guaca",
+        "run ./scripts/ci.sh",
+        "pi",
+        "open",
+      ),
     );
   });
 
@@ -213,6 +234,7 @@ describe("RepositoryList", () => {
         "guaca",
         "never touch migrations",
         "claude",
+        "open",
       ),
     );
   });
@@ -229,7 +251,9 @@ describe("RepositoryList", () => {
     fireEvent.change(screen.getByDisplayValue("guaca"), { target: { value: "guac" } });
     fireEvent.click(screen.getByRole("button", { name: "Coding harness: Claude Code" }));
 
-    await waitFor(() => expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "claude"));
+    await waitFor(() =>
+      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "claude", "open"),
+    );
   });
 
   it("says which program a repository runs without opening it", async () => {
@@ -260,8 +284,56 @@ describe("RepositoryList", () => {
         path: "/Users/you/dev/guaca",
         note: "",
         harness: "claude",
+        gate: "open",
       }),
     );
+  });
+
+  it("saves the gate on the stored name and note, not on a half-typed rename", async () => {
+    // The same rule the harness above follows. A click on a tick is not the
+    // gesture that saves a rename somebody is in the middle of typing.
+    groupRepositories.mockResolvedValue([repository()]);
+    updateRepository.mockResolvedValue(repository({ gate: "askBeforePushing" }));
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+    fireEvent.change(screen.getByPlaceholderText("what you call it"), {
+      target: { value: "half-typed" },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    await waitFor(() =>
+      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "pi", "askBeforePushing"),
+    );
+  });
+
+  it("does not offer the gate on a harness that cannot be reached while it works", async () => {
+    // A control that silently does nothing is worse than one that is not
+    // offered, and the hint has to say which harness cannot take it.
+    codingHarnesses.mockResolvedValue([
+      {
+        harness: "pi",
+        installed: true,
+        version: "0.9.0",
+        bridged: false,
+        install: "npm install -g pi",
+      },
+      {
+        harness: "claude",
+        installed: true,
+        version: "2.1.247 (Claude Code)",
+        bridged: true,
+        install: "npm install -g @anthropic-ai/claude-code",
+      },
+    ]);
+    groupRepositories.mockResolvedValue([repository()]);
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+    await waitFor(() =>
+      expect((screen.getByRole("checkbox") as HTMLInputElement).disabled).toBe(true),
+    );
+    expect(screen.getByText(/pi cannot be reached while it works/)).toBeTruthy();
   });
 
   it("offers a harness that is not installed, disabled, with the command that installs it", async () => {
@@ -270,8 +342,20 @@ describe("RepositoryList", () => {
     // either: the only symptom of storing it would be a coding job that never
     // starts, reported to an agent forty minutes later.
     codingHarnesses.mockResolvedValue([
-      { harness: "pi", installed: true, install: "npm install -g pi" },
-      { harness: "claude", installed: false, install: "npm install -g @anthropic-ai/claude-code" },
+      {
+        harness: "pi",
+        installed: true,
+        version: "0.9.0",
+        bridged: false,
+        install: "npm install -g pi",
+      },
+      {
+        harness: "claude",
+        installed: false,
+        version: "",
+        bridged: false,
+        install: "npm install -g @anthropic-ai/claude-code",
+      },
     ]);
     groupRepositories.mockResolvedValue([repository()]);
     render(<RepositoryList groupId={GROUP} crew={CREW} />);

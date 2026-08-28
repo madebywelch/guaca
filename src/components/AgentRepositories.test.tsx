@@ -48,6 +48,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     path: "/Users/you/dev/api",
     note: "",
     harness: "pi",
+    gate: "open",
     createdAt: 0,
     updatedAt: 0,
     ...over,

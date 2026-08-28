@@ -1150,20 +1150,46 @@ button {
    composer off the screen. */
 .coding {
   flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
   margin: 0 var(--space-6) var(--space-3);
   padding: var(--space-4) var(--space-5);
   border-radius: var(--radius);
   border: 1px solid color-mix(in oklab, var(--flesh) 28%, transparent);
   background: color-mix(in oklab, var(--flesh) 7%, transparent);
+}
+
+/* The cap and the scroll are on the tail, not on the panel. The panel also
+   holds the box the operator types a correction into, and a long job whose
+   tail owned the scrolling pushed that box out of reach exactly when it was
+   worth reaching for. */
+.coding__tail {
   max-height: 11rem;
   overflow-y: auto;
+}
+
+.coding__say {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.coding__say .input {
+  flex: 1;
+  min-width: 0;
 }
 
 .coding__head {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  margin-bottom: var(--space-3);
+}
+
+/* Pushes the stop away from the title, so the one destructive control here is
+   not next to the words naming the repository it would stop. */
+.coding__head .btn:first-of-type {
+  margin-left: auto;
 }
 
 .coding__pulse {

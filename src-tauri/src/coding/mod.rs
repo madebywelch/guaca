@@ -41,23 +41,52 @@
 //! in this app's usage table, because this app did not spend it. What the job
 //! reports back is what the harness says it cost.
 //!
+//! ## A job is reachable while it runs, on one of the two
+//!
+//! `code` returns as soon as the process is up, which is what keeps the agent
+//! that asked from reading as `Thinking` for the length of a change to a
+//! codebase. The cost of that used to be paid at the other end: for up to
+//! [`CEILING`] the job was write-only, and an operator watching one go the
+//! wrong way at minute three had nothing to do but wait for it to finish.
+//!
+//! [`bridge`] is what makes it two-way. Claude Code has a second interface
+//! besides its stdout, so a job on that harness gets a mailbox the operator can
+//! drop a correction into, an optional gate in front of the handful of commands
+//! that reach outside the repository, and two tools for reporting what it
+//! produced. `pi` has no equivalent and gets none of it, which is a difference
+//! between the harnesses rather than a gap: everything the bridge adds is an
+//! improvement on a job that already worked without it, so every part of it
+//! fails open.
+//!
 //! ## What is not here
 //!
 //! Any confinement. The process runs as the operator, in their repository, with
 //! their credentials and their network, and it may commit, push and open pull
 //! requests. That was asked for explicitly. Neither harness is asked to prompt
-//! for permission, because there is nobody there to answer: `pi` has no
-//! permission system of its own and says so in its own documentation, and
-//! Claude Code is started in the mode that does not ask. So the boundary is the
-//! directory the operator chose and the fact that git can undo what happens
-//! inside it. Nothing in this file should ever be described as a sandbox.
+//! for permission on the ordinary path, because there is nobody there to
+//! answer: `pi` has no permission system of its own and says so in its own
+//! documentation, and Claude Code is started in the mode that does not ask. So
+//! the boundary is the directory the operator chose and the fact that git can
+//! undo what happens inside it. Nothing in this file should ever be described
+//! as a sandbox.
+//!
+//! [`crate::domain::repository::Gate::AskBeforePushing`] does not change that
+//! sentence and must not be read as changing it. It reads a shell line and decides
+//! whether it looks like a push, which is a judgment about the ordinary case: a
+//! job that wanted to get around it could, and it was already running as the
+//! operator with their network before any of this. What it buys is that the
+//! ordinary push, made by a job doing what it was asked, is one somebody gets
+//! to see first.
 
+pub mod bridge;
 pub mod claude_code;
 pub mod pi;
 
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::domain::repository::Harness;
+
+pub use bridge::{Bridge, Signal, Wiring};
 
 /// How long a job may run before it is killed.
 ///
@@ -142,6 +171,29 @@ pub struct Outcome {
     /// nothing needed doing, and `pi auth check` called the provider ready
     /// throughout.
     pub failed: Option<String>,
+    /// The harness session this job ran as, when Guaca chose one.
+    ///
+    /// Empty on `pi` and on any job that ran without a bridge. Where it is set
+    /// it is what the operator hands to `claude --resume` to open the same work
+    /// in their own terminal, which is not the same thing as `claude -c`:
+    /// `-c` resumes whatever ran last in that directory, and after two jobs
+    /// that is the wrong one.
+    pub session_id: String,
+    /// A pull request the job opened and said so about.
+    ///
+    /// Filled in by the runtime from [`Signal::PullRequest`] rather than by the
+    /// fold, because it does not come from the harness's stdout at all: it is
+    /// the job deliberately calling a tool. Recorded here so everything one job
+    /// produced arrives at `job_finished` as one value.
+    pub pull_request: Option<PullRequest>,
+}
+
+/// A pull request a job opened, as it reported it.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequest {
+    pub url: String,
+    pub branch: String,
 }
 
 /// One line of progress, for whoever is watching the job run.
@@ -189,22 +241,90 @@ pub fn install(harness: Harness) -> &'static str {
     }
 }
 
-/// Whether a harness is installed at all.
+/// The oldest Claude Code this app will wire a [`bridge`] into.
+///
+/// Not a floor on running a job. A job on an older program runs exactly as it
+/// did before the bridge existed, which is the only honest thing to do with a
+/// version nothing here has ever been measured against: refusing it would take
+/// away a harness that works to protect a feature that is an addition to it.
+///
+/// The number is the line the contract was measured on. Every part of the
+/// bridge is a promise about how the program behaves rather than about a flag
+/// it accepts, and those cannot be checked offline: that a `PreToolUse` hook's
+/// `deny` overrides `--permission-mode bypassPermissions`, that a `Stop` hook's
+/// `reason` reaches the model, that `additionalContext` from `PostToolUse` is
+/// put in front of it. All three were verified against 2.1.247, and the live
+/// half of `tests/coding.rs` is what catches them moving.
+const BRIDGE_FLOOR: (u32, u32) = (2, 1);
+
+/// What this machine has of one harness.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Presence {
+    /// Not on this app's `PATH`.
+    Missing,
+    /// There, and what it says its version is.
+    ///
+    /// The string is the program's own answer rather than a parse of it, so a
+    /// panel shows what `--version` prints and an operator comparing it with
+    /// their terminal sees the same thing.
+    Installed { version: String, bridged: bool },
+}
+
+impl Presence {
+    pub fn installed(&self) -> bool {
+        matches!(self, Presence::Installed { .. })
+    }
+}
+
+/// What this machine has of a harness, and whether a job on it gets a bridge.
 ///
 /// Asked by the panel that offers the choice, so an operator picking one they
 /// do not have is told at the moment they pick rather than forty minutes later
-/// inside a job that never started. It is deliberately not a pre-flight in
-/// [`run`]: spawning is already the check there, it cannot go stale between the
-/// question and the answer, and a second process per job buys nothing.
-pub async fn installed(harness: Harness) -> bool {
-    tokio::process::Command::new(binary(harness))
+/// inside a job that never started. Asked again by [`crate::runtime`] when a
+/// job starts, which is one process spawn against a job that runs for minutes
+/// and is the only way to know whether the bridge is worth wiring: an operator
+/// upgrades between the panel and the job.
+///
+/// It is still not a pre-flight on whether the job can run. Spawning is the
+/// check for that, it cannot go stale between the question and the answer, and
+/// a refusal built on this one would refuse jobs that work.
+pub async fn presence(harness: Harness) -> Presence {
+    let asked = tokio::process::Command::new(binary(harness))
         .arg("--version")
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .status()
-        .await
-        .map(|code| code.success())
-        .unwrap_or(false)
+        .output()
+        .await;
+
+    let Ok(asked) = asked else { return Presence::Missing };
+    if !asked.status.success() {
+        return Presence::Missing;
+    }
+
+    let version = String::from_utf8_lossy(&asked.stdout).trim().to_string();
+    let bridged = harness == Harness::Claude && at_least(&version, BRIDGE_FLOOR);
+    Presence::Installed { version, bridged }
+}
+
+/// Whether a `--version` line names a release at or past a floor.
+///
+/// The programs spell it differently and both spellings are moving targets:
+/// `2.1.247 (Claude Code)` today, a bare number yesterday. So the first
+/// dotted number in the line is what is read, and a line with none in it is
+/// treated as too old rather than as new enough. That direction matters: an
+/// unreadable version turns the bridge off and leaves a working job, where the
+/// other way round would wire a job to a contract nothing has checked.
+fn at_least(version: &str, floor: (u32, u32)) -> bool {
+    let digits = |word: &str| {
+        word.split('.').all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let Some(found) = version.split_whitespace().find(|word| word.contains('.') && digits(word))
+    else {
+        return false;
+    };
+    let mut parts = found.split('.').map(|part| part.parse::<u32>().unwrap_or(0));
+    let (major, minor) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
+    (major, minor) >= floor
 }
 
 /// Runs one task to completion in one repository.
@@ -213,15 +333,22 @@ pub async fn installed(harness: Harness) -> bool {
 /// lets the operator open the same work in their own terminal (`pi -c`,
 /// `claude -c`), which is the difference between a harness the app runs and a
 /// black box.
+///
+/// `wiring` is the job's end of the [`bridge`], and `None` is a job that runs
+/// without one: `pi`, a Claude Code older than [`BRIDGE_FLOOR`], or a bridge
+/// that could not start. All three run the job.
 pub async fn run(
     harness: Harness,
     repository: &str,
     task: &str,
+    wiring: Option<&Wiring>,
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
     let (args, fold): (Vec<String>, Fold) = match harness {
+        // `pi` has no hooks and no second interface, so the wiring is not
+        // offered to it rather than being offered and ignored.
         Harness::Pi => (pi::argv(task), pi::absorb),
-        Harness::Claude => (claude_code::argv(task), claude_code::absorb),
+        Harness::Claude => (claude_code::argv(task, wiring), claude_code::absorb),
     };
 
     let mut child = tokio::process::Command::new(binary(harness))
@@ -245,7 +372,14 @@ pub async fn run(
     let stdout = child.stdout.take().ok_or_else(|| CodingError::Start("no output".into()))?;
     let stderr = child.stderr.take();
     let mut lines = BufReader::new(stdout).lines();
-    let mut outcome = Outcome::default();
+    // The session is set from what was asked for rather than read back off the
+    // stream, which is the point of choosing it: a job killed at the ceiling
+    // still has a session the operator can open, and a job that died before its
+    // first event still says which one it was.
+    let mut outcome = Outcome {
+        session_id: wiring.map(|w| w.session_id.clone()).unwrap_or_default(),
+        ..Outcome::default()
+    };
 
     let reading = async {
         // Split on `\n` and nothing else: pi's own protocol note, and the

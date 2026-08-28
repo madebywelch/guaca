@@ -437,6 +437,8 @@ pub fn run() {
             commands::update_repository,
             commands::delete_repository,
             commands::coding_harnesses,
+            commands::message_coding_job,
+            commands::stop_coding_job,
             commands::set_agent_repository,
             commands::plugin_catalog,
             commands::group_plugins,

@@ -42,8 +42,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
-    repository.rs     A directory an agent may write code in, and which of two
-                      programs writes it.
+    repository.rs     A directory an agent may write code in, which of two
+                      programs writes it, and whether it asks before pushing.
     worknote.rs       A line about work in flight, and why it is not memory.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
@@ -71,6 +71,8 @@ src-tauri/src/
     mod.rs            One process, one ceiling, one prompt. Read this one first.
     pi.rs             `pi`'s argument vector and its stream.
     claude_code.rs    Claude Code's, which are not the same and cannot be.
+    bridge.rs         The other end of a job that is still running: what an
+                      operator can say to one, and what it may not do alone.
   db/                 SQLite. Plain SQL, numbered migrations.
   e2b.rs              Computers: the machines agents look at and point at.
   proxy.rs            Loopback viewer for those machines.
@@ -119,6 +121,9 @@ repo: the frontend renders state and forwards intent.
 | Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
 | An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |
+| Reaching a job that is already running, stopping one, or anything a hook does | *A job can be reached while it runs* in `docs/CODING.md`, then `coding/bridge.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check any of it |
+| Whether a job stops before it pushes, and what counts as outward-facing | *The gate is a decision the operator takes per repository* in `docs/CODING.md`, then `bridge::outward` and `Runtime::park_with` |
+| What a job inherits from the operator's own Claude Code, and what that costs | *A job inherits the operator's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
 | A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
@@ -455,6 +460,60 @@ the model takes a screenshot to see what `browse` did.
   the store was wrong and both are tested, which is how it shipped and stayed.
   A type with no path on it is the only version of "the path is not editable"
   that nothing downstream can forget.
+- **Every part of the bridge fails open, and that is the whole error
+  handling.** A bridge that could not bind, a `curl` that is not installed, a
+  Claude Code too old for the contract and a server that already dropped the job
+  all end the same way: an empty answer, exit zero, and a job that runs exactly
+  as it did before any of this existed. The direction cannot be reversed.
+  Everything the bridge adds is an improvement on a job that already worked, so
+  a bridge that refused to start a job would trade a working harness for a
+  feature built on top of it. The one place that fails *closed* is the gate's
+  verdict: a dropped sender answers deny, because a permission that granted
+  whenever the plumbing broke is worse than none.
+- **The `Stop` hook blocks and delivers in the same call, and that is what
+  makes it terminate.** A `Stop` hook's `reason` reaches the model as feedback
+  on the refusal to stop, so the pending mail goes out in the answer that
+  refuses. Blocking without delivering would find the same mail pending on the
+  next `Stop`, refuse again, and go round until the forty-five minute ceiling
+  killed a job that had finished its work. The same reason `take_mail` reads and
+  clears together: mail delivered twice is an instruction the model was given
+  twice.
+- **A `PreToolUse` hook's `deny` overrides `--permission-mode
+  bypassPermissions`, and every job here runs in that mode.** Measured against
+  2.1.247. Without it the gate would be a suggestion, and there would be no way
+  to have both a job that never stops for the ordinary tool call and a job that
+  stops before it pushes. No offline test can see this, or the two beside it
+  (`Stop`'s `reason`, `PostToolUse`'s `additionalContext`): all three are
+  promises about how the program *behaves* rather than flags it accepts, which
+  is what the `#[ignore]`d half of `tests/coding.rs` is for.
+- **A job's session id is chosen rather than read back.** `--session-id` takes a
+  UUID, so one value is the job's address on the bridge, the key of its mailbox,
+  and what an operator hands to `claude --resume`. That last one is the reason:
+  `claude -c` resumes whatever ran last in the directory, which after two jobs is
+  the wrong one. Chosen also means a job killed at the ceiling, and one that died
+  before its first event, both still have one to hand over.
+- **A coding job is not a turn, so it must not move the agent's activity.**
+  `Runtime::park_with` is `park` with exactly that one difference. A parked turn
+  is an agent genuinely stopped mid-inference and the dot beside its name has to
+  say so; a job outlived the turn that started it by many minutes and its agent
+  may be idle or answering somebody else. Everything else about a request, the
+  row, the waker, the ten-minute window and the expiry, is shared rather than
+  copied, because a second copy is a second place for a request to be left
+  waiting on nobody.
+- **The gate is off unless the operator turned it on, and not for the reason it
+  looks like.** Not compatibility. `APPENDED_PROMPT` tells every job that nobody
+  will answer a question, and switching the gate on everywhere would make that
+  sentence false in every repository at once: a job that believes it while a
+  hook silently holds it is a job that reports a push it never made.
+- **A coding job inherits the operator's whole Claude Code setup on purpose,
+  and one thing in it can hold a job open.** No `--strict-mcp-config` and no
+  `--setting-sources`, which is the exact opposite of `llm/claude.rs` and right
+  for the opposite reason: a job works in the operator's own repository, where
+  their rules file and their servers are what make it good. Measured at 16 MCP
+  servers, 229 tools, 100 slash commands and 8 agents on one machine. The hazard
+  is theirs too: a `Stop` hook of their own answering `{"decision":"block"}`
+  holds a job against its own completion until the ceiling, in a loop nothing
+  here can see. `docs/CODING.md`.
 - **A harness is two functions, and the process around them is one.** What `pi`
   and Claude Code share is the shape of a job: one process, in one directory,
   whose stdout is JSON objects one per line, that ends. So the spawn, the read

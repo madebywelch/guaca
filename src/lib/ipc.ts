@@ -35,6 +35,7 @@ import type {
   Decision,
   DeviceCode,
   Envelope,
+  Gate,
   Group,
   GroupDraft,
   GroupId,
@@ -171,8 +172,8 @@ export const api = {
    * does the writing. The path is not among them: a different directory is a
    * different repository, because reach was granted for that one.
    */
-  updateRepository: (id: RepositoryId, name: string, note: string, harness: Harness) =>
-    invoke<Repository>("update_repository", { id, name, note, harness }),
+  updateRepository: (id: RepositoryId, name: string, note: string, harness: Harness, gate: Gate) =>
+    invoke<Repository>("update_repository", { id, name, note, harness, gate }),
 
   /** Unlinks it. Nothing on disk is touched. */
   deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
@@ -184,6 +185,26 @@ export const api = {
    * than the person choosing.
    */
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
+
+  /**
+   * Sends a correction into a coding job that is already running.
+   *
+   * Staged rather than delivered: the job reads it at its next tool boundary,
+   * or when it tries to finish, whichever comes first. Refused when nothing
+   * takes it, and the two reasons are different sentences the operator can act
+   * on: the job has already ended, or its harness cannot be reached at all.
+   */
+  messageCodingJob: (repositoryId: RepositoryId, message: string) =>
+    invoke<void>("message_coding_job", { repositoryId, message }),
+
+  /**
+   * Stops one, leaving whatever it has committed.
+   *
+   * Nothing is reverted. The commits a job was told to make as it went are the
+   * operator's checkpoints, and throwing them away is not this button's
+   * decision to take. The agent that started it is told it was stopped.
+   */
+  stopCodingJob: (repositoryId: RepositoryId) => invoke<void>("stop_coding_job", { repositoryId }),
 
   /**
    * Gives one agent a repository, or takes it back. One agent per call, so a
