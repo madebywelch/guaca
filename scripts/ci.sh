@@ -44,6 +44,16 @@ run_rust() {
 
   step "Rust tests"
   cargo test --manifest-path src-tauri/Cargo.toml
+
+  # The daemon is a second host over the same library, and it is built without
+  # Tauri on purpose: `app.rs` expands a macro that reads dist/, so a server
+  # that needed the desktop feature could not be built in a container that has
+  # no frontend. Nothing above catches a break here, because every target above
+  # is compiled with the desktop feature on.
+  step "Daemon (no Tauri, no frontend bundle)"
+  cargo clippy --manifest-path src-tauri/Cargo.toml \
+    --no-default-features --features server --all-targets -- -D warnings
+  cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server
 }
 
 case "${1:-all}" in

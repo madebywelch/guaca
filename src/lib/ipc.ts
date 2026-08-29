@@ -1,19 +1,21 @@
 /**
- * Typed wrappers over the Tauri command surface.
+ * Typed wrappers over the command surface.
  *
  * Every call the UI can make goes through here, so the set of things the
- * webview is able to do is one readable list. Tauri maps camelCase argument
- * keys onto the Rust snake_case parameters.
+ * frontend is able to do is one readable list. camelCase argument keys map onto
+ * the Rust snake_case parameters, in both hosts: `transport.ts` is what decides
+ * whether a call goes over Tauri's IPC or over HTTP to a box, and nothing in
+ * this file knows which.
  */
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
-import { openUrl } from "@tauri-apps/plugin-opener";
+  hosted,
+  invoke,
+  notify,
+  openExternal as reachBrowser,
+  subscribe,
+  type Unlisten,
+} from "./transport";
 
 import type {
   AccountConnectors,
@@ -29,6 +31,7 @@ import type {
   Bench,
   Browser,
   BrowserConsent,
+  Capabilities,
   CatalogKind,
   Computer,
   Connector,
@@ -613,6 +616,15 @@ export const api = {
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
 
+  /**
+   * What this workspace can do, which is decided by where it runs.
+   *
+   * Asked once at startup. Every panel that could offer something a server
+   * cannot honor reads the answer, and the commands behind those panels refuse
+   * it again: a stale bundle draws controls this build no longer offers.
+   */
+  capabilities: () => invoke<Capabilities>("capabilities"),
+
   getSettings: () => invoke<Settings>("get_settings"),
 
   updateSettings: (patch: SettingsPatch) => invoke<Settings>("update_settings", { patch }),
@@ -689,7 +701,7 @@ export const api = {
  * navigate away from the app with no way back.
  */
 export function openExternal(url: string): Promise<void> {
-  return openUrl(url);
+  return reachBrowser(url);
 }
 
 /**
@@ -712,20 +724,22 @@ export function openExternal(url: string): Promise<void> {
  * transcript. This is the redundant copy, not the record.
  */
 export async function notifyOperator(title: string, body: string): Promise<boolean> {
-  try {
-    const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-    if (!granted) return false;
-
-    sendNotification({ title, body });
-    return true;
-  } catch {
-    return false;
-  }
+  return notify(title, body);
 }
 
-/** Subscribes to runtime events. Returns an unsubscribe function. */
-export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<UnlistenFn> {
-  return listen<UiEvent>(EVENT_CHANNEL, (message) => handler(message.payload));
+/**
+ * Subscribes to runtime events. Returns an unsubscribe function.
+ *
+ * `onReconnect` fires when a dropped connection comes back, and only a hosted
+ * workspace can produce one: the desktop's channel cannot fail without the
+ * process failing. What was missed while it was down is gone, exactly as it is
+ * while the desktop app is closed, so a caller refetches what it draws.
+ */
+export function onRuntimeEvent(
+  handler: (event: UiEvent) => void,
+  onReconnect?: () => void,
+): Promise<Unlisten> {
+  return subscribe(EVENT_CHANNEL, handler, onReconnect);
 }
 
 /**
@@ -736,8 +750,14 @@ export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<Unlis
  * from the strip does not come through here: that one is decided in Rust and
  * reaches the transcript as an ordinary settled event.
  */
-export function onRevealRequest(handler: (target: Reveal) => void): Promise<UnlistenFn> {
-  return listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload));
+export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unlisten> {
+  // The menu bar is the desktop's, and so is this channel. A hosted workspace
+  // has no strip to be asked from, and a subscription that never fires is
+  // cheaper than a caller that has to know which host it is in.
+  if (hosted) return Promise.resolve(() => {});
+  return import("@tauri-apps/api/event").then((events) =>
+    events.listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload)),
+  );
 }
 
 /**
@@ -751,11 +771,19 @@ export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unli
 export async function onFileDrop(handlers: {
   dropped: (paths: string[]) => void;
   over: (inside: boolean) => void;
-}): Promise<UnlistenFn> {
+}): Promise<Unlisten> {
+  // Paths are a desktop fact. Tauri hands over the path of a dropped file and
+  // the Rust side reads the bytes, which is the whole reason `dragDropEnabled`
+  // is on: a document never enters the renderer. A browser has no path to give
+  // and hands over bytes instead, which is a different mechanism and a
+  // different command, and `capabilities().localFiles` is what says so.
+  if (hosted) return () => {};
+
+  const events = await import("@tauri-apps/api/event");
   const stops = await Promise.all([
-    listen(TauriEvent.DRAG_ENTER, () => handlers.over(true)),
-    listen(TauriEvent.DRAG_LEAVE, () => handlers.over(false)),
-    listen<{ paths: string[] }>(TauriEvent.DRAG_DROP, (message) => {
+    events.listen(events.TauriEvent.DRAG_ENTER, () => handlers.over(true)),
+    events.listen(events.TauriEvent.DRAG_LEAVE, () => handlers.over(false)),
+    events.listen<{ paths: string[] }>(events.TauriEvent.DRAG_DROP, (message) => {
       handlers.over(false);
       handlers.dropped(message.payload.paths ?? []);
     }),
