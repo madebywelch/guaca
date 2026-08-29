@@ -15,6 +15,12 @@
 //!   the tooltip   one line, on hover. The glance that costs no click.
 //!   the menu      the whole picture, and the answers.
 //!
+//! The picture is drawn by crew wherever a crew is worth naming, because two
+//! crews can hold two agents with the same name and the same face: a row that
+//! says only that Scout is thinking is a row an operator with two Scouts cannot
+//! act on. Naming stops the moment there is one crew to name, which is the rule
+//! the window's own crews' column is drawn by. `src/lib/presence.ts`.
+//!
 //! Nothing here knows Tauri exists. This file decides what the strip says and
 //! `tray.rs` draws it, which is what makes every judgment below arguable in a
 //! test rather than by opening the app and squinting at the corner.
@@ -23,7 +29,7 @@ use std::collections::HashMap;
 
 use crate::domain::approval::{Approval, Decision, ProtectedAction};
 use crate::domain::escalation::Escalation;
-use crate::domain::ids::{AgentId, ApprovalId};
+use crate::domain::ids::{AgentId, ApprovalId, GroupId};
 use crate::domain::usage::Tokens;
 use crate::domain::worknote;
 use crate::runtime::events::{Activity, UiEvent};
@@ -101,6 +107,16 @@ pub enum Row {
         id: AgentId,
         label: String,
     },
+    /// A crew, and how much of it is working. Opens the window inside it.
+    ///
+    /// A heading that is also a destination, which the two above are not: the
+    /// rows under it name agents, and an operator who wanted the crew rather
+    /// than one of its agents would otherwise have to pick somebody to get
+    /// there and then let go of them.
+    Crew {
+        id: GroupId,
+        label: String,
+    },
     /// Bring the window back.
     Open,
     /// End every conversation in flight. Absent when there is nothing to end.
@@ -116,7 +132,9 @@ impl Row {
     fn label(&self) -> Option<&str> {
         match self {
             Row::Note(text) | Row::StopAll(text) => Some(text),
-            Row::Waiting { label, .. } | Row::Agent { label, .. } => Some(label),
+            Row::Waiting { label, .. } | Row::Agent { label, .. } | Row::Crew { label, .. } => {
+                Some(label)
+            }
             Row::Separator | Row::Open | Row::Quit => None,
         }
     }
@@ -136,6 +154,9 @@ impl Row {
                 format!("waiting:{id}:{always}:{}", detail.join("\u{1}"))
             }
             Row::Agent { id, .. } => format!("agent:{id}"),
+            // The count on it moves as agents start and stop, so the label is
+            // out of the shape and the row is edited rather than replaced.
+            Row::Crew { id, .. } => format!("crew:{id}"),
             Row::Open => "open".to_string(),
             Row::StopAll(_) => "stop".to_string(),
             Row::Quit => "quit".to_string(),
@@ -155,6 +176,8 @@ pub enum Command {
     StopAll,
     /// Show the window with one agent's channel open.
     Reveal(AgentId),
+    /// Show the window inside one crew, with no channel chosen.
+    Enter(GroupId),
     Decide(ApprovalId, Decision),
 }
 
@@ -164,6 +187,7 @@ impl Command {
             Command::Open => "guac.open".to_string(),
             Command::StopAll => "guac.stop".to_string(),
             Command::Reveal(agent) => format!("guac.reveal.{agent}"),
+            Command::Enter(crew) => format!("guac.crew.{crew}"),
             Command::Decide(approval, decision) => {
                 format!("guac.decide.{}.{approval}", decision_token(decision))
             }
@@ -179,6 +203,10 @@ impl Command {
 
         if let Some(agent) = id.strip_prefix("guac.reveal.") {
             return agent.parse().ok().map(Command::Reveal);
+        }
+
+        if let Some(crew) = id.strip_prefix("guac.crew.") {
+            return crew.parse().ok().map(Command::Enter);
         }
 
         let rest = id.strip_prefix("guac.decide.")?;
@@ -204,6 +232,34 @@ fn decision_token(decision: Decision) -> &'static str {
     }
 }
 
+/// One agent, as much of one as the strip needs.
+///
+/// Its crew is a field rather than a second map keyed by the same id: the two
+/// are read from one row of the roster, and two maps that could disagree is an
+/// agent drawn under another crew's heading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    pub crew: GroupId,
+}
+
+/// A crew, as much of one as the strip needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Crew {
+    pub id: GroupId,
+    pub name: String,
+}
+
+/// An agent that is working, and where.
+struct Busy {
+    id: AgentId,
+    /// Its crew, when the strip is naming crews at all.
+    crew: Option<Crew>,
+    /// The agent and what it is doing, and never its crew: in the menu that is
+    /// the heading over it.
+    label: String,
+}
+
 /// Everything the strip needs to know, read fresh rather than accumulated.
 ///
 /// All of it but `session` is a read of something that already holds the truth:
@@ -216,7 +272,14 @@ fn decision_token(decision: Decision) -> &'static str {
 /// using to decide whether to go and look.
 #[derive(Debug, Clone, Default)]
 pub struct Presence {
-    pub names: HashMap<AgentId, String>,
+    pub roster: HashMap<AgentId, Member>,
+    /// Every crew, in the order the crews' column draws them.
+    ///
+    /// That order rather than by how busy each one is, for the same reason the
+    /// working list is alphabetical inside a rank: a menu whose sections change
+    /// places between two glances has to be read from the top every time, and
+    /// this is the order the operator already learned in the window.
+    pub crews: Vec<Crew>,
     pub activity: HashMap<AgentId, Activity>,
     /// Pending requests, oldest first.
     pub waiting: Vec<Approval>,
@@ -234,16 +297,47 @@ pub struct Presence {
 
 impl Presence {
     fn name_of(&self, id: AgentId) -> &str {
-        self.names.get(&id).map(String::as_str).unwrap_or("A deleted agent")
+        self.roster.get(&id).map(|member| member.name.as_str()).unwrap_or("A deleted agent")
     }
 
-    /// Agents mid-inference or with work queued, the busiest first.
+    /// A crew's name, when naming it says anything.
     ///
-    /// Thinking before queued because one is spending money right now and the
-    /// other is about to, and alphabetical within each so the list does not
-    /// reshuffle itself between two glances.
-    fn busy(&self) -> Vec<(AgentId, String)> {
-        let mut rows: Vec<(u8, &str, AgentId, String)> = self
+    /// Nothing at all while the workspace has one crew. That is the rule the
+    /// window's crews' column is drawn by rather than a shortcut: a name that is
+    /// the only name distinguishes nobody, and every row carrying it has spent
+    /// menu width saying where the only place is. Nothing either for a crew that
+    /// is not on the list, which is one that has been disbanded out from under a
+    /// turn still finishing.
+    fn crew_named(&self, group: GroupId) -> Option<&Crew> {
+        if self.crews.len() < 2 {
+            return None;
+        }
+        self.crews.iter().find(|crew| crew.id == group)
+    }
+
+    /// The crew an agent is in, by the same rule.
+    fn crew_of(&self, agent: AgentId) -> Option<&Crew> {
+        self.crew_named(self.roster.get(&agent)?.crew)
+    }
+
+    /// Where the crews' column would draw a crew, and past the end for one it
+    /// would not draw at all.
+    fn crew_rank(&self, crew: Option<&Crew>) -> usize {
+        let Some(crew) = crew else { return usize::MAX };
+        self.crews.iter().position(|one| one.id == crew.id).unwrap_or(usize::MAX)
+    }
+
+    /// Agents mid-inference or with work queued, by crew, the busiest first.
+    ///
+    /// Crew first so the menu can put a heading over each run of them, and the
+    /// crews in the column's own order. Thinking before queued because one is
+    /// spending money right now and the other is about to, and alphabetical
+    /// within each so the list does not reshuffle itself between two glances.
+    ///
+    /// A workspace with one crew names none, so every row ranks the same and
+    /// the sort collapses to the two it always was.
+    fn busy(&self) -> Vec<Busy> {
+        let mut rows: Vec<(usize, u8, &str, Busy)> = self
             .activity
             .iter()
             .filter_map(|(id, activity)| {
@@ -262,11 +356,18 @@ impl Presence {
                     // that answers it.
                     Activity::AwaitingApproval | Activity::Idle | Activity::Paused => return None,
                 };
-                Some((rank, self.name_of(*id), *id, what))
+                let name = self.name_of(*id);
+                let crew = self.crew_of(*id);
+                Some((
+                    self.crew_rank(crew),
+                    rank,
+                    name,
+                    Busy { id: *id, crew: crew.cloned(), label: format!("{name} · {what}") },
+                ))
             })
             .collect();
-        rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
-        rows.into_iter().map(|(_, name, id, what)| (id, format!("{name} · {what}"))).collect()
+        rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(b.2)));
+        rows.into_iter().map(|(_, _, _, one)| one).collect()
     }
 
     fn paused(&self) -> usize {
@@ -280,11 +381,11 @@ impl Presence {
         // stopped are different work and the same answer to that question, and
         // two numbers in the menu bar is the state nobody can read at a glance.
         let waiting = self.waiting.len() + self.stuck.len();
-        let busy = self.busy().len();
+        let busy = self.busy();
 
         let glyph = if waiting > 0 {
             Glyph::Attention
-        } else if busy > 0 || self.running > 0 {
+        } else if !busy.is_empty() || self.running > 0 {
             Glyph::Working
         } else {
             Glyph::Idle
@@ -298,20 +399,43 @@ impl Presence {
         let state = if waiting == 1 {
             // Named either way, because one is the case where a name fits and
             // it is the whole difference between "something needs you" and
-            // knowing whether to go and look now.
-            let who = match self.waiting.first() {
-                Some(approval) => self.name_of(approval.agent_id),
-                None => self.name_of(self.stuck[0].agent_id),
+            // knowing whether to go and look now. Its crew too, for the same
+            // reason and only when there is more than one: the operator is
+            // deciding whether to go and look, and where is half of that.
+            let (who, crew) = match self.waiting.first() {
+                Some(approval) => {
+                    (self.name_of(approval.agent_id), self.crew_named(approval.group_id))
+                }
+                None => {
+                    let stuck = &self.stuck[0];
+                    (self.name_of(stuck.agent_id), self.crew_named(stuck.group_id))
+                }
             };
-            format!("{who} is waiting on you")
+            match crew {
+                Some(crew) => format!("{who} in {} is waiting on you", crew.name),
+                None => format!("{who} is waiting on you"),
+            }
         } else if waiting > 1 {
+            // Not where. Several parked turns are several crews as often as
+            // not, and a tooltip is one line: the count is what decides whether
+            // to open the window, and the menu under it says where.
             format!("{waiting} agents are waiting on you")
-        } else if busy == 1 {
-            "1 agent working".to_string()
-        } else if busy > 1 {
-            format!("{busy} agents working")
-        } else {
+        } else if busy.is_empty() {
             "nothing running".to_string()
+        } else {
+            let count = if busy.len() == 1 {
+                "1 agent working".to_string()
+            } else {
+                format!("{} agents working", busy.len())
+            };
+            // Where, when where is a thing this workspace has. One crew working
+            // is named, because that is the answer; several are counted,
+            // because the names would not fit and the menu has them.
+            match crews_working(&busy).as_slice() {
+                [] => count,
+                [only] => format!("{count} in {}", only.name),
+                several => format!("{count} in {} crews", several.len()),
+            }
         };
 
         // Named, because a tooltip in the menu bar is one of a dozen and the
@@ -342,10 +466,18 @@ impl Presence {
                 // be answered. Left out of the menu entirely it would still be
                 // in the title's count, and the operator would open the window
                 // looking for a request the menu had not mentioned.
+                // The crew off the request rather than off the agent that
+                // asked. They are the same crew, and this one is the crew the
+                // run happened in whatever has since been done to the roster.
+                let crew = self.crew_named(approval.group_id);
+
                 let Some(action) = approval.request.action() else {
                     rows.push(Row::Agent {
                         id: approval.agent_id,
-                        label: format!("{} · in Guaca", one_line(&approval.summary, 110)),
+                        label: format!(
+                            "{} · in Guaca",
+                            in_crew(one_line(&approval.summary, 110), crew)
+                        ),
                     });
                     continue;
                 };
@@ -353,7 +485,7 @@ impl Presence {
                 rows.push(Row::Waiting {
                     id: approval.id,
                     agent: approval.agent_id,
-                    label: one_line(&approval.summary, 120),
+                    label: in_crew(one_line(&approval.summary, 120), crew),
                     detail: approval
                         .detail
                         .iter()
@@ -398,7 +530,10 @@ impl Presence {
                     id: one.agent_id,
                     label: format!(
                         "{} · {} · {}",
-                        self.name_of(one.agent_id),
+                        in_crew(
+                            self.name_of(one.agent_id).to_string(),
+                            self.crew_named(one.group_id)
+                        ),
                         one_line(&one.summary, 90),
                         worknote::how_long_ago(one.raised_at, now)
                     ),
@@ -413,8 +548,26 @@ impl Presence {
         let busy = self.busy();
         if !busy.is_empty() {
             rows.push(Row::Note("Working".to_string()));
-            for (id, label) in busy.iter().take(MAX_WORKING) {
-                rows.push(Row::Agent { id: *id, label: label.clone() });
+            // A crew's heading goes in with the first of its rows rather than
+            // ahead of the run, so a crew whose agents all fell past the cap is
+            // never a heading with nothing under it. The count on it is the
+            // crew's own, which is what the row is about; what the menu had
+            // room for is the note at the end.
+            let mut heading: Option<GroupId> = None;
+            for one in busy.iter().take(MAX_WORKING) {
+                let crew = one.crew.as_ref();
+                if crew.map(|crew| crew.id) != heading {
+                    heading = crew.map(|crew| crew.id);
+                    if let Some(crew) = crew {
+                        let working =
+                            busy.iter().filter(|other| other.crew.as_ref() == Some(crew)).count();
+                        rows.push(Row::Crew {
+                            id: crew.id,
+                            label: format!("{} · {working} working", crew.name),
+                        });
+                    }
+                }
+                rows.push(Row::Agent { id: one.id, label: one.label.clone() });
             }
             if let Some(more) = overflow(busy.len(), MAX_WORKING) {
                 rows.push(Row::Note(format!("{more} more working")));
@@ -459,6 +612,34 @@ impl Presence {
 
         rows
     }
+}
+
+/// A label with the crew it happened in on the end, or the label alone.
+///
+/// The crew last because the row is read left to right and the first thing the
+/// operator is looking for is which of their agents it is. `None` is a
+/// workspace with one crew, where the answer is the same for every row.
+fn in_crew(label: String, crew: Option<&Crew>) -> String {
+    match crew {
+        Some(crew) => format!("{label} · {}", crew.name),
+        None => label,
+    }
+}
+
+/// The crews the working agents are spread over, in the order they appear.
+///
+/// Deduplicated by walking rather than by a set, which [`Presence::busy`] has
+/// already earned: it comes back sorted by crew, so every crew's agents are one
+/// run.
+fn crews_working(busy: &[Busy]) -> Vec<&Crew> {
+    let mut crews: Vec<&Crew> = Vec::new();
+    for one in busy {
+        let Some(crew) = one.crew.as_ref() else { continue };
+        if crews.last().map(|last: &&Crew| last.id) != Some(crew.id) {
+            crews.push(crew);
+        }
+    }
+    crews
 }
 
 /// How many did not fit, or nothing when they all did.
@@ -664,7 +845,7 @@ mod tests {
     use super::*;
     use crate::domain::approval::{ApprovalState, DetailField, Request};
     use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
-    use crate::domain::ids::{GroupId, MessageId, RunId};
+    use crate::domain::ids::{MessageId, RunId};
 
     fn approval(agent: AgentId, action: ProtectedAction, summary: &str) -> Approval {
         request(agent, Request::Permission { action }, summary)
@@ -686,13 +867,47 @@ mod tests {
         }
     }
 
-    /// A workspace with one named agent doing nothing.
+    /// A workspace with one crew and one named agent, doing nothing.
+    ///
+    /// One crew is what an install that has never made another one has, and it
+    /// is the case where the strip names no crew anywhere: everything below
+    /// that says nothing about crews is asserting that.
     fn quiet() -> (Presence, AgentId) {
-        let scout = AgentId::new();
-        let mut presence = Presence::default();
-        presence.names.insert(scout, "Scout".to_string());
+        let mut presence = Presence { crews: vec![crew("Everyone")], ..Default::default() };
+        let scout = hire(&mut presence, "Scout");
         presence.activity.insert(scout, Activity::Idle);
         (presence, scout)
+    }
+
+    fn crew(name: &str) -> Crew {
+        Crew { id: GroupId::new(), name: name.to_string() }
+    }
+
+    /// Puts a named agent in the first crew, which is where a workspace that
+    /// has made only one keeps everybody.
+    fn hire(presence: &mut Presence, name: &str) -> AgentId {
+        let crew = presence.crews.first().map(|crew| crew.id).unwrap_or_default();
+        hire_into(presence, name, crew)
+    }
+
+    fn hire_into(presence: &mut Presence, name: &str, crew: GroupId) -> AgentId {
+        let id = AgentId::new();
+        presence.roster.insert(id, Member { name: name.to_string(), crew });
+        id
+    }
+
+    /// Everything a section says, in order, up to the separator that ends it.
+    fn section(rows: &[Row], heading: &str) -> Vec<String> {
+        let Some(start) =
+            rows.iter().position(|row| matches!(row, Row::Note(text) if text == heading))
+        else {
+            panic!("no {heading:?} section: {rows:?}");
+        };
+        rows[start + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, Row::Separator))
+            .filter_map(|row| row.label().map(str::to_string))
+            .collect()
     }
 
     fn notes(rows: &[Row]) -> Vec<String> {
@@ -817,8 +1032,7 @@ mod tests {
     #[test]
     fn a_working_crew_fills_the_glyph_and_lists_who() {
         let (mut presence, scout) = quiet();
-        let analyst = AgentId::new();
-        presence.names.insert(analyst, "Analyst".to_string());
+        let analyst = hire(&mut presence, "Analyst");
         presence.activity.insert(scout, Activity::Thinking);
         presence.activity.insert(analyst, Activity::Queued { depth: 3 });
         presence.running = 1;
@@ -926,8 +1140,7 @@ mod tests {
     fn a_long_list_says_how_many_did_not_fit() {
         let mut presence = Presence::default();
         for index in 0..MAX_WAITING + 3 {
-            let agent = AgentId::new();
-            presence.names.insert(agent, format!("Agent {index}"));
+            let agent = hire(&mut presence, &format!("Agent {index}"));
             presence.waiting.push(approval(agent, ProtectedAction::CreateAgent, "wants to"));
         }
 
@@ -946,8 +1159,7 @@ mod tests {
     fn a_long_working_list_says_the_same() {
         let mut presence = Presence::default();
         for index in 0..MAX_WORKING + 2 {
-            let agent = AgentId::new();
-            presence.names.insert(agent, format!("Agent {index:02}"));
+            let agent = hire(&mut presence, &format!("Agent {index:02}"));
             presence.activity.insert(agent, Activity::Thinking);
         }
 
@@ -959,13 +1171,185 @@ mod tests {
     #[test]
     fn paused_agents_are_counted_rather_than_listed() {
         let (mut presence, scout) = quiet();
-        let other = AgentId::new();
-        presence.names.insert(other, "Analyst".to_string());
+        let other = hire(&mut presence, "Analyst");
         presence.activity.insert(scout, Activity::Paused);
         presence.activity.insert(other, Activity::Paused);
 
         assert!(notes(&presence.rows()).contains(&"2 agents paused".to_string()));
         assert_eq!(presence.look().glyph, Glyph::Idle, "paused is not running");
+    }
+
+    // ---- which crew ------------------------------------------------------
+
+    /// Two crews, in the order the column would draw them.
+    fn two_crews() -> (Presence, Crew, Crew) {
+        let research = crew("Research");
+        let ops = crew("Ops");
+        let presence =
+            Presence { crews: vec![research.clone(), ops.clone()], ..Default::default() };
+        (presence, research, ops)
+    }
+
+    #[test]
+    fn the_working_list_is_arranged_by_crew_when_there_is_more_than_one() {
+        // The whole point of naming a crew at all. Two crews can hold two
+        // agents with the same name and the same face, so "Scout · thinking"
+        // on its own is a row the operator cannot act on: it does not say
+        // which Scout, and clicking it is the only way to find out.
+        let (mut presence, research, ops) = two_crews();
+        let scout = hire_into(&mut presence, "Scout", research.id);
+        let analyst = hire_into(&mut presence, "Analyst", research.id);
+        let deploy = hire_into(&mut presence, "Deploy", ops.id);
+        presence.activity.insert(scout, Activity::Thinking);
+        presence.activity.insert(analyst, Activity::Queued { depth: 2 });
+        presence.activity.insert(deploy, Activity::Thinking);
+
+        let rows = presence.rows();
+        assert_eq!(
+            section(&rows, "Working"),
+            [
+                "Research · 2 working",
+                "Scout · thinking",
+                "Analyst · 2 messages waiting",
+                "Ops · 1 working",
+                "Deploy · thinking",
+            ],
+            "{rows:?}"
+        );
+        // The heading is a destination, not a label: an operator who wanted the
+        // crew rather than one of its agents has one click for it.
+        assert!(rows.iter().any(|row| matches!(row, Row::Crew { id, .. } if *id == ops.id)));
+    }
+
+    #[test]
+    fn the_crews_stay_in_the_columns_own_order_as_the_work_moves() {
+        // Not busiest first. A menu whose sections change places between two
+        // glances has to be read from the top every time, and this is the order
+        // the operator already learned in the window.
+        let (mut presence, research, ops) = two_crews();
+        let scout = hire_into(&mut presence, "Scout", research.id);
+        let deploy = hire_into(&mut presence, "Deploy", ops.id);
+        presence.activity.insert(scout, Activity::Queued { depth: 1 });
+        presence.activity.insert(deploy, Activity::Thinking);
+
+        assert_eq!(
+            section(&presence.rows(), "Working"),
+            [
+                "Research · 1 working",
+                "Scout · 1 message waiting",
+                "Ops · 1 working",
+                "Deploy · thinking",
+            ]
+        );
+    }
+
+    #[test]
+    fn one_crew_is_named_nowhere_at_all() {
+        // A name that is the only name distinguishes nobody, and every row
+        // carrying it has spent menu width saying where the only place is. The
+        // same rule the window draws the crews' column by.
+        let (mut presence, scout) = quiet();
+        presence.activity.insert(scout, Activity::Thinking);
+        presence.stuck.push(escalation(scout, "no key", 1));
+
+        let rows = presence.rows();
+        assert!(!rows.iter().any(|row| matches!(row, Row::Crew { .. })), "{rows:?}");
+        assert_eq!(section(&rows, "Working"), ["Scout · thinking"]);
+        assert_eq!(presence.look().tooltip, "Guaca · Scout is waiting on you");
+    }
+
+    #[test]
+    fn a_crew_whose_agents_all_fell_past_the_cap_draws_no_heading() {
+        // A heading with nothing under it is the menu claiming a crew is
+        // working and then listing nobody from it.
+        let (mut presence, research, ops) = two_crews();
+        for index in 0..MAX_WORKING {
+            let agent = hire_into(&mut presence, &format!("Agent {index:02}"), research.id);
+            presence.activity.insert(agent, Activity::Thinking);
+        }
+        let deploy = hire_into(&mut presence, "Deploy", ops.id);
+        presence.activity.insert(deploy, Activity::Thinking);
+
+        let rows = presence.rows();
+        assert!(
+            !rows.iter().any(|row| matches!(row, Row::Crew { id, .. } if *id == ops.id)),
+            "{rows:?}"
+        );
+        assert!(notes(&rows).contains(&"1 more working".to_string()), "{rows:?}");
+    }
+
+    #[test]
+    fn a_crews_count_is_its_own_rather_than_what_the_menu_had_room_for() {
+        // The row is a statement about the crew. What did not fit is the note
+        // at the end of the section, and the two add up.
+        let (mut presence, research, _) = two_crews();
+        for index in 0..MAX_WORKING + 2 {
+            let agent = hire_into(&mut presence, &format!("Agent {index:02}"), research.id);
+            presence.activity.insert(agent, Activity::Thinking);
+        }
+
+        let rows = presence.rows();
+        assert!(
+            rows.contains(&Row::Crew {
+                id: research.id,
+                label: format!("Research · {} working", MAX_WORKING + 2),
+            }),
+            "{rows:?}"
+        );
+        assert!(notes(&rows).contains(&"2 more working".to_string()));
+    }
+
+    #[test]
+    fn a_parked_turn_says_which_crew_it_parked_in() {
+        let (mut presence, _, ops) = two_crews();
+        let scout = hire_into(&mut presence, "Scout", ops.id);
+        let mut ask = approval(
+            scout,
+            ProtectedAction::CreateAgent,
+            "Scout wants to create an agent called Scribe",
+        );
+        // Off the request rather than off the roster: this is the crew the run
+        // happened in whatever has since been done to the agent.
+        ask.group_id = ops.id;
+        presence.activity.insert(scout, Activity::AwaitingApproval);
+        presence.waiting.push(ask);
+
+        assert_eq!(presence.look().tooltip, "Guaca · Scout in Ops is waiting on you");
+        assert_eq!(
+            section(&presence.rows(), "Waiting on you"),
+            ["Scout wants to create an agent called Scribe · Ops"]
+        );
+    }
+
+    #[test]
+    fn a_stuck_agent_says_which_crew_it_is_stuck_in() {
+        let (mut presence, research, _) = two_crews();
+        let scout = hire_into(&mut presence, "Scout", research.id);
+        let mut raised = escalation(scout, "the deploy needs a key only you have", 2);
+        raised.group_id = research.id;
+        presence.stuck.push(raised);
+
+        assert_eq!(
+            section(&presence.rows(), "Stuck on you"),
+            ["Scout · Research · the deploy needs a key only you have · 2d ago"]
+        );
+    }
+
+    #[test]
+    fn the_tooltip_names_one_working_crew_and_counts_several() {
+        // One line, and where is half of what the operator is deciding with it.
+        // Named while a name is the answer; counted once the names would not
+        // fit, because the menu under it has them.
+        let (mut presence, research, ops) = two_crews();
+        let scout = hire_into(&mut presence, "Scout", research.id);
+        let analyst = hire_into(&mut presence, "Analyst", research.id);
+        presence.activity.insert(scout, Activity::Thinking);
+        presence.activity.insert(analyst, Activity::Thinking);
+        assert_eq!(presence.look().tooltip, "Guaca · 2 agents working in Research");
+
+        let deploy = hire_into(&mut presence, "Deploy", ops.id);
+        presence.activity.insert(deploy, Activity::Thinking);
+        assert_eq!(presence.look().tooltip, "Guaca · 3 agents working in 2 crews");
     }
 
     #[test]
@@ -1112,6 +1496,7 @@ mod tests {
             Command::Open,
             Command::StopAll,
             Command::Reveal(agent),
+            Command::Enter(GroupId::new()),
             Command::Decide(approval, Decision::Allow),
             Command::Decide(approval, Decision::AlwaysAllow),
             Command::Decide(approval, Decision::Deny),
@@ -1126,6 +1511,7 @@ mod tests {
         assert_eq!(Command::parse("guac.decide.maybe.not-a-uuid"), None);
         assert_eq!(Command::parse("guac.decide.allow.not-a-uuid"), None);
         assert_eq!(Command::parse("guac.reveal."), None);
+        assert_eq!(Command::parse("guac.crew.not-a-uuid"), None);
         assert_eq!(Command::parse("guac.something"), None);
         assert_eq!(Command::parse(""), None);
     }
@@ -1160,6 +1546,30 @@ mod tests {
     }
 
     #[test]
+    fn a_crews_count_moving_under_the_cap_edits_its_row_rather_than_replacing_the_menu() {
+        // The count on a heading moves whenever an agent starts or stops, and
+        // past the cap it moves without any row arriving or leaving. Replacing
+        // the menu for that would close one the operator is reading.
+        let (mut presence, research, _) = two_crews();
+        let mut agents = Vec::new();
+        for index in 0..MAX_WORKING + 2 {
+            let agent = hire_into(&mut presence, &format!("Agent {index:02}"), research.id);
+            presence.activity.insert(agent, Activity::Thinking);
+            agents.push(agent);
+        }
+        let before = presence.rows();
+
+        presence.activity.insert(agents[MAX_WORKING + 1], Activity::Idle);
+
+        let Update::Text(edits) = plan(&before, &presence.rows()) else {
+            panic!("a count that moved replaced the menu: {:?}", presence.rows());
+        };
+        let said: Vec<&str> = edits.iter().map(|(_, text)| text.as_str()).collect();
+        assert!(said.contains(&"Research · 7 working"), "{said:?}");
+        assert!(said.contains(&"1 more working"), "{said:?}");
+    }
+
+    #[test]
     fn a_request_arriving_rebuilds_the_menu() {
         let (mut presence, scout) = quiet();
         let before = presence.rows();
@@ -1176,9 +1586,8 @@ mod tests {
         presence.activity.insert(scout, Activity::Thinking);
         let before = presence.rows();
 
-        let other = AgentId::new();
         presence.activity.remove(&scout);
-        presence.names.insert(other, "Scout".to_string());
+        let other = hire(&mut presence, "Scout");
         presence.activity.insert(other, Activity::Thinking);
 
         assert_eq!(plan(&before, &presence.rows()), Update::Rebuild);
