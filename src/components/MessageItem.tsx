@@ -43,8 +43,8 @@ interface Props {
   named?: boolean;
 }
 
-const HUMAN = { id: "human", name: "You", color: "#5b665e", avatar: "plain" };
-const SYSTEM = { id: "system", name: "Guaca", color: "#8a5a2f", avatar: "plain" };
+const HUMAN = { id: "human", name: "You", color: "#54524d", avatar: "plain" };
+const SYSTEM = { id: "system", name: "Guaca", color: "#2f4858", avatar: "plain" };
 
 function identity(participant: Participant, byId: Lookups["byId"]) {
   if (participant.kind === "human") return HUMAN;
