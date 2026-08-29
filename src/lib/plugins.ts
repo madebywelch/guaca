@@ -22,6 +22,12 @@
  * is, and an approximation would be a logo this file invented for somebody
  * else's software. It gets a plug instead, in the app's own accent, which says
  * the one true thing about it — that it is a server somebody plugged in.
+ *
+ * `nameFor` is the one thing here that a plugin *is*, and it is here because of
+ * where it has to be read rather than what it is. Everything with a row under
+ * it reads the name off that row, and still should. A transcript has no row: it
+ * draws a call made a month ago, by a plugin this crew may have disconnected
+ * since, and all the message carries is the prefix the tool was called by.
  */
 
 import type { CatalogKind, PluginKind, ServerReport } from "./types";
@@ -86,6 +92,36 @@ const ADDED: Brand = {
  */
 export function markFor(kind: PluginKind): Brand {
   return Object.hasOwn(BRANDS, kind) ? BRANDS[kind as CatalogKind] : ADDED;
+}
+
+/**
+ * The six, spelled the way their vendors spell them.
+ *
+ * The spelling is the whole of what this adds: `agentmail` is AgentMail, and a
+ * slug run through a capitalizer is a claim about somebody's name that nobody
+ * checked. Six strings, and the day one of them is wrong is the day the mark
+ * beside it is wrong too.
+ */
+const NAMES: Record<CatalogKind, string> = {
+  neon: "Neon",
+  cloudflare: "Cloudflare",
+  linear: "Linear",
+  stripe: "Stripe",
+  agentmail: "AgentMail",
+  google: "Google",
+};
+
+/**
+ * What to call a plugin where there is no row to read its name off.
+ *
+ * A server the operator added falls back to its slug, which is their own word
+ * for it normalized: the same answer `PluginKind::label` gives, for the same
+ * reason. `Object.hasOwn` for the reason `markFor` has it, and here it decides
+ * more than a missing glyph: a server called `constructor` would otherwise be
+ * drawn in a transcript as a function.
+ */
+export function nameFor(kind: PluginKind): string {
+  return Object.hasOwn(NAMES, kind) ? NAMES[kind as CatalogKind] : kind;
 }
 
 /**

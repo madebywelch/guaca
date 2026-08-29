@@ -24,6 +24,13 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   ends. The two things that stay on the line are the two a count cannot carry —
   a failure, which is the one part somebody may have to act on, and a
   credential by name, which is their audit trail for their own tokens.
+- **A plugin's own summary is not drawn, because the chip is what it said.**
+  The runtime answers a plugin call with `Google · gmail_search` so that
+  whatever draws the call can name the server. The chip names the server
+  itself, and beside it that summary made the row say one thing twice, once as
+  `google__gmail_search`. `tellsMore` treats it as an echo, exactly as it
+  treats `browse` answering `read in the browser`. If that summary ever carries
+  something the title cannot, this is the rule that has to move with it.
 - **Only the component drawing the live bubbles subscribes to `streams`.** One
   level higher, a single token re-renders every message in the transcript. The
   same split is why the line above the composer, the turn's chips and the open

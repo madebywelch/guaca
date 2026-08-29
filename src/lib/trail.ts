@@ -18,9 +18,17 @@
  * A single call still says exactly what it was. `Opened cnn.com` and
  * `Ran a command` are what the operator wanted to know; `used browse` is the
  * name of a function in a file they do not have.
+ *
+ * A plugin's tools are its own and arrive after this build shipped, so nothing
+ * here can say what one of them does. What it can say is where the work went,
+ * which is the half of the name the runtime prefixed on for that purpose. So a
+ * chip reads `Used gmail_search on Google` rather than `Used
+ * google__gmail_search`, and several of them gather by the server rather than
+ * by the tool, the way a browsing turn gathers by the browser.
  */
 
 import { type DiffLine, lineDiff } from "./diff";
+import { nameFor } from "./plugins";
 import { asRecord, attachedNames, sendRecipients } from "./toolArgs";
 import type { ToolCallPart, ToolOutcome } from "./types";
 
@@ -160,6 +168,28 @@ function place(url: string): string {
 function clip(value: string, at = 60): string {
   const flat = value.replace(/\s+/g, " ").trim();
   return flat.length > at ? `${flat.slice(0, at - 1)}…` : flat;
+}
+
+/**
+ * A plugin call, as the server it went to and the tool it called there.
+ *
+ * Mirrors `split_plugin_tool` in `llm/tools.rs`: two underscores, split on the
+ * first pair, both halves non-empty. Which servers exist is deliberately not
+ * checked, and cannot be from here: a crew's plugins are whatever the operator
+ * connected, and a transcript outlives the connection. A prefix this build has
+ * never heard of is drawn as the name it was called by, which is what the
+ * operator typed when they added the server.
+ *
+ * The cost of not checking is a model that invents `use_screen__click` and has
+ * its refusal drawn as a call to a server called Use_screen. That row is a
+ * failure with its reason on it either way, and the alternative is a second
+ * list of this build's own tool names, kept in step with the switch below.
+ */
+export function pluginCall(name: string): { plugin: string; tool: string } | null {
+  const at = name.indexOf("__");
+  if (at <= 0) return null;
+  const tool = name.slice(at + 2);
+  return tool.length > 0 ? { plugin: nameFor(name.slice(0, at)), tool } : null;
 }
 
 /** What one call was, what it acted on, and where. */
@@ -303,9 +333,16 @@ function describe(tool: string, args: Args): Described {
 
     // A tool this build does not know about reads as a tool nobody has
     // explained yet. Guessing at it is how `update_memory` once drew as a
-    // message sent to no one.
-    default:
-      return { title: `Used ${tool}`, target: null };
+    // message sent to no one. A plugin's is that tool with a place behind it,
+    // and the place is worth keeping: `run_sql` alone is not a chip anybody
+    // can read a week later, which is why the runtime writes the name
+    // prefixed at all. It is held as the place rather than said in the title,
+    // for the reason `chipLabel` gives.
+    default: {
+      const from = pluginCall(tool);
+      if (!from) return { title: `Used ${tool}`, target: null };
+      return { title: `Used ${from.tool}`, target: null, where: from.plugin };
+    }
   }
 }
 
@@ -378,8 +415,10 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Asking for permission";
     case "escalate":
       return "Escalating to the operator";
-    default:
-      return `Using ${name}`;
+    default: {
+      const from = pluginCall(name);
+      return from ? `Using ${from.tool} on ${from.plugin}` : `Using ${name}`;
+    }
   }
 }
 
@@ -421,9 +460,29 @@ function manyLabel(group: TrailGroup): string {
       return `Checked who is available ${count} times`;
     case "escalate":
       return `Escalated to the operator ${count} times`;
-    default:
-      return `Used ${group.steps[0]!.tool} ${count} times`;
+    default: {
+      const from = pluginCall(group.steps[0]!.tool);
+      return from
+        ? `${count} calls to ${from.plugin}`
+        : `Used ${group.steps[0]!.tool} ${count} times`;
+    }
   }
+}
+
+/**
+ * What one chip says, whether it stands for one call or several.
+ *
+ * A plugin's server is named here rather than in the step's own title because
+ * the chip is the only place it is missing. A step is only ever drawn under a
+ * chip, and that chip already says where the work went: a column of `Used
+ * drive_read_file on Google` under one reading `4 calls to Google` says the
+ * place five times over.
+ */
+function chipLabel(group: TrailGroup): string {
+  if (group.steps.length > 1) return manyLabel(group);
+  const only = group.steps[0]!;
+  const from = pluginCall(only.tool);
+  return from ? `${only.title} on ${from.plugin}` : only.title;
 }
 
 /**
@@ -450,7 +509,13 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
       });
       continue;
     }
-    const held = open.get(step.tool);
+    // Gathered by the server a plugin call went to rather than by the tool it
+    // called there, for the reason a browsing turn is gathered by the browser:
+    // the plugin is the place, its tools are what the turn did there, and four
+    // chips reading `Used drive_read_file on Google` beside each other say the
+    // place four times and the work once.
+    const family = pluginCall(step.tool)?.plugin ?? step.tool;
+    const held = open.get(family);
     if (held) {
       held.steps.push(step);
       continue;
@@ -462,13 +527,11 @@ export function foldTrail(steps: Step[]): TrailGroup[] {
       failed: false,
       spent: [],
     };
-    open.set(step.tool, group);
+    open.set(family, group);
     groups.push(group);
   }
 
-  return groups.map((group) =>
-    group.steps.length === 1 ? group : { ...group, label: manyLabel(group) },
-  );
+  return groups.map((group) => ({ ...group, label: chipLabel(group) }));
 }
 
 /**
@@ -556,7 +619,10 @@ const ECHOES = new Set([
 
 /** Whether what came back is worth reading beside the call it came from. */
 export function tellsMore(step: Step): boolean {
-  return step.failed || !ECHOES.has(step.tool);
+  // A plugin answers `Google · gmail_search`, which is the chip again. The
+  // runtime writes it so that whatever draws the call can say which server the
+  // work went to, and the chip says that itself now.
+  return step.failed || !(ECHOES.has(step.tool) || pluginCall(step.tool) !== null);
 }
 
 /**

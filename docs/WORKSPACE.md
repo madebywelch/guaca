@@ -38,7 +38,11 @@ and tested without a DOM.
 
 Grouped by tool across the run rather than only where calls are adjacent. The
 order a model happens to interleave `browse` and `run_command` in is not
-something anybody asked about; "4 steps on cnn.com, ran 2 commands" is.
+something anybody asked about; "4 steps on cnn.com, ran 2 commands" is. A
+plugin's calls group by the server rather than the tool, because a plugin is a
+place in the sense the browser is one: `drive_read_file` and `gmail_search` are
+two things one turn did at Google, and by tool they draw as two chips that say
+Google twice and the work once.
 
 **Two things never fold, and they are the two the row exists to be right
 about.** A call the runtime refused or that failed keeps its own chip with its
@@ -59,6 +63,20 @@ function in a file they do not have. A count only replaces that where there are
 several of a kind, and it names what it can even then: a browsing turn that
 stayed on one site says which site, for the reason a burst draws one chip per
 peer rather than "5 messages with 2 agents".
+
+**A plugin call is drawn as the server and the tool, not as the name a model
+calls it by.** The runtime prefixes the plugin onto the tool so that whatever
+draws the call can say where the work went, and that name is a wire name: `Used
+google__gmail_search`, beside the runtime's own summary of it reading `Google ·
+gmail_search`, is one row saying one thing twice and once in a spelling nobody
+reads. The chip says `Used gmail_search on Google` and the summary is treated
+as the echo it is. What the tool *does* is still never guessed at: a crew's
+plugins are connected after this build shipped, so the server's own name for it
+is the whole of what can be said about it. The six are spelled the way their
+vendors spell them in `lib/plugins.ts`, beside their marks, because a
+transcript is the one place that draws a plugin with no row under it to read a
+name off; a server the operator added is called what they called it, which is
+what `PluginKind::label` falls back to for the same reason.
 
 **What came back is on the chip in two cases and no others.** Most of these
 summaries are the line above read back in the runtime's words: `browse` answers
