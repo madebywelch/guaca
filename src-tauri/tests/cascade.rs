@@ -1300,6 +1300,82 @@ async fn a_turn_that_speaks_twice_is_watched_with_the_break_between_its_rounds()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_that_ends_on_a_promise_is_given_the_round_back() {
+    // The failure, verbatim: a plugin that had just started answering again,
+    // two checks left to run, rounds and budget to run them in, and a closing
+    // line of "Checking both properly". A turn ends when the model stops
+    // calling tools, so that sentence was the end of it. The operator read a
+    // promise, waited, and had to send another message to get the work done.
+    //
+    // The prompt now says a message ends the turn, which is the fix for a model
+    // that reads its prompt. This is the fix for the rest of them.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Drive's newest file is still 27 Aug.".into())
+        } else if anyone_said(body, "You ended your message with work you had not done") {
+            Script::Progress("Drive listing is stale".into())
+        } else {
+            Script::Say("Both answered, so the plugin is back. Checking both properly.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "is the plugin back?").unwrap();
+    h.settle(run).await;
+
+    let said = h.channel_texts("Manager").pop().unwrap();
+    assert!(
+        said.contains("still 27 Aug"),
+        "the work the turn promised has to happen in the turn that promised it: {said:?}"
+    );
+    // The promise stays in the message rather than being retracted. The
+    // operator watched it being written, so a finished message without it would
+    // disagree with the bubble they read; left where it is, it reads as the
+    // sentence before the answer, which is what it turned out to be.
+    assert_eq!(
+        said,
+        "Both answered, so the plugin is back. Checking both properly.\n\n\
+         Drive's newest file is still 27 Aug."
+    );
+    assert_eq!(
+        calls_by_agent(&stub).get("Manager"),
+        Some(&3),
+        "the nudge is one model call: the promise, the work, the answer"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_that_promises_again_is_not_argued_with() {
+    // The bound. A model that answers the nudge with the same sentence is not
+    // going to be talked into working, and without a cap this is a turn that
+    // spends every round it has and the budget behind them on one promise.
+    let stub = serve(|_| Script::Say("Checking now.".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "is the plugin back?").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        calls_by_agent(&stub).get("Manager"),
+        Some(&2),
+        "one nudge per turn, however many times the model promises"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_that_says_what_it_found_is_left_alone() {
+    // What the check costs when it is wrong, which is what decides how tight it
+    // has to be. A turn closing on a report is the overwhelmingly common case
+    // and it must not buy a second model call.
+    let stub =
+        serve(|_| Script::Say("Checked both. Drive is stale and Gmail has nothing.".into())).await;
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "is the plugin back?").unwrap();
+    h.settle(run).await;
+
+    assert_eq!(calls_by_agent(&stub).get("Manager"), Some(&1), "a report is not a promise");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_retried_round_opens_its_replacement_at_the_left_margin() {
     // The other half of that break. A retry throws away what was drawn and
     // starts a new placeholder, so the round it reopens for is the first thing

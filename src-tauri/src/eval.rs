@@ -12,8 +12,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::domain::envelope::{Envelope, Participant};
+use crate::domain::envelope::{Envelope, Part, Participant};
 use crate::domain::ids::AgentId;
+use crate::domain::promise;
 
 /// What one run's traffic looked like.
 #[derive(Debug, Clone)]
@@ -64,6 +65,19 @@ pub enum Fault {
     /// agent was given something to do. A tool trail does not count as an
     /// answer: it is the working, and the operator reads channels, not traces.
     AssignedAndSaidNothing { agent: String },
+    /// A message that closed on work the agent had not done.
+    ///
+    /// The near neighbor of the fault above, and invisible to every check in
+    /// this file until now: the agent did speak, so `Silent` and
+    /// `AssignedAndSaidNothing` both read the run as answered, and what the
+    /// operator got was "Checking both properly" followed by nothing. Nothing
+    /// of an agent's runs after its message, so a closing promise is unbacked
+    /// however much work the turn did before it.
+    ///
+    /// Decided from the closing sentence alone. See `domain::promise`, which
+    /// the runtime reads too: a rule that drifted between the two would mean a
+    /// prompt change measuring clean here while the runtime went on nudging.
+    PromisedAndStopped { agent: String, said: String },
     /// Two things said to the operator that are near enough the same words.
     RepeatedToOperator { again: String },
     /// One agent, answering one instruction over and over.
@@ -95,6 +109,9 @@ impl Fault {
             Fault::Silent => "the operator asked for something and was never told anything".into(),
             Fault::AssignedAndSaidNothing { agent } => {
                 format!("{agent} was given work and never said what came of it")
+            }
+            Fault::PromisedAndStopped { agent, said } => {
+                format!("{agent} ended on work it had not done: {said:?}")
             }
             Fault::RepeatedToOperator { again } => {
                 format!("said the same thing to the operator twice: {again:?}")
@@ -213,6 +230,29 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
         assigned.into_iter().filter(|id| !spoke.contains(id)).map(&name_of).collect();
     mute.sort();
     faults.extend(mute.into_iter().map(|agent| Fault::AssignedAndSaidNothing { agent }));
+
+    // Spoke, and said it was about to do something. Once per agent rather than
+    // once per message: this is a habit, and a run where it happened three
+    // times is one thing to fix, not three. In message order, which is the
+    // order the operator read them in.
+    let mut promised: HashSet<AgentId> = HashSet::new();
+    for envelope in messages {
+        let Participant::Agent { id } = envelope.from else { continue };
+        // A `code` call outlives the turn that made it, and the prompt tells an
+        // agent to start one, say so, and stop. That sentence is backed by a
+        // job that is genuinely running, which is the one case where something
+        // of this agent's does carry on after the message.
+        if envelope.parts.iter().any(
+            |part| matches!(part, Part::ToolCall { name, .. } if name == crate::llm::tools::CODE),
+        ) {
+            continue;
+        }
+        if let Some(said) = promise::promises_work(&envelope.plain_text()) {
+            if promised.insert(id) {
+                faults.push(Fault::PromisedAndStopped { agent: name_of(id), said: brief(said) });
+            }
+        }
+    }
 
     // One instruction, several answers. An update followed by a result is
     // reasonable; a third is the crew narrating itself.
@@ -343,7 +383,6 @@ fn overlap(a: &HashSet<String>, b: &HashSet<String>) -> f32 {
 mod tests {
     use super::*;
     use crate::domain::envelope::Intent;
-    use crate::domain::envelope::Part;
     use crate::domain::ids::{MessageId, RunId};
 
     fn agents() -> (AgentId, AgentId) {
@@ -504,6 +543,102 @@ mod tests {
                 .contains(&Fault::AssignedAndSaidNothing { agent: "Chef".into() }),
             "a tool trail is the working, not the report"
         );
+    }
+
+    #[test]
+    fn a_message_that_ends_on_a_promise_is_a_fault() {
+        // Verbatim from the run that produced this check. The plugin worked,
+        // there were two calls to make and rounds left to make them in.
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "is the plugin back?", 0, true),
+            msg(
+                Participant::Agent { id: a },
+                Participant::Human,
+                "Both answered, so the plugin is back. But the results surfaced two problems. \
+                 Checking both properly.",
+                0,
+                false,
+            ),
+        ];
+        assert!(faults(&run, &named(a, b)).contains(&Fault::PromisedAndStopped {
+            agent: "Manager".into(),
+            said: "Checking both properly.".into(),
+        }));
+    }
+
+    #[test]
+    fn every_other_check_here_reads_that_run_as_answered() {
+        // Why this fault has to exist at all. The agent spoke, so the operator
+        // was told something by somebody and nobody was left mute: the run
+        // scores clean on every count in this file while the operator sits
+        // waiting for a check that was never going to run.
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "is the plugin back?", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Human, "Checking now.", 0, false),
+        ];
+        let found = faults(&run, &named(a, b));
+        assert!(!found.contains(&Fault::Silent));
+        assert!(!found.iter().any(|f| matches!(f, Fault::AssignedAndSaidNothing { .. })));
+        assert_eq!(found.len(), 1, "and this is the only one that sees it: {found:?}");
+    }
+
+    #[test]
+    fn an_agent_that_says_what_it_found_is_clean() {
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "is the plugin back?", 0, true),
+            msg(
+                Participant::Agent { id: a },
+                Participant::Human,
+                "Checked both. Drive answered and Gmail answered, so it is back.",
+                0,
+                false,
+            ),
+        ];
+        assert!(faults(&run, &named(a, b)).is_empty());
+    }
+
+    #[test]
+    fn a_started_coding_job_is_the_one_thing_that_outlives_the_message() {
+        // The prompt tells an agent to start a `code` job, say so, and end its
+        // turn, and that is right: the job comes back on a run of its own. So
+        // the sentence is backed, and a rule that could not tell the two apart
+        // would fire on the one announcement the app asks for.
+        let (a, b) = agents();
+        let started = Envelope {
+            parts: vec![
+                Part::text("Started the coding agent on it. Checking back on it shortly."),
+                Part::tool_call(
+                    crate::llm::tools::CODE,
+                    serde_json::Value::Null,
+                    crate::domain::envelope::ToolOutcome::Ok { summary: "started".into() },
+                ),
+            ],
+            ..msg(Participant::Agent { id: a }, Participant::Human, "", 0, false)
+        };
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "fix the test", 0, true),
+            started,
+        ];
+        assert!(faults(&run, &named(a, b)).is_empty());
+    }
+
+    #[test]
+    fn one_agent_promising_twice_is_one_thing_to_fix() {
+        let (a, b) = agents();
+        let run = [
+            msg(Participant::Human, Participant::Agent { id: a }, "check it", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Human, "Checking now.", 0, false),
+            msg(Participant::Human, Participant::Agent { id: a }, "well?", 0, true),
+            msg(Participant::Agent { id: a }, Participant::Human, "One moment.", 0, false),
+        ];
+        let promises = faults(&run, &named(a, b))
+            .into_iter()
+            .filter(|f| matches!(f, Fault::PromisedAndStopped { .. }))
+            .count();
+        assert_eq!(promises, 1, "a habit is one fault, not one per message");
     }
 
     #[test]

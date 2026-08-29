@@ -53,6 +53,8 @@ src-tauri/src/
     repository.rs     A directory an agent may write code in, which of two
                       programs writes it, and whether it asks before pushing.
     worknote.rs       A line about work in flight, and why it is not memory.
+    promise.rs        A closing sentence that says the work is still coming,
+                      in a turn that is over. One rule, two readers.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
     escalation.rs     The third thing, which stops nothing: work an agent
@@ -123,6 +125,7 @@ repo: the frontend renders state and forwards intent.
 | Messaging, replies, cascades, hop limits, the guard | `runtime/guard.rs`, then *Cascades terminate because of one asymmetry* and *The five limits* in `docs/ARCHITECTURE.md` |
 | A message that arrives while an agent is already working, and the coding job whose answer could not reach the turn that started it | *A working turn reads its inbox, and only what it can answer where it stands* in `docs/ARCHITECTURE.md`, then `Runtime::take_in` and `Intake` |
 | What a turn is told it was asked for: `expects_reply`, `intent`, `ReplyMode` | *Cascades terminate because of one asymmetry*, and `runtime/prompt.rs`, which has to agree with it |
+| A turn that ends on "checking now" and does nothing, the round it is given back, the fault that counts them | *A turn ends when the model stops calling tools, so a closing promise is silence* in `docs/gotchas/runtime.md`, then `src-tauri/src/domain/promise.rs` and the `## Your reply` block in `runtime/prompt.rs` |
 | Streaming, retries, the budget, when a run settles | *A failed model call is retried*, *A thought is shown and never kept*, *The budget counts model calls* |
 | What a turn shows of itself while it runs: the thinking, the calls, the line above the composer | *A thought is shown and never kept* and *A turn's own work is watched while it happens*, then `src/lib/reasoning.ts` |
 | How a turn is paid for: providers, the ChatGPT sign-in, the Responses API | *A subscription is a second provider, not a second endpoint*, then `llm/codex.rs` and `subscription.rs` |
