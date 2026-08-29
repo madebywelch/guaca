@@ -6,10 +6,16 @@
  * `guacfile:` instead, a scheme `app.rs` answers out of the file store, so a
  * picture is fetched once by the element drawing it and only while that element
  * is on screen.
+ *
+ * A hosted workspace answers the same bytes on a route instead, because a
+ * custom scheme is a thing a webview registers and a browser has none. The one
+ * difference is where the token goes: an `<img>` cannot carry a header, so it
+ * goes in the query string, exactly as the event socket's does.
  */
 
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+import { hosted, token } from "./transport";
 import type { Attachment } from "./types";
 
 /** The scheme `app.rs` registers. */
@@ -88,6 +94,18 @@ export function kindLabel(mime: string): string {
  * names are one set of bytes at one address.
  */
 export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
+  if (hosted) {
+    const target = `${encodeURIComponent(file.digest)}/${encodeURIComponent(file.name)}`;
+    return `${window.location.origin}/v1/file/${target}?token=${encodeURIComponent(token())}`;
+  }
+  // Asked for rather than built: Tauri spells its own scheme differently per
+  // platform (`guacfile:` on macOS, `http://guacfile.localhost` on Windows,
+  // which is why the app's content policy names both), and a hand-built URL is
+  // right on the machine it was written on and draws nothing on the other.
+  //
+  // Imported statically rather than behind the host check, because this has to
+  // be synchronous: it is called while a message renders. The function is pure
+  // string handling and importing it in a browser costs nothing.
   return convertFileSrc(`${file.digest}/${file.name}`, SCHEME);
 }
 

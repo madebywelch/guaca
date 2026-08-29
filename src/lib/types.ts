@@ -423,6 +423,16 @@ export interface HarnessOnMachine {
    */
   bridged: boolean;
   install: string;
+  /**
+   * Why this workspace will not run it, when it will not.
+   *
+   * Present only where the harness is withheld by where the workspace runs,
+   * which today means Claude Code on a server: it spends a plan signed in to on
+   * the operator's own machine. Drawn as the row's reason rather than by
+   * dropping the row, because a harness that silently vanishes is a panel that
+   * disagrees with the operator's laptop and explains nothing.
+   */
+  withheld?: string | null;
 }
 
 /**
@@ -811,6 +821,36 @@ export interface RankedModel {
    *  not the same as free. */
   promptPerMillion: number | null;
   completionPerMillion: number | null;
+}
+
+/**
+ * What this workspace can do, which is a property of where it runs.
+ *
+ * Five flags, and every one of them is something physically on the operator's
+ * machine rather than a feature nobody finished. A local workspace has all
+ * five; one running on a server has none, because a credential bound to a
+ * program, a working tree with uncommitted work in it, a model server on
+ * loopback and a file on a disk cannot be reached from an origin.
+ *
+ * Read once when the window opens. A deployment cannot change under a running
+ * app, so this is a constant that happens to arrive over IPC.
+ *
+ * The panels gate on it and the commands refuse anyway. That is not belt and
+ * braces: a webview on a stale bundle still draws the control it was built
+ * with, and the refusal is what turns that into a sentence instead of a
+ * failure.
+ */
+export interface Capabilities {
+  /** Whether a repository may be a directory the operator picked. */
+  localDirectories: boolean;
+  /** Whether inference may point at a model server on loopback. */
+  loopbackEndpoints: boolean;
+  /** Whether a turn may be paid for by a Claude plan. */
+  claudeProvider: boolean;
+  /** Whether Claude Code may be the harness that writes the code. */
+  claudeCodeHarness: boolean;
+  /** Whether a file may be named by a path on the operator's own disk. */
+  localFiles: boolean;
 }
 
 export interface Settings {

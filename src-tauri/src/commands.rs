@@ -10,7 +10,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tauri::State;
 
 use crate::account::{Account, AccountError, Connectors};
 use crate::artifact::Artifacts;
@@ -19,6 +18,7 @@ use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Lifecyc
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
+use crate::domain::deployment::{Absent, Capabilities, Deployment};
 use crate::domain::envelope::Envelope;
 use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
@@ -46,8 +46,28 @@ use crate::runtime::guard::GuardLimits;
 use crate::runtime::Runtime;
 use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
 
+/// How the operator's own browser is opened, which is a property of the host.
+///
+/// A sign-in that needs a person goes to the browser they are sitting in front
+/// of. On a desktop that is this machine's, and Tauri opens it. On a server
+/// there is nobody at the machine at all, so the honest answer is a refusal
+/// naming where the sign-in has to happen instead.
+///
+/// A boxed function rather than a match on [`Deployment`], because the desktop
+/// arm is the one line in this file that would drag `tauri` back into it, and
+/// this module is the boundary that keeps the runtime host-agnostic.
+pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 pub struct AppState {
     pub runtime: Runtime,
+    /// Where this runtime is, which decides what the panels may offer.
+    ///
+    /// Read by the commands that would otherwise reach the operator's machine,
+    /// and by `capabilities`, which is what the frontend gates on. Every
+    /// refusal is drawn before anything is spent rather than at turn time.
+    pub deployment: Deployment,
+    /// Opens a URL in the operator's browser, or says why it cannot.
+    pub open_url: OpenUrl,
     pub config_path: PathBuf,
     /// Where a saved copy of an attachment lands. Resolved once at startup:
     /// the operating system's own downloads folder is the one place a person
@@ -82,9 +102,51 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    fn new(kind: &'static str, message: impl Into<String>) -> Self {
+    pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
         Self { kind, message: message.into() }
     }
+}
+
+/// A capability this host does not have, as the panel reads it.
+///
+/// Its own kind rather than `validation`, because the two are different
+/// problems: a validation failure is something the operator typed wrongly and
+/// can retype, and this is something that is true of where the workspace runs.
+/// A panel that can tell them apart can draw the second as a disabled control
+/// with a reason rather than as a rejected form.
+impl From<Absent> for CommandError {
+    fn from(absent: Absent) -> Self {
+        CommandError::new("notHere", absent.sentence())
+    }
+}
+
+/// Refuses inference settings a server cannot honor, wherever they are written.
+///
+/// One function because there are three places: the app's settings, a group's
+/// overrides, and the test button beside each. Three copies of this rule would
+/// be three sentences for one fact, and the one an operator hit would depend on
+/// which box they typed in.
+///
+/// Both checks are about the operator's own machine rather than about a feature
+/// being unfinished. A `claude` signed in on a laptop cannot be reached from a
+/// box, and neither can a model server on loopback.
+fn honorable(
+    here: Capabilities,
+    provider: Option<config::Provider>,
+    base_url: Option<&str>,
+) -> Result<(), CommandError> {
+    if provider == Some(config::Provider::Claude) {
+        here.require(Absent::ClaudeProvider)?;
+    }
+    // Only when it is actually being set. A group that inherits the endpoint is
+    // not making a claim about one, and refusing it would make every group edit
+    // on a server fail over a field nobody touched.
+    if let Some(url) = base_url.filter(|url| !url.trim().is_empty()) {
+        if crate::domain::deployment::is_loopback(url) {
+            here.require(Absent::LoopbackEndpoints)?;
+        }
+    }
+    Ok(())
 }
 
 impl From<crate::db::StoreError> for CommandError {
@@ -272,16 +334,16 @@ impl From<CatalogError> for CommandError {
     }
 }
 
-type Reply<T> = Result<T, CommandError>;
+pub type Reply<T> = Result<T, CommandError>;
 
 // ---- computers -----------------------------------------------------------
 
 /// The E2B client, or a clear reason there is not one.
-fn computers(state: &State<'_, AppState>) -> Reply<E2bClient> {
+fn computers(state: &AppState) -> Reply<E2bClient> {
     E2bClient::new(&state.runtime.config().e2b.api_key).ok_or_else(|| E2bError::NoKey.into())
 }
 
-fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
+fn agent_card(state: &AppState, id: AgentId) -> Reply<crate::domain::agent::AgentCard> {
     state
         .runtime
         .store()
@@ -293,13 +355,12 @@ fn agent_card(state: &State<'_, AppState>, id: AgentId) -> Reply<crate::domain::
 ///
 /// `None` means it has never been given one, which the UI shows as an offer
 /// rather than as an error.
-#[tauri::command]
-pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
+pub async fn agent_computer(state: &AppState, id: AgentId) -> Reply<Option<Computer>> {
+    let card = agent_card(state, id)?;
     let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
         return Ok(None);
     };
-    let client = computers(&state)?;
+    let client = computers(state)?;
 
     if client.state(&sandbox).await? == crate::e2b::SandboxState::Gone {
         // A reclaimed sandbox leaves a dangling id. Clearing it turns a dead
@@ -316,8 +377,7 @@ pub async fn agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Op
 /// The decision and nothing else: no machine is made here, and an agent that
 /// never needs one never costs anything. What changes is what its turns are
 /// offered, which is the whole of what the operator is deciding.
-#[tauri::command]
-pub fn give_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+pub async fn give_agent_computer(state: &AppState, id: AgentId) -> Reply<()> {
     state.runtime.store().set_has_computer(id, true)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -334,13 +394,12 @@ pub fn give_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()>
 /// already been recorded by then, and the machine sleeps on its own timeout;
 /// refusing would leave an agent holding a computer the operator has said it
 /// may not have.
-#[tauri::command]
-pub async fn take_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let card = agent_card(&state, id)?;
+pub async fn take_agent_computer(state: &AppState, id: AgentId) -> Reply<()> {
+    let card = agent_card(state, id)?;
     state.runtime.store().set_has_computer(id, false)?;
 
     if let Some(sandbox) = card.sandbox_id {
-        match computers(&state) {
+        match computers(state) {
             Ok(client) => {
                 if let Err(err) = client.pause(&sandbox).await {
                     tracing::warn!(%err, %sandbox, "could not sleep a machine that was taken back");
@@ -359,9 +418,8 @@ pub async fn take_agent_computer(state: State<'_, AppState>, id: AgentId) -> Rep
 /// does not offer: this is the operator's own route to the same gate the
 /// runtime uses, and one that granted by side effect would make the give
 /// button decorative.
-#[tauri::command]
-pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<Computer> {
-    let card = agent_card(&state, id)?;
+pub async fn start_agent_computer(state: &AppState, id: AgentId) -> Reply<Computer> {
+    let card = agent_card(state, id)?;
     let (client, sandbox) = state.runtime.ensure_computer(&card).await?;
 
     client.start_desktop(&sandbox.id, &sandbox.envd_token).await?;
@@ -376,28 +434,23 @@ pub async fn start_agent_computer(state: State<'_, AppState>, id: AgentId) -> Re
 /// Not a delete: the disk is kept, so a browser that was signed in still is
 /// when it wakes. This is what a bill-conscious operator wants, and what the
 /// idle timeout does on its own.
-#[tauri::command]
-pub async fn stop_agent_computer(
-    state: State<'_, AppState>,
-    id: AgentId,
-) -> Reply<Option<Computer>> {
-    let card = agent_card(&state, id)?;
+pub async fn stop_agent_computer(state: &AppState, id: AgentId) -> Reply<Option<Computer>> {
+    let card = agent_card(state, id)?;
     let (Some(sandbox), Some(envd)) = (card.sandbox_id, card.sandbox_envd_token) else {
         return Ok(None);
     };
-    let client = computers(&state)?;
+    let client = computers(state)?;
     client.pause(&sandbox).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
 }
 
 /// Destroys the sandbox and everything on its disk.
-#[tauri::command]
-pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let Some(sandbox) = agent_card(&state, id)?.sandbox_id else {
+pub async fn delete_agent_computer(state: &AppState, id: AgentId) -> Reply<()> {
+    let Some(sandbox) = agent_card(state, id)?.sandbox_id else {
         return Ok(());
     };
-    computers(&state)?.kill(&sandbox).await?;
+    computers(state)?.kill(&sandbox).await?;
     state.runtime.store().set_agent_sandbox(id, None)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -406,7 +459,7 @@ pub async fn delete_agent_computer(state: State<'_, AppState>, id: AgentId) -> R
 // ---- browsers ------------------------------------------------------------
 
 /// The Kernel client, or a clear reason there is not one.
-fn browsers(state: &State<'_, AppState>) -> Reply<KernelClient> {
+fn browsers(state: &AppState) -> Reply<KernelClient> {
     KernelClient::new(&state.runtime.config().kernel.api_key)
         .ok_or_else(|| KernelError::NoKey.into())
 }
@@ -417,12 +470,11 @@ fn browsers(state: &State<'_, AppState>) -> Reply<KernelClient> {
 /// the UI shows as an offer rather than as an error. Gone is the ordinary end of
 /// every browser and costs nothing: the cookies went back to the agent's
 /// profile, so the next one opens signed in to the same accounts.
-#[tauri::command]
-pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Option<Browser>> {
-    let Some(browser) = agent_card(&state, id)?.browser_id else {
+pub async fn agent_browser(state: &AppState, id: AgentId) -> Reply<Option<Browser>> {
+    let Some(browser) = agent_card(state, id)?.browser_id else {
         return Ok(None);
     };
-    let client = browsers(&state)?;
+    let client = browsers(state)?;
 
     match client.get(&browser).await? {
         Some(session) => Ok(Some(Browser::running(session))),
@@ -439,8 +491,7 @@ pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Opt
 ///
 /// As with the computer: the decision alone. A browser is opened on first use,
 /// or by the operator when they want to sign this agent in to something.
-#[tauri::command]
-pub fn give_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+pub async fn give_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
     state.runtime.store().set_has_browser(id, true)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -452,13 +503,12 @@ pub fn give_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
 /// keeps what the operator signed it in to exactly as the Close button does.
 /// The profile outlives every browser made against it and is deleted with the
 /// agent, so giving the browser back opens one signed in to the same accounts.
-#[tauri::command]
-pub async fn take_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let card = agent_card(&state, id)?;
+pub async fn take_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
+    let card = agent_card(state, id)?;
     state.runtime.store().set_has_browser(id, false)?;
 
     if let Some(browser) = card.browser_id {
-        match browsers(&state) {
+        match browsers(state) {
             Ok(client) => {
                 if let Err(err) = client.delete(&browser).await {
                     tracing::warn!(%err, %browser, "could not close a browser that was taken back");
@@ -474,9 +524,8 @@ pub async fn take_agent_browser(state: State<'_, AppState>, id: AgentId) -> Repl
 }
 
 /// Opens an agent's browser, or hands back the one it has.
-#[tauri::command]
-pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Browser> {
-    let card = agent_card(&state, id)?;
+pub async fn start_agent_browser(state: &AppState, id: AgentId) -> Reply<Browser> {
+    let card = agent_card(state, id)?;
     let (_, session) = state.runtime.ensure_browser(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(Browser::running(session))
@@ -488,12 +537,11 @@ pub async fn start_agent_browser(state: State<'_, AppState>, id: AgentId) -> Rep
 /// browser has: deleting is what writes the cookies back to the agent's
 /// profile, so this is how an operator makes a sign-in they just performed
 /// durable rather than waiting for the timeout to do it.
-#[tauri::command]
-pub async fn stop_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let Some(browser) = agent_card(&state, id)?.browser_id else {
+pub async fn stop_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
+    let Some(browser) = agent_card(state, id)?.browser_id else {
         return Ok(());
     };
-    browsers(&state)?.delete(&browser).await?;
+    browsers(state)?.delete(&browser).await?;
     state.runtime.store().set_agent_browser(id, None)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -503,13 +551,11 @@ pub async fn stop_agent_browser(state: State<'_, AppState>, id: AgentId) -> Repl
 
 /// Every account one crew can reach. Secrets are reported as set or not; the
 /// values are not in this type and there is no command that returns them.
-#[tauri::command]
-pub fn group_connectors(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Connector>> {
+pub async fn group_connectors(state: &AppState, group_id: GroupId) -> Reply<Vec<Connector>> {
     Ok(state.runtime.store().group_connectors(group_id)?)
 }
 
-#[tauri::command]
-pub fn create_connector(state: State<'_, AppState>, draft: ConnectorDraft) -> Reply<Connector> {
+pub async fn create_connector(state: &AppState, draft: ConnectorDraft) -> Reply<Connector> {
     let clean = draft.validate()?;
     let connector = state.runtime.store().create_connector(&clean)?;
     // The roster every agent is shown includes what its peers can reach, so a
@@ -518,8 +564,7 @@ pub fn create_connector(state: State<'_, AppState>, draft: ConnectorDraft) -> Re
     Ok(connector)
 }
 
-#[tauri::command]
-pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()> {
+pub async fn delete_connector(state: &AppState, id: ConnectorId) -> Reply<()> {
     state.runtime.store().delete_connector(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -533,8 +578,7 @@ pub fn delete_connector(state: State<'_, AppState>, id: ConnectorId) -> Reply<()
 /// on disk since it was linked still comes back, because the panel is where the
 /// operator fixes that and a list that silently dropped a row would leave them
 /// nothing to fix.
-#[tauri::command]
-pub fn group_repositories(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Repository>> {
+pub async fn group_repositories(state: &AppState, group_id: GroupId) -> Reply<Vec<Repository>> {
     Ok(state.runtime.store().group_repositories(group_id)?)
 }
 
@@ -549,9 +593,8 @@ pub fn group_repositories(state: State<'_, AppState>, group_id: GroupId) -> Repl
 /// and empty. The directory may have been moved or unmounted since it was
 /// linked, and a row saying `main, clean` about a path that is no longer there
 /// is worse than a row saying nothing.
-#[tauri::command]
 pub async fn repository_statuses(
-    state: State<'_, AppState>,
+    state: &AppState,
 ) -> Reply<std::collections::HashMap<RepositoryId, crate::repo::RepoStatus>> {
     let repositories = state.runtime.store().repositories()?;
     let asked = repositories.into_iter().map(|repository| async move {
@@ -565,8 +608,7 @@ pub async fn repository_statuses(
 /// One read for the whole rail. The crews column and the rail inside a crew are
 /// drawn from one roster, and a call per crew would make the round trips the
 /// number of crews.
-#[tauri::command]
-pub fn list_repositories(state: State<'_, AppState>) -> Reply<Vec<Repository>> {
+pub async fn list_repositories(state: &AppState) -> Reply<Vec<Repository>> {
     Ok(state.runtime.store().repositories()?)
 }
 
@@ -579,11 +621,12 @@ pub fn list_repositories(state: State<'_, AppState>) -> Reply<Vec<Repository>> {
 ///
 /// Nobody is given it here. Adding and handing out are two decisions, and the
 /// second one is `set_repository_access`.
-#[tauri::command]
-pub async fn create_repository(
-    state: State<'_, AppState>,
-    draft: RepositoryDraft,
-) -> Reply<Repository> {
+pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Reply<Repository> {
+    // Before the path is even cleaned. On a server there is no directory
+    // for the operator to have picked, and verifying one would answer with
+    // git's complaint about a path rather than with the reason.
+    state.deployment.capabilities().require(Absent::LocalDirectories)?;
+
     let mut clean = draft.clean()?;
     clean.path = crate::repo::verify(&clean.path).await?;
     // Taken from the canonical path rather than the typed one, for the case
@@ -624,9 +667,8 @@ pub async fn create_repository(
 /// place. Worktrees an agent is no longer using are left on disk rather than
 /// removed here, because a switch back has to find its caches where it left
 /// them, and `repo::release_bench` is what actually takes one away.
-#[tauri::command]
-pub fn update_repository(
-    state: State<'_, AppState>,
+pub async fn update_repository(
+    state: &AppState,
     id: RepositoryId,
     name: String,
     note: String,
@@ -672,6 +714,14 @@ pub struct HarnessOnMachine {
     /// and two copies of an install command drift the day a vendor renames a
     /// package.
     pub install: &'static str,
+    /// Why this host will not run it, when it will not.
+    ///
+    /// A row rather than an absence, for the reason every other capability here
+    /// is drawn rather than hidden: a harness that silently vanishes from the
+    /// list on a server is a panel that disagrees with the documentation and
+    /// with the operator's own laptop, and nothing on screen explains it.
+    /// `None` is the ordinary case and draws exactly what it always drew.
+    pub withheld: Option<String>,
 }
 
 /// Which coding harnesses are on this machine, and how to get the ones that are
@@ -685,12 +735,22 @@ pub struct HarnessOnMachine {
 ///
 /// Every harness comes back, installed or not, and they are asked concurrently:
 /// each is a process spawn, and asked in series a panel waits once per harness.
-#[tauri::command]
-pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
+pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> {
+    let here = state.deployment.capabilities();
     let asked = Harness::ALL.map(|harness| async move {
-        let (installed, version, bridged) = match crate::coding::presence(harness).await {
-            crate::coding::Presence::Missing => (false, String::new(), false),
-            crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
+        let withheld = match harness {
+            Harness::Claude => here.require(Absent::ClaudeCodeHarness).err(),
+            _ => None,
+        };
+        // Not probed when it is withheld. The probe is a process spawn whose
+        // answer could not change anything, and "installed, and not offered"
+        // is a sentence that invites an operator to go and fix the install.
+        let (installed, version, bridged) = match withheld {
+            Some(_) => (false, String::new(), false),
+            None => match crate::coding::presence(harness).await {
+                crate::coding::Presence::Missing => (false, String::new(), false),
+                crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
+            },
         };
         HarnessOnMachine {
             harness,
@@ -698,6 +758,7 @@ pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
             version,
             bridged,
             install: crate::coding::install(harness),
+            withheld: withheld.map(|absent| absent.sentence().to_string()),
         }
     });
     Ok(futures_util::future::join_all(asked).await.into_iter().collect())
@@ -714,12 +775,7 @@ pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
 /// ended, and a repository whose harness has no bridge, are two different
 /// sentences and both are things the operator can act on: the second is why
 /// the panel says which harness a repository runs.
-#[tauri::command]
-pub fn message_coding_job(
-    state: State<'_, AppState>,
-    agent_id: AgentId,
-    message: String,
-) -> Reply<()> {
+pub async fn message_coding_job(state: &AppState, agent_id: AgentId, message: String) -> Reply<()> {
     state.runtime.message_job(agent_id, &message).map_err(Into::into)
 }
 
@@ -730,8 +786,7 @@ pub fn message_coding_job(
 /// checkpoints and throwing them away is not this button's decision to take.
 /// The agent that started the job is told, on the same path it is told about
 /// one that finished: an agent never told is an agent waiting forever.
-#[tauri::command]
-pub fn stop_coding_job(state: State<'_, AppState>, agent_id: AgentId) -> Reply<()> {
+pub async fn stop_coding_job(state: &AppState, agent_id: AgentId) -> Reply<()> {
     state.runtime.stop_job(agent_id).map_err(Into::into)
 }
 
@@ -741,8 +796,7 @@ pub fn stop_coding_job(state: State<'_, AppState>, agent_id: AgentId) -> Reply<(
 /// made for the agents that worked here do go, because each one is a
 /// registration in that checkout and one left behind is an entry in their
 /// `git worktree list` pointing into an app that has forgotten the directory.
-#[tauri::command]
-pub async fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> Reply<()> {
+pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> {
     state.runtime.unlink_repository(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -754,9 +808,8 @@ pub async fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> 
 /// it comes back out and there is no second call that takes one away. The rail
 /// drops an agent onto a repository exactly as it drops one onto a crew, and
 /// the two gestures mean the same kind of thing for the same reason.
-#[tauri::command]
-pub fn set_agent_repository(
-    state: State<'_, AppState>,
+pub async fn set_agent_repository(
+    state: &AppState,
     id: AgentId,
     repository_id: Option<RepositoryId>,
 ) -> Reply<AgentCard> {
@@ -769,15 +822,13 @@ pub fn set_agent_repository(
 
 /// The servers Guaca knows how to sign in to. Static, and the same for every
 /// group: what differs is which of them a crew has connected.
-#[tauri::command]
-pub fn plugin_catalog() -> Reply<Vec<PluginOffer>> {
+pub async fn plugin_catalog(_state: &AppState) -> Reply<Vec<PluginOffer>> {
     Ok(plugin::catalog())
 }
 
 /// What one crew has connected, and what each of those can do. No grant is on
 /// this type and there is no command that returns one.
-#[tauri::command]
-pub fn group_plugins(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec<Plugin>> {
+pub async fn group_plugins(state: &AppState, group_id: GroupId) -> Reply<Vec<Plugin>> {
     Ok(state.runtime.store().group_plugins(group_id)?)
 }
 
@@ -788,9 +839,8 @@ pub fn group_plugins(state: State<'_, AppState>, group_id: GroupId) -> Reply<Vec
 /// sign-in to hold or to clean up. It can take minutes: the operator has to
 /// authorize in a browser, and the command is what is waiting for them. Five
 /// minutes and it gives up, which is also when the loopback socket closes.
-#[tauri::command]
 pub async fn connect_plugin(
-    state: State<'_, AppState>,
+    state: &AppState,
     group_id: GroupId,
     kind: PluginKind,
     // Which of the account's authorized identities this crew should use.
@@ -824,7 +874,7 @@ pub async fn connect_plugin(
     // A catalog server is dialled at the address this build ships, with nothing
     // on the request but the credential. Headers are the operator's answer to a
     // server nobody vouched for, and there is nothing here to answer.
-    sign_in(&state, group_id, &kind, &endpoint, credential, &Headers::none()).await
+    sign_in(state, group_id, &kind, &endpoint, credential, &Headers::none()).await
 }
 
 /// Adds a server the operator addressed themselves, and connects it.
@@ -852,9 +902,8 @@ pub async fn connect_plugin(
 /// reconnection, which is right for the same address and wrong for a different
 /// one — two tool lists under one prefix, with which one a call landed on
 /// decided by row order.
-#[tauri::command]
 pub async fn add_plugin(
-    state: State<'_, AppState>,
+    state: &AppState,
     group_id: GroupId,
     name: String,
     url: String,
@@ -886,7 +935,7 @@ pub async fn add_plugin(
         None => crate::plugins::Credential::Discover,
     };
     let endpoint = state.runtime.plugin_endpoint(&kind);
-    sign_in(&state, group_id, &kind, &endpoint, credential, &headers).await
+    sign_in(state, group_id, &kind, &endpoint, credential, &headers).await
 }
 
 /// What the operator gave, as the two things the connect path takes.
@@ -941,10 +990,14 @@ async fn sign_in(
         endpoint,
         credential,
         headers,
-        move |url| {
-            // The one line in this feature that knows the app is a Tauri app. The
-            // flow itself takes a callback so that `oauth.rs` does not have to.
-            tauri_plugin_opener::open_url(url, None::<&str>).map_err(|err| err.to_string())
+        {
+            // The flow takes a callback so `oauth.rs` does not have to know how
+            // a browser is opened, and the host is what decides. On a desktop
+            // this is the operator's own browser and the loopback redirect
+            // lands back in this process. On a server there is nobody at the
+            // machine, and the refusal says where the sign-in has to happen.
+            let open = state.open_url.clone();
+            move |url: &str| open(url)
         },
     )
     .await?;
@@ -965,9 +1018,8 @@ async fn sign_in(
 /// The tool list is re-read, because two identities do not offer the same
 /// tools: a grant that can read mail and not send it publishes fewer, and a row
 /// left holding the old list would offer a model a tool that is no longer there.
-#[tauri::command]
 pub async fn set_plugin_connection(
-    state: State<'_, AppState>,
+    state: &AppState,
     group_id: GroupId,
     kind: PluginKind,
     connection: String,
@@ -1001,9 +1053,8 @@ pub async fn set_plugin_connection(
 /// rather than a second rule: absent means "ask the server", which is what the
 /// box beside it says. It stays because a server that stopped needing a key is
 /// otherwise unreachable from this panel.
-#[tauri::command]
 pub async fn readdress_plugin(
-    state: State<'_, AppState>,
+    state: &AppState,
     group_id: GroupId,
     id: PluginId,
     url: String,
@@ -1060,7 +1111,7 @@ pub async fn readdress_plugin(
         None => crate::plugins::Credential::Discover,
     };
     let endpoint = state.runtime.plugin_endpoint(&kind);
-    sign_in(&state, group_id, &kind, &endpoint, credential, &headers).await
+    sign_in(state, group_id, &kind, &endpoint, credential, &headers).await
 }
 
 /// Dials a server and says what it found, connecting nothing.
@@ -1079,8 +1130,8 @@ pub async fn readdress_plugin(
 ///
 /// No group, because nothing is being connected to one, and no name, because a
 /// name is what a server's tools are called by and this calls none of them.
-#[tauri::command]
 pub async fn probe_server(
+    _state: &AppState,
     url: String,
     key: Option<String>,
     headers: Option<Vec<HeaderPair>>,
@@ -1103,8 +1154,7 @@ pub async fn probe_server(
 /// tool it cannot call. A stale grant is renewed first, because the next real
 /// call would renew it too and a check that skipped it would report a working
 /// plugin as broken.
-#[tauri::command]
-pub async fn check_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<ServerReport> {
+pub async fn check_plugin(state: &AppState, id: PluginId) -> Reply<ServerReport> {
     let dialed = state
         .runtime
         .store()
@@ -1134,9 +1184,8 @@ pub async fn check_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<Ser
 /// The whole answer, every time: `everyone`, or the complete list of agents.
 /// A merge would let a panel narrow a plugin by forgetting somebody, and this
 /// one renders what it last read.
-#[tauri::command]
-pub fn set_plugin_access(
-    state: State<'_, AppState>,
+pub async fn set_plugin_access(
+    state: &AppState,
     id: PluginId,
     access: PluginAccess,
 ) -> Reply<Plugin> {
@@ -1153,9 +1202,8 @@ pub fn set_plugin_access(
 /// two panels open on the same group cannot swap a decision between them. The
 /// plugin comes back so the caller draws what was stored rather than what it
 /// asked for.
-#[tauri::command]
-pub fn set_plugin_tool(
-    state: State<'_, AppState>,
+pub async fn set_plugin_tool(
+    state: &AppState,
     id: PluginId,
     tool: String,
     access: PluginAccess,
@@ -1173,8 +1221,7 @@ pub fn set_plugin_tool(
 /// authorization server publishes a revocation endpoint, and an operator who
 /// wants the authorization itself withdrawn has to do that where they granted
 /// it. Said in the UI rather than assumed.
-#[tauri::command]
-pub fn disconnect_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<()> {
+pub async fn disconnect_plugin(state: &AppState, id: PluginId) -> Reply<()> {
     state.runtime.store().delete_plugin(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -1186,8 +1233,7 @@ pub fn disconnect_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<()> 
 /// asks the machine instead of asking the operator to keep a list up to date.
 /// Called when the operator opens an agent, and by the runtime after an agent
 /// has been browsing, which between them covers both ways a session appears.
-#[tauri::command]
-pub async fn scan_agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signin>> {
+pub async fn scan_agent_signins(state: &AppState, id: AgentId) -> Reply<Vec<Signin>> {
     Ok(state.runtime.scan_signins(id).await?)
 }
 
@@ -1196,8 +1242,7 @@ pub async fn scan_agent_signins(state: State<'_, AppState>, id: AgentId) -> Repl
 /// Separate from the scan because the machine may be asleep, and what it was
 /// signed in to yesterday is still the best answer available. Waking a sandbox
 /// to redraw a list would also cost money on every render.
-#[tauri::command]
-pub fn agent_signins(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Signin>> {
+pub async fn agent_signins(state: &AppState, id: AgentId) -> Reply<Vec<Signin>> {
     Ok(state.runtime.store().agent_signins(id)?)
 }
 
@@ -1215,8 +1260,7 @@ const MAX_PENDING: u32 = 200;
 /// The requests themselves travel in the transcript, so this is only the half
 /// that changes: whether the buttons on a request already in a channel are
 /// still live, and what was decided if they are not.
-#[tauri::command]
-pub fn approval_states(state: State<'_, AppState>) -> Reply<HashMap<ApprovalId, ApprovalState>> {
+pub async fn approval_states(state: &AppState) -> Reply<HashMap<ApprovalId, ApprovalState>> {
     Ok(state.runtime.store().approval_states(500)?)
 }
 
@@ -1229,22 +1273,19 @@ pub fn approval_states(state: State<'_, AppState>) -> Reply<HashMap<ApprovalId, 
 /// than an accumulation for the same reason: a list assembled from events drifts
 /// the moment one is missed, and what drifts is the count the operator is using
 /// to decide whether anyone is waiting.
-#[tauri::command]
-pub fn pending_approvals(state: State<'_, AppState>) -> Reply<Vec<Approval>> {
+pub async fn pending_approvals(state: &AppState) -> Reply<Vec<Approval>> {
     Ok(state.runtime.store().pending_approvals(MAX_PENDING)?)
 }
 
 /// What this agent no longer has to ask about.
-#[tauri::command]
-pub fn agent_grants(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<ProtectedAction>> {
+pub async fn agent_grants(state: &AppState, id: AgentId) -> Reply<Vec<ProtectedAction>> {
     Ok(state.runtime.store().standing_grants(id)?)
 }
 
 /// Takes one back. A permission that could only ever be given is a trap, and
 /// "always" has to stay something the operator can change their mind about.
-#[tauri::command]
-pub fn revoke_grant(
-    state: State<'_, AppState>,
+pub async fn revoke_grant(
+    state: &AppState,
     id: AgentId,
     action: ProtectedAction,
 ) -> Reply<Vec<ProtectedAction>> {
@@ -1254,9 +1295,8 @@ pub fn revoke_grant(
 
 /// Answers one. Refused if it was already answered or has expired, which is
 /// what the operator's second click on a stale widget is.
-#[tauri::command]
-pub fn decide_approval(
-    state: State<'_, AppState>,
+pub async fn decide_approval(
+    state: &AppState,
     id: ApprovalId,
     decision: Decision,
 ) -> Reply<Approval> {
@@ -1268,12 +1308,7 @@ pub fn decide_approval(
 /// Its own command rather than a fourth `Decision`, for the reason on that
 /// enum: three tokens and arbitrary text are different things on a wire, and
 /// only one of them can come from a menu item.
-#[tauri::command]
-pub fn answer_question(
-    state: State<'_, AppState>,
-    id: ApprovalId,
-    answer: String,
-) -> Reply<Approval> {
+pub async fn answer_question(state: &AppState, id: ApprovalId, answer: String) -> Reply<Approval> {
     Ok(state.runtime.answer_question(id, &answer)?)
 }
 
@@ -1286,35 +1321,40 @@ pub fn answer_question(
 /// Unbounded in practice by the same argument `MAX_PENDING` rests on, one step
 /// stronger: an agent holds at most one open escalation, so this is bounded by
 /// the size of the crew.
-#[tauri::command]
-pub fn open_escalations(state: State<'_, AppState>) -> Reply<Vec<Escalation>> {
+pub async fn open_escalations(state: &AppState) -> Reply<Vec<Escalation>> {
     Ok(state.runtime.store().open_escalations(MAX_PENDING)?)
 }
 
 /// Takes one off the desk. Not an answer: nothing is waiting on it.
-#[tauri::command]
-pub fn clear_escalation(state: State<'_, AppState>, id: EscalationId) -> Reply<()> {
+pub async fn clear_escalation(state: &AppState, id: EscalationId) -> Reply<()> {
     state.runtime.clear_escalation(id)?;
     Ok(())
 }
 
 // ---- groups --------------------------------------------------------------
 
-#[tauri::command]
-pub fn list_groups(state: State<'_, AppState>) -> Reply<Vec<Group>> {
+pub async fn list_groups(state: &AppState) -> Reply<Vec<Group>> {
     Ok(state.runtime.store().list_groups()?)
 }
 
-#[tauri::command]
-pub fn create_group(state: State<'_, AppState>, draft: GroupDraft) -> Reply<Group> {
+pub async fn create_group(state: &AppState, draft: GroupDraft) -> Reply<Group> {
+    honorable(
+        state.deployment.capabilities(),
+        draft.inference.as_ref().and_then(|i| i.provider),
+        draft.inference.as_ref().and_then(|i| i.base_url.as_deref()),
+    )?;
     let clean = draft.validate()?;
     let group = state.runtime.store().create_group(&clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(group)
 }
 
-#[tauri::command]
-pub fn update_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) -> Reply<Group> {
+pub async fn update_group(state: &AppState, id: GroupId, draft: GroupDraft) -> Reply<Group> {
+    honorable(
+        state.deployment.capabilities(),
+        draft.inference.as_ref().and_then(|i| i.provider),
+        draft.inference.as_ref().and_then(|i| i.base_url.as_deref()),
+    )?;
     let clean = draft.validate()?;
     let group = state.runtime.store().update_group(id, &clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
@@ -1329,9 +1369,8 @@ pub fn update_group(state: State<'_, AppState>, id: GroupId, draft: GroupDraft) 
 /// half. Takes what is on screen, exactly as the app's does, and starts from the
 /// stored key so a test run without retyping it tests the key that is actually
 /// there. `id` is absent for a group that has not been created yet.
-#[tauri::command]
 pub async fn test_group_connection(
-    state: State<'_, AppState>,
+    state: &AppState,
     id: Option<GroupId>,
     draft: GroupDraft,
 ) -> Reply<String> {
@@ -1358,8 +1397,7 @@ pub async fn test_group_connection(
 
 /// Deletes an empty group. Refused while it still holds agents; see
 /// `Store::delete_group` for why they are not relocated.
-#[tauri::command]
-pub fn delete_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
+pub async fn delete_group(state: &AppState, id: GroupId) -> Reply<()> {
     state.runtime.store().delete_group(id)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -1393,8 +1431,7 @@ pub fn delete_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
 /// Past that point a failure stops where it is and is reported. Retrying is
 /// safe and picks up where it left off, because the crew is read fresh and the
 /// agents already retired are no longer in it.
-#[tauri::command]
-pub async fn disband_group(state: State<'_, AppState>, id: GroupId) -> Reply<()> {
+pub async fn disband_group(state: &AppState, id: GroupId) -> Reply<()> {
     state.runtime.store().group_for_removal(id)?;
 
     let outcome = async {
@@ -1415,13 +1452,11 @@ pub async fn disband_group(state: State<'_, AppState>, id: GroupId) -> Reply<()>
 
 // ---- agents --------------------------------------------------------------
 
-#[tauri::command]
-pub fn list_agents(state: State<'_, AppState>) -> Reply<Vec<AgentCard>> {
+pub async fn list_agents(state: &AppState) -> Reply<Vec<AgentCard>> {
     Ok(state.runtime.store().list_agents()?)
 }
 
-#[tauri::command]
-pub fn create_agent(state: State<'_, AppState>, draft: AgentDraft) -> Reply<AgentCard> {
+pub async fn create_agent(state: &AppState, draft: AgentDraft) -> Reply<AgentCard> {
     let clean = draft.validate()?;
     let card = state.runtime.store().create_agent(&clean)?;
     state.runtime.start_agent(card.id);
@@ -1429,12 +1464,7 @@ pub fn create_agent(state: State<'_, AppState>, draft: AgentDraft) -> Reply<Agen
     Ok(card)
 }
 
-#[tauri::command]
-pub fn update_agent(
-    state: State<'_, AppState>,
-    id: AgentId,
-    draft: AgentDraft,
-) -> Reply<AgentCard> {
+pub async fn update_agent(state: &AppState, id: AgentId, draft: AgentDraft) -> Reply<AgentCard> {
     let clean = draft.validate()?;
     let card = state.runtime.store().update_agent(id, &clean)?;
     state.runtime.emit(UiEvent::AgentsChanged);
@@ -1452,9 +1482,8 @@ pub fn update_agent(
 /// days its memory, working notes, schedule, sign-ins and permissions sit
 /// exactly where they were and the operator can pull it back out;
 /// `Runtime::sweep_compost` is what eventually spends the other half.
-#[tauri::command]
-pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let card = agent_card(&state, id)?;
+pub async fn delete_agent(state: &AppState, id: AgentId) -> Reply<()> {
+    let card = agent_card(state, id)?;
     state.runtime.discard_agent(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
@@ -1465,9 +1494,8 @@ pub async fn delete_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> 
 /// Refused for an agent whose thirty days are up, which is the same refusal as
 /// for one nobody deleted: both are rows with no stamp on them, and neither has
 /// anything left to bring back.
-#[tauri::command]
-pub fn restore_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCard> {
-    let card = agent_card(&state, id)?;
+pub async fn restore_agent(state: &AppState, id: AgentId) -> Reply<AgentCard> {
+    let card = agent_card(state, id)?;
     let restored = state.runtime.restore_agent(&card)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(restored)
@@ -1479,16 +1507,14 @@ pub fn restore_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCard
 /// thing in this app that destroys an agent's memory on a click. What it leaves
 /// is what the sweep leaves: a terminated row with no stamp, whose transcript
 /// still reads.
-#[tauri::command]
-pub async fn purge_agent(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
-    let card = agent_card(&state, id)?;
+pub async fn purge_agent(state: &AppState, id: AgentId) -> Reply<()> {
+    let card = agent_card(state, id)?;
     state.runtime.purge_agent(&card).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }
 
-#[tauri::command]
-pub fn set_agent_paused(state: State<'_, AppState>, id: AgentId, paused: bool) -> Reply<AgentCard> {
+pub async fn set_agent_paused(state: &AppState, id: AgentId, paused: bool) -> Reply<AgentCard> {
     let target = if paused { Lifecycle::Paused } else { Lifecycle::Active };
     let card = state.runtime.store().set_lifecycle(id, target)?;
     if paused {
@@ -1506,8 +1532,7 @@ pub fn set_agent_paused(state: State<'_, AppState>, id: AgentId, paused: bool) -
 /// Nothing about the agent changes: it is discoverable, addressable and billed
 /// exactly as before, and no peer is told. The card version deliberately does
 /// not move, because nothing a peer reads has.
-#[tauri::command]
-pub fn set_agent_pinned(state: State<'_, AppState>, id: AgentId, pinned: bool) -> Reply<AgentCard> {
+pub async fn set_agent_pinned(state: &AppState, id: AgentId, pinned: bool) -> Reply<AgentCard> {
     let card = state.runtime.store().set_agent_pinned(id, pinned)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(card)
@@ -1523,9 +1548,8 @@ pub fn set_agent_pinned(state: State<'_, AppState>, id: AgentId, pinned: bool) -
 /// Nothing about the agent itself changes, so the card version does not move
 /// and no peer is told: an agent's group is enforced on every turn from a fresh
 /// read, so it is in its new crew's directory from the next message onward.
-#[tauri::command]
-pub fn move_agent(
-    state: State<'_, AppState>,
+pub async fn move_agent(
+    state: &AppState,
     id: AgentId,
     group_id: GroupId,
     before: Option<AgentId>,
@@ -1542,9 +1566,8 @@ pub fn move_agent(
 /// no accounts and no transcript. Those are not part of what the operator
 /// wrote, they are what one agent went and did, and a second agent that
 /// inherited a sandbox would be two agents holding one machine.
-#[tauri::command]
-pub fn duplicate_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCard> {
-    let original = agent_card(&state, id)?;
+pub async fn duplicate_agent(state: &AppState, id: AgentId) -> Reply<AgentCard> {
+    let original = agent_card(state, id)?;
     // Only the group it is being copied into, and only agents that still hold
     // their name: a terminated agent frees it.
     let taken: Vec<String> = state
@@ -1591,9 +1614,8 @@ pub fn duplicate_agent(state: State<'_, AppState>, id: AgentId) -> Reply<AgentCa
 /// point of the cafeteria is that a crew lands somewhere the operator chose,
 /// and a batch that could scatter across groups is a batch that can arrive
 /// half outside the wall its agents were picked to sit behind.
-#[tauri::command]
-pub fn hire_agents(
-    state: State<'_, AppState>,
+pub async fn hire_agents(
+    state: &AppState,
     group_id: GroupId,
     drafts: Vec<AgentDraft>,
 ) -> Reply<Vec<AgentCard>> {
@@ -1638,22 +1660,19 @@ pub fn hire_agents(
     Ok(hired)
 }
 
-#[tauri::command]
-pub fn agent_activity(state: State<'_, AppState>) -> Reply<HashMap<AgentId, Activity>> {
+pub async fn agent_activity(state: &AppState) -> Reply<HashMap<AgentId, Activity>> {
     Ok(state.runtime.activity_snapshot())
 }
 
 /// Newest message timestamp per agent, used to order the sidebar by who spoke
 /// most recently. Live updates come from message events; this seeds them.
 /// An agent's memory: a small markdown file it maintains for itself.
-#[tauri::command]
-pub fn agent_memory(state: State<'_, AppState>, id: AgentId) -> Reply<String> {
+pub async fn agent_memory(state: &AppState, id: AgentId) -> Reply<String> {
     Ok(state.runtime.workspace().read(id))
 }
 
 /// Lets the operator seed or correct an agent's memory by hand.
-#[tauri::command]
-pub fn set_agent_memory(state: State<'_, AppState>, id: AgentId, content: String) -> Reply<String> {
+pub async fn set_agent_memory(state: &AppState, id: AgentId, content: String) -> Reply<String> {
     let card = state
         .runtime
         .store()
@@ -1668,8 +1687,7 @@ pub fn set_agent_memory(state: State<'_, AppState>, id: AgentId, content: String
 }
 
 /// What an agent is in the middle of: the other half of what it carries.
-#[tauri::command]
-pub fn agent_working_notes(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<WorkingNote>> {
+pub async fn agent_working_notes(state: &AppState, id: AgentId) -> Reply<Vec<WorkingNote>> {
     Ok(state.runtime.store().working_notes(id)?)
 }
 
@@ -1680,14 +1698,12 @@ pub fn agent_working_notes(state: State<'_, AppState>, id: AgentId) -> Reply<Vec
 /// the shape memory already has and the reason it needed the held-draft dance
 /// in the panel. This list is the agent's own account of its work; the operator
 /// either believes it or says the work is done.
-#[tauri::command]
-pub fn clear_agent_working_notes(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
+pub async fn clear_agent_working_notes(state: &AppState, id: AgentId) -> Reply<()> {
     state.runtime.store().clear_working_notes(id)?;
     Ok(())
 }
 
-#[tauri::command]
-pub fn agent_last_active(state: State<'_, AppState>) -> Reply<HashMap<AgentId, i64>> {
+pub async fn agent_last_active(state: &AppState) -> Reply<HashMap<AgentId, i64>> {
     Ok(state.runtime.store().last_activity()?)
 }
 
@@ -1703,9 +1719,8 @@ const MAX_CHANNEL_WINDOW: u32 = 1000;
 /// three hundred, and a jump that lands somewhere else is a jump that failed.
 /// A message that has since been cleared falls back to the plain newest window
 /// rather than to an empty channel.
-#[tauri::command]
-pub fn channel_messages(
-    state: State<'_, AppState>,
+pub async fn channel_messages(
+    state: &AppState,
     channel_id: AgentId,
     limit: Option<u32>,
     through: Option<MessageId>,
@@ -1724,9 +1739,8 @@ pub fn channel_messages(
 ///
 /// Neither agent's channel holds it: a send is filed under the recipient and
 /// the answer under the sender, so this is read from the messages themselves.
-#[tauri::command]
-pub fn pair_messages(
-    state: State<'_, AppState>,
+pub async fn pair_messages(
+    state: &AppState,
     a: AgentId,
     b: AgentId,
     limit: Option<u32>,
@@ -1735,9 +1749,8 @@ pub fn pair_messages(
 }
 
 /// One crew's conversation, for the flow board in its settings.
-#[tauri::command]
-pub fn conversation_flow(
-    state: State<'_, AppState>,
+pub async fn conversation_flow(
+    state: &AppState,
     group: GroupId,
     limit: Option<u32>,
 ) -> Reply<Vec<Envelope>> {
@@ -1751,8 +1764,7 @@ pub fn conversation_flow(
 /// right while the operator types. What it is not holding is the transcript,
 /// and shipping that across IPC to search it in the renderer would copy the
 /// database once per keystroke.
-#[tauri::command]
-pub fn search(state: State<'_, AppState>, query: String, limit: Option<u32>) -> Reply<SearchHits> {
+pub async fn search(state: &AppState, query: String, limit: Option<u32>) -> Reply<SearchHits> {
     Ok(state.runtime.store().search(query.trim(), limit.unwrap_or(20).min(100))?)
 }
 
@@ -1776,8 +1788,9 @@ pub struct Staged {
 ///
 /// `paths` are on the operator's own disk, never bytes: this side reads them,
 /// so a document never crosses IPC and never sits in the renderer's memory.
-#[tauri::command]
-pub fn stage_files(state: State<'_, AppState>, paths: Vec<String>) -> Reply<Staged> {
+pub async fn stage_files(state: &AppState, paths: Vec<String>) -> Reply<Staged> {
+    state.deployment.capabilities().require(Absent::LocalFiles)?;
+
     let mut staged = Staged::default();
     for path in &paths {
         match state.runtime.files().take(std::path::Path::new(path)) {
@@ -1807,9 +1820,8 @@ pub struct FileRef {
 /// The files are already in the store by now: `stage_files` put them there when
 /// they were dropped. This resolves each one again rather than trusting what
 /// came back over IPC, so a message carries a file the operator actually has.
-#[tauri::command]
-pub fn send_message(
-    state: State<'_, AppState>,
+pub async fn send_message(
+    state: &AppState,
     agent_id: AgentId,
     text: String,
     files: Option<Vec<FileRef>>,
@@ -1841,8 +1853,9 @@ pub fn send_message(
 /// not for a conversation about where to put it. The path goes back so the app
 /// can say where to look, since a copy that lands somewhere unannounced is a
 /// copy they have to go and find.
-#[tauri::command]
-pub fn save_file(state: State<'_, AppState>, digest: String, name: String) -> Reply<String> {
+pub async fn save_file(state: &AppState, digest: String, name: String) -> Reply<String> {
+    state.deployment.capabilities().require(Absent::LocalFiles)?;
+
     let saved = state
         .runtime
         .files()
@@ -1863,8 +1876,7 @@ pub fn save_file(state: State<'_, AppState>, digest: String, name: String) -> Re
 /// The document is not persisted and this is not a store. The message that
 /// carried it is the record; this is a copy held while a transcript is drawing
 /// one, and an id that has been evicted is registered again by the next draw.
-#[tauri::command]
-pub fn frame_artifact(state: State<'_, AppState>, html: String) -> Reply<ArtifactAddress> {
+pub async fn frame_artifact(state: &AppState, html: String) -> Reply<ArtifactAddress> {
     let id = state
         .artifacts
         .keep(&html)
@@ -1884,9 +1896,8 @@ pub struct ArtifactAddress {
 ///
 /// Offered on the notice the failure left behind, so the operator retries the
 /// thing that broke rather than retyping what they asked for.
-#[tauri::command]
-pub fn retry_turn(
-    state: State<'_, AppState>,
+pub async fn retry_turn(
+    state: &AppState,
     agent_id: AgentId,
     message_id: MessageId,
 ) -> Reply<RunId> {
@@ -1903,8 +1914,7 @@ pub fn retry_turn(
 /// stop that arrives a moment too late. It is not an error and there is nothing
 /// for the operator to do about it: the answer they were waiting for is already
 /// on screen.
-#[tauri::command]
-pub fn stop_run(state: State<'_, AppState>, run_id: RunId) -> Reply<bool> {
+pub async fn stop_run(state: &AppState, run_id: RunId) -> Reply<bool> {
     Ok(state.runtime.stop_run(run_id))
 }
 
@@ -1927,16 +1937,14 @@ pub fn stop_run(state: State<'_, AppState>, run_id: RunId) -> Reply<bool> {
 /// they can still read it, and takes away only what this agent would read
 /// back. That asymmetry is the point rather than a limitation: resetting one
 /// confused agent must not erase a colleague's record of what it asked for.
-#[tauri::command]
-pub fn clear_channel(state: State<'_, AppState>, channel_id: AgentId) -> Reply<usize> {
+pub async fn clear_channel(state: &AppState, channel_id: AgentId) -> Reply<usize> {
     Ok(state.runtime.store().delete_channel_messages(channel_id)?)
 }
 
 // ---- routines ------------------------------------------------------------
 
 /// An agent's own schedule, as the operator sees it.
-#[tauri::command]
-pub fn agent_routines(state: State<'_, AppState>, id: AgentId) -> Reply<Vec<Routine>> {
+pub async fn agent_routines(state: &AppState, id: AgentId) -> Reply<Vec<Routine>> {
     Ok(state.runtime.store().agent_routines(id)?)
 }
 
@@ -1978,9 +1986,8 @@ impl RoutineDraft {
     }
 }
 
-#[tauri::command]
-pub fn create_routine(
-    state: State<'_, AppState>,
+pub async fn create_routine(
+    state: &AppState,
     agent_id: AgentId,
     draft: RoutineDraft,
 ) -> Reply<Routine> {
@@ -1998,9 +2005,8 @@ pub fn create_routine(
     Ok(routine)
 }
 
-#[tauri::command]
-pub fn update_routine(
-    state: State<'_, AppState>,
+pub async fn update_routine(
+    state: &AppState,
     id: RoutineId,
     draft: RoutineDraft,
 ) -> Reply<Routine> {
@@ -2030,12 +2036,7 @@ pub fn update_routine(
 /// Not an edit to what it says, so it goes through its own command and leaves
 /// the next firing where it was. A routine switched back on after its slot has
 /// passed is overdue, and the scheduler fires an overdue slot once.
-#[tauri::command]
-pub fn set_routine_active(
-    state: State<'_, AppState>,
-    id: RoutineId,
-    active: bool,
-) -> Reply<Routine> {
+pub async fn set_routine_active(state: &AppState, id: RoutineId, active: bool) -> Reply<Routine> {
     let routine = state.runtime.store().set_routine_active(id, active)?;
     state.runtime.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
     Ok(routine)
@@ -2046,8 +2047,7 @@ pub fn set_routine_active(
 /// The same delivery the scheduler makes, so what comes back from the button
 /// is what will happen on Tuesday. Works on a routine that is switched off:
 /// trying one out before turning it on is the point.
-#[tauri::command]
-pub fn test_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<RunId> {
+pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
     let routine = state
         .runtime
         .store()
@@ -2057,15 +2057,13 @@ pub fn test_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<RunId> {
 }
 
 /// What a routine has done lately, newest first.
-#[tauri::command]
-pub fn routine_runs(state: State<'_, AppState>, id: RoutineId) -> Reply<Vec<RoutineRun>> {
+pub async fn routine_runs(state: &AppState, id: RoutineId) -> Reply<Vec<RoutineRun>> {
     // Enough to answer "is this thing working" without turning the panel into
     // a log viewer. The transcript is where a firing is actually read.
     Ok(state.runtime.store().routine_runs(id, 20)?)
 }
 
-#[tauri::command]
-pub fn delete_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<()> {
+pub async fn delete_routine(state: &AppState, id: RoutineId) -> Reply<()> {
     // Read before the delete, because the event names the agent whose schedule
     // changed and afterward there is nothing left to ask.
     let whose = state.runtime.store().get_routine(id)?.map(|routine| routine.agent_id);
@@ -2081,8 +2079,7 @@ pub fn delete_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<()> {
 /// Asked for by the activity view, which knows which runs it is drawing. The
 /// alternative, joining usage onto every message, would send the same totals
 /// back once per message in the run.
-#[tauri::command]
-pub fn usage_for_runs(state: State<'_, AppState>, runs: Vec<RunId>) -> Reply<Vec<RunUsage>> {
+pub async fn usage_for_runs(state: &AppState, runs: Vec<RunId>) -> Reply<Vec<RunUsage>> {
     Ok(state
         .runtime
         .store()
@@ -2097,8 +2094,7 @@ pub fn usage_for_runs(state: State<'_, AppState>, runs: Vec<RunId>) -> Reply<Vec
 /// Cheap enough to ask for on load and after a run settles: it is one grouped
 /// sum over a local table. The live numbers between those points come from
 /// events, so this is a correction rather than a poll.
-#[tauri::command]
-pub fn usage_summary(state: State<'_, AppState>) -> Reply<Vec<GroupUsage>> {
+pub async fn usage_summary(state: &AppState) -> Reply<Vec<GroupUsage>> {
     Ok(state
         .runtime
         .store()
@@ -2109,8 +2105,7 @@ pub fn usage_summary(state: State<'_, AppState>) -> Reply<Vec<GroupUsage>> {
 }
 
 /// Empties every channel in a group. The crew stays; what it said does not.
-#[tauri::command]
-pub fn clear_group(state: State<'_, AppState>, group_id: GroupId) -> Reply<GroupReset> {
+pub async fn clear_group(state: &AppState, group_id: GroupId) -> Reply<GroupReset> {
     let store = state.runtime.store();
     let agents = store.group_agent_ids(group_id)?;
 
@@ -2176,8 +2171,19 @@ pub struct SettingsPatch {
     pub browser_stealth: Option<bool>,
 }
 
-#[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
+/// What this workspace can do, which is a property of where it runs.
+///
+/// Read once when the window opens and never again: a deployment cannot change
+/// under a running app, so this is a constant that happens to be delivered over
+/// IPC. Every panel that could offer something impossible reads it, and the
+/// refusals in the commands themselves are the second half of the same rule:
+/// a model names tools it was never offered, and a webview on a stale bundle
+/// calls commands its panels no longer draw.
+pub async fn capabilities(state: &AppState) -> Reply<Capabilities> {
+    Ok(state.deployment.capabilities())
+}
+
+pub async fn get_settings(state: &AppState) -> Reply<RedactedConfig> {
     Ok(state.runtime.config().redacted())
 }
 
@@ -2187,8 +2193,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Reply<RedactedConfig> {
 ///
 /// The origin is on it because in development it is not `guaca.bot`, and an
 /// operator who cannot see which service they linked cannot tell the two apart.
-#[tauri::command]
-pub fn account_status(state: State<'_, AppState>) -> Reply<crate::account::Status> {
+pub async fn account_status(state: &AppState) -> Reply<crate::account::Status> {
     Ok(state.account.status())
 }
 
@@ -2201,22 +2206,13 @@ pub fn account_status(state: State<'_, AppState>) -> Reply<crate::account::Statu
 ///
 /// Parks for up to five minutes on purpose. An operator who closes the dialog
 /// abandons it, and what is left behind is a closed socket.
-#[tauri::command]
-pub async fn sign_in_account(
-    app: tauri::AppHandle,
-    state: State<'_, AppState>,
-) -> Reply<crate::account::Status> {
+pub async fn sign_in_account(state: &AppState) -> Reply<crate::account::Status> {
     let account = state.account.clone();
-    Ok(account
-        .sign_in(|url| {
-            // The system browser, not the webview. The sign-in belongs to a
-            // session this app has no business holding, and the whole argument
-            // for a loopback redirect is that the browser is the operator's.
-            tauri_plugin_opener::OpenerExt::opener(&app)
-                .open_url(url, None::<&str>)
-                .map_err(|err| err.to_string())
-        })
-        .await?)
+    // The system browser, not the webview. The sign-in belongs to a session
+    // this app has no business holding, and the whole argument for a loopback
+    // redirect is that the browser is the operator's own.
+    let open = state.open_url.clone();
+    Ok(account.sign_in(|url| open(url)).await?)
 }
 
 /// What the account holds, asked of the service rather than remembered.
@@ -2224,15 +2220,13 @@ pub async fn sign_in_account(
 /// The answer changes when the operator authorizes something in a browser, not
 /// when this app does anything, so a cached copy would be a list of
 /// capabilities an agent is told it has and does not.
-#[tauri::command]
-pub async fn account_connectors(state: State<'_, AppState>) -> Reply<Connectors> {
+pub async fn account_connectors(state: &AppState) -> Reply<Connectors> {
     let account = state.account.clone();
     Ok(account.connectors().await?)
 }
 
 /// Forgets the sign-in on this machine.
-#[tauri::command]
-pub fn sign_out_account(state: State<'_, AppState>) -> Reply<crate::account::Status> {
+pub async fn sign_out_account(state: &AppState) -> Reply<crate::account::Status> {
     state.account.sign_out()?;
     Ok(state.account.status())
 }
@@ -2240,8 +2234,7 @@ pub fn sign_out_account(state: State<'_, AppState>) -> Reply<crate::account::Sta
 // ---- the ChatGPT sign-in -------------------------------------------------
 
 /// Whether a subscription is signed in, and which account it is.
-#[tauri::command]
-pub fn subscription_status(state: State<'_, AppState>) -> Reply<Status> {
+pub async fn subscription_status(state: &AppState) -> Reply<Status> {
     Ok(state.subscription.status())
 }
 
@@ -2250,8 +2243,7 @@ pub fn subscription_status(state: State<'_, AppState>) -> Reply<Status> {
 /// Two commands rather than one because the two halves take wildly different
 /// amounts of time. This returns in a round trip and the dialog draws the code
 /// immediately; the next one waits for a person.
-#[tauri::command]
-pub async fn begin_subscription_signin(state: State<'_, AppState>) -> Reply<DeviceCode> {
+pub async fn begin_subscription_signin(state: &AppState) -> Reply<DeviceCode> {
     Ok(state.subscription.begin().await?)
 }
 
@@ -2261,11 +2253,7 @@ pub async fn begin_subscription_signin(state: State<'_, AppState>) -> Reply<Devi
 /// would need a third command and a place to keep the half-finished sign-in
 /// between calls; awaiting one call keeps the whole flow in one place, and an
 /// operator who closes the dialog abandons it with nothing left behind.
-#[tauri::command]
-pub async fn complete_subscription_signin(
-    state: State<'_, AppState>,
-    code: DeviceCode,
-) -> Reply<Status> {
+pub async fn complete_subscription_signin(state: &AppState, code: DeviceCode) -> Reply<Status> {
     Ok(state.subscription.complete(&code).await?)
 }
 
@@ -2274,8 +2262,7 @@ pub async fn complete_subscription_signin(
 /// Both halves, because leaving the provider pointed at a subscription that has
 /// just been signed out gives every agent the same refusal on its next turn,
 /// and the operator's next action would have been to switch it back by hand.
-#[tauri::command]
-pub fn sign_out_subscription(state: State<'_, AppState>) -> Reply<RedactedConfig> {
+pub async fn sign_out_subscription(state: &AppState) -> Reply<RedactedConfig> {
     state.subscription.sign_out()?;
 
     let mut config: AppConfig = state.runtime.config();
@@ -2291,7 +2278,12 @@ pub fn sign_out_subscription(state: State<'_, AppState>) -> Reply<RedactedConfig
 
 /// Applies a patch to a config in memory. Shared by saving and testing, so a
 /// tested configuration and a saved one can never diverge.
-fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), CommandError> {
+fn apply_patch(
+    here: Capabilities,
+    config: &mut AppConfig,
+    patch: SettingsPatch,
+) -> Result<(), CommandError> {
+    honorable(here, patch.provider, patch.base_url.as_deref())?;
     if let Some(name) = patch.operator_name {
         config.operator_name = name.trim().to_string();
     }
@@ -2348,10 +2340,9 @@ fn apply_patch(config: &mut AppConfig, patch: SettingsPatch) -> Result<(), Comma
     Ok(())
 }
 
-#[tauri::command]
-pub fn update_settings(state: State<'_, AppState>, patch: SettingsPatch) -> Reply<RedactedConfig> {
+pub async fn update_settings(state: &AppState, patch: SettingsPatch) -> Reply<RedactedConfig> {
     let mut config: AppConfig = state.runtime.config();
-    apply_patch(&mut config, patch)?;
+    apply_patch(state.deployment.capabilities(), &mut config, patch)?;
     config::save(&state.config_path, &config)?;
     state.runtime.set_config(config.clone());
     Ok(config.redacted())
@@ -2363,14 +2354,10 @@ pub fn update_settings(state: State<'_, AppState>, patch: SettingsPatch) -> Repl
 /// not persist them. Testing the saved config while the operator is looking at
 /// an unsaved key reports "no API key configured" for a key they can see in
 /// front of them, which reads as a bug in the app.
-#[tauri::command]
-pub async fn test_connection(
-    state: State<'_, AppState>,
-    patch: Option<SettingsPatch>,
-) -> Reply<String> {
+pub async fn test_connection(state: &AppState, patch: Option<SettingsPatch>) -> Reply<String> {
     let mut config = state.runtime.config();
     if let Some(patch) = patch {
-        apply_patch(&mut config, patch)?;
+        apply_patch(state.deployment.capabilities(), &mut config, patch)?;
     }
     state
         .runtime
@@ -2388,11 +2375,7 @@ pub async fn test_connection(
 ///
 /// Offered beside an agent's model field, so it is asked for while a dialog is
 /// open and at no other time. Nothing is blocked on it and no turn reads it.
-#[tauri::command]
-pub async fn ranked_models(
-    state: State<'_, AppState>,
-    category: String,
-) -> Reply<Vec<RankedModel>> {
+pub async fn ranked_models(state: &AppState, category: String) -> Reply<Vec<RankedModel>> {
     Ok(state.catalog.ranked(&category).await?)
 }
 
@@ -2431,6 +2414,7 @@ mod tests {
         config.inference.default_model = "stored/model".into();
 
         apply_patch(
+            Deployment::Desktop.capabilities(),
             &mut config,
             SettingsPatch { base_url: Some("https://x/v1".into()), ..Default::default() },
         )
@@ -2448,6 +2432,7 @@ mod tests {
         assert!(!config.inference.is_ready(), "no key stored yet");
 
         apply_patch(
+            Deployment::Desktop.capabilities(),
             &mut config,
             SettingsPatch { api_key: Some("  sk-typed  ".into()), ..Default::default() },
         )
@@ -2461,6 +2446,7 @@ mod tests {
     fn a_patch_rejects_a_blank_model_rather_than_storing_one() {
         let mut config = AppConfig::default();
         let err = apply_patch(
+            Deployment::Desktop.capabilities(),
             &mut config,
             SettingsPatch { default_model: Some("   ".into()), ..Default::default() },
         )
