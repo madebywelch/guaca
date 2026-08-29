@@ -514,7 +514,7 @@ function WorkingNote({
       <AgentAvatar
         avatar={agent.avatar}
         color={agent.color}
-        size="sm"
+        size="md"
         seed={agent.id}
         activity={{ state: "thinking" }}
         title={`${agent.name} is working`}

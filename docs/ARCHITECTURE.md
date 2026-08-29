@@ -652,13 +652,14 @@ touches the three rules above: the same slice, dropped by the same event, and
 nothing about it reaches a channel, a prompt or a hash.
 
 **And the line drawn is not the tail.** A tail replaced every sixteen
-milliseconds is a flicker that says a turn is alive, which is what the pulse
-already said. `lib/reasoning.ts` draws two things instead, both the model's own:
-the section heading it is working under, which changes every half minute, and
-the last sentence it *finished*, which is the newest thing anybody can actually
-read. Waiting for the period costs a second or two of staleness and is the
-difference between a line and a blur. Models that publish nothing (Anthropic's,
-over OpenRouter, unless thinking is asked for) leave it exactly as it was.
+milliseconds is a flicker that says a turn is alive, which is what the creature
+beside it already said. `lib/reasoning.ts` draws two things instead, both the
+model's own: the section heading it is working under, which changes every half
+minute, and the last sentence it *finished*, which is the newest thing anybody
+can actually read. Waiting for the period costs a second or two of staleness and
+is the difference between a line and a blur. Models that publish nothing
+(Anthropic's, over OpenRouter, unless thinking is asked for) leave it exactly as
+it was.
 
 ## A turn's own work is watched while it happens, on the same terms
 
