@@ -1,0 +1,29 @@
+
+> guaca@0.1.0 app /Users/robert/.paseo/worktrees/1gpqe2ei/foolish-llama
+> tauri dev
+
+     Running BeforeDevCommand (`pnpm dev`)
+
+> guaca@0.1.0 dev /Users/robert/.paseo/worktrees/1gpqe2ei/foolish-llama
+> vite
+
+
+  VITE v7.3.6  ready in 169 ms
+
+  ➜  Local:   http://localhost:1420/
+     Running DevCommand (`cargo  run --no-default-features --color always --`)
+        Info Watching /Users/robert/.paseo/worktrees/1gpqe2ei/foolish-llama/src-tauri for changes...
+[1m[92m   Compiling[0m guac v0.1.0 (/Users/robert/.paseo/worktrees/1gpqe2ei/foolish-llama/src-tauri)
+[1m[96m    Building[0m [=======================> ] 467/469: guac                        [1m[96m    Building[0m [=======================> ] 468/469: guac(bin)                   [K[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 3.03s
+[1m[92m     Running[0m `target/debug/guac`
+[2m2026-08-29T17:30:29.278961Z[0m [32m INFO[0m [2mguac_lib::programs[0m[2m:[0m adopted the operator's PATH [3mpath[0m[2m=[0m/Applications/WezTerm.app/Contents/MacOS:/Users/robert/.opencode/bin:/Users/robert/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/pmk/env/global/bin:/Library/Apple/usr/bin:/Applications/Little Snitch.app/Contents/Components:/usr/local/go/bin:/Users/robert/.paseo/worktrees/1gpqe2ei/foolish-llama/node_modules/.bin:/opt/homebrew/lib/node_modules/pnpm/dist/node-gyp-bin:/Users/robert/.cargo/bin:/Users/robert/.lmstudio/bin:/Users/robert/.claude/plugins/cache/openai-codex/codex/1.0.2/bin:/Users/robert/.claude/plugins/cache/claude-plugins-official/frontend-design/ed404106fcd8/bin:/Users/robert/.claude/plugins/cache/paper/paper-desktop/0.1.0/bin:/Users/robert/.claude/plugins/cache/claude-plugins-official/rust-analyzer-lsp/1.0.0/bin:/Users/robert/.claude/plugins/cache/skill-codex/skill-codex/1.1.0/bin:/Users/robert/.claude/plugins/cache/claude-plugins-official/swift-lsp/1.0.0/bin
+[2m2026-08-29T17:30:29.506647Z[0m [32m INFO[0m [2mguac_lib::proxy[0m[2m:[0m computer viewer listening [3mport[0m[2m=[0m62612
+[2m2026-08-29T17:30:29.506714Z[0m [32m INFO[0m [2mguac_lib::artifact[0m[2m:[0m artifact viewer listening [3mport[0m[2m=[0m62613
+[2m2026-08-29T17:30:29.506907Z[0m [32m INFO[0m [2mguac_lib::app[0m[2m:[0m guac ready [3mdb[0m[2m=[0m/Users/robert/Library/Application Support/com.madebywelch.guac/guac.db [3mconfig[0m[2m=[0m/Users/robert/Library/Application Support/com.madebywelch.guac/config.json [3mworkspace[0m[2m=[0m/Users/robert/Library/Application Support/com.madebywelch.guac/workspace [3magents[0m[2m=[0m14
+[2m2026-08-29T17:30:29.720968Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m swept: no orphaned browsers
+[2m2026-08-29T17:30:29.794287Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m swept: no orphaned sandboxes
+[2m2026-08-29T17:30:30.454744Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m served a file [3mtarget[0m[2m=[0m"9e9241f1c4559825c7d68ed7bd9c4dfc508d4a7fd26018cc09ccbe8c0f4fa7da%2Fsynopsis-v1-consolidated-recommendation.md" [3mrange[0m[2m=[0m"bytes=0-2047" [3mserved.status[0m[2m=[0m206 [3mbytes[0m[2m=[0m2048
+[2m2026-08-29T17:30:30.454984Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m served a file [3mtarget[0m[2m=[0m"47394281fad5e0ddeee295f1296dd57fa8376a2a6e91c4a1d0a86f3100457b2a%2Fsynopsis-v1-decisions-locked.md" [3mrange[0m[2m=[0m"bytes=0-2047" [3mserved.status[0m[2m=[0m206 [3mbytes[0m[2m=[0m2016
+[2m2026-08-29T17:30:30.455106Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m served a file [3mtarget[0m[2m=[0m"3c2bb06bf88d74956e028fb7a81801a9cb4844dc9c5c465e69b8bc94e9d21226%2Fsynopsis-v1-decisions-locked.md" [3mrange[0m[2m=[0m"bytes=0-2047" [3mserved.status[0m[2m=[0m206 [3mbytes[0m[2m=[0m2048
+[2m2026-08-29T17:30:30.455225Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m served a file [3mtarget[0m[2m=[0m"624febf36a99ebd9917f107a8cddfc715994d309e91066a7a8254ac4b9e74f85%2Fsynopsis-v1-decisions-locked.md" [3mrange[0m[2m=[0m"bytes=0-2047" [3mserved.status[0m[2m=[0m206 [3mbytes[0m[2m=[0m2048
+[2m2026-08-29T17:30:30.455338Z[0m [34mDEBUG[0m [2mguac_lib::app[0m[2m:[0m served a file [3mtarget[0m[2m=[0m"8c202dca10e6ca9a4e67cccca8f5eab14796ea0ea7bc105dd82545bef13f174b%2Fsynopsis-v1-decisions-locked.md" [3mrange[0m[2m=[0m"bytes=0-2047" [3mserved.status[0m[2m=[0m206 [3mbytes[0m[2m=[0m2048

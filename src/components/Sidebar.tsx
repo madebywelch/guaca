@@ -11,7 +11,7 @@ import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
 import { RailRepositories } from "./RailRepositories";
-import { TokenMeter } from "./TokenMeter";
+import { SpendTag, useSpendTag } from "./Spend";
 
 interface Props {
   onEditAgent: (agent: AgentCard) => void;
@@ -111,6 +111,9 @@ export function Sidebar({
 
   // Messages arrive in bursts; this spaces them out so each throw is watchable.
   const { staged, inFlight } = usePulseChoreography(pulses, dismissPulse);
+
+  /** Which crew's heading is being asked what it has spent. One per pointer. */
+  const spend = useSpendTag();
 
   const focused = groups.find((g) => g.id === railGroup) ?? null;
 
@@ -429,21 +432,26 @@ export function Sidebar({
     );
   };
 
-  /** The controls that belong to a group, wherever its name is drawn. */
-  const groupTail = (group: Group, count: number) => (
-    <span className="rail__group-tail">
-      <TokenMeter groupId={group.id} />
-      <span className="rail__group-count">{count}</span>
-      <button
-        type="button"
-        className="rail__gear"
-        onClick={() => onEditGroup(group)}
-        title={`${group.name} settings`}
-        aria-label={`${group.name} settings`}
-      >
-        ⚙
-      </button>
-    </span>
+  /**
+   * The way into a group's settings, and the only thing left beside its name.
+   *
+   * The member count that used to hang here is gone: the crews' column says how
+   * many are in a crew twice already, since the faces on a circle are seated by
+   * how many there are and the tag under the pointer says the number in words.
+   * What a crew has spent is gone from the line too, and is what hovering the
+   * heading says. Both were readouts of fixed width on a line fifteen rem wide
+   * at its widest, and the name was the only thing on it that could give any up.
+   */
+  const gear = (group: Group) => (
+    <button
+      type="button"
+      className="rail__gear"
+      onClick={() => onEditGroup(group)}
+      title={`${group.name} settings`}
+      aria-label={`${group.name} settings`}
+    >
+      ⚙
+    </button>
   );
 
   const inCompost = useMemo(() => composted(everyone), [everyone]);
@@ -469,6 +477,13 @@ export function Sidebar({
         onDragOut={() => hover(null)}
         dragging={drag !== null}
       />
+
+      {/* Over the rail rather than inside it: the card is fixed to the window
+          and the list it hangs off scrolls, and one card for every heading is
+          what having one pointer means. Never during a drag, when the rows it
+          would cover are the targets being aimed at and the pointer is already
+          carrying something. */}
+      {spend.shown && !drag && <SpendTag groupId={spend.shown.id} at={spend.shown} />}
 
       <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
         {/* The plus rides the drag region rather than sitting under it: a button
@@ -517,10 +532,11 @@ export function Sidebar({
             })}
 
             {focused ? (
-              // Inside one group. The heading carries the name and the controls
-              // that were squeezed onto a 0.6rem label in the overview, because
-              // here there is one group on screen and room to say so. The pins
-              // head the list rather than sitting in a section of their own:
+              // Inside one group. The heading is the name at reading size, on a
+              // line of its own, with what the crew is spending under it: there
+              // is one group on screen here, so the name is the heading of the
+              // whole column rather than one label among several. The pins head
+              // the list rather than sitting in a section of their own:
               // everybody drawn here is in this crew already, so a heading over
               // one or two rows would divide nothing, and the mark on the row is
               // what says which rows those are.
@@ -530,7 +546,11 @@ export function Sidebar({
                 onPointerEnter={() => hover({ kind: "group", id: focused.id })}
                 onPointerLeave={() => hover(null)}
               >
-                <div className="rail__open-head">
+                <div
+                  className="rail__open-head"
+                  onPointerEnter={(event) => spend.show(focused.id, event)}
+                  onPointerLeave={spend.hide}
+                >
                   {/* Both headings ellipse a name that does not fit the rail,
                       and the crew column has no room to say it either, so the
                       full one is on the heading as well as beside the circle.
@@ -539,7 +559,7 @@ export function Sidebar({
                   <span className="rail__open-name" title={focused.name}>
                     {focused.name}
                   </span>
-                  {groupTail(focused, agents.filter((a) => a.groupId === focused.id).length)}
+                  {gear(focused)}
                 </div>
                 {/* Above the crew, because "what are we working on" is read
                     before "who is here", and because a drop target that sits
@@ -600,11 +620,15 @@ export function Sidebar({
                       onPointerEnter={() => hover({ kind: "group", id: group.id })}
                       onPointerLeave={() => hover(null)}
                     >
-                      <div className="rail__group-head">
+                      <div
+                        className="rail__group-head"
+                        onPointerEnter={(event) => spend.show(group.id, event)}
+                        onPointerLeave={spend.hide}
+                      >
                         <span className="rail__group-name" title={group.name}>
                           {group.name}
                         </span>
-                        {groupTail(group, members.length)}
+                        {gear(group)}
                       </div>
                       <RailRepositories
                         repositories={repositories.filter((r) => r.groupId === group.id)}

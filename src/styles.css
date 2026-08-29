@@ -864,31 +864,15 @@ button {
   gap: var(--space-4);
 }
 
-/* The only part of the header that gives up space. Everything to its right is
-   a fixed-width readout, so the name shrinks to an ellipsis rather than the
-   row overflowing the rail. */
+/* The only part of the header that gives up space, and now the only part that
+   needs any: what is left beside it is the gear. The name still ellipses rather
+   than overflowing the rail, because a crew can be called anything. */
 .rail__group-name {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.rail__group-tail {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  margin-left: auto;
-  flex: none;
-  /* Sized here rather than inherited from the heading. The same tail hangs off
-     the 0.6rem label in the overview and off the group's own name once the rail
-     is inside it, and inheriting made the member count twice the size in one of
-     them. */
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  letter-spacing: var(--track-caps-wide);
-  color: var(--rail-muted);
 }
 
 /* The group's pinned model is not drawn here at all. A model id is longer than
@@ -910,62 +894,133 @@ button {
   background: none;
   border: 0;
   padding: 0 var(--space-1);
-  font-size: var(--type-small);
+  /* A step up from what it sits beside. It is the only thing in either heading
+     that is aimed at rather than read, and at the size of a label it was a
+     glyph the pointer had to hunt for. */
+  font-size: var(--type-ui);
   line-height: var(--lead-flush);
   color: var(--rail-muted);
   opacity: 0.55;
+  flex: none;
   transition: opacity var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
 }
 
-/* What a group is spending, and whether it is spending it right now. */
-.meter {
+/* What a crew has spent, over the rail, for as long as its heading is held.
+   This was a strip on the heading itself, four characters wide and sharing a
+   line with the crew's name. Off the line it can hold the whole picture instead
+   of the part that fit, and the name gets the width back. */
+.spend {
+  --pop-origin: top left;
+
+  position: fixed;
+  left: var(--tag-x);
+  top: var(--tag-y);
+  z-index: 30;
+  /* The heading underneath is what holds this open, and the rows it covers are
+     still targets. Neither may lose a pointer to a panel that is only read. */
+  pointer-events: none;
+  width: 13rem;
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex: none;
+  flex-direction: column;
+  gap: var(--space-4);
+  /* Off the heading's own box, which starts at the edge of the window. The same
+     inset the heading pads itself by, so the card's edge lands under the first
+     letter of the name it belongs to. */
+  margin: var(--space-2) 0 0 var(--space-6);
+  padding: var(--space-5);
+  border-radius: var(--radius-sm);
+  background: var(--rail-raised);
+  box-shadow: inset 0 0 0 1px var(--rail-edge), var(--lift-2);
 }
 
-.meter__spark {
+.spend__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+/* The one figure read at a glance, at the size that says so. */
+.spend__total {
+  font-family: var(--font-display);
+  font-size: var(--type-lede);
+  font-weight: 600;
+  letter-spacing: var(--track-tight);
+  line-height: var(--lead-flush);
+  color: var(--rail-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.spend__cost {
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+  letter-spacing: var(--track-flat);
+  color: var(--rail-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.spend__spark {
   display: flex;
   align-items: flex-end;
   gap: 1px;
-  height: 0.62rem;
-  width: 2.6rem;
+  height: 1.5rem;
+  /* A crew that has spent something but is doing nothing right now has no bars
+     at all, and a blank strip between the total and the split reads as a card
+     that failed to draw. The line is what a quiet sparkline looks like. */
+  border-bottom: 1px solid var(--rail-edge);
 }
 
-.meter__bar {
+.spend__bar {
   flex: 1;
   min-height: 0;
   background: var(--rail-edge);
   border-radius: 1px;
-  /* Only the height animates, and only upward from nothing, so a quiet meter
-     is flat rather than a row of stubs pretending to be activity. */
+  /* Only the height animates, and only upward from nothing, so a quiet crew is
+     a flat line rather than a row of stubs pretending to be activity. */
   transition: height var(--tempo-move) var(--ease);
 }
 
-.meter[data-busy] .meter__bar {
+/* The bars carry the whole of "right now", and nothing else on the card does.
+   The total used to take the tint as well, which at four mono characters was a
+   readout changing color and at the size it is drawn here was the one figure on
+   the card going pale on the surface it is drawn on. */
+.spend[data-busy] .spend__bar {
   background: var(--flesh-soft);
 }
 
-.meter__count,
-.meter__cost {
-  font-family: var(--font-mono);
-  font-size: var(--type-mark);
-  letter-spacing: var(--track-caps);
-  color: var(--rail-muted);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  /* The group header this hangs off is uppercased, and the only letters in a
-     readout are its units: `909k` arrived as `909K`, one glyph away from the
-     `M` that means a thousand times more. Nothing else in the app that draws a
-     token count sits inside an uppercased heading, so the unit is normalized
-     here rather than in the number. */
-  text-transform: none;
+/* The split, exact. Two columns rather than a sentence, because these are read
+   against each other: what a crew sends and what it gets back is the shape of
+   how it works, and `20,000,000 in, 15,000,000 out` on one line is a shape
+   nobody reads off a run of digits. */
+.spend__rows {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--space-1) var(--space-4);
 }
 
-.meter[data-busy] .meter__count,
-.meter[data-busy] .meter__cost {
-  color: var(--flesh-soft);
+.spend__label {
+  font-size: var(--type-meta);
+  line-height: var(--lead-ui);
+  color: var(--rail-muted);
+}
+
+.spend__figure {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  letter-spacing: var(--track-flat);
+  line-height: var(--lead-ui);
+  color: var(--rail-text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* A crew that has not called a model yet still answers when it is asked. A card
+   that opens for the crews with something to say and stays shut for the rest is
+   a hover nobody can tell from a broken one. */
+.spend__quiet {
+  font-size: var(--type-small);
+  line-height: var(--lead-ui);
+  color: var(--rail-muted);
 }
 
 .run__cost {
@@ -1771,9 +1826,11 @@ button {
   }
 }
 
-/* Inside one group. The name and its controls get a line of their own, because
-   here there is one group on screen and the 0.6rem label the overview uses was
-   sized to sit above a list of others. */
+/* Inside one group, where the overview's heading is a 0.6rem label sized to sit
+   above a list of others. The name and the gear, and nothing else on the line:
+   the readout that used to share it is a fixed width and a crew's name is not,
+   so the name was the only item with anything to give and gave it. A crew called
+   "StopTheScam" was drawn as "StopTh…" over its own agents. */
 .rail__open-head {
   display: flex;
   align-items: center;
@@ -5080,7 +5137,8 @@ button {
 .palette,
 .menu,
 .menu__sub,
-.orb__tag {
+.orb__tag,
+.spend {
   animation: pop var(--tempo-enter) var(--ease) both;
   transform-origin: var(--pop-origin);
 }
