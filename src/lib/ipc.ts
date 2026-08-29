@@ -58,6 +58,7 @@ import type {
   Repository,
   RepositoryDraft,
   RepositoryId,
+  Reveal,
   Routine,
   RoutineDraft,
   RoutineId,
@@ -78,7 +79,7 @@ import type {
 const EVENT_CHANNEL = "guac://event";
 
 /**
- * The menu bar asking the window to open one agent's channel.
+ * The menu bar asking the window to open an agent's channel, or a crew.
  *
  * Its own channel rather than a `UiEvent`. That one is the runtime saying what
  * happened, and this is one surface asking another to go somewhere: folding
@@ -691,15 +692,15 @@ export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<Unlis
 }
 
 /**
- * Subscribes to the menu bar asking for a channel to be opened.
+ * Subscribes to the menu bar asking to be taken somewhere.
  *
  * The window is already shown, unminimized and focused by the time this
- * arrives; all that is left is which channel it lands in. Answering a
- * permission request from the strip does not come through here: that one is
- * decided in Rust and reaches the transcript as an ordinary settled event.
+ * arrives; all that is left is where it lands. Answering a permission request
+ * from the strip does not come through here: that one is decided in Rust and
+ * reaches the transcript as an ordinary settled event.
  */
-export function onRevealRequest(handler: (agent: AgentId) => void): Promise<UnlistenFn> {
-  return listen<AgentId>(REVEAL_CHANNEL, (message) => handler(message.payload));
+export function onRevealRequest(handler: (target: Reveal) => void): Promise<UnlistenFn> {
+  return listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload));
 }
 
 /**

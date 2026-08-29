@@ -25,6 +25,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
+use serde::Serialize;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
@@ -32,9 +33,9 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 use tokio::sync::Notify;
 
 use crate::domain::approval::Decision;
-use crate::domain::ids::AgentId;
+use crate::domain::ids::{AgentId, GroupId};
 use crate::domain::usage::Tokens;
-use crate::menubar::{self, Command, Glyph, Look, Presence, Row, Update};
+use crate::menubar::{self, Command, Crew, Glyph, Look, Member, Presence, Row, Update};
 use crate::runtime::events::UiEvent;
 use crate::runtime::Runtime;
 
@@ -53,6 +54,21 @@ pub const TRAY_ID: &str = "guac.menubar";
 /// channel, and folding the two together would put a case in the transcript's
 /// event handling for something the runtime never emits.
 pub const REVEAL: &str = "guac://reveal";
+
+/// Where the strip is asking the window to go.
+///
+/// One channel and two destinations, because it is one gesture: the operator
+/// clicked a row and expects to be looking at what it named. Two, because the
+/// window answers them with different calls and neither is the other's fallback.
+/// `select` follows an agent into whatever crew it is in; `focusGroup` opens a
+/// crew and picks nobody in it, because choosing somebody would put an agent's
+/// history on screen as a side effect of a click that was about the crew.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Reveal {
+    Agent { id: AgentId },
+    Crew { id: GroupId },
+}
 
 /// How long a burst of events becomes one redraw.
 ///
@@ -285,7 +301,8 @@ impl Tray {
 
         match command {
             Command::Open => self.reveal(None),
-            Command::Reveal(agent) => self.reveal(Some(agent)),
+            Command::Reveal(agent) => self.reveal(Some(Reveal::Agent { id: agent })),
+            Command::Enter(crew) => self.reveal(Some(Reveal::Crew { id: crew })),
             // Both of these touch SQLite, and this runs on the main thread
             // inside the event loop. Off it: the operator's click should not be
             // the frame the window drops.
@@ -319,11 +336,11 @@ impl Tray {
         }
     }
 
-    /// Brings the window back, optionally with one channel open.
+    /// Brings the window back, optionally somewhere in particular.
     ///
     /// Shown *and* unminimized *and* focused, because the window can be in any
     /// of the three states and only one of the three calls fixes each.
-    fn reveal(&self, agent: Option<AgentId>) {
+    fn reveal(&self, target: Option<Reveal>) {
         let Some(window) = window(&self.app) else {
             tracing::warn!("no window to open from the menu bar");
             return;
@@ -337,11 +354,11 @@ impl Tray {
                 tracing::debug!(%err, "could not {what} the window");
             }
         }
-        if let Some(agent) = agent {
+        if let Some(target) = target {
             // Emitted after the window is up, so the transcript it scrolls is
             // one that is being drawn.
-            if let Err(err) = self.app.emit(REVEAL, agent) {
-                tracing::debug!(%err, "could not ask the window to open a channel");
+            if let Err(err) = self.app.emit(REVEAL, target) {
+                tracing::debug!(%err, "could not ask the window to go anywhere");
             }
         }
     }
@@ -361,11 +378,27 @@ fn window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
 fn read(runtime: &Runtime, session: Tokens) -> Presence {
     let store = runtime.store();
 
-    let names = match store.list_agents() {
-        Ok(agents) => agents.into_iter().map(|card| (card.id, card.name)).collect(),
+    let roster = match store.list_agents() {
+        Ok(agents) => agents
+            .into_iter()
+            .map(|card| (card.id, Member { name: card.name, crew: card.group_id }))
+            .collect(),
         Err(err) => {
             tracing::debug!(%err, "could not read the roster for the menu bar");
             Default::default()
+        }
+    };
+
+    // A read that failed is no crews, which is a menu that names none: the same
+    // strip this was before crews were on it, rather than one that guesses at
+    // where an agent is.
+    let crews = match store.list_groups() {
+        Ok(groups) => {
+            groups.into_iter().map(|group| Crew { id: group.id, name: group.name }).collect()
+        }
+        Err(err) => {
+            tracing::debug!(%err, "could not read the crews for the menu bar");
+            Vec::new()
         }
     };
 
@@ -394,7 +427,8 @@ fn read(runtime: &Runtime, session: Tokens) -> Presence {
     };
 
     Presence {
-        names,
+        roster,
+        crews,
         activity: runtime.activity_snapshot(),
         waiting,
         stuck,
@@ -462,6 +496,11 @@ fn build(app: &AppHandle, rows: &[Row]) -> tauri::Result<Painted> {
             }
             Row::Agent { id, label } => {
                 let item = answer(app, Command::Reveal(*id), label)?;
+                menu.append(&item)?;
+                items.push(Some(item));
+            }
+            Row::Crew { id, label } => {
+                let item = answer(app, Command::Enter(*id), label)?;
                 menu.append(&item)?;
                 items.push(Some(item));
             }

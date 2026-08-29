@@ -1689,6 +1689,34 @@ the screen.
 - **The menu** is the whole picture. What is waiting, who is working, what has
   been spent, and the two things worth doing from here.
 
+**The picture is drawn by crew, once there is more than one crew to draw.** A
+workspace is agents to the runtime and crews to the operator: two of them can
+hold two agents with the same name and the same face, and *Scout is thinking* on
+its own is a row that does not say which Scout and cannot be acted on without
+clicking it to find out. So the working list is arranged by crew under a heading
+per crew, and the rows that are about the operator rather than about the
+workspace carry the crew on the end of them, because those two sections are
+ordered by how long somebody has been waiting and reordering them by crew would
+bury the oldest.
+
+The naming stops at one crew, which is the state most workspaces are in and the
+same rule the crews' column is drawn by: a name that is the only name
+distinguishes nobody, and every row carrying it has spent menu width saying where
+the only place is. A workspace that has never made a second crew sees exactly the
+strip it saw before.
+
+A crew's heading is a destination and not just a label. The rows under it name
+agents, and an operator who wanted the crew rather than one of its agents would
+otherwise have to pick somebody to get there and then let go of them; the click
+lands on `focusGroup`, which opens the crew and chooses nobody in it, exactly as
+the column does. The count on the heading is the crew's own rather than what the
+menu had room for, and what did not fit is the note at the end of the section.
+
+The heading goes in with the first of its rows rather than ahead of the run. A
+crew whose agents all fell past the cap is then a crew with no heading, rather
+than a heading claiming a crew is working over a list that does not mention
+anybody from it.
+
 **A permission request is answered from the strip.** That is the point of the
 whole feature. A parked turn is the one thing in Guaca that stops until you deal
 with it, and the flow-preserving move is to answer it where you noticed it rather
