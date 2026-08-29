@@ -34,6 +34,17 @@ and *Every length is named* in `AGENTS.md` is the rule they all sit under.
   a `--rail-*` or `--grail-*` color declared for paper and forgotten in the ink
   block is a column that stays off-white in a dark room, which no DOM assertion
   sees. `styles.test.ts` reads both blocks and is the gate.
+- **A `-soft` name is a ground, and drawing ink with one is invisible on both
+  surfaces.** The bar marking which crew the rail is inside was `--flesh-soft`
+  for as long as the crews' column has existed: 1.06 to 1 against the column on
+  paper, 1.31 to 1 in a dark room. It is the trap two bullets down read a third
+  way — not a column color declared for paper and forgotten in the ink block,
+  but ink spelled from a name that was never ink, which both blocks then move
+  faithfully and neither shows. The pairs are `--flesh`/`--flesh-soft` and
+  `--pit`/`--pit-soft`, and the soft half exists to fill a box behind something
+  else. `styles.test.ts` reads the mark's token out of the rule, resolves it in
+  both `:root` blocks and holds it to the 3:1 WCAG asks of a mark that is not
+  text.
 - **A column's recessed surface is not the page's either.** `--sunken` is a hair
   off white, which is a field on paper and nothing at all on an off-white panel,
   so the three columns remap it onto `--rail-sunken` in one rule that names all
