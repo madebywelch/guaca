@@ -422,12 +422,21 @@ fn told_to_a_model(err: crate::e2b::E2bError) -> String {
     }
 }
 
-/// How long an agent will wait for peers that are still answering the same
-/// thing, before reading what it already has.
+/// How long an agent will wait for answers it is owed by peers that are still
+/// working on them, before reading what it already has.
 ///
-/// Long enough to cover the spread between several model calls that started
-/// together, short enough that nobody watching notices.
-const BURST_WINDOW: Duration = Duration::from_millis(2500);
+/// This was two and a half seconds, sized to "the spread between several model
+/// calls that started together", and the scripted suite agreed because a stub
+/// answers in milliseconds. Real model calls land tens of seconds apart, so in
+/// production the window expired before the second answer of every fan-out and
+/// the coordinator read its replies one turn at a time: a whole prompt and a
+/// model call per answer, for a wait that costs nothing. The window can be
+/// this generous because it no longer runs on time alone: the gather ends the
+/// moment nobody owing an answer is still working, so a peer that failed, went
+/// quiet or had its answer refused ends the wait in milliseconds, and this
+/// ceiling only decides how long one honestly-working peer can hold a batch
+/// open before the gatherer reads what it has and catches the rest next turn.
+const GATHER_WINDOW: Duration = Duration::from_secs(120);
 const BURST_POLL: Duration = Duration::from_millis(25);
 
 /// How stale an agent's list of signed-in sites may get before browsing again
@@ -2311,13 +2320,39 @@ impl Runtime {
         Ok(run_id)
     }
 
-    /// Replies this agent is still owed in this run.
+    /// Whether an answer this agent is owed in this run is still being worked
+    /// on by whoever owes it.
+    ///
+    /// Both halves are load-bearing, because each was the whole condition once
+    /// and each refused honest waits. Owed alone waits out the full window for
+    /// a peer whose turn failed, whose answer the guard refused, or who chose
+    /// silence: all three end with the ower idle and nothing coming, which is
+    /// what lets the window above this be generous instead of a guess at model
+    /// latency. Working alone made an agent sit through peers that had already
+    /// answered and were finishing their own notes.
+    ///
+    /// The race this cannot lose: a peer's answer is delivered before its turn
+    /// ends, and its expectation is cleared before the answer is delivered, so
+    /// by the time the ower reads as idle either the answer is in this agent's
+    /// inbox, where the gather's next pass takes it, or it was never sent.
     ///
     /// A peek, so asking cannot be what creates a run's state. The limits that
     /// state is created on belong to the asking agent's group, and this is the
     /// one question about a run that is asked without one to hand.
-    fn awaiting_replies(&self, run: RunId, me: AgentId) -> usize {
-        self.inner.guard.lock().peek(run).map(|state| state.awaiting(me)).unwrap_or(0)
+    fn awaited_still_working(&self, run: RunId, me: AgentId) -> bool {
+        let awaited = {
+            self.inner.guard.lock().peek(run).map(|state| state.awaited(me)).unwrap_or_default()
+        };
+        if awaited.is_empty() {
+            return false;
+        }
+        let activity = self.inner.activity.lock();
+        awaited.iter().any(|peer| {
+            matches!(
+                activity.get(peer),
+                Some(Activity::Thinking | Activity::Queued { .. } | Activity::AwaitingApproval)
+            )
+        })
     }
 
     fn track_inflight(&self, run: RunId, delta: i64) {
@@ -3133,6 +3168,15 @@ impl Runtime {
 
         let roster = self.roster_excluding(agent_id);
         let names = self.name_table();
+        // Nothing newer than what this turn is answering. `deliver` writes to
+        // the store before the inbox, so an operator's second line typed while
+        // the first was being picked up is in this read while still queued
+        // behind the batch — and rendered from here it would sit *above* the
+        // message it corrects, because the batch is rendered last. Left out,
+        // it reaches the model through intake instead, in the order it was
+        // said. Ties are kept: within one millisecond there is no order to
+        // restore, and the id filter already keeps the batch itself out.
+        let newest = batch.iter().map(|e| e.created_at).max().unwrap_or(i64::MAX);
         let history = self
             .inner
             .store
@@ -3141,7 +3185,7 @@ impl Runtime {
             .into_iter()
             // The batch is rendered separately; including it twice would make
             // the model answer itself.
-            .filter(|e| !batch.iter().any(|b| b.id == e.id))
+            .filter(|e| !batch.iter().any(|b| b.id == e.id) && e.created_at <= newest)
             .collect::<Vec<_>>();
 
         // Everything the prompt already carries, which is what stops a message
@@ -3547,6 +3591,7 @@ impl Runtime {
                 // hop. Not sending on is the whole of what a stop is.
                 if called_off { ReplyMode::NoteOnly } else { mode },
                 reply_target,
+                assigned,
                 &addressed,
                 collected_text,
                 tool_parts,
@@ -3812,6 +3857,11 @@ impl Runtime {
         cause: Option<MessageId>,
         mode: ReplyMode,
         reply_target: Option<Participant>,
+        // Whether anything this turn woke to declared itself work. Decided
+        // from the batch in `run_turn` and carried here because the one wrong
+        // answer to work is silence, and only this function knows whether the
+        // turn ended in it.
+        assigned: bool,
         addressed: &HashSet<AgentId>,
         text: String,
         mut tool_parts: Vec<Part>,
@@ -3846,7 +3896,12 @@ impl Runtime {
         );
         let commentary = mode == ReplyMode::ToPeer && already_answered && files.is_empty();
 
-        if mode == ReplyMode::ToPeer && !commentary {
+        // An empty reply is delivering nothing, so it is not put to the guard:
+        // evaluated anyway it would spend a pair-budget slot and clear the
+        // asker's expectation for an answer that never goes out.
+        let delivers = !(text.is_empty() && files.is_empty());
+
+        if mode == ReplyMode::ToPeer && !commentary && delivers {
             if let Some(Participant::Agent { id: peer }) = reply_target {
                 // An automatic reply still travels a hop and still counts
                 // against the pair budget, otherwise two agents could bounce
@@ -3890,14 +3945,26 @@ impl Runtime {
             }
         }
 
-        // Work handed over, and nothing said about it. `Assigned` is the one
-        // mode where silence is always wrong: somebody gave this agent a job,
-        // its answer is filed as a note rather than delivered, and a note it
-        // never writes leaves the operator watching an agent that has
+        // Work handed over, and nothing said about it. Silence is the one
+        // wrong answer to work: somebody gave this agent a job, and a report
+        // it never writes leaves the operator watching an agent that has
         // apparently stopped. That is exactly what shipped, and nothing in the
         // transcript said so, because a turn that produces no text produces no
         // envelope either. Say it out loud instead of returning quietly.
-        if mode == ReplyMode::Assigned && text.is_empty() {
+        //
+        // Two shapes of it, because work arrives in two modes. `Assigned` is
+        // work with nobody waiting, where the missing thing is the note. A
+        // `ToPeer` turn that was handed work and delivered nothing — no text,
+        // no file, no `send_message` to the asker — leaves a peer waiting on
+        // an answer that is not coming, which its gather survives (the idle
+        // check ends it) and the operator should still get to read about.
+        let owed_and_silent = text.is_empty()
+            && match mode {
+                ReplyMode::Assigned => true,
+                ReplyMode::ToPeer => assigned && !already_answered && files.is_empty(),
+                _ => false,
+            };
+        if owed_and_silent {
             tool_parts.push(Part::Notice {
                 kind: NoticeKind::GuardStop,
                 text: format!(
@@ -5609,7 +5676,19 @@ impl Runtime {
                         continue;
                     }
 
-                    let answering = heard_from;
+                    // An answer is a continuation and work is an approach,
+                    // wherever in the exchange it lands. The first version
+                    // read "has already written" as "is answering", which was
+                    // right until a peer could be instructed twice in one run:
+                    // the second instruction ran in the mode that files its
+                    // answer as a note in the doer's own channel, the
+                    // coordinator that asked was told nothing, and its own
+                    // prompt went on listing the ask as outstanding and
+                    // recommending a chase. Work re-arms the reply path; the
+                    // asymmetry that terminates cascades is untouched, because
+                    // it lives on the answer (`emit_reply`), which still
+                    // expects nothing.
+                    let expects_reply = !heard_from || intent.is_work();
 
                     let envelope = Envelope {
                         id: MessageId::new(),
@@ -5620,7 +5699,7 @@ impl Runtime {
                         parts: with_files(text, files.to_vec()),
                         trust: Trust::Peer,
                         hop,
-                        expects_reply: !answering,
+                        expects_reply,
                         intent,
                         cause,
                         created_at: now_ms(),
@@ -5629,6 +5708,12 @@ impl Runtime {
                     match self.deliver(envelope) {
                         Ok(()) => {
                             addressed.insert(target.id);
+                            // Only a delivered ask is a debt worth waiting on.
+                            self.inner.guard.lock().run_within(run_id, limits).note_sent(
+                                card.id,
+                                target.id,
+                                expects_reply,
+                            );
                             out.push(Delivery::Queued { to: target.name.clone() })
                         }
                         Err(err) => out.push(Delivery::Refused {
@@ -6582,11 +6667,12 @@ async fn actor_loop(
         // takes as long as its own model call, so they land seconds apart.
         // Draining only what had already queued meant three separate turns,
         // three prompts, and three notes in the operator's channel for one
-        // instruction. So while the run still has someone else working, this
-        // waits a moment for them rather than reading the first arrival alone.
+        // instruction. So while an answer this agent is owed is still being
+        // worked on, this waits for it rather than reading the first arrival
+        // alone.
         if !batch[0].expects_reply {
             let run = batch[0].run_id;
-            let patience = Instant::now() + BURST_WINDOW;
+            let patience = Instant::now() + GATHER_WINDOW;
             while batch.len() < MAX_BATCH {
                 // The holding queue first: anything in it arrived before
                 // whatever is still in the channel, and batching around it
@@ -6609,12 +6695,16 @@ async fn actor_loop(
                     Err(mpsc::error::TryRecvError::Empty) => {}
                 }
 
-                // Nothing queued. Worth waiting only for replies this agent is
-                // actually still owed, and never for long: an agent that has
-                // been told something is expected to act on it. Waiting on "is
-                // anyone still busy" made it sit through peers that had already
-                // answered and were finishing their own notes.
-                if Instant::now() >= patience || runtime.awaiting_replies(run, id) == 0 {
+                // Nothing queued. Worth waiting only for answers this agent
+                // is owed that somebody is genuinely still working on, and
+                // never once the run is called off: a stopped run's notice
+                // comes from the turn's own boundary, and a gather that sat
+                // out its window first would hold that notice, and the run's
+                // settlement, open for exactly that long.
+                if Instant::now() >= patience
+                    || runtime.stopped(run)
+                    || !runtime.awaited_still_working(run, id)
+                {
                     break;
                 }
                 tokio::time::sleep(BURST_POLL).await;

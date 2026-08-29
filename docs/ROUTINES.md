@@ -267,5 +267,6 @@ how it looks is not worth being able to say the record was edited.
 It arrives from neither the operator nor a peer, which is the case the reply
 mode originally had no arm for: every schedule an agent kept was answered by an
 agent that had just been told nothing was being asked of it. Anything carrying
-work is `ReplyMode::Assigned`, whoever sent it. See *Cascades terminate because
-of one asymmetry* in `ARCHITECTURE.md`.
+work with nobody to answer is `ReplyMode::Assigned`, whoever sent it; work from
+a peer answers that peer instead. See *Cascades terminate because of one
+asymmetry* in `ARCHITECTURE.md`.

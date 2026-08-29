@@ -340,7 +340,15 @@ impl LlmError {
     pub fn is_transient(&self) -> bool {
         match self {
             LlmError::RateLimited { .. } | LlmError::Timeout { .. } | LlmError::Truncated => true,
-            LlmError::Upstream { status, .. } => *status >= 500,
+            // 200 is an error frame arriving mid-stream: the request was
+            // accepted — a bad key, an unknown model or a rejected parameter
+            // all refuse before a stream opens — and the provider broke while
+            // answering, which is the same family as a dropped connection.
+            // Classified by the status alone it read as a rejection, and four
+            // concurrent turns on one live crew each died on their only
+            // attempt to "Upstream idle timeout exceeded" while an identical
+            // fifth call sailed through.
+            LlmError::Upstream { status, .. } => *status >= 500 || *status == 200,
             LlmError::ProgramMissing { .. } | LlmError::ProgramFailed { .. } => false,
             // The one failure of a program provider worth asking again.
             // Nothing about the request was rejected: the model wrote an answer
@@ -1250,6 +1258,11 @@ mod tests {
             LlmError::Upstream { ref message, .. } => assert!(message.contains("provider dropped")),
             other => panic!("expected Upstream, got {other:?}"),
         }
+        // And worth another attempt: the request was accepted and the provider
+        // broke while answering, which no part of the request caused. Read as
+        // a rejection, one idle-timeout frame killed each of four concurrent
+        // live turns on its only attempt.
+        assert!(err.is_transient(), "a mid-stream provider failure must be retried");
     }
 
     #[tokio::test]

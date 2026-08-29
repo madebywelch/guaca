@@ -236,6 +236,17 @@ pub struct RunState {
     steps_used: u32,
     fingerprints: HashSet<String>,
     pair_counts: HashMap<(AgentId, AgentId), u32>,
+    /// Pairs whose last delivered send asked the recipient for something and
+    /// has not been answered: `(asker, ower)`.
+    ///
+    /// Written by [`Self::note_sent`] when the runtime delivers an expectant
+    /// message, and cleared by [`Self::evaluate`] the moment anything travels
+    /// the other way, because any message from the ower is the reply the asker
+    /// was owed. Derived from `pair_counts` before work could re-arm the reply
+    /// path, which broke the moment it could: "has ever written to me" and
+    /// "owes me an answer" are different questions, and a peer that answered
+    /// an earlier round still owes one for the instruction sent after it.
+    expecting: HashSet<(AgentId, AgentId)>,
     last_touched: i64,
 }
 
@@ -246,6 +257,7 @@ impl RunState {
             steps_used: 0,
             fingerprints: HashSet::new(),
             pair_counts: HashMap::new(),
+            expecting: HashSet::new(),
             last_touched: now_ms(),
         }
     }
@@ -347,22 +359,35 @@ impl RunState {
         }
 
         self.pair_counts.insert(pair, sent + 1);
+        // Whatever this message is, it reaches someone who may have been owed
+        // it: an answer, a report, or new work all settle the sender's debt.
+        self.expecting.remove(&(req.to, req.from));
         Verdict::Allow { hop }
     }
 
-    /// Checks fan-out width before any individual recipient is evaluated.
-    /// How many peers this agent has written to that have not written back.
+    /// Records whether a send the runtime went on to deliver asked its
+    /// recipient for something.
     ///
-    /// The number of replies it is still owed, which is the only thing worth
-    /// waiting for. Waiting on "is anyone in this run busy" instead made an
-    /// agent sit through peers that were merely finishing their own notes.
-    pub fn awaiting(&self, me: AgentId) -> usize {
-        self.pair_counts
-            .keys()
-            .filter(|(from, to)| *from == me && !self.has_written(*to, me))
-            .map(|(_, to)| *to)
-            .collect::<HashSet<_>>()
-            .len()
+    /// Separate from [`Self::evaluate`] because whether a message expects an
+    /// answer is decided by the runtime after the verdict, from the sender's
+    /// declared intent and the state of the exchange. Only a delivered message
+    /// creates a debt: a refused one reached nobody.
+    pub fn note_sent(&mut self, from: AgentId, to: AgentId, expects_reply: bool) {
+        if expects_reply {
+            self.expecting.insert((from, to));
+        }
+    }
+
+    /// The peers that owe this agent an answer.
+    ///
+    /// The only thing worth waiting for between turns. Waiting on "is anyone
+    /// in this run busy" was tried and made an agent sit through peers that
+    /// were merely finishing their own notes; deriving it from "has written to
+    /// me at all" was tried next and stopped counting the moment a peer could
+    /// be instructed twice, because a peer that answered round one still owes
+    /// the answer to round two.
+    pub fn awaited(&self, me: AgentId) -> HashSet<AgentId> {
+        self.expecting.iter().filter(|(from, _)| *from == me).map(|(_, to)| *to).collect()
     }
 
     /// Whether `from` has written to `to` at any point in this run.
@@ -375,6 +400,7 @@ impl RunState {
         self.pair_counts.get(&(from, to)).copied().unwrap_or(0) > 0
     }
 
+    /// Checks fan-out width before any individual recipient is evaluated.
     pub fn check_fanout(&self, requested: usize) -> Option<Refusal> {
         if requested > self.limits.max_fanout_per_call {
             return Some(Refusal::FanOutTooWide {
@@ -792,6 +818,60 @@ mod tests {
         reg.runs.get_mut(&old).unwrap().last_touched = now_ms() - (2 * 60 * 60 * 1000);
         reg.run_within(RunId::new(), GuardLimits::default());
         assert!(reg.peek(old).is_none(), "stale run should have been reaped");
+    }
+
+    #[test]
+    fn a_delivered_ask_is_awaited_until_anything_travels_back() {
+        let mut state = RunState::new(permissive());
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+
+        assert!(matches!(
+            state.evaluate(&req(manager, chef, "make bread", 0)),
+            Verdict::Allow { .. }
+        ));
+        state.note_sent(manager, chef, true);
+        assert_eq!(state.awaited(manager), HashSet::from([chef]));
+
+        // Anything from the ower settles the debt, whatever it declares
+        // itself to be: the asker wanted to hear back, and it has.
+        assert!(matches!(state.evaluate(&req(chef, manager, "done", 1)), Verdict::Allow { .. }));
+        assert!(state.awaited(manager).is_empty());
+    }
+
+    #[test]
+    fn a_send_that_expects_nothing_is_not_awaited() {
+        let mut state = RunState::new(permissive());
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+        assert!(matches!(state.evaluate(&req(manager, chef, "thanks", 0)), Verdict::Allow { .. }));
+        state.note_sent(manager, chef, false);
+        assert!(state.awaited(manager).is_empty());
+    }
+
+    #[test]
+    fn a_second_instruction_is_awaited_although_the_peer_answered_the_first() {
+        // The case the pair-count derivation could not see: after one round
+        // trip the peer "has written", and an agent that instructs it again is
+        // owed an answer the old question answered no about.
+        let mut state = RunState::new(permissive());
+        let (manager, chef) = (AgentId::new(), AgentId::new());
+
+        assert!(matches!(
+            state.evaluate(&req(manager, chef, "round one", 0)),
+            Verdict::Allow { .. }
+        ));
+        state.note_sent(manager, chef, true);
+        assert!(matches!(
+            state.evaluate(&req(chef, manager, "answer one", 1)),
+            Verdict::Allow { .. }
+        ));
+        assert!(state.awaited(manager).is_empty());
+
+        assert!(matches!(
+            state.evaluate(&req(manager, chef, "round two", 2)),
+            Verdict::Allow { .. }
+        ));
+        state.note_sent(manager, chef, true);
+        assert_eq!(state.awaited(manager), HashSet::from([chef]));
     }
 
     #[test]

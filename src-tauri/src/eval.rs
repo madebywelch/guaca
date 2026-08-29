@@ -77,8 +77,10 @@ pub enum Fault {
     /// manager and once from the researcher is two channels with one message
     /// each, which is not the complaint.
     AnsweredMoreThanOnce { agent: String, times: usize },
-    /// A message demanding an answer, sent to a peer that had already answered.
-    /// The exact shape of a cascade that will not converge.
+    /// A courtesy demanding an answer, sent to a peer that had already
+    /// answered. The exact shape of a cascade that will not converge. Work is
+    /// exempt: a second instruction expects the report of what came of it, and
+    /// that is delegation.
     DemandedAnswerFromSettledPeer { from: String, to: String },
     /// An acknowledgment of an acknowledgment.
     AcknowledgedAnAcknowledgment { from: String, to: String },
@@ -264,8 +266,12 @@ pub fn faults(messages: &[Envelope], name_of: &dyn Fn(AgentId) -> String) -> Vec
             continue;
         };
 
+        // Work is allowed to demand an answer wherever in the exchange it
+        // lands: a second instruction expects the report of what came of it,
+        // and that is delegation rather than divergence. A courtesy demanding
+        // one from a peer that has already had its say is the cascade shape.
         let they_answered = written.contains(&(to, from));
-        if envelope.expects_reply && they_answered {
+        if envelope.expects_reply && they_answered && !envelope.intent.is_work() {
             faults.push(Fault::DemandedAnswerFromSettledPeer {
                 from: name_of(from),
                 to: name_of(to),
