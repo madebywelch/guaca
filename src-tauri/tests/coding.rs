@@ -395,6 +395,68 @@ async fn an_agent_is_told_what_the_harness_it_was_given_said() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
+/// The one announcement this app asks for, and the one thing that outlives the
+/// message announcing it.
+///
+/// A turn that closes on work it has not done is given its round back, because
+/// nothing of an agent's runs after its message. A started `code` job is the
+/// exception and has to be: the job is already running on a process of its own
+/// and comes back as its own envelope, so "started it, checking back" is a
+/// report of a call that has already been made. Without the exemption the
+/// nudge fires on exactly the shape `## Your repository` tells an agent to
+/// write, and every coding job in the app buys a wasted model call.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_started_job_is_not_an_unbacked_promise() {
+    stand_ins();
+    let repo = a_repository("announced");
+
+    let stub = serve(|body| {
+        if anyone_said(body, "has finished") {
+            Script::Say("The coding agent fixed the flaky test.".into())
+        } else if has_tool_result(body) {
+            Script::Say("Started it. Checking back on it shortly.".into())
+        } else {
+            Script::Code("fix the flaky test".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+
+    let engineer = h.agent_named("Engineer").unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: engineer.group_id,
+            name: "guaca".into(),
+            path: repo.to_string_lossy().to_string(),
+            note: String::new(),
+            harness: Which::Claude,
+            gate: Gate::Open,
+            bench: Bench::Shared,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Engineer").iter().any(|line| line.contains("Started it")),
+        "the announcement is the answer to that turn: {:?}",
+        h.channel_texts("Engineer")
+    );
+    assert!(
+        !stub
+            .transcript
+            .lock()
+            .iter()
+            .any(|body| anyone_said(body, "You ended your message with work you had not done")),
+        "a job that is genuinely running backs the sentence that announces it"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// A job is told where the tree is standing before it is told what to do.
 ///
 /// This is the other seam nothing else in the repo can see. Drop the

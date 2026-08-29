@@ -294,6 +294,20 @@ impl Stream {
 /// this same string, or the two disagree for as long as the turn runs.
 const ROUND_BREAK: &str = "\n\n";
 
+/// What a turn closing on work it has not done is told, once.
+///
+/// The prompt says the same thing before the turn starts, and this is the
+/// second half of the same fix rather than a duplicate of it: the prompt
+/// reaches models that read it, and this reaches the rest. The observed shape
+/// is a model that has run out of will rather than out of options, so it is
+/// given the mechanism again and told what to do with the round it just got.
+const UNBACKED_PROMISE: &str =
+    "You ended your message with work you had not done. Your message ends your turn, so nothing \
+     of yours runs after it: the check you described will not happen, and the operator will read \
+     a promise and wait for it. You still have this turn. Do the work now with the tools you \
+     have, then write the reply you meant to write, with what you found in it. If you cannot do \
+     it, say plainly what stopped you and what you need.";
+
 /// How many times one model call is attempted before the operator is told.
 ///
 /// The failure this exists for is a connection that never opened: a laptop that
@@ -343,6 +357,7 @@ use crate::domain::ids::{
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
+use crate::domain::promise;
 use crate::domain::repository::{Gate, Harness};
 use crate::domain::routine::{Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
@@ -3546,6 +3561,10 @@ impl Runtime {
         let mut hit_tool_ceiling = false;
         let mut budget_exhausted = false;
         let mut called_off = false;
+        // At most one per turn. A turn that promises again after being told is
+        // not going to be argued into working, and a second nudge is a model
+        // call spent on the same sentence.
+        let mut nudged = false;
 
         let max_rounds = limits.max_tool_rounds as usize;
         for round in 0..max_rounds {
@@ -3637,6 +3656,49 @@ impl Runtime {
             }
 
             if completion.tool_calls.is_empty() {
+                // Where a turn ends, and therefore the only place a promise can
+                // be caught before it becomes silence. The model has stopped
+                // calling tools, so this text is the last thing that happens:
+                // if it says work is under way, that work is not going to
+                // happen and the operator will wait for it.
+                //
+                // Not gated on an empty tool trail. The turn this was written
+                // for had made two calls already and still closed on a promise
+                // about two more, because what backs a sentence is a call made
+                // before it rather than anywhere in the turn.
+                //
+                // One exception, and it is the one the prompt asks for: a `code`
+                // job outlives the turn that started it, so "started it, will
+                // report back" is a report of a call that has already been made.
+                let started_a_job = tool_parts
+                    .iter()
+                    .any(|part| matches!(part, Part::ToolCall { name, .. } if name == tools::CODE));
+                let unbacked = (!nudged && !started_a_job && round + 1 < max_rounds)
+                    .then(|| promise::promises_work(&completion.content))
+                    .flatten();
+                if let Some(said) = unbacked {
+                    // The one place this is visible without reading a
+                    // transcript. `eval` counts the same thing afterward from
+                    // the envelopes, which is the half that can fail a build.
+                    tracing::info!(
+                        agent = %card.name,
+                        said,
+                        "turn closed on work it had not done; given another round"
+                    );
+                    nudged = true;
+                    messages.push(ChatMessage::Assistant {
+                        content: (!completion.content.is_empty())
+                            .then(|| completion.content.clone()),
+                        tool_calls: Vec::new(),
+                    });
+                    messages.push(ChatMessage::user(UNBACKED_PROMISE));
+                    // What was streamed stays streamed. The operator watched the
+                    // promise being written, so taking it back out of the
+                    // finished message would leave the bubble they read
+                    // disagreeing with the record; kept, it reads as the
+                    // sentence before the answer, which is what it becomes.
+                    continue;
+                }
                 break;
             }
 

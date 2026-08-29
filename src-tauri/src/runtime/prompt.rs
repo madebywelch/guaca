@@ -910,6 +910,34 @@ pub fn system_prompt(
         }
     });
 
+    // All four modes, because it is a fact about the machine rather than about
+    // who is reading. A model cannot infer it and gets it wrong the same way
+    // every time: chat-trained, it assumes speech and work interleave, because
+    // in most harnesses they do. Here the message is the terminator, so
+    // "Checking both properly" is not a plan, it is the end of the turn, and
+    // the operator waits for a check that was never going to run.
+    //
+    // Written as the mechanism rather than as a rule. "Do not announce work" is
+    // a rule a model talks itself out of, because announcing reads as courtesy;
+    // "nothing of yours runs after this message" leaves nothing to reason
+    // around. It also subsumes the one place this prompt sanctions announcing:
+    // `code` is started before it is described, so that sentence is a report of
+    // a call that has already been made, which is the ordering stated here.
+    out.push_str(
+        "\nYour message ends your turn. Nothing of yours runs after it: not the check you said \
+         you were about to run, not the thing you meant to do next. Nothing happens at all until \
+         somebody writes to you again.\n\n\
+         So the tool call comes first and the sentence comes after. Do not write that you are \
+         checking, looking something up, running something now, or confirming in a moment. \
+         Either the call has already been made and you are reporting what came back, or the work \
+         has not happened and saying it is under way is untrue. If it needs doing, do it in this \
+         turn and write what you found.\n\n\
+         When the work does not fit in one turn, say where you actually got to: what you did, \
+         what it showed, what is left, and what you need to finish it. That is a state the \
+         operator can act on. A promise is not, because there is nothing left running to keep \
+         it.\n",
+    );
+
     out
 }
 
@@ -2411,6 +2439,35 @@ mod tests {
 
         let note = prompt_for(&c, &roster, "", ReplyMode::NoteOnly);
         assert!(note.contains("filed as a short note"));
+    }
+
+    #[test]
+    fn every_reply_mode_is_told_that_the_message_is_the_end_of_the_turn() {
+        // The failure this closes: an agent with a working plugin, two checks
+        // to run and rounds left to run them in closed on "Checking both
+        // properly". The turn ended there, and the operator had to ask why
+        // nothing had happened. Nothing in this prompt had ever said that a
+        // message is the terminator, so the model assumed what it assumes
+        // everywhere else, which is that it can speak and carry on working.
+        let c = card("Manager");
+        for mode in
+            [ReplyMode::ToOperator, ReplyMode::ToPeer, ReplyMode::NoteOnly, ReplyMode::Assigned]
+        {
+            let prompt = prompt_for(&c, &[entry("Chef", &[])], "", mode);
+            assert!(
+                prompt.contains("Your message ends your turn"),
+                "{mode:?} has to be told the mechanism, not only the rule"
+            );
+            assert!(
+                prompt.contains("the tool call comes first and the sentence comes after"),
+                "{mode:?} needs the ordering, which is the part that is actionable"
+            );
+            assert!(
+                prompt.contains("say where you actually got to"),
+                "{mode:?} needs somewhere to go when the work genuinely does not fit, or the \
+                 rule reads as an instruction to finish everything or lie"
+            );
+        }
     }
 
     #[test]
