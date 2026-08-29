@@ -647,6 +647,46 @@ describe("groups as places", () => {
     expect(orb.querySelector(".orb__tag-name")?.textContent).toBe("research");
   });
 
+  // The circle used to be a toggle, so the gesture for going into a crew went
+  // in and straight back out again, and a click on the crew you were already
+  // in put you in the overview. There is a circle for the overview at the top
+  // of the column, on screen for the whole of both gestures.
+  it("stays inside the crew whose circle is clicked twice", () => {
+    draw([group("everyone"), group("research", null, RESEARCH)], [agent("Manager")]);
+
+    fireEvent.click(screen.getByLabelText("research, 0 agents"));
+    expect(useStore.getState().railGroup).toBe(RESEARCH);
+
+    fireEvent.click(screen.getByLabelText("research, 0 agents"));
+    expect(useStore.getState().railGroup).toBe(RESEARCH);
+  });
+
+  it("goes back out to everybody by the circle at the top of the column", () => {
+    draw([group("everyone"), group("research", null, RESEARCH)], [agent("Manager")]);
+
+    fireEvent.click(screen.getByLabelText("research, 0 agents"));
+    fireEvent.click(screen.getByLabelText("All groups, 1 agents"));
+
+    expect(useStore.getState().railGroup).toBeNull();
+  });
+
+  // Which circle is lit is the whole argument for the column: "which crew am I
+  // in" is meant to have an answer in a fixed place. What that mark is drawn in
+  // is `styles.test.ts`, which is where it was invisible for a year.
+  it("marks the crew the rail is inside, and only that one", () => {
+    draw([group("everyone"), group("research", null, RESEARCH)], [agent("Manager")]);
+
+    const current = () =>
+      [...document.querySelectorAll<HTMLElement>('.orb[aria-current="true"]')].map((orb) =>
+        orb.getAttribute("aria-label"),
+      );
+
+    expect(current()).toEqual(["All groups, 1 agents"]);
+
+    fireEvent.click(screen.getByLabelText("research, 0 agents"));
+    expect(current()).toEqual(["research, 0 agents"]);
+  });
+
   // The heading ellipses whatever does not fit the rail, and after clicking a
   // circle it is the only place the name is drawn at all.
   it("keeps the whole name on the heading the rail cuts short", () => {
