@@ -4184,7 +4184,7 @@ mod tests {
         CleanDraft {
             group_id: None,
             name: name.into(),
-            avatar: "avocado".into(),
+            avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
             system_prompt: "be useful".into(),

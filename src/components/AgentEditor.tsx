@@ -1,13 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
-import {
-  ACCENTS,
-  CHARACTER_GROUPS,
-  CHARACTERS,
-  suggestAccent,
-  suggestCharacter,
-} from "../avatars/catalog";
+import { ACCENTS, CHARACTERS, suggestAccent, suggestCharacter } from "../avatars/catalog";
 import { api } from "../lib/ipc";
 import { onOpenRouter } from "../lib/providers";
 import { useStore } from "../lib/store";
@@ -174,34 +168,22 @@ export function AgentEditor({ agent, onClose }: Props) {
 
         <div className="field">
           <span className="field__label">Character</span>
-          {CHARACTER_GROUPS.map((group) => (
-            <div key={group} style={{ marginBottom: "0.55rem" }}>
-              <span className="hint" style={{ display: "block", marginBottom: "0.25rem" }}>
-                {group}
-              </span>
-              <div className="picker">
-                {CHARACTERS.filter((entry) => entry.group === group).map((entry) => (
-                  <button
-                    key={entry.key}
-                    type="button"
-                    className="picker__item"
-                    title={entry.label}
-                    aria-label={entry.label}
-                    aria-pressed={draft.avatar === entry.key}
-                    style={{ "--accent": draft.color } as React.CSSProperties}
-                    onClick={() => patch({ avatar: entry.key })}
-                  >
-                    <AgentAvatar
-                      avatar={entry.key}
-                      color={draft.color}
-                      size="sm"
-                      seed={entry.key}
-                    />
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))}
+          <div className="picker">
+            {CHARACTERS.map((entry) => (
+              <button
+                key={entry.key}
+                type="button"
+                className="picker__item"
+                title={entry.label}
+                aria-label={entry.label}
+                aria-pressed={draft.avatar === entry.key}
+                style={{ "--accent": draft.color } as React.CSSProperties}
+                onClick={() => patch({ avatar: entry.key })}
+              >
+                <AgentAvatar avatar={entry.key} color={draft.color} size="sm" seed={entry.key} />
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Only shown once a second group exists. With one group there is no

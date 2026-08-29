@@ -6892,7 +6892,7 @@ mod tests {
             id: AgentId::new(),
             group_id: GroupId::new(),
             name: "Agent".into(),
-            avatar: "avocado".into(),
+            avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
             system_prompt: String::new(),

@@ -11,6 +11,12 @@ table below says which one to open before changing something.
 
 ```
 src/                  React + TypeScript. A view over the runtime, nothing more.
+  avatars/            An agent's character. One species, drawn from numbers.
+    form.ts           The body, as a function of a character and a mood.
+    eyes.ts           One stroke, four numbers, and where it is looking.
+    catalog.ts        The cast, and every key an older build wrote.
+    moods.ts          Ten expressions, and the one place a signal becomes one.
+    clock.ts          One frame loop for every creature on screen.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/presence.ts     A crew, in the two marks its circle can carry.
@@ -157,6 +163,9 @@ repo: the frontend renders state and forwards intent.
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
+| An agent's character: the drawing, a new one, or why there are no eyebrows | `docs/CHARACTERS.md`, then `src/avatars/form.ts` |
+| A new expression, or what the app reads one from | *Moods* in `docs/CHARACTERS.md`, then `moods.ts`, whose table and `moodFor` are the whole of it |
+| Anything that moves on a creature: a look, a blink, a message landing | *The gaze moves the body* in `docs/CHARACTERS.md`, then `AgentAvatar.tsx`, which is the only place the three meet |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
@@ -256,6 +265,16 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 its loop over because it is a different unit of work with its own budget. A turn
 cannot: it is the unit the five limits are written in.
 
+**A creature is a shape, not a drawing.** Every agent is one round species,
+recomputed every frame from a character (a row of numbers) and a mood (another
+row). No path is ever drawn by hand and no transform is ever put on the drawing:
+a character that slides around inside its own box reads as a sprite being moved,
+and one whose outline changes reads as a thing that is alive. The body only
+breathes, leans and settles, because a body that acts as hard as a face is a
+body nobody can read a face on; what acts is two eyes, each one stroke with four
+numbers on it. Four casts of hand-drawn characters preceded this and every one
+of them failed the same way. `docs/CHARACTERS.md`.
+
 **Every length is named, not spelled.** A size, a space, a radius, a duration,
 an easing and a shadow are each spelled from a closed set of tokens at the top
 of `src/styles.css`, and `styles.test.ts` fails the build on a literal. The rule
@@ -268,16 +287,20 @@ system sitting at the top of it the whole time. Nobody chose that, and no review
 would have caught it. The exceptions are named in the suite with their reasons;
 add one there rather than working around it.
 
-**One arrival, and three registers of motion.** Every surface that appears runs
-`@keyframes pop` at `--tempo-enter` on `--ease`, listed in one rule, and a new
-surface joins by adding its selector to it. What tells a menu from a dialog is
-`--pop-origin`, which a menu's own component sets to the corner nearest the
+**One arrival, and two registers of motion in CSS.** Every surface that appears
+runs `@keyframes pop` at `--tempo-enter` on `--ease`, listed in one rule, and a
+new surface joins by adding its selector to it. What tells a menu from a dialog
+is `--pop-origin`, which a menu's own component sets to the corner nearest the
 button that opened it, *after* measuring where it actually fit: a menu pulled
 back off a window edge and grown from the corner it wanted slides across the
-screen on the way in. The three curves are not preferences. `--ease` is a
-surface arriving, `--ease-spring` is a character reacting and may only be spent
-on the vegetables, `--ease-loop` is anything that loops or travels. A fourth has
-to argue it is a register.
+screen on the way in. The two curves are not preferences. `--ease` is a surface
+arriving and `--ease-loop` is anything that loops or travels. A third has to
+argue it is a register.
+
+There was a spring, for the one register that is no longer CSS: a character
+reacting. An agent is a shape recomputed every frame now, so its overshoot is a
+spring in the geometry and its recoil is a displacement of its own outline.
+`docs/CHARACTERS.md`.
 
 **A secret never reaches a model.** A credential's value and a cookie's value do
 not enter a prompt, a transcript, an event or the webview, and there is no field

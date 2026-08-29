@@ -198,23 +198,22 @@
      were 8 durations and 5 curves and no token; `--ease` is promoted from the
      one already used most rather than invented.
 
-     The second curve is not a second opinion. Guaca has two motion registers
-     and until now distinguished them only by accident: surfaces arrive, and
-     characters react. `wind-up` and `knock-back` are a vegetable having a
-     physical response to something and they *should* overshoot, because that
-     is what reads as a character rather than as an icon. Nothing that is a
-     panel, a menu or a dialog may touch it.
+     The second is for anything that loops or travels: an orb breathing, a dot
+     running down a wire, a mark pulsing beside a head. Those want to leave as
+     fast as they arrive, which is the one thing a decelerating curve cannot
+     do, and a loop built on `--ease` visibly stalls at the top of every cycle.
 
-     The third is for anything that loops or travels: an orb breathing, a dot
-     running down a wire, a face glancing about. Those want to leave as fast as
-     they arrive, which is the one thing a decelerating curve cannot do, and a
-     loop built on `--ease` visibly stalls at the top of every cycle.
+     There was a third, a spring, and it is gone rather than kept beside these
+     two. It existed for the one register CSS no longer holds: a character
+     having a physical reaction. A creature is now a shape recomputed every
+     frame in `avatars/form.ts`, so its overshoot is a spring in the geometry
+     and its recoil is a displacement of the outline. A curve here could not
+     have expressed either, and an unused token is a decision somebody would
+     eventually spend on a panel.
 
-     Every easing in this file is one of these three, `linear`, or `steps()`.
-     There is no fourth opinion, and a new one has to argue it is a register
-     rather than a preference. */
+     Every easing in this file is one of these two, `linear`, or `steps()`. A
+     third has to argue it is a register rather than a preference. */
   --ease: cubic-bezier(0.18, 0.9, 0.22, 1);
-  --ease-spring: cubic-bezier(0.3, 1, 0.3, 1);
   --ease-loop: cubic-bezier(0.35, 0, 0.3, 1);
 
   --tempo-tap: 110ms; /* Nothing moves: color, background, border, opacity. */
@@ -1001,7 +1000,9 @@ button {
 .agent-row {
   width: 100%;
   display: grid;
-  grid-template-columns: 2.25rem 1fr auto;
+  /* The first lane is the character's own box and has to be told when that
+     grows, or the face overflows its track and sits under the name. */
+  grid-template-columns: 2.75rem 1fr auto;
   align-items: center;
   gap: var(--space-4);
   padding: var(--space-2) var(--space-5) var(--space-2) var(--space-4);
@@ -1712,145 +1713,136 @@ button {
 /* ==========================================================================
    Avatars
 
-   Every agent is a different ingredient, drawn to one spec in catalog.tsx. The
-   accent picks the hue and the rest of the tones derive from it, so one choice
-   produces a coherent character rather than a body and a set of unrelated parts.
+   Every agent is the same round creature, drawn by `avatars/form.ts` from a
+   handful of numbers rather than from a path. Nothing in here animates it:
+   the outline is recomputed per frame and written as one `d`, because what a
+   creature does is change shape, and a keyframe can only move a drawing about.
 
-   Behavior, in order of loudness: a slow breath at rest, a glance around every
-   few seconds, quicker glances and an occasional full turn while thinking, an
-   aimed look when addressing someone, and a wind-up or knock-back when a
-   message is thrown or caught.
+   What is left here is what CSS is actually better at. The accent is the whole
+   color: the body is that value flat, with no outline, no gradient and nothing
+   drawn on top of it, and the eyes are the same hue taken most of the way to
+   ink so they read as marks in the body rather than as holes through it. The
+   marks beside a head are three small loops, and they are the only motion in
+   this block.
    ========================================================================== */
 
 .avatar {
-  --char-fill: var(--accent, var(--flesh));
-  --char-light: color-mix(in oklab, var(--accent, var(--flesh)) 46%, #ffffff);
-  --char-shade: color-mix(in oklab, var(--accent, var(--flesh)) 62%, #33240f);
-  --char-deep: color-mix(in oklab, var(--accent, var(--flesh)) 36%, #17200f);
-  --char-white: #fdfdf5;
-  --char-ink: #17210f;
+  --eye: color-mix(in oklab, var(--accent, var(--flesh)) 34%, #171410);
 
   display: inline-grid;
   place-items: center;
   flex: none;
   position: relative;
-  line-height: 0;
-  /* Slow enough that turning to face a peer reads as a movement. */
-  transition: transform var(--tempo-enter) var(--ease);
+  line-height: var(--lead-flush);
 }
 
-.avatar--xs { width: 1.35rem; height: 1.35rem; }
-.avatar--sm { width: 1.8rem; height: 1.8rem; }
-.avatar--md { width: 2.25rem; height: 2.25rem; }
-.avatar--lg { width: 3.4rem; height: 3.4rem; }
+/* Bigger than they were, and the reason is legibility rather than presence: an
+   expression carried by a change of shape needs enough of it to catch the eye
+   of somebody reading the column beside it. Under about 1.5rem the loud moods
+   still separate and the quiet ones stop trying. */
+.avatar--xs {
+  width: 1.5rem;
+  height: 1.5rem;
+}
 
+.avatar--sm {
+  width: 2rem;
+  height: 2rem;
+}
+
+.avatar--md {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.avatar--lg {
+  width: 4.25rem;
+  height: 4.25rem;
+}
+
+/* The body is bounded by `FORM.reach` and stays inside the viewBox even at full
+   excursion, but the marks are drawn into the top right corner of it and the
+   attention halo grows past its own radius. Clipping is what would cut the one
+   thing on a creature that has to be seen from across the room. */
 .avatar__body {
   width: 100%;
   height: 100%;
   overflow: visible;
-  transform-origin: center 78%;
-  animation: breathe 4.4s var(--ease-loop) infinite;
-  animation-delay: var(--phase, 0s);
 }
 
-@keyframes breathe {
-  0%, 100% { transform: scale(1, 1) translateY(0); }
-  50% { transform: scale(1.015, 0.985) translateY(1.5%); }
+/* Paused and composted are the same face and the same treatment: a creature
+   that is not going to do anything. Keyed on the mood rather than on the
+   lifecycle, so a turn the runtime has paused looks the same as an agent the
+   operator has. */
+.avatar[data-mood="paused"] .avatar__body {
+  filter: grayscale(0.72);
+  opacity: 0.5;
 }
 
-/* Thinking is a change of behavior, not a spinner bolted on beside the face. */
-.avatar[data-busy="true"] .avatar__body {
-  animation: think 1.9s var(--ease-loop) infinite;
+/* --- the marks beside a head --------------------------------------------- */
+
+.avatar__dots circle {
+  animation: think-dot 1.5s var(--ease-loop) infinite;
 }
 
-@keyframes think {
-  0%, 100% { transform: rotate(-2.5deg); }
-  50% { transform: rotate(2.5deg); }
+.avatar__dots circle:nth-child(2) {
+  animation-delay: 0.18s;
 }
 
-.avatar[data-lifecycle="terminated"],
-.avatar[data-lifecycle="paused"] {
-  filter: grayscale(0.8);
-  opacity: 0.6;
+.avatar__dots circle:nth-child(3) {
+  animation-delay: 0.36s;
 }
 
-/* --- eyes ---------------------------------------------------------------- */
+@keyframes think-dot {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
 
-.avatar__eye {
-  /* Without fill-box the origin is the whole drawing, and a blink slides the
-     eyes off the face instead of closing them. */
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* The one amber thing on a creature, and the only one that has to be seen from
+   the other side of the room: a turn parked on a person. */
+.avatar__halo {
   transform-box: fill-box;
   transform-origin: center;
-  animation: blink 6.2s var(--ease-loop) infinite;
-  animation-delay: var(--phase, 0s);
+  animation: attention 1.9s var(--ease-loop) infinite;
 }
 
-@keyframes blink {
-  0%, 93%, 100% { transform: scaleY(1); }
-  96% { transform: scaleY(0.1); }
+@keyframes attention {
+  0% {
+    opacity: 0.5;
+    transform: scale(0.85);
+  }
+
+  70%,
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
 }
 
-.avatar__pupil {
-  transform-box: fill-box;
-  transform-origin: center;
-  animation: glance 9s var(--ease-loop) infinite;
-  animation-delay: var(--phase, 0s);
+.avatar__z {
+  animation: snooze 3.4s var(--ease-loop) infinite;
 }
 
-@keyframes glance {
-  0%, 56%, 100% { transform: translate(0, 0); }
-  62% { transform: translate(-1.6px, 0); }
-  71% { transform: translate(1.6px, 0); }
-  80% { transform: translate(0, -1.2px); }
-  88% { transform: translate(0, 0); }
-}
+@keyframes snooze {
+  0% {
+    opacity: 0;
+    transform: translate(0, 1px) scale(0.75);
+  }
 
-.avatar[data-busy="true"] .avatar__pupil {
-  animation: glance 2.6s var(--ease-loop) infinite;
-}
+  30% {
+    opacity: 0.75;
+  }
 
-/* --- aimed look ---------------------------------------------------------- */
-
-/* Fixing the pupils beats letting the idle glance wander while the agent is
-   supposed to be addressing someone in particular. */
-.avatar[data-look] .avatar__pupil {
-  animation: none;
-}
-
-.avatar[data-look="up"] .avatar__pupil { transform: translate(0, -1.9px); }
-.avatar[data-look="down"] .avatar__pupil { transform: translate(0, 1.9px); }
-
-.avatar[data-look="up"] { transform: rotate(-7deg) translateY(-1px); }
-.avatar[data-look="down"] { transform: rotate(7deg) translateY(1px); }
-
-/* --- throwing and catching ----------------------------------------------- */
-
-/* Matches AIM_MS in lib/choreography.ts: a slow wind-up, then the release. */
-.avatar[data-gesture="send"] {
-  animation: wind-up 650ms var(--ease-spring);
-}
-
-@keyframes wind-up {
-  0% { transform: rotate(0) scale(1); }
-  14% { transform: rotate(-6deg) scale(0.99); }
-  46% { transform: rotate(-17deg) scale(0.94); }
-  64% { transform: rotate(15deg) scale(1.08); }
-  82% { transform: rotate(-3deg) scale(1.01); }
-  100% { transform: rotate(0) scale(1); }
-}
-
-/* Matches CATCH_MS: knocked back, then a couple of settling wobbles. */
-.avatar[data-gesture="receive"] {
-  animation: knock-back 700ms var(--ease-spring);
-}
-
-@keyframes knock-back {
-  0% { transform: translateX(0) scale(1, 1); }
-  14% { transform: translateX(3px) scale(0.88, 1.12) rotate(4deg); }
-  38% { transform: translateX(-2.5px) scale(1.1, 0.9) rotate(-3deg); }
-  60% { transform: translateX(1.5px) scale(0.96, 1.04) rotate(2deg); }
-  80% { transform: translateX(-0.5px) scale(1.02, 0.98) rotate(-1deg); }
-  100% { transform: none; }
+  100% {
+    opacity: 0;
+    transform: translate(2px, -6px) scale(1.05);
+  }
 }
 
 .avatar__says {
@@ -1872,11 +1864,29 @@ button {
 }
 
 @keyframes says {
-  0% { opacity: 0; transform: translateY(5px) scale(0.6); }
-  14% { opacity: 1; transform: translateY(0) scale(1.12); }
-  24% { transform: translateY(0) scale(1); }
-  76% { opacity: 1; transform: translateY(0) scale(1); }
-  100% { opacity: 0; transform: translateY(-6px) scale(0.9); }
+  0% {
+    opacity: 0;
+    transform: translateY(5px) scale(0.6);
+  }
+
+  14% {
+    opacity: 1;
+    transform: translateY(0) scale(1.12);
+  }
+
+  24% {
+    transform: translateY(0) scale(1);
+  }
+
+  76% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.9);
+  }
 }
 
 /* ==========================================================================
@@ -3924,8 +3934,9 @@ button {
 }
 
 /* The pulse is what carries "still going" when the label is hidden. It rides
-   under the character rather than on it: the avatar has its own idle motion
-   and stacking a second transform on the same element fought with it. */
+   under the character rather than on it: a creature's own motion is its outline
+   being recomputed, and a transform stacked on top of that would scale the one
+   thing that is meant to be reading as a shape rather than as a picture. */
 .working .avatar::before {
   content: "";
   position: absolute;

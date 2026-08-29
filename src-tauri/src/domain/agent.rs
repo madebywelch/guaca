@@ -302,14 +302,16 @@ pub struct CleanDraft {
 /// Here so an agent created by another agent gets one too. This is a courtesy
 /// and not a contract with the frontend catalog: an unrecognized key still
 /// draws, from a hash of the key itself, so the two drifting apart costs a
-/// character somebody did not choose rather than a blank avatar.
-const CHARACTERS: [&str; 16] = [
-    "avocado", "lime", "tomato", "onion", "garlic", "chilli", "cilantro", "salt", "corn", "pepper",
-    "radish", "carrot", "mushroom", "chip", "pit", "mill",
+/// character somebody did not choose rather than a blank avatar. The keys that
+/// earlier builds wrote are kept working by the alias table in
+/// `src/avatars/catalog.ts` rather than by being listed here.
+const CHARACTERS: [&str; 21] = [
+    "orb", "egg", "pebble", "drop", "bean", "lobe", "puck", "cell", "knot", "moon", "wave", "mote",
+    "bead", "gourd", "slab", "pip", "husk", "loop", "crumb", "tide", "cinder",
 ];
 const ACCENTS: [&str; 12] = [
-    "#c7d96b", "#6faa5c", "#b0784a", "#7fd1a3", "#e2674a", "#d9534f", "#e8b84b", "#6aa9d9",
-    "#9b8ad4", "#d97ea8", "#c2926b", "#8aa0a6",
+    "#c28c31", "#bf5f3c", "#a8453a", "#b3805c", "#8b8f45", "#5e8158", "#4d8b83", "#5a7d99",
+    "#4f5f96", "#7c5a8c", "#b26f86", "#6c6f70",
 ];
 
 /// Picks a look for an agent nobody chose one for.
@@ -425,7 +427,7 @@ mod tests {
         AgentDraft {
             group_id: None,
             name: "  Manager  ".into(),
-            avatar: "avocado".into(),
+            avatar: "orb".into(),
             color: "#7FB069".into(),
             model: "anthropic/claude-sonnet-4.5".into(),
             system_prompt: "  You coordinate.  ".into(),
@@ -491,7 +493,7 @@ mod tests {
             id: AgentId::new(),
             group_id: GroupId::new(),
             name: "Manager".into(),
-            avatar: "avocado".into(),
+            avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "m".into(),
             system_prompt: "SECRET INSTRUCTIONS".into(),
