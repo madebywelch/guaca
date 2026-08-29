@@ -32,12 +32,11 @@ export const SEATS = 6;
 /**
  * The ring each crew size stands on, and how big its faces are.
  *
- * Sized against the ink rather than the box: a character is drawn inside
- * `FORM`, which leaves it 62% of its box wide and 83% of it tall, so the tight
- * axis is vertical and it is `radius + 0.42 × size` that has to stay inside the
- * rim. Every row here leaves about a pixel of daylight at 2.4rem, and
- * `orb.test.ts` holds them to it against the catalog's own box rather than
- * against the numbers here.
+ * Sized against the ink rather than the box, and against two numbers rather
+ * than one: a creature is round, so `FORM.reach` is what has to stay inside the
+ * rim on both axes, and `FORM.radius` is what two of them are spaced on. Every
+ * row here leaves about a pixel of daylight at 2.4rem, and `orb.test.ts` holds
+ * them to it against the geometry itself rather than against the numbers here.
  *
  * `from` is where the first face stands, in degrees clockwise from the right,
  * so -90 is the top. Everything but the pair starts there: a shape with a face

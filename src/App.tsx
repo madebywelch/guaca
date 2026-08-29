@@ -236,7 +236,7 @@ export default function App() {
         ) : agents.length === 0 ? (
           <div className="empty" style={{ margin: "auto" }}>
             <span style={{ display: "inline-flex" }}>
-              <AgentAvatar avatar="avocado" color="#c7d96b" size="lg" seed="empty-state" />
+              <AgentAvatar avatar="orb" color="#5a7d99" size="lg" seed="empty-state" />
             </span>
             <h2 className="empty__title">No agents yet</h2>
             <p className="empty__body">

@@ -1219,7 +1219,7 @@ mod tests {
             repository_id: None,
             id: AgentId::new(),
             name: name.into(),
-            avatar: "avocado".into(),
+            avatar: "orb".into(),
             color: "#7fb069".into(),
             model: "test/model".into(),
             system_prompt: "You coordinate the kitchen.".into(),

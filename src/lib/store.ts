@@ -227,6 +227,16 @@ interface State {
    * what there is to watch.
    */
   trail: Record<AgentId, LiveCall[] | undefined>;
+  /**
+   * When each agent's last reply landed.
+   *
+   * A stamp rather than a flag, so the one thing that reads it can decide for
+   * itself how long a finished turn is worth looking pleased about without a
+   * timer here putting it back. Never cleared: the value is what it says, and
+   * an agent that finished an hour ago is not a different fact from an agent
+   * that has never run.
+   */
+  finishedAt: Record<AgentId, number | undefined>;
   pulses: Pulse[];
 
   /**
@@ -452,6 +462,7 @@ export const useStore = create<State>((set, get) => ({
   streams: {},
   reasoning: {},
   trail: {},
+  finishedAt: {},
   pulses: [],
   focused: null,
   openingRoutine: null,
@@ -912,7 +923,12 @@ export const useStore = create<State>((set, get) => ({
           delete reasoning[ending.agentId];
           const trail = { ...state.trail };
           delete trail[ending.agentId];
-          return { streams, reasoning, trail };
+          return {
+            streams,
+            reasoning,
+            trail,
+            finishedAt: { ...state.finishedAt, [ending.agentId]: Date.now() },
+          };
         });
         break;
       }

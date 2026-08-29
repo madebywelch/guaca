@@ -1,182 +1,173 @@
 import { describe, expect, it } from "vitest";
 
-import { pathBounds } from "./bounds";
 import {
   ACCENTS,
-  CHARACTER_GROUPS,
+  ALIASES,
   CHARACTERS,
+  DEFAULT_ACCENT,
   DEFAULT_CHARACTER,
-  FACE,
-  type Face,
-  FORM,
   lookupCharacter,
   suggestAccent,
   suggestCharacter,
 } from "./catalog";
+import { FORM } from "./form";
 
 /**
- * How far a face reaches, without drawing it. Derived from the same constants
- * the drawing uses, so a change to one is caught here rather than by eye.
+ * Keys that have been written into somebody's database by a shipped build.
+ * None of them means anything to the current cast, so each has to be mapped by
+ * hand or an existing crew is re-rolled by a hash the day this ships.
  */
-function faceBounds(face: Face) {
-  const cx = face.cx ?? FORM.centerX;
-  const reach = face.spread + face.r;
-  return {
-    x0: cx - reach,
-    x1: cx + reach,
-    y0: face.y - face.r * FACE.tallest,
-    y1: face.y + face.r * (FACE.drop + FACE.width),
-  };
-}
-
-describe("the construction spec", () => {
-  // The whole premise of the set is that a silhouette carries the identity. That
-  // only works if the silhouettes agree about how much room they take, so these
-  // are the numbers that stop a new ingredient from being drawn freehand.
-  it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s stays inside the box", (_key, c) => {
-    const b = pathBounds(c.body.d);
-    expect(b.x0).toBeGreaterThanOrEqual(FORM.left);
-    expect(b.x1).toBeLessThanOrEqual(FORM.right);
-    expect(b.y0).toBeGreaterThanOrEqual(FORM.top);
-    expect(b.y1).toBeLessThanOrEqual(FORM.bottom);
-  });
-
-  it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s carries one weight", (_key, c) => {
-    const b = pathBounds(c.body.d);
-    // Wide and narrow ingredients are both allowed; a row of them sitting at
-    // visibly different sizes is not. An earlier pass ran from 760 to 1684.
-    expect(b.x1 - b.x0).toBeGreaterThanOrEqual(24);
-    expect(b.x1 - b.x0).toBeLessThanOrEqual(40);
-    expect(b.y1 - b.y0).toBeGreaterThanOrEqual(34);
-    expect(b.y1 - b.y0).toBeLessThanOrEqual(47);
-  });
-
-  it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s sits on the baseline", (_key, c) => {
-    const b = pathBounds(c.body.d);
-    expect(Math.abs((b.x0 + b.x1) / 2 - FORM.centerX)).toBeLessThanOrEqual(1.5);
-    expect(Math.abs((b.y0 + b.y1) / 2 - FORM.centerY)).toBeLessThanOrEqual(3);
-  });
-
-  it.each(CHARACTERS.map((c) => [c.key, c] as const))("%s keeps its face on", (_key, c) => {
-    // A face hanging off the rim is the single most visible way to break the
-    // set, and it is invisible in a diff.
-    const body = pathBounds(c.body.d);
-    const face = faceBounds(c.face);
-    expect(face.x0).toBeGreaterThan(body.x0);
-    expect(face.x1).toBeLessThan(body.x1);
-    expect(face.y0).toBeGreaterThan(body.y0);
-    expect(face.y1).toBeLessThan(body.y1);
-  });
-
-  it("draws every silhouette with the shared sheen", () => {
-    // One light, from one direction. A body without it reads as a flat region.
-    for (const c of CHARACTERS) {
-      expect(c.body.sheen, `${c.key} sheen`).toBeTruthy();
-    }
-  });
-});
+const SHIPPED = [
+  // the vegetables
+  "avocado",
+  "lime",
+  "tomato",
+  "onion",
+  "garlic",
+  "chilli",
+  "cilantro",
+  "salt",
+  "corn",
+  "pepper",
+  "radish",
+  "carrot",
+  "mushroom",
+  "squash",
+  "eggplant",
+  "chip",
+  "pit",
+  "mill",
+  "molcajete",
+  "jar",
+  "spoon",
+  // the egg with props
+  "plain",
+  "cheerful",
+  "curious",
+  "wink",
+  "sleepy",
+  "stern",
+  "bright",
+  "blank",
+  "cat",
+  "tophat",
+  "cap",
+  "crown",
+  "bowtie",
+  "necktie",
+  "scarf",
+  "glasses",
+  "monocle",
+  "headphones",
+  "antenna",
+  "sprout",
+  // the creatures
+  "bean",
+  "fox",
+  "owl",
+  "crab",
+  "bird",
+  "bug",
+  "slime",
+  "bot",
+  "gear",
+  "ghost",
+  "moon",
+  "star",
+  "cloud",
+  // the emoji before any of it
+  "robot",
+  "brain",
+  "penguin",
+  "butterfly",
+  "bee",
+  "rocket",
+  "sun",
+  "taco",
+  "octopus",
+  "frog",
+  "snail",
+  "comet",
+  "fire",
+  "bolt",
+  "satellite",
+];
 
 describe("the cast", () => {
-  it("has unique keys", () => {
-    const keys = CHARACTERS.map((c) => c.key);
-    expect(new Set(keys).size).toBe(keys.length);
+  it("has a unique key and label for every character", () => {
+    expect(new Set(CHARACTERS.map((c) => c.key)).size).toBe(CHARACTERS.length);
+    expect(new Set(CHARACTERS.map((c) => c.label)).size).toBe(CHARACTERS.length);
   });
 
-  it("gives every character its own silhouette", () => {
-    // Two agents sharing an outline is the failure this whole set exists to fix.
-    const shapes = CHARACTERS.map((c) => c.body.d);
-    expect(new Set(shapes).size).toBe(shapes.length);
-  });
-
-  it("only uses groups that are listed", () => {
-    for (const c of CHARACTERS) {
-      expect(CHARACTER_GROUPS).toContain(c.group);
+  it("draws something for a key from any build, past or future", () => {
+    for (const key of [...SHIPPED, "", "not-a-character", "🙂"]) {
+      expect(lookupCharacter(key), key).toBeDefined();
     }
-  });
-
-  it("gives every group something to choose from", () => {
-    for (const group of CHARACTER_GROUPS) {
-      expect(CHARACTERS.filter((c) => c.group === group).length).toBeGreaterThanOrEqual(3);
-    }
-  });
-
-  it("keeps the default resolvable", () => {
     expect(lookupCharacter(DEFAULT_CHARACTER).key).toBe(DEFAULT_CHARACTER);
   });
-});
 
-describe("lookup", () => {
-  it("falls back rather than returning undefined for an unknown key", () => {
-    const found = lookupCharacter("not-a-real-key");
-    expect(found).toBeDefined();
-    expect(CHARACTERS).toContain(found);
-  });
-
-  it("is stable for the same unknown key", () => {
-    // An agent must not change character between launches.
-    expect(lookupCharacter("mystery").key).toBe(lookupCharacter("mystery").key);
-  });
-
-  it("keeps a character for agents created by every earlier set", () => {
-    // The egg set, the creature set and the original emoji set are all still in
-    // databases. None of their keys may fall through to the hash.
-    const legacy = [
-      "plain",
-      "cheerful",
-      "tophat",
-      "monocle",
-      "headphones",
-      "sprout",
-      "owl",
-      "crab",
-      "slime",
-      "ghost",
-      "moon",
-      "star",
-      "robot",
-      "penguin",
-      "taco",
-      "bolt",
-    ];
-    for (const key of legacy) {
-      expect(CHARACTERS, key).toContain(lookupCharacter(key));
+  // A hash would answer too, and would re-roll every existing agent's face on
+  // the day the cast changed size. The point of the alias table is that an
+  // operator's crew looks the same tomorrow as it did today.
+  it("maps every key that has ever shipped by hand", () => {
+    const rolled = SHIPPED.filter(
+      (key) => !CHARACTERS.some((c) => c.key === key) && ALIASES[key] === undefined,
+    );
+    expect(rolled, "these would fall through to the hash").toEqual([]);
+    for (const [old, now] of Object.entries(ALIASES)) {
+      expect(
+        CHARACTERS.some((c) => c.key === now),
+        `${old} points nowhere`,
+      ).toBe(true);
     }
-    expect(lookupCharacter("plain").key).toBe("avocado");
-    expect(lookupCharacter("taco").key).toBe("chip");
-    expect(lookupCharacter("ghost").key).toBe("garlic");
   });
 
-  it("gives the starter crew four distinct characters", () => {
-    // They sit together in the rail, so collapsing them onto one character would
-    // make the crew unreadable at a glance.
-    const crew = ["avocado", "owl", "chilli", "star"].map((k) => lookupCharacter(k).key);
-    expect(new Set(crew).size).toBe(4);
+  /* One species means the eyes carry as much of an identity as the outline
+     does, so no two characters may have the same pair in the same place. */
+  it("gives every character a distinguishable set of eyes", () => {
+    const seen = CHARACTERS.map((c) =>
+      [c.eye.one ? 1 : 2, c.eye.spread, c.eye.r, c.eye.x ?? 0, c.eye.y ?? 0].join(":"),
+    );
+    expect(new Set(seen).size, "two characters wear the same face").toBe(CHARACTERS.length);
   });
 
-  it("resolves a known key exactly", () => {
-    expect(lookupCharacter("tomato").key).toBe("tomato");
+  it("keeps every character round", () => {
+    for (const c of CHARACTERS) {
+      // The species is a ball. A lump that stretched past this would read as a
+      // second kind of creature standing in the same rail.
+      expect(Math.abs(c.ax - 1), c.key).toBeLessThanOrEqual(0.12);
+      expect(Math.abs(c.ay - 1), c.key).toBeLessThanOrEqual(0.12);
+      const lumpy = c.sig.reduce((sum, lobe) => sum + Math.abs(lobe.amp), 0);
+      expect(lumpy, c.key).toBeLessThanOrEqual(0.09);
+    }
+  });
+
+  it("seats both eyes inside the body", () => {
+    for (const c of CHARACTERS) {
+      const reach = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r * (c.eye.one ? 1.5 : 1);
+      expect(Math.hypot(reach, Math.abs(c.eye.y ?? 0)), c.key).toBeLessThan(FORM.radius * 0.75);
+    }
   });
 });
 
-describe("suggestions", () => {
-  it("picks a character that is not already in use", () => {
-    const taken = CHARACTERS.slice(0, 5).map((c) => c.key);
-    expect(taken).not.toContain(suggestCharacter(taken));
+describe("accents", () => {
+  it("has one value per name, written the same way everywhere", () => {
+    expect(new Set(ACCENTS.map((a) => a.value)).size).toBe(ACCENTS.length);
+    for (const accent of ACCENTS) expect(accent.value).toMatch(/^#[0-9a-f]{6}$/);
+    expect(ACCENTS.some((a) => a.value === DEFAULT_ACCENT)).toBe(true);
   });
 
-  it("falls back to the first character once every one is taken", () => {
-    expect(suggestCharacter(CHARACTERS.map((c) => c.key))).toBe(CHARACTERS[0]!.key);
-  });
-
-  it("picks the least used accent so a new crew stays separable", () => {
-    const [first, second] = [ACCENTS[0]!.value, ACCENTS[1]!.value];
+  it("hands out what is least used, and keeps going once everything is", () => {
+    expect(suggestAccent([])).toBe(DEFAULT_ACCENT);
+    const first = suggestAccent([]);
     expect(suggestAccent([first])).not.toBe(first);
-    expect(suggestAccent([first, second])).not.toBe(first);
-    expect(suggestAccent([first, second])).not.toBe(second);
+    expect(ACCENTS.some((a) => a.value === suggestAccent(ACCENTS.map((a) => a.value)))).toBe(true);
   });
 
-  it("is case insensitive about taken colors", () => {
-    const first = ACCENTS[0]!.value;
-    expect(suggestAccent([first.toUpperCase()])).not.toBe(first);
+  it("hands out an unused character until there are none", () => {
+    expect(suggestCharacter([])).toBe(CHARACTERS[0]?.key);
+    expect(suggestCharacter([CHARACTERS[0]?.key ?? ""])).toBe(CHARACTERS[1]?.key);
+    const all = CHARACTERS.map((c) => c.key);
+    expect(all).toContain(suggestCharacter(all));
   });
 });
