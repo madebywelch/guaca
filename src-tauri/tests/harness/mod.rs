@@ -30,13 +30,11 @@ use guac_lib::domain::agent::{CleanDraft, Lifecycle};
 use guac_lib::domain::envelope::{Envelope, Participant};
 use guac_lib::domain::group::CleanGroup;
 use guac_lib::domain::ids::{AgentId, RunId};
-use guac_lib::files::FileStore;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::Runtime;
+use guac_lib::runtime::{OnDisk, Runtime};
 use guac_lib::trajectory::{self, Trajectory};
-use guac_lib::workspace::Workspace;
 
 // ---- scripted model ------------------------------------------------------
 
@@ -728,8 +726,7 @@ fn build(
         store,
         LlmClient::new().unwrap(),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         sink.clone(),
     );
     runtime.start_all().unwrap();

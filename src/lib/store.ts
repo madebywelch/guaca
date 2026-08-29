@@ -101,12 +101,19 @@ interface State {
    */
   repositories: Repository[];
   /**
-   * Repositories with a coding job running, and the agent that started each.
+   * Agents with a coding job running, and the repository each is working in.
+   *
+   * Keyed by agent rather than by repository, because a repository that gives
+   * each agent a worktree of its own can have two jobs running in it and would
+   * name neither. An agent works in at most one repository and holds at most
+   * one work tree in it, so it names exactly one. It is also the direction both
+   * readers wanted: `CodingPanel` had to search the map by agent, and the rail
+   * only asks whether anything at all is building in a repository.
    *
    * In memory and event-driven, like the job itself. It does not survive a
    * restart, which is correct: neither does the job.
    */
-  building: Record<RepositoryId, AgentId>;
+  building: Record<AgentId, RepositoryId>;
   /**
    * What each running job is doing, newest last, by the agent that started it.
    *
@@ -1083,7 +1090,7 @@ export const useStore = create<State>((set, get) => ({
       // needed doing.
       case "codingJobStarted": {
         set((state) => ({
-          building: { ...state.building, [event.repositoryId]: event.agentId },
+          building: { ...state.building, [event.agentId]: event.repositoryId },
         }));
         break;
       }
@@ -1106,7 +1113,7 @@ export const useStore = create<State>((set, get) => ({
 
       case "codingJobFinished": {
         set((state) => {
-          const { [event.repositoryId]: _gone, ...rest } = state.building;
+          const { [event.agentId]: _gone, ...rest } = state.building;
           const { [event.agentId]: _done, ...others } = state.coding;
           return { building: rest, coding: others };
         });

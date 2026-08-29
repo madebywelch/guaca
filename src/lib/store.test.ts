@@ -705,7 +705,7 @@ describe("a coding job that could not run", () => {
       tool: "bash",
       detail: "swift test",
     });
-    expect(useStore.getState().building.r1).toBe("a1");
+    expect(useStore.getState().building.a1).toBe("r1");
     expect(useStore.getState().coding.a1).toEqual([{ tool: "bash", detail: "swift test" }]);
 
     useStore.getState().applyEvent({
@@ -713,7 +713,7 @@ describe("a coding job that could not run", () => {
       agentId: "a1",
       repositoryId: "r1",
     });
-    expect(useStore.getState().building.r1).toBeUndefined();
+    expect(useStore.getState().building.a1).toBeUndefined();
     expect(useStore.getState().coding.a1).toBeUndefined();
   });
 

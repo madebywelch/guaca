@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 
 use guac_lib::coding::{self, Progress};
 use guac_lib::domain::approval::Decision;
-use guac_lib::domain::repository::{CleanRepository, Gate, Harness as Which};
+use guac_lib::domain::repository::{Bench, CleanRepository, Gate, Harness as Which};
 use guac_lib::runtime::events::UiEvent;
 use guac_lib::runtime::guard::GuardLimits;
 
@@ -367,6 +367,12 @@ async fn an_agent_is_told_what_the_harness_it_was_given_said() {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            // Pinned rather than defaulted. These tests are about the argument
+            // vector a harness is started with and the directory it is started
+            // in, and a worktree would put that directory somewhere the
+            // stand-in's recording is not. What the default does instead is
+            // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+            bench: Bench::Shared,
         })
         .unwrap();
     h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
@@ -422,6 +428,7 @@ async fn a_job_is_told_which_branch_it_is_standing_on() {
             note: "run ./scripts/ci.sh before you finish".into(),
             harness: Which::Pi,
             gate: Gate::Open,
+            bench: Bench::Shared,
         })
         .unwrap();
     h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
@@ -468,6 +475,11 @@ fn put_in_a_repository(h: &Harness, agent: &str, repo: &Path, gate: Gate) {
             note: String::new(),
             harness: Which::Claude,
             gate,
+            // `shell` runs where `code` runs, so these read the linked
+            // directory only because the bench is pinned to it. The pair that
+            // proves the two doors agree in a worktree is
+            // `both_doors_into_a_repository_open_on_the_same_work_tree`.
+            bench: Bench::Shared,
         })
         .unwrap();
     h.runtime.store().set_agent_repository(card.id, Some(linked.id)).unwrap();
@@ -807,6 +819,12 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            // Pinned rather than defaulted. These tests are about the argument
+            // vector a harness is started with and the directory it is started
+            // in, and a worktree would put that directory somewhere the
+            // stand-in's recording is not. What the default does instead is
+            // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+            bench: Bench::Shared,
         })
         .unwrap();
     h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
@@ -815,7 +833,7 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
     h.settle(run).await;
     h.wait_until("the harness is up", |_| repo.join(ARGV).exists()).await;
 
-    h.runtime.stop_job(linked.id).expect("a running job has to be stoppable");
+    h.runtime.stop_job(engineer.id).expect("a running job has to be stoppable");
 
     // Told, rather than left waiting for a message that is not coming. An agent
     // that is never told answers "I started that and have not heard back",
@@ -827,7 +845,7 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
 
     // And the lane is free, so the next brief does not come back busy about a
     // job that is over.
-    h.runtime.message_job(linked.id, "anything").expect_err("a stopped job is not a running one");
+    h.runtime.message_job(engineer.id, "anything").expect_err("a stopped job is not a running one");
 
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -846,7 +864,7 @@ async fn stopping_a_job_that_is_already_over_says_so_rather_than_failing() {
     );
     let engineer = h.agent_named("Engineer").unwrap();
     let repo = a_repository("stop-twice");
-    let linked = h
+    let _linked = h
         .runtime
         .store()
         .create_repository(&CleanRepository {
@@ -856,10 +874,11 @@ async fn stopping_a_job_that_is_already_over_says_so_rather_than_failing() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            bench: Bench::Shared,
         })
         .unwrap();
 
-    let why = h.runtime.stop_job(linked.id).unwrap_err().to_string();
+    let why = h.runtime.stop_job(engineer.id).unwrap_err().to_string();
     assert!(why.contains("already finished"), "{why}");
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -896,6 +915,7 @@ async fn a_harness_with_no_second_interface_says_so_instead_of_swallowing_it() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            bench: Bench::Shared,
         })
         .unwrap();
     h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
@@ -904,13 +924,13 @@ async fn a_harness_with_no_second_interface_says_so_instead_of_swallowing_it() {
     h.settle(run).await;
     h.wait_until("the harness is up", |_| repo.join(ARGV).exists()).await;
 
-    let why = h.runtime.message_job(linked.id, "use the other endpoint").unwrap_err().to_string();
+    let why = h.runtime.message_job(engineer.id, "use the other endpoint").unwrap_err().to_string();
     assert!(why.contains("pi"), "{why}");
     // The way out is named, because an operator cannot guess it from a message
     // about a harness.
     assert!(why.contains("Claude Code"), "{why}");
 
-    h.runtime.stop_job(linked.id).unwrap();
+    h.runtime.stop_job(engineer.id).unwrap();
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -1086,5 +1106,250 @@ async fn the_real_pi_still_answers_the_way_this_build_reads() {
     assert_eq!(outcome.failed, None, "the sign-in is spent or the vector is stale");
     assert!(outcome.said.to_lowercase().contains("banana"), "{}", outcome.said);
     assert!(outcome.tool_calls > 0, "it has to have read the file rather than guessed");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+// ---- a work tree of the agent's own --------------------------------------
+
+/// Where git says this repository's work trees are, other than the linked one.
+fn worktrees_under(root: &Path) -> Vec<PathBuf> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(PathBuf::from)
+        .filter(|at| at != root)
+        .collect()
+}
+
+/// Links a repository that gives every agent a work tree of its own, and puts
+/// the named agents in it.
+///
+/// One call for the whole crew rather than one per agent, because the store's
+/// unique index is on the path: linking the same directory twice is refused,
+/// which is the point of the index and the thing this test needs to work
+/// around rather than around.
+fn put_in_a_bench(h: &Harness, agents: &[&str], repo: &Path) {
+    let first = h.agent_named(agents[0]).unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: first.group_id,
+            name: "guaca".into(),
+            path: repo.to_string_lossy().to_string(),
+            note: String::new(),
+            harness: Which::Claude,
+            gate: Gate::Open,
+            bench: Bench::Own,
+        })
+        .unwrap();
+    for agent in agents {
+        let card = h.agent_named(agent).unwrap();
+        h.runtime.store().set_agent_repository(card.id, Some(linked.id)).unwrap();
+    }
+}
+
+/// A job works in a tree of its own, and the operator's checkout is not touched.
+///
+/// The whole reason the setting exists. Before it, a harness ran in the
+/// directory the operator was working in: it switched their branch, it left the
+/// tree standing on whatever branch it made, and the next job started there.
+/// The assertion is deliberately about the *operator's* directory rather than
+/// about the worktree, because that is the promise: the stand-in records its
+/// argument vector into whatever directory it was started in, and after this
+/// job there is no recording in the linked one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_job_runs_in_a_work_tree_of_the_agents_own() {
+    stand_ins();
+    let repo = a_repository_on_a_landed_branch("bench-job");
+    // Back on the default branch, so the tree the operator left behind is an
+    // ordinary one and the assertion below is about the bench rather than about
+    // a reset.
+    git(&repo, &["checkout", "main"]);
+
+    let stub = serve(|body| match anyone_said(body, "Fixed the flaky test") {
+        true => Script::Say("It is done.".into()),
+        false => Script::Code("fix the flaky test".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_bench(&h, &["Engineer"], &repo);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+    h.settle(run).await;
+    h.wait_until("the job comes back", |h| {
+        h.channel_texts("Engineer").iter().any(|line| line.contains("It is done"))
+    })
+    .await;
+
+    assert!(
+        !repo.join(ARGV).exists(),
+        "the harness ran in the operator's own checkout, which is the thing this prevents"
+    );
+    let trees = worktrees_under(&repo);
+    assert_eq!(trees.len(), 1, "one agent, one tree: {trees:?}");
+    assert!(trees[0].join(ARGV).exists(), "and that is where it ran: {trees:?}");
+    // Every assertion below is `any(contains)` rather than an element match:
+    // the preamble, the footing and the task are one `-p` argument, which is
+    // what the harness is actually handed.
+    let argv = argv_at(&trees[0]);
+    assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
+    assert!(
+        argv.iter().any(|arg| arg.contains("worktree of your own")),
+        "the job has to be told where it is standing: {argv:?}"
+    );
+    assert!(
+        argv.iter().any(|arg| arg.contains("Do not use `git stash`")),
+        "and the one thing about a worktree it cannot work out from inside it: {argv:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Two agents in one codebase work at the same time.
+///
+/// Refused before this, and not by accident: `start_job` took its lock per
+/// repository, because a repository had exactly one work tree and two harnesses
+/// in it would interleave their edits. With a tree each that collision cannot
+/// happen, so the lock moved to the directory, which is what it was always
+/// about. A lock still on the repository would refuse the second agent for a
+/// collision that no longer exists.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_agents_in_one_repository_both_get_a_job() {
+    stand_ins();
+    let repo = a_repository_on_a_landed_branch("bench-both");
+    git(&repo, &["checkout", "main"]);
+    // Committed rather than written into the linked directory, because each
+    // agent works in a checkout of its own and an untracked file is in none of
+    // them. Long enough that both jobs are genuinely in flight together.
+    std::fs::write(repo.join(LINGER), "30").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "linger"]);
+
+    // One job each. A stub that answered `code` unconditionally would have each
+    // agent call it until the guard stopped the turn, and every call after the
+    // first is that agent colliding with its own lock, which is a different
+    // fact and the one the assertion below has to be able to see past.
+    let stub = serve(|body| match anyone_said(body, "started work in guaca") {
+        true => Script::Say("It is under way.".into()),
+        false => Script::Code("fix the flaky test".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Engineer", "Reviewer"], GuardLimits::default());
+    put_in_a_bench(&h, &["Engineer", "Reviewer"], &repo);
+
+    let first = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Reviewer"), "fix the other one").unwrap();
+    h.settle(second).await;
+
+    h.wait_until("both harnesses are up", |_| {
+        worktrees_under(&repo).iter().filter(|at| at.join(ARGV).exists()).count() == 2
+    })
+    .await;
+
+    let trees = worktrees_under(&repo);
+    assert_eq!(trees.len(), 2, "one tree each: {trees:?}");
+    // The refusal that used to arrive here, named by who it blames. An agent
+    // colliding with its own lock still says "started by you" and is a
+    // different fact; what must not happen is one agent being held out of the
+    // repository by the other.
+    let transcript = h.transcript();
+    for who in ["started by Engineer", "started by Reviewer"] {
+        assert!(!transcript.contains(who), "one agent was held out by the other:\n{transcript}");
+    }
+
+    for card in ["Engineer", "Reviewer"] {
+        let _ = h.runtime.stop_job(h.agent_named(card).unwrap().id);
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Both doors into a repository open on the same tree.
+///
+/// `shell` runs one line and `code` runs a harness, and an agent whose job works
+/// in a worktree while its `git status` reads the operator's checkout is being
+/// told about a tree it is not working in. That read is the one an agent most
+/// wants while a job is going, and it is the one that would be wrong.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn both_doors_into_a_repository_open_on_the_same_work_tree() {
+    stand_ins();
+    let repo = a_repository_on_a_landed_branch("bench-doors");
+    git(&repo, &["checkout", "main"]);
+    let linked = repo.to_string_lossy().to_string();
+
+    let stub = serve(move |body| match anyone_said(body, "/worktrees/") {
+        true => Script::Say("I am in my own tree.".into()),
+        false => Script::InRepository("git rev-parse --show-toplevel".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_bench(&h, &["Engineer"], &repo);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "which directory are you in?").unwrap();
+    h.settle(run).await;
+
+    let told = tool_results(&stub).join("\n");
+    let trees = worktrees_under(&repo);
+    assert_eq!(trees.len(), 1, "asking a question makes the tree if it is not there: {trees:?}");
+    assert!(
+        told.contains(&trees[0].to_string_lossy().to_string()),
+        "the line ran somewhere other than the job's tree:\n{told}"
+    );
+    assert!(
+        !told.lines().any(|line| line.trim() == linked),
+        "and specifically not in the operator's own checkout:\n{told}"
+    );
+
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The bug this was reported for: a tree left on a branch whose work has landed.
+///
+/// A job opens a pull request, the operator merges it, and the branch is still
+/// checked out weeks later. `Footing` already told the *next* job to start
+/// somewhere else, which is why nothing was ever built on top of it, but the
+/// tree itself never moved and the rail went on naming a branch that was over.
+/// On a bench Guaca owns it, so it puts it back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_landed_branch_is_left_behind_before_the_next_job_starts() {
+    stand_ins();
+    let repo = a_repository_on_a_landed_branch("bench-reset");
+
+    let stub = serve(|body| match anyone_said(body, "Fixed the flaky test") {
+        true => Script::Say("It is done.".into()),
+        false => Script::Code("fix the flaky test".into()),
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_bench(&h, &["Engineer"], &repo);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+    h.settle(run).await;
+    h.wait_until("the job comes back", |h| {
+        h.channel_texts("Engineer").iter().any(|line| line.contains("It is done"))
+    })
+    .await;
+
+    // The tree was cut from `landed`, which is where the operator's checkout was
+    // standing, and the job was told to go back to `main` before it started.
+    let bench = worktrees_under(&repo).pop().expect("the agent has a tree");
+    let argv = argv_at(&bench);
+    let brief = argv
+        .iter()
+        .find(|arg| arg.contains("Where you are starting from"))
+        .unwrap_or_else(|| panic!("the job has to be told its footing: {argv:?}"));
+    assert!(brief.contains("`main`"), "and where the work belongs: {brief}");
+
+    // And the operator's own directory is exactly where they left it.
+    let theirs = guac_lib::repo::status(&repo.to_string_lossy()).await.unwrap();
+    assert_eq!(theirs.branch, "landed", "their checkout is not this app's to move");
+
     let _ = std::fs::remove_dir_all(&repo);
 }

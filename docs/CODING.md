@@ -231,6 +231,80 @@ arguments, and a wrong guess there prints somebody's file contents into a
 channel. Anything not in a table draws no detail at all, which is what every MCP
 tool the operator has connected falls into.
 
+## Each agent gets a work tree of its own, and Guaca resets it
+
+The linked directory is the operator's own checkout, and until this existed a
+coding job ran in it. That made three things true at once.
+
+The job and the operator shared one branch. Two agents in one codebase could not
+work at the same time, because `Runtime::start_job` takes a lock per work tree
+and there was only ever one. And a job that opened a pull request left the tree
+standing on the branch it made: the work landed, the branch was over, and the
+rail went on naming it for weeks.
+
+`Bench::Own` is a linked git worktree per agent, under the app's data directory,
+one job per agent in it. The operator's checkout is never checked out, never
+switched and never cleaned. Two agents are two directories, so the lock moved
+from the repository to the directory, which is what the invariant was always
+about: two harnesses in one work tree interleave their edits, and two harnesses
+in two work trees cannot see each other.
+
+And because Guaca owns the tree, it can put it back. `repo::prepare` runs before
+every job: fetch, make the tree if it is not there, and reset it to the default
+branch whenever nothing would be lost.
+
+**Whenever nothing would be lost is `Footing::resettable`, and each of its three
+refusals is work that exists in exactly one place.** Uncommitted changes, which
+is what a job killed at the ceiling leaves. Commits that neither the default
+branch nor a remote has. And a repository with no default branch or no commits,
+which are the two states with nowhere to be put back *to*. What is deliberately
+not a reason to hold is a branch that is pushed with a pull request open: its
+work is safe on the remote and the next brief is usually about something else, so
+the tree goes back and a job that needs that branch checks it out again, which is
+one command against a tree that otherwise sits on a landed branch for a month.
+
+**The reset is at the start of a job and never at the end**, which is the same
+argument the next section makes about the footing, for the same reason. A job
+killed at the forty-five minute ceiling never runs its cleanup and a job that
+died on a spent plan never reached it. Preparation at the start always happens.
+
+**It is a choice, and the reason is ignored files.** A worktree is a fresh
+checkout, so it has no `node_modules`, no `target`, no `.venv` and no `.env` —
+which is the exact thing `repo.rs`'s own header says the linked-directory design
+exists to avoid. Long-lived *per agent* rather than per job is what makes the
+trade work: the cost is paid once and the caches survive every later job, and the
+preamble says where the operator's checkout is so a job that needs a gitignored
+file can go and get it. That is a good trade in most repositories and a bad one
+in a few — submodules, LFS, a checkout large enough that a second one is real
+disk — and those keep `Bench::Shared`.
+
+**Three things the preamble says that the job cannot work out from inside the
+directory.** That the tree is its own and nobody else works in it. That on a
+fresh one nothing git ignores is present yet, and where a copy would be. And the
+prohibition: git's stash belongs to the repository rather than to the work tree,
+so it is shared with the operator's own checkout and with every other agent, and
+a pop in any of them takes whatever was pushed last. Nothing about standing in a
+worktree hints at that.
+
+**`shell` moves with `code`.** `Runtime::run_in_repository` resolves the same
+bench, through `repo::ensure_bench` rather than `prepare`: an agent whose job
+works in a worktree and whose `git status` reads the operator's checkout is being
+told about a tree it is not working in, and that read is the one it most wants
+while a job is going. `ensure_bench` is the half that does not fetch and does not
+reset, because a line run inside a turn must not pay for a network round trip and
+must not move a branch somebody asked a question about.
+
+**A tree that could not be made refuses the job.** Falling back to the linked
+directory would put a harness in the operator's own checkout holding a lock taken
+on a path it is not in, so a second agent failing the same way would join it
+there. `CodingError::NoWorkTree` names the directory and the two ways out.
+
+**A new repository gets `Own` and an existing one keeps `Shared`.** This is the
+one setting whose SQL default and Rust default disagree, and migration 44 says
+why: `ALTER TABLE ... DEFAULT` only ever runs against rows that already exist,
+and moving somebody's jobs into a directory with none of their dependencies in
+it, on launch, with no gesture, is not an upgrade's decision to take.
+
 ## A job is told where it is standing before it is told what to do
 
 A harness handed a brief starts editing where it is standing, and where it is
@@ -252,6 +326,12 @@ what a job leaves behind, and it does not hold. A job killed at the ceiling
 never runs its cleanup. A job that opened a pull request should still be on its
 branch. Cleanup at the end is a step that sometimes does not happen; the footing
 at the start always does.
+
+Everything here still applies on a bench, and is read from the bench rather than
+from the linked directory. The two are not alternatives: the footing tells the
+harness what to do about a tree it found, and the bench is a tree Guaca can also
+*act* on. `Footing::resettable` is that same question asked from the other end,
+and it is only ever asked of a tree this app owns.
 
 Both halves of the preamble are load-bearing, and this is the part to keep.
 Facts alone are not enough: a model handed a branch name and a count decides for

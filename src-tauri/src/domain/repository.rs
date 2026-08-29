@@ -218,6 +218,107 @@ impl Gate {
     }
 }
 
+/// Where an agent's jobs actually run inside a repository.
+///
+/// The linked directory is the operator's own checkout. A coding job used to
+/// run in it, which made three things true at once and all of them bad: the
+/// job and the operator shared one branch, two agents in one codebase could not
+/// work at the same time, and a job that opened a pull request left the tree
+/// standing on a feature branch that landed a week later.
+///
+/// [`Bench::Own`] gives each agent a linked git worktree of its own, off the
+/// same repository, and the job runs there. The operator's checkout is never
+/// checked out, never switched and never cleaned. Two agents get two
+/// directories, so two jobs run at once. And because Guaca owns the tree, it
+/// can put it back: [`crate::repo::prepare`] resets it to the default branch at
+/// the start of every job, whenever nothing would be lost by doing so.
+///
+/// ## Why the reset is at the start and never at the end
+///
+/// The same argument [`crate::repo::Footing`] is built on. A job killed at the
+/// forty-five minute ceiling never runs its cleanup, and a job that died on a
+/// spent plan never got there either. Cleanup at the end is a step that
+/// sometimes does not happen; preparation at the start always does.
+///
+/// ## Why it is a choice and not simply how it works
+///
+/// A worktree is a fresh checkout, and a fresh checkout has no ignored files
+/// in it: no `node_modules`, no `target`, no `.venv`, no `.env`. That is the
+/// exact thing [`crate::repo`]'s own header says the linked-directory design
+/// exists to avoid. Long-lived per agent, the cost is paid once and the caches
+/// survive every later job, and the brief says where the operator's checkout is
+/// so a job that needs a gitignored file can go and get it. That is a good
+/// trade in most repositories and a bad one in a few: submodules, LFS, and
+/// checkouts large enough that a second one is a real amount of disk. Those
+/// keep [`Bench::Shared`].
+///
+/// Per repository, for the reason [`Harness`] and [`Gate`] are: it is a fact
+/// about how work happens *here*.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Bench {
+    /// A worktree per agent, reset to the default branch before every job.
+    ///
+    /// The default, and the only default in this module that is an opinion
+    /// rather than a statement of fact. [`Harness`] and [`Gate`] both default to
+    /// what every row written before them was already doing, because changing
+    /// that under an operator is not a migration's business. This one cannot do
+    /// both: what every earlier row was doing is [`Bench::Shared`], and a new
+    /// repository linked today should get the arrangement that keeps the
+    /// operator's checkout out of it.
+    ///
+    /// So the two answers are split by *who is asking*. [`Bench::parse`] reads a
+    /// stored row and answers `Shared`, because a row is somebody's decision or
+    /// a downgrade's typo and neither is a reason to move their jobs. This
+    /// answers a caller that named no preference at all, and migration 44
+    /// backfills `shared` explicitly so no existing row is ever read by it.
+    #[default]
+    Own,
+    /// Jobs run in the linked directory itself, as they did before worktrees.
+    Shared,
+}
+
+impl Bench {
+    /// What the column holds, and what crosses IPC. One spelling for both, for
+    /// the reason [`Harness::as_str`] has one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Bench::Own => "own",
+            Bench::Shared => "shared",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Bench::Own => "A worktree per agent",
+            Bench::Shared => "The linked directory",
+        }
+    }
+
+    pub const ALL: [Bench; 2] = [Bench::Own, Bench::Shared];
+
+    /// What a stored row means.
+    ///
+    /// Anything unrecognized is [`Bench::Shared`], which is deliberately not
+    /// [`Bench::default`]. The only way to write an unrecognized value is a
+    /// newer build and then a downgrade, and reading one as `Own` would move a
+    /// repository's jobs into a worktree the operator never asked for, over a
+    /// string this build cannot read. Reading it as `Shared` runs them where
+    /// they have always run. Same direction [`Gate::parse`] leans for the same
+    /// kind of reason.
+    pub fn parse(raw: &str) -> Bench {
+        match raw {
+            "own" => Bench::Own,
+            _ => Bench::Shared,
+        }
+    }
+
+    /// Whether an agent working here gets a work tree of its own.
+    pub fn is_own(self) -> bool {
+        self == Bench::Own
+    }
+}
+
 /// A directory a crew may work in.
 ///
 /// Who is in it is not on this type. An agent carries the repository it works
@@ -254,6 +355,9 @@ pub struct Repository {
     pub harness: Harness,
     /// Whether a job here stops before it reaches outside the directory.
     pub gate: Gate,
+    /// Where a job here actually runs: the linked directory, or a worktree of
+    /// the working agent's own.
+    pub bench: Bench,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -293,6 +397,13 @@ pub struct RepositoryDraft {
     /// the operator said rather than something a caller forgot to mention.
     #[serde(default)]
     pub gate: Gate,
+    /// Absent is `own`, and this is the one field where absent is an opinion
+    /// rather than a statement about what earlier rows did. [`Bench::Own`] says
+    /// why: a repository linked today should keep jobs out of the operator's
+    /// own checkout, and no stored row ever reaches this default because
+    /// migration 44 backfills every one of them.
+    #[serde(default)]
+    pub bench: Bench,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -304,6 +415,7 @@ pub struct CleanRepository {
     pub note: String,
     pub harness: Harness,
     pub gate: Gate,
+    pub bench: Bench,
 }
 
 /// What an operator may change about a repository that is already linked.
@@ -329,6 +441,7 @@ pub struct RepositoryEdit {
     pub note: String,
     pub harness: Harness,
     pub gate: Gate,
+    pub bench: Bench,
 }
 
 impl RepositoryEdit {
@@ -352,7 +465,7 @@ impl RepositoryEdit {
             return Err(RepositoryError::NoteTooLong);
         }
 
-        Ok(RepositoryEdit { name, note, harness: self.harness, gate: self.gate })
+        Ok(RepositoryEdit { name, note, harness: self.harness, gate: self.gate, bench: self.bench })
     }
 }
 
@@ -407,6 +520,7 @@ impl RepositoryDraft {
             note: self.note.clone(),
             harness: self.harness,
             gate: self.gate,
+            bench: self.bench,
         }
         .clean()?;
 
@@ -417,6 +531,7 @@ impl RepositoryDraft {
             note: edit.note,
             harness: edit.harness,
             gate: edit.gate,
+            bench: edit.bench,
         })
     }
 }
@@ -433,6 +548,7 @@ mod tests {
             path: path.to_string(),
             note: String::new(),
             harness: Harness::default(),
+            bench: Bench::default(),
         }
     }
 
@@ -475,6 +591,7 @@ mod tests {
     #[test]
     fn an_edit_is_not_refused_for_having_no_path() {
         let clean = RepositoryEdit {
+            bench: Bench::default(),
             name: "  guac  ".into(),
             note: "  never touch migrations  ".into(),
             harness: Harness::Claude,
@@ -493,6 +610,7 @@ mod tests {
     fn an_edit_refuses_what_a_link_refuses_and_a_name_it_cannot_backfill() {
         let refused = |name: &str, note: &str| {
             RepositoryEdit {
+                bench: Bench::default(),
                 name: name.into(),
                 note: note.into(),
                 harness: Harness::Pi,
@@ -530,6 +648,7 @@ mod tests {
             id: RepositoryId::new(),
             group_id: GroupId::new(),
             gate: Gate::Open,
+            bench: Bench::default(),
             name: "guaca".into(),
             path: "/dev/guaca".into(),
             note: "run ./scripts/ci.sh before you finish".into(),

@@ -59,7 +59,10 @@ the code.
   `coding::bridge::outward` and both park through `Runtime::ask_about_push`. Two
   readings of one gate is a gate an agent walks around by picking the other
   tool, which is worse than none: the operator switched it on and would be told
-  it was holding. `docs/CODING.md`.
+  it was holding. They also have to open on the same *directory*: an agent whose
+  job runs in a worktree and whose `git status` reads the operator's checkout is
+  being told about a tree it is not working in, which is the read it most wants
+  while a job is going. `docs/CODING.md`.
 - **The gate reads what a line runs, and stops short of what it cannot read.**
   Those are one decision, not a rule and a hole in it. Reading the words alone
   is what one level of indirection walks straight past: `./scripts/ship.sh` is
@@ -85,6 +88,56 @@ the code.
   message clears it; in memory, for the reason a job's lock is, since a refusal
   that outlived the process is a repository quietly refusing pushes with no
   decision behind it.
+- **A worktree per agent is one long-lived tree, not one per job.** The
+  granularity is the whole design and the obvious one is wrong. A worktree is a
+  fresh checkout, so it has no `node_modules`, no `target`, no `.venv` and no
+  `.env`: made and destroyed per job, every job pays for an install against a
+  forty-five minute ceiling, and a repository whose tests need a gitignored
+  `.env` cannot run them at all. That is the thing `repo.rs`'s header says the
+  linked-directory design exists to avoid. Per *agent*, the cost is paid once
+  and every later job finds the caches where it left them, which is also why an
+  agent working in at most one repository was already the right invariant to
+  hang it on. `docs/CODING.md`.
+- **The tree is reset at the start of a job, and a tree holding the only copy of
+  anything is not reset at all.** Those are one decision. At the end is where a
+  cleanup rule was tried and rejected, for `Footing`'s reason: a job killed at
+  the ceiling never runs it. And the three refusals in `Footing::resettable` are
+  each work that exists in exactly one place — uncommitted changes, commits
+  neither the default branch nor a remote has, and a repository with nowhere to
+  be put back to. A pushed branch with a pull request open is deliberately *not*
+  one of them: that work is safe on the remote, and holding for it is how a tree
+  ends up sitting on a landed branch for a month.
+- **It is detached at the default branch, never on it.** A branch can be checked
+  out in one work tree at a time, so an agent sitting on `main` in its bench is
+  an agent holding `main` away from the operator's own checkout. Detached at the
+  same commit is the same starting point and holds nothing, and `Footing`'s
+  detached rule already says the right thing about it: put yourself on a branch
+  before you change anything, a new one off `main` for new work.
+- **The coding lock is keyed by directory, not by repository.** It was the same
+  statement while a repository had one work tree and stopped being one the day
+  each agent got its own. Two harnesses in one directory interleave their edits
+  and nothing downstream could say which wrote what; two harnesses in two
+  directories cannot see each other, and a lock still on the repository would
+  refuse the second agent for a collision that cannot happen. A job is addressed
+  by the agent running it for the same reason: with two jobs in one codebase the
+  repository names neither, and an agent names exactly one.
+- **A bench that could not be made refuses the job rather than falling back.**
+  The fallback is the thing this prevents, and it would happen on the one path
+  where nothing on screen says a decision was taken: a harness in the operator's
+  own checkout, holding a lock taken on a path it is not in, so a second agent
+  failing the same way joins it there. The two reasons carry different advice,
+  because a fresh `git init` has no commit for a work tree to check out and one
+  commit is the whole fix.
+- **A new repository gets a worktree and an existing one keeps the linked
+  directory.** The one column in this subsystem whose SQL default and Rust
+  default disagree, and it is deliberate. `ALTER TABLE ... DEFAULT` only ever
+  runs against rows that already exist, so it is the backfill and nothing else;
+  `create_repository` always writes the value explicitly. Moving somebody's jobs
+  into a directory with none of their installed dependencies in it, on launch,
+  with no gesture, is not an upgrade's decision to take. `Bench::parse` leans the
+  same way for the same reason and `Bench::default` does not, because they
+  answer different questions: what did somebody already decide, and what do we
+  choose when nobody has.
 - **`shell` takes no lock, and `code` takes one.** They look like the same
   decision about one work tree and are opposite ones. Two harnesses in a
   directory interleave their edits over minutes and nothing downstream could say
