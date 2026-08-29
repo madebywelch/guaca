@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { hostOf, markFor, reportLine } from "./plugins";
+import { hostOf, markFor, nameFor, reportLine } from "./plugins";
 import type { ServerReport } from "./types";
 
 function report(over: Partial<ServerReport> = {}): ServerReport {
@@ -24,6 +24,22 @@ describe("markFor", () => {
     expect(markFor("home_assistant").color).toBe("var(--accent)");
     expect(markFor("constructor" as never).color).toBe("var(--accent)");
     expect(markFor("neon").color).toBe("#34d59a");
+  });
+});
+
+describe("nameFor", () => {
+  it("spells the six the way their vendors do", () => {
+    // The one thing a slug cannot supply. A transcript is the only place that
+    // needs this, because it is the only place with no row to read a name off.
+    expect(nameFor("agentmail")).toBe("AgentMail");
+    expect(nameFor("google")).toBe("Google");
+  });
+
+  it("calls a server the operator added what they called it", () => {
+    // The same answer `PluginKind::label` gives for a custom row, and for the
+    // same reason: nobody else has a name for it.
+    expect(nameFor("home_assistant")).toBe("home_assistant");
+    expect(nameFor("constructor" as never)).toBe("constructor");
   });
 });
 
