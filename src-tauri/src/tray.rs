@@ -377,6 +377,14 @@ fn read(runtime: &Runtime, session: Tokens) -> Presence {
         }
     };
 
+    let stuck = match store.open_escalations(APPROVAL_WINDOW) {
+        Ok(stuck) => stuck,
+        Err(err) => {
+            tracing::debug!(%err, "could not read open escalations for the menu bar");
+            Vec::new()
+        }
+    };
+
     let all_time = match store.usage_by_group() {
         Ok(groups) => menubar::sum(groups.into_values()),
         Err(err) => {
@@ -389,6 +397,7 @@ fn read(runtime: &Runtime, session: Tokens) -> Presence {
         names,
         activity: runtime.activity_snapshot(),
         waiting,
+        stuck,
         session,
         all_time,
         running: runtime.live_runs(),

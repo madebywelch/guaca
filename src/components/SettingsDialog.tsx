@@ -84,6 +84,10 @@ const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
     label: "An agent needs permission",
     hint: "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
   },
+  stuck: {
+    label: "An agent is stuck on you",
+    hint: "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it sits on your desk until you clear it. Same channel rule as above.",
+  },
   routine: {
     label: "A routine fired",
     hint: "Work that starts on a schedule rather than because you asked. It lands in whichever channel it was pointed at, which is usually not the one on screen.",

@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { cluster } from "../lib/orb";
 import { presenceLabel, presenceNote, presenceOf } from "../lib/presence";
-import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
+import type { Activity, AgentCard, AgentId, Escalation, Group } from "../lib/types";
 import { OrbTag, useOrbTag } from "./OrbTag";
 
 interface Props {
@@ -11,6 +11,8 @@ interface Props {
   /** Live members, in the order the rail arranged them. */
   members: AgentCard[];
   activity: Record<AgentId, Activity>;
+  /** Every open escalation in the workspace. Filtered to this crew inside. */
+  stuck: readonly Escalation[];
   /** Whether the rail is currently looking inside this group. */
   current: boolean;
   /** Whether a dragged row would land here if it were dropped now. */
@@ -45,6 +47,7 @@ export function GroupOrb({
   group,
   members,
   activity,
+  stuck,
   current,
   over,
   onOpen,
@@ -57,7 +60,7 @@ export function GroupOrb({
   // The two states worth interrupting a glance for, and why they are not one
   // mark: `lib/presence.ts`. This column is the only thing on screen about the
   // crews the operator is not looking at, so what it can say is all they get.
-  const presence = presenceOf(members, activity);
+  const presence = presenceOf(members, activity, stuck);
 
   return (
     <button

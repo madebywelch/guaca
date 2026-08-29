@@ -16,10 +16,12 @@
  * The second is where the judgment is. "Away" is not one condition, because a
  * permission request and a finished conversation are not the same news:
  *
- *   attention   an agent is blocked on you. Reaches you when the window is not
- *               in front of you, and also when it is but the request belongs to
- *               a channel you are not looking at. Nobody finds a parked turn by
- *               noticing a row change color three screens up the rail.
+ *   attention   an agent is blocked on you, whether or not its turn is parked.
+ *               Reaches you when the window is not in front of you, and also
+ *               when it is but the request belongs to a channel you are not
+ *               looking at. Nobody finds a parked turn by noticing a row change
+ *               color three screens up the rail, and nobody finds an agent that
+ *               gave up four turns ago by reading its channel.
  *   ambient     nothing was addressed to you and no channel is implied. A
  *               routine fires wherever it was pointed. Reaches you whenever you
  *               are away, with no channel to match against.
@@ -36,6 +38,10 @@ export type NotifyClass = "attention" | "ambient" | "completion";
 export function classOf(kind: NotifyKind): NotifyClass {
   switch (kind) {
     case "approval":
+    // An escalation is the same class from the other end: nothing is parked on
+    // it, so nothing lapses, and it has to reach the operator anyway because
+    // the agent that raised it has already carried on without them.
+    case "stuck":
       return "attention";
     case "routine":
       return "ambient";

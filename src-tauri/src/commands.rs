@@ -20,9 +20,11 @@ use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
 use crate::domain::envelope::Envelope;
+use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RepositoryId, RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RepositoryId,
+    RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::{
@@ -1259,6 +1261,27 @@ pub fn answer_question(
     answer: String,
 ) -> Reply<Approval> {
     Ok(state.runtime.answer_question(id, &answer)?)
+}
+
+/// Everything an agent has said it cannot get past without the operator.
+///
+/// The other half of the desk's queue, read the same way and for the same
+/// reason: what is on it is whatever the store says is open, so nothing can
+/// appear there that is not a row somewhere.
+///
+/// Unbounded in practice by the same argument `MAX_PENDING` rests on, one step
+/// stronger: an agent holds at most one open escalation, so this is bounded by
+/// the size of the crew.
+#[tauri::command]
+pub fn open_escalations(state: State<'_, AppState>) -> Reply<Vec<Escalation>> {
+    Ok(state.runtime.store().open_escalations(MAX_PENDING)?)
+}
+
+/// Takes one off the desk. Not an answer: nothing is waiting on it.
+#[tauri::command]
+pub fn clear_escalation(state: State<'_, AppState>, id: EscalationId) -> Reply<()> {
+    state.runtime.clear_escalation(id)?;
+    Ok(())
 }
 
 // ---- groups --------------------------------------------------------------

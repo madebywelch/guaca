@@ -35,6 +35,8 @@ import type {
   Decision,
   DeviceCode,
   Envelope,
+  Escalation,
+  EscalationId,
   Gate,
   Group,
   GroupDraft,
@@ -327,6 +329,15 @@ export const api = {
   approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
   /** Every request still waiting on the operator, oldest first. */
   pendingApprovals: () => invoke<Approval[]>("pending_approvals"),
+
+  /**
+   * Everything an agent has said it cannot get past without the operator,
+   * oldest first. The other half of the desk's queue, and read the same way:
+   * nothing can be on the desk that is not a row in the store.
+   */
+  openEscalations: () => invoke<Escalation[]>("open_escalations"),
+  /** Takes one off the desk. Not an answer: nothing is waiting on it. */
+  clearEscalation: (id: EscalationId) => invoke<void>("clear_escalation", { id }),
 
   /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>

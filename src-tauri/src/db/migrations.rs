@@ -1203,6 +1203,61 @@ ALTER TABLE agents ADD COLUMN discarded_at INTEGER;
 ALTER TABLE repositories ADD COLUMN gate TEXT NOT NULL DEFAULT 'open';
 "#,
     ),
+    (
+        43,
+        r#"
+-- An escalation: work that has stopped and that only the operator can move.
+--
+-- There were two ways for an agent to reach a person and both of them park the
+-- turn inside a tool call, waiting ten minutes for an answer. Both are right
+-- for a decision the turn needs now. Neither is right for the case they kept
+-- being reached for anyway, which is an agent that cannot go on at all: a
+-- coding harness that will not start, a sign-in that has expired, a machine
+-- only the operator can touch. None of that is answerable inside a turn and
+-- none of it stops being true because ten minutes passed, so the agent wrote it
+-- into its channel instead, clearly, addressed to somebody who was not reading
+-- it. Five turns of one crew went that way before anybody noticed, and what
+-- made it invisible is that the three surfaces built for exactly this -- the
+-- count on a crew's circle, the desk, the menu bar -- are all fed from
+-- `approvals`. Nothing had parked, so all three said the workspace was fine.
+--
+-- Nothing parks here either, and that is the difference rather than an
+-- omission: the turn ends, no run booking is held, and so there is no window,
+-- no expiry, and no cost to a row staying open for two days. Nothing is
+-- answered either. Clearing is the operator saying they have dealt with it;
+-- what actually unblocks the agent is a message in the channel this row opens.
+--
+-- One open row per agent. An agent that hits the same wall on six turns must
+-- not fill the desk with six rows saying one thing, and must not be told to
+-- keep quiet either: the sixth raise restates the line, counts, and leaves
+-- `raised_at` exactly where it is. `raised_at` says how long this has been
+-- true, `times` says how many turns have hit it, and the pair is what says "a
+-- crew has been stuck for two days" rather than "an agent mentioned something".
+CREATE TABLE escalations (
+    id         TEXT    PRIMARY KEY,
+    agent_id   TEXT    NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    group_id   TEXT    NOT NULL,
+    run_id     TEXT    NOT NULL,
+    summary    TEXT    NOT NULL,
+    raised_at  INTEGER NOT NULL,
+    said_at    INTEGER NOT NULL,
+    times      INTEGER NOT NULL DEFAULT 1,
+    cleared_at INTEGER
+);
+
+-- One open escalation per agent, enforced here rather than by whoever writes
+-- one. A second open row is the failure the desk exists to prevent, one level
+-- down: a queue that says six things when six is one thing said six times.
+CREATE UNIQUE INDEX escalations_open_per_agent
+    ON escalations (agent_id)
+    WHERE cleared_at IS NULL;
+
+-- What the desk, the crews' column and the menu bar all read: what is still
+-- open, oldest first. Partial, so it stays the size of the problem rather than
+-- the size of the history.
+CREATE INDEX escalations_open ON escalations (raised_at) WHERE cleared_at IS NULL;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

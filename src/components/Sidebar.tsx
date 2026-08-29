@@ -75,6 +75,7 @@ export function Sidebar({
   const repoStatus = useStore((s) => s.repoStatus);
   const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
+  const stuck = useStore((s) => s.stuck);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
@@ -307,6 +308,22 @@ export function Sidebar({
     id: AgentId,
     state: Activity | undefined,
   ): { text: string; kind: string | undefined } => {
+    // Above everything but a parked turn, and above it in the same voice. Both
+    // of the states a person is the fix for outrank every state that will
+    // resolve itself, because this column is what somebody scans when they have
+    // noticed that nothing is moving: an agent stuck since Tuesday that happens
+    // to be typing right now must not read as an agent that is fine.
+    //
+    // The age is the label. "Stuck" is a state and "stuck 2d" is a decision,
+    // and the second one is the whole reason this is on the row rather than in
+    // a channel somebody has to open.
+    if (state?.state !== "awaitingApproval") {
+      const open = stuck.find((one) => one.agentId === id);
+      if (open) {
+        return { text: `stuck ${relativeTime(open.raisedAt, now)}`, kind: "asking" };
+      }
+    }
+
     // Before the turn states, because a coding job outlives the turn that
     // started it: the agent goes idle the moment `code` returns and stays that
     // way while a coding agent works in its repository for twenty minutes.
@@ -437,6 +454,7 @@ export function Sidebar({
         groups={groups}
         agents={agents}
         activity={activity}
+        stuck={stuck}
         focused={railGroup}
         onFocus={(id) => void focusGroup(id)}
         isOver={isOver}

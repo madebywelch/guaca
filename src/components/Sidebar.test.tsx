@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { Activity, AgentCard, Group } from "../lib/types";
+import type { Activity, AgentCard, Escalation, Group } from "../lib/types";
 import { aGroup, DEFAULT_GROUP } from "../test-fixtures";
 import { Sidebar } from "./Sidebar";
 
@@ -56,11 +56,17 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
   };
 }
 
-function draw(groups: Group[], agents: AgentCard[] = [], activity: Record<string, Activity> = {}) {
+function draw(
+  groups: Group[],
+  agents: AgentCard[] = [],
+  activity: Record<string, Activity> = {},
+  stuck: Escalation[] = [],
+) {
   useStore.setState({
     agents,
     groups,
     activity,
+    stuck,
     lastActive: {},
     usage: Object.fromEntries(
       groups.map((g) => [g.id, { prompt: 900_000, completion: 900_000, calls: 400, cost: 123.45 }]),
@@ -622,5 +628,53 @@ describe("groups as places", () => {
     fireEvent.pointerUp(window, { clientX: 60, clientY: 120 });
 
     await vi.waitFor(() => expect(moveAgent).toHaveBeenCalledWith("Manager", RESEARCH, null));
+  });
+});
+
+describe("an agent that has stopped and said so", () => {
+  const stuckOn = (by: string, over: Partial<Escalation> = {}): Escalation => ({
+    id: `esc-${by}`,
+    agentId: by,
+    groupId: DEFAULT_GROUP,
+    runId: "run-1",
+    summary: "The deploy needs a key only you have.",
+    raisedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    saidAt: Date.now(),
+    times: 3,
+    clearedAt: null,
+    ...over,
+  });
+
+  // This column is what somebody scans when they have noticed that nothing is
+  // moving. An agent stuck since Tuesday reading as idle is the whole reason
+  // the escalation exists, one surface up.
+  it("says so on the row, with how long it has been", () => {
+    draw([group("everyone")], [agent("Manager")], {}, [stuckOn("Manager")]);
+    expect(screen.getByText("stuck 2d")).toBeTruthy();
+  });
+
+  // A state that resolves itself must not hide one that does not.
+  it("says it over anything the agent happens to be doing right now", () => {
+    draw([group("everyone")], [agent("Manager")], { Manager: { state: "thinking" } }, [
+      stuckOn("Manager"),
+    ]);
+    expect(screen.getByText("stuck 2d")).toBeTruthy();
+    expect(screen.queryByText("typing")).toBeNull();
+  });
+
+  // The one state that outranks it, and only because it is the same statement
+  // with a turn parked behind it: that one has ten minutes and this one does not.
+  it("gives way to a parked turn, which is the more urgent version of itself", () => {
+    draw([group("everyone")], [agent("Manager")], { Manager: { state: "awaitingApproval" } }, [
+      stuckOn("Manager"),
+    ]);
+    expect(screen.getByText("needs you")).toBeTruthy();
+  });
+
+  it("leaves every other row alone", () => {
+    draw([group("everyone")], [agent("Manager"), agent("Reader", { railOrder: 1 })], {}, [
+      stuckOn("Manager"),
+    ]);
+    expect(screen.getAllByText("stuck 2d")).toHaveLength(1);
   });
 });

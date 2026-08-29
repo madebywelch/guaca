@@ -9,7 +9,7 @@ use std::path::Path;
 
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
-use rusqlite::{named_params, params, OptionalExtension, Row};
+use rusqlite::{named_params, params, OptionalExtension, Row, TransactionBehavior};
 
 use crate::db::migrations;
 use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
@@ -18,9 +18,11 @@ use crate::domain::approval::{
 };
 use crate::domain::connector::{CleanConnector, Connector};
 use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
+use crate::domain::escalation::{Escalation, Raised};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, GroupId, MessageId, PluginId, RepositoryId, RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RepositoryId,
+    RoutineId, RunId,
 };
 use crate::domain::now_ms;
 use crate::domain::plugin::{
@@ -1321,6 +1323,178 @@ impl Store {
     pub fn delete_agent_approvals(&self, agent: AgentId) -> Result<usize, StoreError> {
         let conn = self.conn()?;
         Ok(conn.execute("DELETE FROM approvals WHERE agent_id=?1", params![agent.to_string()])?)
+    }
+
+    // ---- escalations -----------------------------------------------------
+
+    /// Puts an agent's escalation up, or restates the one it already has.
+    ///
+    /// One transaction, because the read and the write are the same decision:
+    /// an agent writes from every thread it holds, and a check outside the
+    /// transaction lets two turns each find nothing open and each insert, which
+    /// the unique index then refuses at the worst possible moment. Inside it,
+    /// the second turn finds the first one's row and counts against it.
+    ///
+    /// `raised_at` never moves and `times` only goes up. That is the whole
+    /// design: what the operator needs is not that an agent is stuck, it is
+    /// that it has been stuck since Tuesday and that six turns have been spent
+    /// walking into it. A fresh stamp on every raise would hide the one number
+    /// that says so, exactly as refreshing a working note's stamp would.
+    pub fn raise_escalation(
+        &self,
+        agent: AgentId,
+        group: GroupId,
+        run: RunId,
+        summary: &str,
+        at: i64,
+    ) -> Result<Raised, StoreError> {
+        let mut conn = self.conn()?;
+        // Immediate, not deferred, and that is the difference between this
+        // working and this failing under exactly the concurrency it is for. A
+        // deferred transaction takes its write lock on the first write, so two
+        // turns of one agent both read "nothing open", both try to insert, and
+        // the second is refused with `SQLITE_BUSY_SNAPSHOT` -- which the busy
+        // handler cannot wait out, because there is nothing to wait for: the
+        // snapshot it read from is already stale. Taking the lock at BEGIN
+        // makes the second one queue and then find the first one's row.
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+
+        let open: Option<(String, String, i64, u32)> = tx
+            .query_row(
+                "SELECT id,run_id,raised_at,times FROM escalations
+                  WHERE agent_id=?1 AND cleared_at IS NULL",
+                params![agent.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()?;
+
+        if let Some((id, run_id, raised_at, times)) = open {
+            let id = id.parse::<EscalationId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
+            // The first raise's run, kept rather than replaced: it is the one
+            // with the beginning of the story in it.
+            let run_id = run_id.parse::<RunId>().map_err(|e| StoreError::Corrupt(e.to_string()))?;
+            let times = times.saturating_add(1);
+            tx.execute(
+                "UPDATE escalations SET summary=?2, said_at=?3, times=?4 WHERE id=?1",
+                params![id.to_string(), summary, at, times],
+            )?;
+            tx.commit()?;
+            return Ok(Raised::Again(Escalation {
+                id,
+                agent_id: agent,
+                group_id: group,
+                run_id,
+                summary: summary.to_string(),
+                raised_at,
+                said_at: at,
+                times,
+                cleared_at: None,
+            }));
+        }
+
+        let escalation = Escalation {
+            id: EscalationId::new(),
+            agent_id: agent,
+            group_id: group,
+            run_id: run,
+            summary: summary.to_string(),
+            raised_at: at,
+            said_at: at,
+            times: 1,
+            cleared_at: None,
+        };
+        tx.execute(
+            "INSERT INTO escalations (id,agent_id,group_id,run_id,summary,raised_at,said_at,times)
+             VALUES (?1,?2,?3,?4,?5,?6,?6,1)",
+            params![
+                escalation.id.to_string(),
+                agent.to_string(),
+                group.to_string(),
+                run.to_string(),
+                escalation.summary,
+                at,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(Raised::First(escalation))
+    }
+
+    /// What one agent currently has up, if anything.
+    ///
+    /// Read on every turn of that agent, so the prompt can say what it already
+    /// told the operator and how long ago. An agent that cannot see its own
+    /// open escalation restates it as news.
+    pub fn open_escalation_for(&self, agent: AgentId) -> Result<Option<Escalation>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id,agent_id,group_id,run_id,summary,raised_at,said_at,times,cleared_at
+               FROM escalations WHERE agent_id=?1 AND cleared_at IS NULL",
+        )?;
+        match stmt.query_row(params![agent.to_string()], row_to_escalation).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Everything still up, oldest first.
+    ///
+    /// Oldest first because the age is the point: the row at the top is the one
+    /// that has been true longest, which is the opposite of a feed and is what
+    /// keeps a two-day-old escalation from sinking under this morning's.
+    ///
+    /// Terminated agents are left out, which is the same question fifteen other
+    /// queries ask. An agent in the compost is unreachable and out of every
+    /// crew, so a row on the desk offering to open its channel is an offer
+    /// nothing can take up.
+    pub fn open_escalations(&self, limit: u32) -> Result<Vec<Escalation>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT e.id,e.agent_id,e.group_id,e.run_id,e.summary,e.raised_at,e.said_at,e.times,
+                    e.cleared_at
+               FROM escalations e JOIN agents a ON a.id = e.agent_id
+              WHERE e.cleared_at IS NULL AND a.lifecycle <> 'terminated'
+              ORDER BY e.raised_at ASC, e.id ASC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit], row_to_escalation)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Takes one off the desk, and only from open.
+    ///
+    /// `cleared_at IS NULL` in the WHERE clause for the reason `settle_approval`
+    /// has `state='pending'` in its own: the operator can press this twice, and
+    /// a second clear must not move a stamp that already says when the first
+    /// one happened.
+    ///
+    /// `false` is a row that was already cleared or was never there, which the
+    /// caller reports as nothing rather than as a failure. Both mean the desk
+    /// the operator is looking at is behind the store, and the read that
+    /// follows is what corrects it.
+    pub fn clear_escalation(&self, id: EscalationId, at: i64) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE escalations SET cleared_at=?2 WHERE id=?1 AND cleared_at IS NULL",
+            params![id.to_string(), at],
+        )? > 0)
+    }
+
+    /// Everything one agent has up, cleared because the agent is going.
+    ///
+    /// A purge would take the rows with it either way -- the foreign key
+    /// cascades -- but a discarded agent is not deleted for thirty days, and
+    /// its escalation would sit on the desk for all of them asking the operator
+    /// to deal with work that has stopped for good.
+    pub fn clear_agent_escalations(&self, agent: AgentId, at: i64) -> Result<usize, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "UPDATE escalations SET cleared_at=?2 WHERE agent_id=?1 AND cleared_at IS NULL",
+            params![agent.to_string(), at],
+        )?)
     }
 
     // ---- connectors ------------------------------------------------------
@@ -3515,6 +3689,35 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
                 cost: row.get::<_, Option<f64>>(5)?,
                 calls: row.get::<_, i64>(6)? as u64,
             },
+        })
+    })())
+}
+
+fn row_to_escalation(row: &Row<'_>) -> RowResult<Escalation> {
+    let id_raw: String = row.get(0)?;
+    let agent_raw: String = row.get(1)?;
+    let group_raw: String = row.get(2)?;
+    let run_raw: String = row.get(3)?;
+
+    Ok((|| {
+        Ok(Escalation {
+            id: id_raw
+                .parse::<EscalationId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad escalation id {id_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .parse::<AgentId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad agent id {agent_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            run_id: run_raw
+                .parse::<RunId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad run id {run_raw:?}: {e}")))?,
+            summary: row.get(4)?,
+            raised_at: row.get(5)?,
+            said_at: row.get(6)?,
+            times: row.get(7)?,
+            cleared_at: row.get(8)?,
         })
     })())
 }
@@ -6353,6 +6556,173 @@ mod tests {
         assert_eq!(f.store.delete_agent_approvals(manager.id).unwrap(), 1);
         assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
         assert!(f.store.get_approval(request.id).unwrap().is_none());
+    }
+
+    // ---- escalations -----------------------------------------------------
+
+    /// One escalation from `agent`, raised at `at`.
+    fn stuck(store: &Store, agent: &AgentCard, summary: &str, at: i64) -> Raised {
+        store.raise_escalation(agent.id, agent.group_id, RunId::new(), summary, at).unwrap()
+    }
+
+    #[test]
+    fn an_escalation_goes_up_once_and_is_read_back_whole() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let raised = stuck(&f.store, &manager, "the deploy needs a key only you have", 1_000);
+
+        assert!(matches!(raised, Raised::First(_)));
+        let open = f.store.open_escalation_for(manager.id).unwrap().unwrap();
+        assert_eq!(open.summary, "the deploy needs a key only you have");
+        assert_eq!(open.raised_at, 1_000);
+        assert_eq!(open.times, 1);
+        assert_eq!(open.cleared_at, None);
+    }
+
+    #[test]
+    fn raising_it_again_counts_the_turn_and_leaves_the_stamp_where_it_is() {
+        // The whole reason a row beats the message it replaces. What the
+        // operator needs is not that an agent is stuck, it is that it has been
+        // stuck since Tuesday and that three turns have gone into it. A fresh
+        // stamp on every raise hides the one number that says so.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        stuck(&f.store, &manager, "the tooling is down", 1_000);
+        stuck(&f.store, &manager, "the tooling is down", 2_000);
+        let third = stuck(&f.store, &manager, "the tooling is still down", 3_000);
+
+        let Raised::Again(one) = third else { panic!("a second raise is not a second row") };
+        assert_eq!(one.raised_at, 1_000, "the age is the news and must not move");
+        assert_eq!(one.said_at, 3_000, "and when it was last said is a second question");
+        assert_eq!(one.times, 3);
+        assert_eq!(one.summary, "the tooling is still down", "the latest wording stands");
+        assert_eq!(one.run_id, f.store.open_escalation_for(manager.id).unwrap().unwrap().run_id);
+        assert_eq!(f.store.open_escalations(50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn two_agents_stuck_are_two_rows() {
+        // One per agent, not one per workspace. A crew where three agents have
+        // each run into a different wall is three things to deal with.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let critic = f.store.create_agent(&draft("Critic")).unwrap();
+        stuck(&f.store, &manager, "no key", 1_000);
+        stuck(&f.store, &critic, "no machine", 2_000);
+
+        let open = f.store.open_escalations(50).unwrap();
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0].agent_id, manager.id, "oldest first: the age is what is being read");
+    }
+
+    #[test]
+    fn clearing_one_takes_it_off_the_desk_and_frees_the_agent_to_raise_another() {
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let Raised::First(one) = stuck(&f.store, &manager, "no key", 1_000) else {
+            panic!("the first raise is the first row")
+        };
+
+        assert!(f.store.clear_escalation(one.id, 5_000).unwrap());
+        assert!(f.store.open_escalations(50).unwrap().is_empty());
+        assert!(f.store.open_escalation_for(manager.id).unwrap().is_none());
+
+        // The unique index is over the open rows only, so a cleared one does
+        // not block the next. An agent that gets stuck twice with a fortnight
+        // between must not be refused the second time.
+        let next = stuck(&f.store, &manager, "no machine either", 9_000);
+        assert!(matches!(next, Raised::First(_)));
+        assert_eq!(f.store.open_escalation_for(manager.id).unwrap().unwrap().raised_at, 9_000);
+    }
+
+    #[test]
+    fn clearing_one_twice_changes_nothing_the_second_time() {
+        // The operator pressed it twice, or two windows are looking at one
+        // desk. The second press must not move a stamp that already says when
+        // the first one happened.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let Raised::First(one) = stuck(&f.store, &manager, "no key", 1_000) else {
+            panic!("the first raise is the first row")
+        };
+
+        assert!(f.store.clear_escalation(one.id, 5_000).unwrap());
+        assert!(!f.store.clear_escalation(one.id, 8_000).unwrap(), "already off the desk");
+    }
+
+    #[test]
+    fn a_composted_agents_escalation_is_not_on_the_desk() {
+        // The same question fifteen other queries ask. An agent in the compost
+        // is unreachable and out of every crew, so a row offering to open its
+        // channel is an offer nothing can take up.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        stuck(&f.store, &manager, "no key", 1_000);
+        f.store.discard_agent(manager.id, 2_000).unwrap();
+
+        assert!(f.store.open_escalations(50).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_discarded_agents_escalation_is_cleared_rather_than_left_open() {
+        // Left open it would come back with a restore three weeks later, as
+        // news about a wall nobody has walked into since.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        stuck(&f.store, &manager, "no key", 1_000);
+
+        assert_eq!(f.store.clear_agent_escalations(manager.id, 2_000).unwrap(), 1);
+        assert!(f.store.open_escalation_for(manager.id).unwrap().is_none());
+        assert_eq!(
+            f.store.clear_agent_escalations(manager.id, 3_000).unwrap(),
+            0,
+            "and there is nothing left to clear"
+        );
+    }
+
+    #[test]
+    fn an_escalation_is_not_an_approval_and_shares_no_queue_with_one() {
+        // Two reads, two tables. Folding them would put a row with no verdict
+        // and no expiry into a list every caller answers with a decision.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        ask(&f.store, &manager);
+        stuck(&f.store, &manager, "no key", 1_000);
+
+        assert_eq!(f.store.pending_approvals(50).unwrap().len(), 1);
+        assert_eq!(f.store.open_escalations(50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_raises_from_one_agent_are_one_row() {
+        // An agent writes from every thread it holds. A check outside the
+        // transaction lets two turns each find nothing open and each insert,
+        // which the unique index then refuses at the worst possible moment:
+        // inside a turn that had already given up on getting anywhere.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+
+        std::thread::scope(|scope| {
+            for i in 0..8 {
+                let store = f.store.clone();
+                let card = manager.clone();
+                scope.spawn(move || {
+                    store
+                        .raise_escalation(
+                            card.id,
+                            card.group_id,
+                            RunId::new(),
+                            &format!("stuck {i}"),
+                            1_000 + i,
+                        )
+                        .expect("a raise must never be refused by the index");
+                });
+            }
+        });
+
+        let open = f.store.open_escalations(50).unwrap();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].times, 8);
     }
 
     #[test]

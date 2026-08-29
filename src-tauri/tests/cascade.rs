@@ -3776,6 +3776,162 @@ async fn an_agent_reading_an_acknowledgment_may_still_say_nothing_quietly() {
     );
 }
 
+// ---- saying it has stopped, without stopping ------------------------------
+
+/// Everything the model was sent this call, as one string.
+///
+/// Deliberately every message rather than only the last: what these stubs
+/// branch on is whether a tool has already answered, and that answer arrives as
+/// a message of its own. It reads the system prompt too, which is what one of
+/// them is asking about.
+fn said(body: &serde_json::Value) -> String {
+    body["messages"]
+        .as_array()
+        .map(|m| m.iter().filter_map(|m| m["content"].as_str()).collect::<Vec<_>>().join("\n"))
+        .unwrap_or_default()
+}
+
+/// Whether `escalate` has already answered this turn.
+///
+/// Two phrases because there are deliberately two answers, and the difference
+/// between them is the feature: a first raise is told it is on the desk, and a
+/// repeat is told how long the operator has had it and how many turns have gone
+/// into the same wall. A stub keyed on one of them loops on the other.
+fn escalated(body: &serde_json::Value) -> bool {
+    let said = said(body);
+    said.contains("on the operator's desk now") || said.contains("You already had that up")
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_agent_that_cannot_go_on_puts_it_on_the_desk_and_finishes_its_turn() {
+    // The case neither of the two parking tools could cover. Nothing here can
+    // be answered inside a turn: the operator has to go and do something, and
+    // ten minutes of a parked turn would end with the wall still there and a
+    // run booking spent. So the agent says so on its way out and carries on,
+    // and what it said becomes a row rather than a paragraph in a channel
+    // nobody has open.
+    let stub = serve(|body| {
+        if escalated(body) {
+            Script::Say("Flagged it. I have done what I can without the deploy key.".into())
+        } else {
+            Script::Escalate("The deploy needs a key only you have.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(run).await;
+
+    // Nothing parked, and that is the point rather than a gap: the turn ran to
+    // the end and the agent was never held anywhere.
+    assert_eq!(
+        h.sink.count_of(|e| matches!(e, UiEvent::ApprovalRequested { .. })),
+        0,
+        "an escalation must not park a turn"
+    );
+    assert_eq!(h.sink.count_of(|e| matches!(e, UiEvent::EscalationRaised { .. })), 1);
+
+    let open = h.runtime.store().open_escalations(50).unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].summary, "The deploy needs a key only you have.");
+    assert_eq!(open[0].agent_id, h.id("Analyst"));
+    assert_eq!(open[0].times, 1);
+
+    assert!(
+        h.transcript().contains("done what I can"),
+        "the turn has to finish rather than stop on it:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_turn_that_hits_the_same_wall_counts_rather_than_queues() {
+    // Six turns into one wall is one thing to deal with, and the operator has
+    // to be able to see that it is six. A row each would be a desk that reads
+    // as six problems; a silent second raise would be a desk that reads as one
+    // bad afternoon.
+    let stub = serve(|body| {
+        if escalated(body) {
+            Script::Say("Nothing else I can do here.".into())
+        } else {
+            Script::Escalate("The workspace tooling is down.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    for _ in 0..2 {
+        let run = h.runtime.send_from_human(h.id("Analyst"), "Any progress?").unwrap();
+        h.settle(run).await;
+    }
+
+    let open = h.runtime.store().open_escalations(50).unwrap();
+    assert_eq!(open.len(), 1, "one agent, one open row");
+    assert_eq!(open[0].times, 2, "and the count is what says how much has been lost to it");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_open_escalation_is_in_the_next_turns_prompt() {
+    // An agent that cannot see what it has already escalated raises it again as
+    // news every turn, which is the behavior in a channel that this replaced.
+    let stub = serve(|body| {
+        if said(body).contains("What you have already escalated") {
+            Script::Say("Still waiting on the key. Nothing has moved.".into())
+        } else if escalated(body) {
+            Script::Say("Flagged it.".into())
+        } else {
+            Script::Escalate("The deploy needs a key only you have.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Analyst"), "Any progress?").unwrap();
+    h.settle(second).await;
+
+    assert!(
+        h.transcript().contains("Nothing has moved"),
+        "the second turn has to have been shown its own open escalation:\n{}",
+        h.transcript()
+    );
+    assert_eq!(
+        h.runtime.store().open_escalations(50).unwrap()[0].times,
+        1,
+        "and having been shown it, must not have raised it again as news"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn clearing_one_says_so_and_leaves_the_agent_free_to_raise_another() {
+    let stub = serve(|body| {
+        if escalated(body) {
+            Script::Say("Nothing else I can do here.".into())
+        } else {
+            Script::Escalate("The workspace tooling is down.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Analyst"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Analyst"), "Ship it.").unwrap();
+    h.settle(run).await;
+
+    let one = h.runtime.store().open_escalations(50).unwrap().remove(0);
+    h.runtime.clear_escalation(one.id).unwrap();
+
+    assert_eq!(h.sink.count_of(|e| matches!(e, UiEvent::EscalationCleared { .. })), 1);
+    assert!(h.runtime.store().open_escalations(50).unwrap().is_empty());
+
+    // Cleared is not answered. Nothing was waiting on it, so nothing resumed,
+    // and the agent is not told: what unblocks it is a message in its channel.
+    let again = h.runtime.send_from_human(h.id("Analyst"), "And now?").unwrap();
+    h.settle(again).await;
+    assert_eq!(h.runtime.store().open_escalations(50).unwrap().len(), 1);
+}
+
 // ---- asking the operator what, rather than whether ------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

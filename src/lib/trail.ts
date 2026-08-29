@@ -194,6 +194,11 @@ function describe(tool: string, args: Args): Described {
     case "request_permission":
       return { title: "Asked for permission", target: text(args, "summary") };
 
+    // Not "asked" and not "said": nothing was asked, and this is the one call
+    // that reaches the operator wherever they are without stopping the turn.
+    case "escalate":
+      return { title: "Escalated to the operator", target: text(args, "summary") };
+
     case "run_command":
       return { title: "Ran a command", target: text(args, "command") };
 
@@ -371,6 +376,8 @@ export function callInFlight(name: string, raw: unknown): string {
       return "Asking to add an agent";
     case "request_permission":
       return "Asking for permission";
+    case "escalate":
+      return "Escalating to the operator";
     default:
       return `Using ${name}`;
   }
@@ -412,6 +419,8 @@ function manyLabel(group: TrailGroup): string {
       return `Noted where its work stands ${count} times`;
     case "directory":
       return `Checked who is available ${count} times`;
+    case "escalate":
+      return `Escalated to the operator ${count} times`;
     default:
       return `Used ${group.steps[0]!.tool} ${count} times`;
   }
@@ -538,6 +547,11 @@ const ECHOES = new Set([
   "update_notes",
   "note_progress",
   "attach_file",
+  // Every word of what comes back is an instruction to the model -- do not
+  // wait, do what you can, do not raise it again -- and the two numbers in it
+  // that the operator would want are on the desk and the rail, read live from
+  // the row. Frozen into a transcript, "2d ago" is wrong by the next morning.
+  "escalate",
 ]);
 
 /** Whether what came back is worth reading beside the call it came from. */

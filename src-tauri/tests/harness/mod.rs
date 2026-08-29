@@ -93,6 +93,9 @@ pub enum Script {
     AskPermission { action: String, because: String },
     /// Emit an `ask_operator` tool call. Empty options is a written answer.
     AskQuestion { question: String, options: Vec<String> },
+    /// Emit an `escalate` tool call: the one way to an operator that does not
+    /// park the turn, played by a model on its way out of one.
+    Escalate(String),
     /// Emit a `run_command` tool call: a model reaching for a computer, whether
     /// or not it was offered one.
     ///
@@ -283,6 +286,16 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_question","type":"function",
                  "function":{"name":"ask_operator","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Escalate(summary) => {
+            let args = serde_json::json!({ "summary": summary }).to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_escalate","type":"function",
+                 "function":{"name":"escalate","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

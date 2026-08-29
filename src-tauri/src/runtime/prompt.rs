@@ -22,6 +22,7 @@ use crate::domain::plugin::PluginToolset;
 /// twelfth, and the list is on every turn of every agent. Newest first, so what
 /// is cut is the oldest, which is also the least likely to still be live.
 const MAX_WAITING: usize = 10;
+use crate::domain::escalation::Escalation;
 use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
@@ -95,6 +96,15 @@ pub fn system_prompt(
     // three assignments stale and reported work as outstanding that had never
     // been sent.
     waiting_on: &[Outstanding],
+    // What this agent has already put on the operator's desk and had no answer
+    // to, if anything. At most one: an agent holds one open escalation, and a
+    // second raise restates the first rather than adding a row.
+    //
+    // In the prompt for the reason the two lists above it are, and with one of
+    // its own: an agent that cannot see what it has already escalated raises it
+    // again as news every turn, which is the behavior this whole mechanism
+    // exists to stop being written into a channel.
+    escalation: Option<&Escalation>,
     // The codebase this agent works in, if the operator put it in one. At most
     // one, always: two agents on one repository coordinate through the crew,
     // and one agent on two is a change nobody can see the shape of.
@@ -703,6 +713,27 @@ pub fn system_prompt(
         );
     }
 
+    // After the two lists above rather than beside the tools, because this is
+    // read while deciding whether the work can move at all. An agent that
+    // cannot see its own open escalation reports it again every turn, in a
+    // channel, which is the failure the escalation replaced.
+    if let Some(one) = escalation {
+        out.push_str("\n## What you have already escalated\n");
+        out.push_str(&format!(
+            "You put this in front of {} {}, and {} turns have run into it since:\n\n> {}\n\n",
+            if operator.trim().is_empty() { "the operator" } else { operator },
+            worknote::how_long_ago(one.raised_at, crate::domain::now_ms()),
+            one.times,
+            one_line(&one.summary)
+        ));
+        out.push_str(
+            "It is still on their desk and they have not cleared it, so assume they have not \
+             dealt with it yet. Do not raise it again unless what you would say has changed, and \
+             do not spend this turn waiting on it: work around it if there is a way around it, or \
+             say plainly what is stopped and stop. If it has come unstuck, carry on and say so.\n",
+        );
+    }
+
     // Named here as well as offered as a tool, and for the reason the plugins
     // are: a tool list is read while deciding *how* to do something, and this
     // is read while deciding whether it can be done at all, which happens
@@ -973,6 +1004,7 @@ pub fn build_messages(
     inbound: &[Envelope],
     mode: ReplyMode,
     waiting_on: &[Outstanding],
+    escalation: Option<&Escalation>,
     repository: Option<&Repository>,
     surfaces: Surfaces,
     modalities: Modalities,
@@ -989,6 +1021,7 @@ pub fn build_messages(
         routines,
         mode,
         waiting_on,
+        escalation,
         repository,
         surfaces,
         modalities,
@@ -1041,6 +1074,7 @@ mod tests {
             mode,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         )
@@ -1061,6 +1095,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -1085,6 +1120,7 @@ mod tests {
             routines,
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -1116,6 +1152,7 @@ mod tests {
             inbound,
             mode,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -1356,6 +1393,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -1415,6 +1453,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -1449,6 +1488,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::none(),
             Modalities::seeing(),
@@ -1486,6 +1526,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::none(),
             Modalities::seeing(),
         );
@@ -1518,6 +1559,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::none(),
             Modalities::seeing(),
@@ -1559,6 +1601,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -1593,6 +1636,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -1632,6 +1676,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -1664,6 +1709,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -1984,6 +2030,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -2082,6 +2129,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -2100,6 +2148,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),
@@ -2185,6 +2234,7 @@ mod tests {
             ReplyMode::ToOperator,
             &waiting,
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -2199,6 +2249,60 @@ mod tests {
             derived.contains("working notes above do not need to carry it"),
             "and the derived one has to say why the other is short: {derived}"
         );
+    }
+
+    #[test]
+    fn an_agent_is_shown_what_it_has_already_escalated_and_how_long_ago() {
+        // An agent that cannot see its own open escalation raises it again as
+        // news every turn, which is the behavior this whole mechanism exists to
+        // stop being written into a channel. The age and the count are what
+        // make the section worth reading rather than a repeat of the tool.
+        let now = crate::domain::now_ms();
+        let open = Escalation {
+            id: crate::domain::ids::EscalationId::new(),
+            agent_id: card("Manager").id,
+            group_id: card("Manager").group_id,
+            run_id: crate::domain::ids::RunId::new(),
+            summary: "the workspace tooling is down and I cannot verify anything".into(),
+            raised_at: now - 2 * 24 * 3_600_000,
+            said_at: now,
+            times: 5,
+            cleared_at: None,
+        };
+        let prompt = system_prompt(
+            &card("Manager"),
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            ReplyMode::ToOperator,
+            &[],
+            Some(&open),
+            None,
+            Surfaces::both(),
+            Modalities::seeing(),
+        );
+        let said = section(&prompt, "## What you have already escalated");
+
+        assert!(said.contains("2d ago"), "{said}");
+        assert!(said.contains("5 turns"), "{said}");
+        assert!(said.contains("the workspace tooling is down"), "{said}");
+        assert!(
+            said.contains("Do not raise it again unless what you would say has changed"),
+            "a section that only reports costs a turn and changes nothing: {said}"
+        );
+    }
+
+    #[test]
+    fn an_agent_with_nothing_escalated_is_told_nothing_about_it() {
+        // The section is the state, so an empty one is a heading about a thing
+        // that has not happened, in a prompt every turn pays for.
+        let prompt = prompt_for(&card("Manager"), &[], "", ReplyMode::ToOperator);
+        assert!(!prompt.contains("## What you have already escalated"), "{prompt}");
     }
 
     #[test]
@@ -2370,6 +2474,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::none(),
             Modalities::seeing(),
         );
@@ -2391,6 +2496,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces { computer: true, browser: false, repository: false },
             Modalities::seeing(),
@@ -2416,6 +2522,7 @@ mod tests {
             &[],
             mode,
             &[],
+            None,
             None,
             Surfaces::both(),
             modalities,
@@ -2518,6 +2625,7 @@ mod tests {
             ReplyMode::ToOperator,
             &[],
             None,
+            None,
             Surfaces::none(),
             Modalities::seeing(),
         );
@@ -2545,6 +2653,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces { computer: false, browser: true, repository: false },
             Modalities::seeing(),
@@ -2826,6 +2935,7 @@ mod tests {
             ReplyMode::ToOperator,
             &waiting,
             None,
+            None,
             Surfaces::both(),
             Modalities::seeing(),
         );
@@ -2857,6 +2967,7 @@ mod tests {
             &[],
             ReplyMode::ToOperator,
             &[],
+            None,
             None,
             Surfaces::both(),
             Modalities::seeing(),

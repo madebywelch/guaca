@@ -33,6 +33,8 @@ import type {
   CodingLine,
   Decision,
   Envelope,
+  Escalation,
+  EscalationId,
   Group,
   GroupId,
   GroupUsage,
@@ -171,6 +173,17 @@ interface State {
    */
   pending: Approval[];
 
+  /**
+   * Every escalation still open, oldest first.
+   *
+   * The other half of the desk's queue, held the same way and for the same
+   * reason. Beside `pending` rather than merged into it because the two are
+   * answered differently: one takes a verdict or a value and has ten minutes to
+   * take it in, and this one is cleared when the operator has dealt with it and
+   * waits as long as it takes.
+   */
+  stuck: Escalation[];
+
   selected: ChannelKey | null;
   /**
    * The group the rail is looking inside, or `null` for all of them.
@@ -267,6 +280,16 @@ interface State {
   refreshRepoStatuses: () => Promise<void>;
   refreshUsage: () => Promise<void>;
   refreshApprovals: () => Promise<void>;
+  /**
+   * Re-reads the open escalations.
+   *
+   * Its own call rather than a third read inside `refreshApprovals`: the two
+   * queues change on different events, and folding them together would make
+   * every answered permission re-read a list that cannot have moved.
+   */
+  refreshEscalations: () => Promise<void>;
+  /** Takes one off the desk. Nothing is waiting on it, so nothing resumes. */
+  clearEscalation: (id: EscalationId) => Promise<void>;
   select: (key: ChannelKey) => Promise<void>;
   /**
    * Looks inside one group, or back out at all of them. Closes the open channel
@@ -418,6 +441,7 @@ export const useStore = create<State>((set, get) => ({
   pulse: {},
   approvals: {},
   pending: [],
+  stuck: [],
   selected: null,
   railGroup: null,
   messages: {},
@@ -443,6 +467,7 @@ export const useStore = create<State>((set, get) => ({
       usage,
       approvals,
       pending,
+      stuck,
     ] = await Promise.all([
       api.listAgents(),
       api.listGroups(),
@@ -456,6 +481,10 @@ export const useStore = create<State>((set, get) => ({
       // has to be right on the first paint, or the operator's first read of
       // it says nobody is waiting.
       api.pendingApprovals(),
+      // And an agent that gave up on a Friday is still stuck on Monday. This
+      // one has no window at all, so first paint is the only thing that decides
+      // whether the operator ever sees it.
+      api.openEscalations(),
     ]);
     set({
       agents,
@@ -467,6 +496,7 @@ export const useStore = create<State>((set, get) => ({
       usage: byGroup(usage),
       approvals,
       pending,
+      stuck,
     });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
@@ -683,6 +713,22 @@ export const useStore = create<State>((set, get) => ({
   async refreshApprovals() {
     const [approvals, pending] = await Promise.all([api.approvalStates(), api.pendingApprovals()]);
     set({ approvals, pending });
+  },
+
+  async refreshEscalations() {
+    set({ stuck: await api.openEscalations() });
+  },
+
+  async clearEscalation(id) {
+    try {
+      await api.clearEscalation(id);
+    } catch (error) {
+      get().setBanner({ tone: "error", text: errorMessage(error) });
+    }
+    // Read back either way, for the reason `settle` does: a clear that failed
+    // must not leave the desk missing a row the store still has, and one that
+    // worked is confirmed rather than assumed.
+    await get().refreshEscalations();
   },
 
   async decideApproval(id, decision) {
@@ -1008,6 +1054,15 @@ export const useStore = create<State>((set, get) => ({
           approvals: { ...state.approvals, [event.approvalId]: event.state },
         }));
         void get().refreshApprovals();
+        break;
+      }
+
+      // Nothing to patch first, unlike the two above: an escalation has no
+      // state a card is keyed on, and the wording is the whole row. Both events
+      // invalidate the queue and the read is where the desk's card comes from.
+      case "escalationRaised":
+      case "escalationCleared": {
+        void get().refreshEscalations();
         break;
       }
 

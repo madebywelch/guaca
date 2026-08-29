@@ -1319,6 +1319,7 @@ describe("notifications", () => {
 
     expect(useStore.getState().prefs.notify.kinds).toEqual({
       approval: true,
+      stuck: true,
       routine: false,
       settled: true,
       failed: true,

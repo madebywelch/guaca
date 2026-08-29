@@ -65,6 +65,7 @@ macro_rules! declare_id {
 declare_id!(AgentId, "agent");
 declare_id!(ApprovalId, "approval");
 declare_id!(ConnectorId, "connector");
+declare_id!(EscalationId, "escalation");
 declare_id!(GroupId, "group");
 declare_id!(MessageId, "msg");
 declare_id!(PluginId, "plugin");

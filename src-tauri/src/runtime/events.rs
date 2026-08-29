@@ -11,7 +11,9 @@ use serde::Serialize;
 
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
+use crate::domain::ids::{
+    AgentId, ApprovalId, EscalationId, GroupId, MessageId, RepositoryId, RunId,
+};
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -197,6 +199,22 @@ pub enum UiEvent {
     ApprovalSettled {
         approval_id: ApprovalId,
         state: ApprovalState,
+    },
+
+    /// An agent has put something on the operator's desk and carried on.
+    ///
+    /// The id and the agent, for the reason `ApprovalRequested` carries those
+    /// two and nothing else: what the UI is missing is not the wording, which
+    /// it reads back whole, but that the desk it is drawing is now behind the
+    /// store.
+    EscalationRaised {
+        escalation_id: EscalationId,
+        agent_id: AgentId,
+    },
+    /// The operator has dealt with one, or it went with the agent that raised
+    /// it. Not a settlement: nothing was answered and nothing was granted.
+    EscalationCleared {
+        escalation_id: EscalationId,
     },
 
     /// A coding job started, and the repository it is working in is now busy.

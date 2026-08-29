@@ -548,6 +548,24 @@ button {
   margin-left: auto;
 }
 
+/* How long it has been true and how many turns have run into it. At the far end
+   and quiet, because it is what the operator reads after deciding to look at
+   this card rather than what makes them look: the card's own first line already
+   carries the age. */
+.desk__aside {
+  margin-left: auto;
+  font-size: var(--type-meta);
+  color: var(--faint);
+}
+
+/* An escalation is the one card here that nothing is parked on, so it is the
+   one that can sit for days. Marked down the edge rather than in a color of its
+   own: the panel already says everything on it needs the operator, and a second
+   alarm color would make the two kinds compete instead of stack. */
+.desk__card[data-kind="stuck"] {
+  border-left: 2px solid var(--alarm);
+}
+
 /* ==========================================================================
    Group column
 

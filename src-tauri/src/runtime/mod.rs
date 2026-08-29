@@ -336,7 +336,10 @@ use crate::domain::envelope::{
     channel_for, Envelope, Intent, NoticeKind, Part, Participant, RefusedRecipient, ToolOutcome,
     Trust,
 };
-use crate::domain::ids::{AgentId, ApprovalId, GroupId, MessageId, RepositoryId, RunId};
+use crate::domain::escalation;
+use crate::domain::ids::{
+    AgentId, ApprovalId, EscalationId, GroupId, MessageId, RepositoryId, RunId,
+};
 use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::repository::{Gate, Harness};
@@ -896,6 +899,17 @@ impl Runtime {
         let id = card.id;
         self.inner.store.discard_agent(id, now_ms())?;
         self.stop_agent(id);
+
+        // The one thing it holds that is not its own. Everything else waits
+        // out the thirty days untouched because it belongs to this agent and
+        // nobody else can use it; an escalation is a row on the operator's
+        // desk, and a desk that still asks them to deal with an agent they have
+        // just thrown out is asking about work that has stopped for good. It
+        // must not come back with a restore either: thirty days later it would
+        // arrive as news about a wall nobody has walked into since.
+        if let Err(err) = self.inner.store.clear_agent_escalations(id, now_ms()) {
+            tracing::warn!(%err, "could not take a discarded agent's escalation off the desk");
+        }
 
         if let Some(sandbox) = card.sandbox_id.as_ref() {
             match crate::e2b::E2bClient::new(&self.config().e2b.api_key) {
@@ -2346,6 +2360,24 @@ impl Runtime {
     /// The row is settled first and only from pending, so a second click, or a
     /// click that arrives as the request times out, is refused here rather than
     /// overwriting an answer that is already recorded.
+    /// Takes one escalation off the desk.
+    ///
+    /// There is no waker to fire and no turn to resume, which is what makes
+    /// this a different act from settling an approval rather than a variation
+    /// on it: nothing is parked on an escalation. The operator is saying they
+    /// have dealt with it, and the way they actually unblock the agent is the
+    /// channel the row opened.
+    ///
+    /// A row that was already cleared is not an error. The operator pressed it
+    /// twice, or two windows are looking at one desk, and the event that
+    /// follows either way is what puts both of them back in step.
+    pub fn clear_escalation(&self, id: EscalationId) -> Result<(), RuntimeError> {
+        if self.inner.store.clear_escalation(id, now_ms())? {
+            self.inner.events.emit(UiEvent::EscalationCleared { escalation_id: id });
+        }
+        Ok(())
+    }
+
     pub fn decide_approval(
         &self,
         id: ApprovalId,
@@ -3096,6 +3128,15 @@ impl Runtime {
             tracing::warn!(%err, "could not read what this agent is waiting on");
             Vec::new()
         });
+        // The other half of that question, arrived at from the opposite end:
+        // one is derived from what this agent sent and cannot go stale, and
+        // this is what it said out loud to the operator and has had no answer
+        // to. A read that fails is nothing in the prompt, which costs a repeat
+        // rather than a turn.
+        let escalation = self.inner.store.open_escalation_for(card.id).unwrap_or_else(|err| {
+            tracing::warn!(%err, "could not read this agent's open escalation");
+            None
+        });
         // Settings resolve agent over group over app. An agent that names its own
         // model keeps it; otherwise the group's choice applies; otherwise the
         // app default. The endpoint resolves the same way, so one crew can run
@@ -3135,6 +3176,7 @@ impl Runtime {
             &batch,
             mode,
             &waiting_on,
+            escalation.as_ref(),
             repository.as_ref(),
             surfaces,
             modalities,
@@ -4137,6 +4179,77 @@ impl Runtime {
                         format!("Error: your note could not be saved ({err})."),
                         Part::tool_call(
                             tools::NOTE_PROGRESS,
+                            arguments,
+                            ToolOutcome::Failed { error: err.to_string() },
+                        ),
+                    ),
+                }
+            }
+
+            ToolInvocation::Escalate { summary } => {
+                let (body, cut) = escalation::store_as(&summary);
+                match self.inner.store.raise_escalation(
+                    card.id,
+                    card.group_id,
+                    run_id,
+                    &body,
+                    now_ms(),
+                ) {
+                    Ok(raised) => {
+                        let one = raised.escalation();
+                        self.emit(UiEvent::EscalationRaised {
+                            escalation_id: one.id,
+                            agent_id: card.id,
+                        });
+                        // Two answers, and only the second one can carry the
+                        // number that matters. An agent told "raised" for the
+                        // sixth time learns that raising is how you say
+                        // something is still true; told how long the operator
+                        // has had it and how many turns have gone into the same
+                        // wall, it has what it needs to stop hitting it.
+                        let summary = match &raised {
+                            escalation::Raised::First(_) => {
+                                "That is on the operator's desk now, and it stays there until they \
+                                 clear it. Do not wait for them and do not raise it again this \
+                                 turn: finish with whatever you can still do, and say in your \
+                                 reply what has stopped and what you did instead."
+                                    .to_string()
+                            }
+                            escalation::Raised::Again(one) => format!(
+                                "You already had that up, raised {}, and this is turn {} to run \
+                                 into it. The wording is updated and nothing was added to their \
+                                 desk. They have not cleared it, so treat it as unseen: do not \
+                                 spend another turn on the same wall, do what you can without it, \
+                                 or stop and say plainly that you are waiting.",
+                                worknote::how_long_ago(one.raised_at, now_ms()),
+                                one.times
+                            ),
+                        };
+                        let summary = if cut {
+                            format!(
+                                "{summary}\n\nIt was long for a desk row and the end was cut, so \
+                                 check the part they will read says what you need. The rest \
+                                 belongs in your reply."
+                            )
+                        } else {
+                            summary
+                        };
+                        (
+                            summary.clone(),
+                            Part::tool_call(
+                                tools::ESCALATE,
+                                arguments,
+                                ToolOutcome::Ok { summary },
+                            ),
+                        )
+                    }
+                    Err(err) => (
+                        format!(
+                            "Error: that could not be put in front of the operator ({err}). Say it \
+                             in your reply instead, plainly and at the top."
+                        ),
+                        Part::tool_call(
+                            tools::ESCALATE,
                             arguments,
                             ToolOutcome::Failed { error: err.to_string() },
                         ),

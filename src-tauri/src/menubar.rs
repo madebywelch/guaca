@@ -22,8 +22,10 @@
 use std::collections::HashMap;
 
 use crate::domain::approval::{Approval, Decision, ProtectedAction};
+use crate::domain::escalation::Escalation;
 use crate::domain::ids::{AgentId, ApprovalId};
 use crate::domain::usage::Tokens;
+use crate::domain::worknote;
 use crate::runtime::events::{Activity, UiEvent};
 
 /// The most requests listed before the rest become a count. Answering the
@@ -32,6 +34,12 @@ const MAX_WAITING: usize = 5;
 
 /// The most working agents listed, for the same reason.
 const MAX_WORKING: usize = 6;
+
+/// The most escalations listed. Bounded by the crew rather than by the app --
+/// an agent holds one -- so this is only ever reached by a workspace where a
+/// lot has gone wrong at once, which is the workspace least helped by a menu
+/// forty rows long.
+const MAX_STUCK: usize = 5;
 
 /// The most fields of a request shown under it, and how much of each.
 ///
@@ -212,6 +220,10 @@ pub struct Presence {
     pub activity: HashMap<AgentId, Activity>,
     /// Pending requests, oldest first.
     pub waiting: Vec<Approval>,
+    /// Open escalations, oldest first. Beside the requests rather than in with
+    /// them because the two are answered differently and only one of them can
+    /// be answered from here at all.
+    pub stuck: Vec<Escalation>,
     /// Spent since the window opened.
     pub session: Tokens,
     /// Spent ever, across every crew.
@@ -263,7 +275,11 @@ impl Presence {
 
     /// The glyph, the title and the tooltip.
     pub fn look(&self) -> Look {
-        let waiting = self.waiting.len();
+        // One number, because the operator is answering one question with it:
+        // is anything over there mine. A parked turn and an agent that has
+        // stopped are different work and the same answer to that question, and
+        // two numbers in the menu bar is the state nobody can read at a glance.
+        let waiting = self.waiting.len() + self.stuck.len();
         let busy = self.busy().len();
 
         let glyph = if waiting > 0 {
@@ -280,7 +296,14 @@ impl Presence {
         let title = (waiting > 0).then(|| waiting.to_string());
 
         let state = if waiting == 1 {
-            format!("{} is waiting on you", self.name_of(self.waiting[0].agent_id))
+            // Named either way, because one is the case where a name fits and
+            // it is the whole difference between "something needs you" and
+            // knowing whether to go and look now.
+            let who = match self.waiting.first() {
+                Some(approval) => self.name_of(approval.agent_id),
+                None => self.name_of(self.stuck[0].agent_id),
+            };
+            format!("{who} is waiting on you")
         } else if waiting > 1 {
             format!("{waiting} agents are waiting on you")
         } else if busy == 1 {
@@ -356,6 +379,37 @@ impl Presence {
             rows.push(Row::Separator);
         }
 
+        // Its own section rather than more rows under "Waiting on you", which
+        // they would be dishonest as: nothing here is parked, none of it
+        // expires, and every one of them has been true for longer than a menu
+        // usually reports on. The age is on the row for that reason -- an
+        // escalation is a duration rather than a piece of news, and the number
+        // in the title says how many and never how long.
+        //
+        // Each row opens its channel and none of them clears from here. Clearing
+        // is one click and would fit a menu item, which is exactly the problem:
+        // the click that takes it off the desk is not the click that deals with
+        // it, and the two must not be the same size. `docs/ATTENTION.md`.
+        if !self.stuck.is_empty() {
+            rows.push(Row::Note("Stuck on you".to_string()));
+            let now = crate::domain::now_ms();
+            for one in self.stuck.iter().take(MAX_STUCK) {
+                rows.push(Row::Agent {
+                    id: one.agent_id,
+                    label: format!(
+                        "{} · {} · {}",
+                        self.name_of(one.agent_id),
+                        one_line(&one.summary, 90),
+                        worknote::how_long_ago(one.raised_at, now)
+                    ),
+                });
+            }
+            if let Some(more) = overflow(self.stuck.len(), MAX_STUCK) {
+                rows.push(Row::Note(format!("{more} more stuck, in Guaca")));
+            }
+            rows.push(Row::Separator);
+        }
+
         let busy = self.busy();
         if !busy.is_empty() {
             rows.push(Row::Note("Working".to_string()));
@@ -368,7 +422,7 @@ impl Presence {
             rows.push(Row::Separator);
         }
 
-        if self.waiting.is_empty() && busy.is_empty() {
+        if self.waiting.is_empty() && self.stuck.is_empty() && busy.is_empty() {
             rows.push(Row::Note("Nothing running".to_string()));
             rows.push(Row::Separator);
         }
@@ -463,6 +517,8 @@ pub fn touches(event: &UiEvent) -> bool {
             | UiEvent::RunSettled { .. }
             | UiEvent::ApprovalRequested { .. }
             | UiEvent::ApprovalSettled { .. }
+            | UiEvent::EscalationRaised { .. }
+            | UiEvent::EscalationCleared { .. }
     )
 }
 
@@ -646,6 +702,97 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// One open escalation from `agent`, raised `days` ago.
+    fn escalation(agent: AgentId, summary: &str, days: i64) -> Escalation {
+        let now = crate::domain::now_ms();
+        Escalation {
+            id: crate::domain::ids::EscalationId::new(),
+            agent_id: agent,
+            group_id: GroupId::new(),
+            run_id: RunId::new(),
+            summary: summary.to_string(),
+            raised_at: now - days * 24 * 3_600_000,
+            said_at: now,
+            times: 1,
+            cleared_at: None,
+        }
+    }
+
+    #[test]
+    fn an_agent_that_has_stopped_turns_the_glyph_without_anything_being_parked() {
+        // The state this whole mechanism exists for. Nothing is parked, so the
+        // activity map says idle and the approvals table is empty: read from
+        // either of those alone, a workspace where a crew gave up on Friday
+        // draws exactly like one where everything is fine.
+        let (mut presence, scout) = quiet();
+        presence.stuck.push(escalation(scout, "the deploy needs a key only you have", 2));
+
+        let look = presence.look();
+        assert_eq!(look.glyph, Glyph::Attention);
+        assert_eq!(look.title.as_deref(), Some("1"));
+        assert_eq!(look.tooltip, "Guaca · Scout is waiting on you");
+    }
+
+    #[test]
+    fn the_title_is_one_number_over_both_kinds() {
+        // The operator is answering one question with it: is anything over
+        // there mine. Two numbers in the menu bar is a state nobody can read at
+        // a glance, and a title that counted only the parked turns would say
+        // "1" about a workspace holding three things.
+        let (mut presence, scout) = quiet();
+        presence.waiting.push(approval(scout, ProtectedAction::CreateAgent, "wants an agent"));
+        presence.stuck.push(escalation(scout, "the tooling is down", 2));
+
+        assert_eq!(presence.look().title.as_deref(), Some("2"));
+        assert_eq!(presence.look().tooltip, "Guaca · 2 agents are waiting on you");
+    }
+
+    #[test]
+    fn a_stuck_agent_is_its_own_section_with_the_age_on_the_row() {
+        // An escalation is a duration rather than a piece of news, and the
+        // title says how many and never how long. This row is the only place
+        // the operator can read it without opening the window.
+        let (mut presence, scout) = quiet();
+        presence.stuck.push(escalation(scout, "the deploy needs a key only you have", 2));
+
+        let rows = presence.rows();
+        assert!(notes(&rows).contains(&"Stuck on you".to_string()));
+        assert!(
+            rows.contains(&Row::Agent {
+                id: scout,
+                label: "Scout · the deploy needs a key only you have · 2d ago".to_string(),
+            }),
+            "{rows:?}"
+        );
+    }
+
+    #[test]
+    fn a_stuck_agent_is_not_also_listed_as_nothing_running() {
+        // "Nothing running" beside a crew that has stopped dead is the strip
+        // saying the one thing that is not true.
+        let (mut presence, scout) = quiet();
+        presence.stuck.push(escalation(scout, "no key", 1));
+
+        assert!(!notes(&presence.rows()).contains(&"Nothing running".to_string()));
+    }
+
+    #[test]
+    fn nothing_clears_an_escalation_from_the_menu() {
+        // Clearing is one click and would fit a menu item, which is exactly the
+        // problem: the click that takes it off the desk is not the click that
+        // deals with it, and the two must not be the same size. The row opens
+        // the channel instead.
+        let (mut presence, scout) = quiet();
+        presence.stuck.push(escalation(scout, "no key", 1));
+
+        for row in presence.rows() {
+            assert!(
+                !matches!(row, Row::Waiting { .. }),
+                "an escalation has no verdict to take from a menu"
+            );
+        }
     }
 
     #[test]

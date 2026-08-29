@@ -1,12 +1,12 @@
 /**
- * Turning runtime events into the four things worth interrupting someone for.
+ * Turning runtime events into the five things worth interrupting someone for.
  *
  * Kept apart from `notify`, which decides *whether* to interrupt, and from
  * `App`, which is a view. This decides *what* the interruption would say, and
  * it is a pure function of one event so it can be argued with in a test rather
  * than in a running window.
  *
- * Three of the four kinds are read out of the event stream directly. The fourth
+ * Four of the five kinds are read out of the event stream directly. The other
  * is not: `runSettled` says which run ended and nothing about where it
  * happened, and "only tell me about the channel I was looking at" needs a
  * channel. So the one piece of state here is a run's channel, learned from the
@@ -72,6 +72,20 @@ export function announcementFor(
         body: "Its turn is parked until you answer, and gives up after ten minutes.",
         channel: event.agentId,
         key: `approval:${event.agentId}`,
+      };
+
+    case "escalationRaised":
+      return {
+        kind: "stuck",
+        title: `${nameOf(event.agentId)} is stuck`,
+        // What it is stuck on is deliberately not here. The event carries an id
+        // and an agent, exactly as `approvalRequested` does, so this says the
+        // one thing it can say without reading the store from a pure function:
+        // that there is now something on the desk, and that nothing will take
+        // it off again.
+        body: "It cannot go on without you. On your desk until you clear it.",
+        channel: event.agentId,
+        key: `stuck:${event.agentId}`,
       };
 
     case "runSettled": {

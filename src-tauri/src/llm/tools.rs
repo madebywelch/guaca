@@ -31,6 +31,7 @@ pub const SCHEDULE: &str = "schedule";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const ASK_OPERATOR: &str = "ask_operator";
+pub const ESCALATE: &str = "escalate";
 pub const ATTACH_FILE: &str = "attach_file";
 pub const WRITE_DOCUMENT: &str = "write_document";
 pub const CODE: &str = "code";
@@ -706,6 +707,33 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: ESCALATE.to_string(),
+            // The description has one job that the other two operator tools do
+            // not: it has to be reached for by a turn that is *ending*. Both of
+            // those stop a turn mid-flight to get something back, so a model
+            // that has run out of road reads them as the wrong shape and does
+            // the only other thing it has, which is to write a good clear
+            // paragraph into a channel nobody is reading. So the line drawn
+            // here is about waiting rather than about severity, the cost is
+            // stated in what it puts on a screen rather than in what it spends,
+            // and the thing it replaces is named: models do not infer that a
+            // message they addressed to the operator did not reach them.
+            description: "Put something on the operator's desk that has stopped your work, and                           carry on without waiting for them. Use this when you cannot make                           progress and they are the only one who can change that: a program or                           tool that will not run, a sign-in that has expired, a key or a machine                           only they can touch, an approval that has already lapsed twice. This                           does not stop your turn and does not wait for an answer. It puts one                           row in front of them wherever they are in the app, and it stays there                           until they clear it. Saying it in your reply instead does not reach                           them: a message waits in a channel they may not open for days, which                           is exactly what this exists to replace. The cost is their screen, so                           this is for work that has stopped and never for a progress report,                           a summary, or something you can do a different way. If a colleague                           could unblock you, use send_message. If you can go on and say what                           you assumed, do that and say it in your reply. If you need an answer                           inside this turn, use ask_operator instead: that one waits, this one                           does not. Raise it again on a later turn if you hit the same wall                           again -- you will not make a second row, and they will be shown how                           long it has been up and how many turns have run into it."
+                .to_string(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "What has stopped and what you need them to do, in one or                                         two sentences. Write it for somebody who has not read                                         your channel and does not know what you were working on.                                         Put the exact command, address or name they will need                                         in it; the rest of the account goes in your reply."
+                    }
+                },
+                "required": ["summary"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: SEND_MESSAGE.to_string(),
             description: "Send a message to the other agents a piece of work belongs to. Choose \
                           them by fit: the agents whose skills cover this task, and no others. \
@@ -1030,6 +1058,15 @@ pub enum ToolInvocation {
     RequestPermission {
         action: String,
         because: String,
+    },
+    /// Put something the operator has to deal with on their desk, and carry on.
+    ///
+    /// The one way to an operator that does not park the turn, which is what
+    /// makes it a third variant rather than a shape of the two above: those are
+    /// a turn waiting for something back, and this is a turn that has run out
+    /// of road saying so on the way out.
+    Escalate {
+        summary: String,
     },
     /// Stop and ask the operator which way to go. Grants nothing.
     AskOperator {
@@ -1804,6 +1841,26 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             }
 
             Ok(ToolInvocation::AskOperator { question, options })
+        }
+        // The aliases are the words a model reaches for when it has run out of
+        // road, and every one of them costs a whole turn to learn if it is
+        // refused -- on the one call where the turn was already going nowhere.
+        ESCALATE | "escalate_to_operator" | "flag_operator" | "report_blocked" => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: ESCALATE.to_string(),
+                detail: e.to_string(),
+            })?;
+            let summary = ["summary", "what", "blocked", "problem", "reason", "text", "message"]
+                .iter()
+                .find_map(|key| value.get(*key).and_then(|v| v.as_str()))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                // An escalation with nothing in it is a row on the operator's
+                // desk that says an agent is stuck and cannot say at what,
+                // which is worse than the message in the channel it replaces.
+                .ok_or(ToolParseError::MissingText)?;
+
+            Ok(ToolInvocation::Escalate { summary })
         }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -2952,14 +3009,59 @@ mod tests {
     }
 
     #[test]
+    fn escalating_is_told_apart_from_the_two_tools_that_wait() {
+        // The one job of this description. Both of the others stop a turn
+        // mid-flight to get something back, so a model that has run out of road
+        // reads them as the wrong shape and writes a paragraph into a channel
+        // instead. The line drawn here is about waiting rather than about how
+        // bad the problem is, and what it replaces has to be named: models do
+        // not infer that a message addressed to the operator never reached one.
+        let spec = spec(ESCALATE);
+        assert!(spec.description.contains("does not wait"), "{}", spec.description);
+        assert!(spec.description.contains(ASK_OPERATOR), "{}", spec.description);
+        assert!(spec.description.contains(SEND_MESSAGE), "{}", spec.description);
+        assert!(spec.description.contains("channel"), "{}", spec.description);
+    }
+
+    #[test]
+    fn an_escalation_is_parsed_from_the_words_a_stuck_model_reaches_for() {
+        // Every alias costs a whole turn to learn if it is refused, on the one
+        // call where the turn was already going nowhere.
+        for (name, field) in [
+            (ESCALATE, "summary"),
+            ("escalate_to_operator", "what"),
+            ("flag_operator", "problem"),
+            ("report_blocked", "blocked"),
+        ] {
+            let arguments = format!("{{\"{field}\": \"  the deploy needs your key  \"}}");
+            assert_eq!(
+                parse(&call(name, &arguments)).unwrap(),
+                ToolInvocation::Escalate { summary: "the deploy needs your key".to_string() },
+                "{name} with {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escalation_with_nothing_in_it_is_refused() {
+        // A row on the operator's desk saying an agent is stuck and unable to
+        // say at what is worse than the message in a channel it replaces.
+        assert!(matches!(
+            parse(&call(ESCALATE, "{\"summary\": \"   \"}")),
+            Err(ToolParseError::MissingText)
+        ));
+        assert!(matches!(parse(&call(ESCALATE, "{}")), Err(ToolParseError::MissingText)));
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            16,
+            17,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             create_agent, request_permission, ask_operator, send_message, write_document, \
-             attach_file, update_memory, note_progress"
+             create_agent, request_permission, ask_operator, escalate, send_message, \
+             write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
             assert_eq!(
