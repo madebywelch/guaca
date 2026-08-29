@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Guaca icon — variants</title>
+<style>
+  :root {
+    --ink: #0b0b0a; --paper: #ffffff; --rail: #f5f3ee; --edge: #e2e0da;
+    --muted: #54524d; --faint: #8a877f; --amber: #b4530a; --slate: #2f4858;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+    color: var(--ink); background: var(--rail);
+  }
+  main { max-width: 1180px; margin: 0 auto; padding: 56px 32px 120px; }
+  h1 { font-size: 34px; letter-spacing: -0.02em; margin: 0 0 4px; }
+  h2 {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--faint); margin: 56px 0 16px; font-weight: 600;
+  }
+  .lede { max-width: 64ch; color: var(--muted); margin: 0 0 10px; }
+  .lede strong { color: var(--ink); font-weight: 600; }
+
+  .bar {
+    position: sticky; top: 0; z-index: 10; display: flex; gap: 22px; flex-wrap: wrap;
+    align-items: center; margin: 28px 0 0; padding: 12px 16px;
+    background: rgba(245,243,238,0.93); backdrop-filter: blur(8px);
+    border: 1px solid var(--edge); border-radius: 10px;
+  }
+  .bar label { font-size: 12px; color: var(--muted); display: flex; gap: 7px; align-items: center; cursor: pointer; }
+  .bar .group { display: flex; gap: 2px; background: #fff; border: 1px solid var(--edge); border-radius: 7px; padding: 2px; }
+  .bar button {
+    font: inherit; font-size: 12px; border: 0; background: transparent;
+    color: var(--muted); padding: 4px 10px; border-radius: 5px; cursor: pointer;
+  }
+  .bar button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; }
+  .card {
+    background: #fff; border: 1px solid var(--edge); border-radius: 12px;
+    padding: 20px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .card.pick { border-color: var(--amber); box-shadow: 0 0 0 3px #fdeed9; }
+  .card h3 { margin: 0; font-size: 17px; letter-spacing: -0.01em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .card h3 .fam { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); font-weight: 600; }
+  .card p { margin: 0; font-size: 13px; color: var(--muted); min-height: 4.8em; }
+  .tag {
+    font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700;
+    color: var(--amber); border: 1px solid currentColor; border-radius: 4px; padding: 1px 5px;
+  }
+
+  .stage { display: flex; justify-content: center; align-items: center; padding: 24px; border-radius: 10px; }
+  .ladder { display: flex; align-items: flex-end; justify-content: space-around; gap: 12px; padding: 18px 16px; border-radius: 10px; }
+  .rung { display: flex; flex-direction: column; align-items: center; gap: 7px; }
+  .rung span { font: 10px/1.3 ui-monospace, monospace; color: var(--faint); text-align: center; }
+
+  body[data-surface="paper"] .stage, body[data-surface="paper"] .ladder, body[data-surface="paper"] .row {
+    background: #fff; box-shadow: inset 0 0 0 1px var(--edge);
+  }
+  body[data-surface="ink"] .stage, body[data-surface="ink"] .ladder, body[data-surface="ink"] .row { background: #17171a; }
+  body[data-surface="ink"] .rung span, body[data-surface="desk"] .rung span { color: rgba(255,255,255,0.7); }
+  body[data-surface="desk"] .stage, body[data-surface="desk"] .ladder, body[data-surface="desk"] .row {
+    background: linear-gradient(145deg, #6d80a4 0%, #47597c 46%, #8b7b93 100%);
+  }
+
+  .row { display: flex; flex-wrap: wrap; gap: 24px; padding: 24px; border-radius: 12px; margin-bottom: 12px; }
+  .row .rung span { max-width: 78px; }
+
+  footer { margin-top: 64px; font-size: 13px; color: var(--muted); max-width: 68ch; }
+  code { font: 12px ui-monospace, monospace; background: var(--rail); border: 1px solid var(--edge); border-radius: 4px; padding: 1px 5px; }
+</style>
+</head>
+<body data-surface="desk">
+<main>
+  <h1>Guaca icon</h1>
+  <p class="lede">
+    What ships today is three concentric ellipses in a green that no longer exists in the app:
+    <code>--flesh</code> was ripe avocado and is now the signal amber. Primitive and off-brand are two
+    separate problems, and only one of them is fixed by picking better colors.
+  </p>
+  <p class="lede">
+    The decision underneath is <strong>what the icon is of</strong>. The name says avocado. The app says
+    a round creature made of clay whose eyes do the acting. The product says agents talking to agents.
+    Each variant below picks one and commits. <strong>Pair was chosen</strong>: the app is the only
+    one of the three that no competitor can copy, and two creatures aimed at each other say it without
+    a word of explanation. Everything else here is kept as the record of what it was chosen over.
+  </p>
+  <p class="lede">
+    The creature variants are drawn by the app's own <code>bodyPoints</code>, <code>outline</code> and
+    gaze math, ported from <code>src/avatars/form.ts</code>. They are the real species at rest, not a
+    sketch of it. Every color is a token from <code>src/styles.css</code>; nothing here was invented.
+  </p>
+
+  <div class="bar">
+    <label>Behind
+      <span class="group" id="surface">
+        <button data-v="desk" aria-pressed="true">Desktop</button>
+        <button data-v="paper" aria-pressed="false">Paper</button>
+        <button data-v="ink" aria-pressed="false">Ink</button>
+      </span>
+    </label>
+    <label><input type="checkbox" id="inset" checked> macOS padding (824/1024)</label>
+    <label><input type="checkbox" id="mono"> Monochrome (menu-bar test)</label>
+    <label><input type="checkbox" id="tile" checked> Tile</label>
+    <label><input type="checkbox" id="grid"> Center lines</label>
+  </div>
+
+  <h2>Variants</h2>
+  <div class="cards" id="cards"></div>
+
+  <h2>The dock test — every variant at 64, 32 and 16</h2>
+  <p class="lede">
+    This is the row that settles it. A dock icon is judged at 64 among strangers and a menu-bar glyph at
+    16 in one color. Turn on <strong>Monochrome</strong> for the second of those. Anything that goes to
+    mush here loses regardless of how it looks at 512.
+  </p>
+  <div class="row" id="dock64"></div>
+  <div class="row" id="dock32"></div>
+  <div class="row" id="dock16"></div>
+
+  <footer>
+    <p>
+      Once one is picked it gets encoded in <code>scripts/make-icon.py</code>, the stdlib rasterizer that
+      writes the 1024&times;1024 source <code>cargo tauri icon</code> derives every platform size from,
+      and its outline half in <code>scripts/make-tray.py</code>. The tray glyph is already an egg
+      outline, so a mark that is an egg keeps the menu bar and the dock speaking one language for free.
+    </p>
+  </footer>
+</main>
+
+<script>
+/* ===========================================================================
+   Tokens. src/styles.css, and nothing invented.
+   =========================================================================== */
+const T = {
+  ink: "#0b0b0a", paper: "#ffffff", rail: "#f5f3ee",
+  amber: "#b4530a", amberSoft: "#fdeed9",
+  slate: "#2f4858", slateSoft: "#e9eff3", mint: "#14713f",
+};
+
+/* The shipping icon's colors, kept only so the comparison is honest. These are
+   the one set on this page that are not app tokens, which is the whole point. */
+const OLD = { tile: "#14281d", skin: "#386641", flesh: "#a7c957", pit: "#8b5e34" };
+
+/* ===========================================================================
+   Geometry, ported from src/avatars/form.ts. Static: t = 0, no mood, but the
+   gaze term is kept, because a body that leans after its eyes is the one thing
+   that separates a creature from an object and this page has to show both.
+   =========================================================================== */
+const FORM = { box: 64, center: 32, radius: 20, samples: 28 };
+const TAU = Math.PI * 2;
+const PULL = { swell: 0.8, flatten: 0.32, lean: 0.1, width: 0.7 };
+
+function press(a, th, w, amp) {
+  let d = a - th * TAU;
+  while (d > Math.PI) d -= TAU;
+  while (d < -Math.PI) d += TAU;
+  return amp * Math.exp(-(d * d) / (w * w));
+}
+
+function bodyPoints(lump, shape = {}, gaze) {
+  const gx = gaze ? gaze[0] : 0, gy = gaze ? gaze[1] : 0;
+  const reach = Math.hypot(gx, gy);
+  const R = FORM.radius;
+  const cx = FORM.center + gx * R * PULL.lean;
+  const cy = FORM.center + gy * R * PULL.lean;
+  const ax = lump.ax * (shape.aspect ? shape.aspect[0] : 1);
+  const ay = lump.ay * (shape.aspect ? shape.aspect[1] : 1);
+  const towards = reach > 0.004 ? Math.atan2(gy, gx) / TAU : 0;
+  const pts = [];
+  for (let i = 0; i < FORM.samples; i++) {
+    const a = (i / FORM.samples) * TAU;
+    let rr = 1;
+    for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
+    if (reach > 0.004) {
+      rr += press(a, towards, PULL.width, reach * PULL.swell);
+      rr += press(a, towards + 0.5, PULL.width + 0.1, -reach * PULL.flatten);
+    }
+    if (shape.press) for (const p of shape.press) rr += press(a, p.th, p.w, p.amp);
+    pts.push([cx + Math.cos(a) * R * rr * ax, cy + Math.sin(a) * R * rr * ay]);
+  }
+  return pts;
+}
+
+/** Catmull-Rom through a closed loop, as cubics. form.ts, verbatim. */
+function outline(pts) {
+  const d = [`M${pts[0][0].toFixed(2)} ${pts[0][1].toFixed(2)}`];
+  for (let i = 0; i < pts.length; i++) {
+    const p0 = pts[(i - 1 + pts.length) % pts.length], p1 = pts[i];
+    const p2 = pts[(i + 1) % pts.length], p3 = pts[(i + 2) % pts.length];
+    const c1x = p1[0] + (p2[0] - p0[0]) / 6, c1y = p1[1] + (p2[1] - p0[1]) / 6;
+    const c2x = p2[0] - (p3[0] - p1[0]) / 6, c2y = p2[1] - (p3[1] - p1[1]) / 6;
+    d.push(`C${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`);
+  }
+  return d.join("") + "Z";
+}
+
+/**
+ * Seat a body in the box: longest dimension to `span`, optically centered.
+ *
+ * Every variant is sized by this rather than by a hand-picked scale, so two of
+ * them side by side are actually the same weight and a change to a lump cannot
+ * quietly make one mark bigger than the rest.
+ */
+function seat(pts, span, cx = FORM.center, cy = FORM.center) {
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k = span / Math.max(x1 - x0, y1 - y0);
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+  const out = pts.map(([x, y]) => [cx + (x - mx) * k, cy + (y - my) * k]);
+  const oxs = out.map((p) => p[0]), oys = out.map((p) => p[1]);
+  out.box = {
+    w: Math.max(...oxs) - Math.min(...oxs),
+    h: Math.max(...oys) - Math.min(...oys),
+    top: Math.min(...oys), bottom: Math.max(...oys),
+    left: Math.min(...oxs), right: Math.max(...oxs),
+  };
+  return out;
+}
+
+/* The cast. `orb` is lifted from src/avatars/catalog.ts. `pit` is tuned for the
+   icon: a k=1 lobe at phase 0 is wide at the bottom and narrow at the top,
+   which is an avocado without anybody drawing one. */
+const LUMPS = {
+  orb: { ax: 1, ay: 1, sig: [{ k: 2, amp: 0.02, phase: 0.4 }] },
+  pit: { ax: 0.80, ay: 1.10, sig: [{ k: 1, amp: 0.105, phase: 0 }, { k: 2, amp: 0.022, phase: 0 }] },
+};
+
+/** How much of the tile the mark takes. One number, so every variant matches. */
+const SPAN = 40;
+
+/**
+ * The pair: one big body and one small one, each leaning after its own look.
+ *
+ * Two agents, and the whole of what the icon says is in the relationship rather
+ * than in either shape, so the numbers that carry it are the sizes (clearly
+ * unequal, or it reads as one thing split in half), the diagonal, and the gap.
+ * Both eyes are aimed across that gap, which is also what the gaze term bends
+ * the two silhouettes along.
+ */
+const PAIR = {
+  big: { span: 29.0, at: [25.5, 36.2], gaze: [0.22, -0.16], eye: 0.20, look: [0.15, -0.11] },
+  small: { span: 18.5, at: [42.6, 23.4], gaze: [-0.22, 0.16], eye: 0.22, look: [-0.13, 0.10] },
+};
+
+function pairBodies() {
+  return [PAIR.big, PAIR.small].map((c) => {
+    const b = seat(bodyPoints(LUMPS.pit, {}, c.gaze), c.span, c.at[0], c.at[1]);
+    b.eye = [
+      c.at[0] + b.box.w * c.look[0],
+      c.at[1] + b.box.h * c.look[1],
+      b.box.w * c.eye,
+    ];
+    return b;
+  });
+}
+
+function circle(cx, cy, r, fill) { return `<circle cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" r="${r.toFixed(2)}" fill="${fill}"/>`; }
+function path(d, fill) { return `<path d="${d}" fill="${fill}"/>`; }
+
+/** An eye: one stroke, four numbers, per src/avatars/eyes.ts. Idle is { w: .02, h: 2 }. */
+function eye(x, y, r, e, mirror, fill) {
+  const w = (e.w ?? 0) * r, c = (e.c ?? 0) * r, a = (e.a ?? 0) * (mirror ? -1 : 1);
+  return `<g transform="translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${a})">`
+    + `<path d="M${-w} 0 Q0 ${-2 * c} ${w} 0" fill="none" stroke="${fill}"`
+    + ` stroke-width="${((e.h ?? 2) * r).toFixed(2)}" stroke-linecap="round"/></g>`;
+}
+
+/** Superellipse. n = 5 is close to the macOS continuous corner. */
+function squircle(n = 5, steps = 180) {
+  const a = FORM.box / 2, c = FORM.center, pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * TAU, ct = Math.cos(t), st = Math.sin(t);
+    pts.push(
+      (c + a * Math.sign(ct) * Math.abs(ct) ** (2 / n)).toFixed(2) + " " +
+      (c + a * Math.sign(st) * Math.abs(st) ** (2 / n)).toFixed(2),
+    );
+  }
+  return "M" + pts.join("L") + "Z";
+}
+const TILE = squircle();
+
+/* ===========================================================================
+   The variants.
+
+   Each declares its own colors as a function of monochrome, because "which
+   shape is the hole" is a per-variant fact: the pit is punched to the tile in
+   one and is the only saturated thing in another, and a single shared palette
+   gets one of those wrong.
+   =========================================================================== */
+const VARIANTS = [
+  {
+    id: "current", name: "Current", family: "What is shipping",
+    thesis: "Three concentric ellipses in the avocado green the app stopped using a year ago. Here to be compared against, not chosen.",
+    colors: (m) => m
+      ? { field: "#fff", mass: T.ink, hole: "#fff" }
+      : { field: OLD.tile, mass: OLD.flesh, hole: OLD.pit, ring: OLD.skin },
+    draw(P) {
+      return path(TILE, P.field)
+        + `<ellipse cx="32" cy="33.3" rx="19.2" ry="23.4" fill="${P.ring ?? P.mass}"/>`
+        + `<ellipse cx="32" cy="33.3" rx="15" ry="18.9" fill="${P.mass}"/>`
+        + circle(32, 32.3, 6.7, P.hole);
+    },
+  },
+  {
+    id: "pit", name: "Pit", family: "The name",
+    thesis: "Two shapes and two colors. The pit is a hole punched through to the tile rather than a third ellipse laid on top of it, so the mark is the negative space and there is nothing in it left to lose at 16px.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      const b = seat(bodyPoints(LUMPS.pit), SPAN, 32, 32.6);
+      return path(TILE, P.field)
+        + path(outline(b), P.mass)
+        + circle(32, b.box.top + b.box.h * 0.44, b.box.w * 0.295, P.hole);
+    },
+  },
+  {
+    id: "oneeye", name: "One eye", family: "Name + product",
+    thesis: "The same silhouette, but the dark center sits high and off-axis and the body swells after it, because that is what the app's own gaze term does. A pit that is looking at you. The name and the product stop arguing.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      const g = [0.11, -0.13];
+      const b = seat(bodyPoints(LUMPS.pit, {}, g), SPAN, 32, 32.8);
+      return path(TILE, P.field)
+        + path(outline(b), P.mass)
+        + circle(32 + b.box.w * 0.06, b.box.top + b.box.h * 0.375, b.box.w * 0.275, P.hole);
+    },
+  },
+  {
+    id: "twoeyes", name: "Two eyes", family: "The product",
+    thesis: "The app's drawing, unmodified: the creature an operator watches all day, at rest. Warmest at 512 and the first thing on this page to fail at 16.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      const b = seat(bodyPoints(LUMPS.pit), SPAN, 32, 32.6);
+      const r = b.box.w * 0.145, y = b.box.top + b.box.h * 0.375, s = b.box.w * 0.275;
+      return path(TILE, P.field)
+        + path(outline(b), P.mass)
+        + eye(32 - s, y, r, { w: 0.02, h: 2 }, true, P.hole)
+        + eye(32 + s, y, r, { w: 0.02, h: 2 }, false, P.hole);
+    },
+  },
+  {
+    id: "wedge", name: "Wedge", family: "The name",
+    thesis: "The half, actually cut. The only silhouette here that is not a blob, which is worth real money in a dock where every neighbor is a blob, and the only one that says half rather than whole.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      const b = seat(bodyPoints(LUMPS.pit), SPAN * 1.08, 32, 32.6);
+      const cut = b.box.left + b.box.w * 0.26;
+      /* Center what is left of the mark, not the mark it was cut from. */
+      const dx = 32 - (cut + b.box.right) / 2;
+      return path(TILE, P.field)
+        + `<clipPath id="wedgecut"><rect x="${cut.toFixed(2)}" y="0" width="64" height="64"/></clipPath>`
+        + `<g transform="translate(${dx.toFixed(2)} 0)">`
+        + `<g clip-path="url(#wedgecut)">${path(outline(b), P.mass)}</g>`
+        + circle(cut + (b.box.right - cut) * 0.50, b.box.top + b.box.h * 0.44, b.box.w * 0.255, P.hole)
+        + `</g>`;
+    },
+  },
+  {
+    id: "stone", name: "Stone", family: "The name",
+    thesis: "The mark inverted. A pale icon is rare in a dock full of dark ones, and it matches an app whose page is the only white thing on screen. The pit is the only saturated shape, which is exactly how amber is spent everywhere else.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.rail, mass: T.ink, hole: T.amber },
+    draw(P) {
+      const b = seat(bodyPoints(LUMPS.pit), SPAN, 32, 32.6);
+      return path(TILE, P.field)
+        + path(outline(b), P.mass)
+        + circle(32, b.box.top + b.box.h * 0.44, b.box.w * 0.34, P.hole);
+    },
+  },
+  {
+    id: "glyph", name: "Glyph", family: "The name",
+    thesis: "The menu-bar mark promoted to the dock. The tray is already an egg outline, so this is the one variant where the 1024px icon and the 16px glyph are literally the same drawing at two weights.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "FG" } : { field: T.paper, mass: T.ink, hole: T.amber },
+    draw(P) {
+      const b = seat(bodyPoints(LUMPS.pit), SPAN, 32, 32.6);
+      return path(TILE, P.field)
+        + `<path d="${outline(b)}" fill="none" stroke="${P.mass}" stroke-width="${(b.box.w * 0.15).toFixed(2)}"/>`
+        + circle(32, b.box.top + b.box.h * 0.44, b.box.w * 0.28, P.hole);
+    },
+  },
+  {
+    id: "pair", name: "Pair", family: "The product", pick: true,
+    thesis: "Chosen. What the app actually is: two agents, one big and one small, each leaning after a look aimed at the other. The relationship carries it, not either shape, so the load-bearing numbers are the unequal masses, the diagonal and the gap between them. Recomposed from the first draft, which put two dark bodies of one size in a dark box and went to mush by 32.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE", second: "FG" } : { field: T.ink, mass: T.amber, hole: T.ink, second: T.rail },
+    draw(P) {
+      const [big, small] = pairBodies();
+      return path(TILE, P.field)
+        + path(outline(big), P.mass)
+        + circle(big.eye[0], big.eye[1], big.eye[2], P.hole)
+        + path(outline(small), P.second)
+        + circle(small.eye[0], small.eye[1], small.eye[2], P.hole);
+    },
+  },
+  {
+    id: "crew", name: "Crew", family: "The product",
+    thesis: "A crew standing inside its circle, which is grammar the app already owns in src/lib/orb.ts. Reads immediately as a group of somethings. Does not read as Guaca.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      let s = path(TILE, P.field) + circle(32, 32, SPAN / 2 + 2, P.mass);
+      for (const [dx, dy] of [[0, -8.4], [-7.8, 5.0], [7.8, 5.0]]) {
+        s += path(outline(seat(bodyPoints(LUMPS.orb), 13.4, 32 + dx, 32 + dy)), P.hole);
+      }
+      return s;
+    },
+  },
+  {
+    id: "letter", name: "Letter", family: "The control",
+    thesis: "A G whose counter is the pit. The safe developer-tool answer, included so it can be rejected against the others rather than on taste, and so the alternative to a mark is on the page.",
+    colors: (m) => m ? { field: "TILE", mass: "FG", hole: "TILE" } : { field: T.ink, mass: T.amber, hole: T.ink },
+    draw(P) {
+      const G = "M32 11 A21 21 0 1 0 53 32 L53 29.5 L33.5 29.5 L33.5 37.5 L44.6 37.5"
+        + " A13 13 0 1 1 32 19 A12.9 12.9 0 0 1 41.3 22.9 L47 17 A21 21 0 0 0 32 11 Z";
+      return path(TILE, P.field) + path(G, P.mass);
+    },
+  },
+];
+
+/* ===========================================================================
+   Rendering.
+   =========================================================================== */
+const state = { surface: "desk", inset: true, mono: false, tile: true, grid: false };
+
+/* Every control is in the query string, so a particular view is a link rather
+   than a sentence telling somebody which four boxes to tick. */
+const params = new URLSearchParams(location.search);
+for (const key of ["inset", "mono", "tile", "grid"]) {
+  if (params.has(key)) state[key] = params.get(key) !== "0";
+}
+if (params.has("surface")) state.surface = params.get("surface");
+
+const MONO_BG = { paper: "#ffffff", ink: "#17171a", desk: "#5c6e91" };
+const MONO_FG = { paper: T.ink, ink: "#ffffff", desk: "#ffffff" };
+
+function resolve(variant) {
+  const P = variant.colors(state.mono);
+  if (!state.mono) return P;
+  const bg = MONO_BG[state.surface], fg = MONO_FG[state.surface];
+  const out = {};
+  for (const [k, v] of Object.entries(P)) out[k] = v === "TILE" ? bg : v === "FG" ? fg : v;
+  return out;
+}
+
+function svg(variant, px) {
+  const inner = variant.draw(resolve(variant));
+  /* macOS content is 824 of a 1024 canvas. Without it every icon on this page
+     looks a size larger than it will actually sit in the dock. */
+  const k = state.inset ? 824 / 1024 : 1;
+  const off = ((1 - k) * FORM.box) / 2;
+  const clip = `c-${variant.id}-${px}`;
+  const marks = state.tile
+    ? `<g clip-path="url(#${clip})">${inner}</g>`
+    : stripTile(inner);
+  const rules = state.grid
+    ? `<g stroke="#ff3b30" stroke-width="0.25" opacity="0.6">`
+      + `<line x1="32" y1="0" x2="32" y2="64"/><line x1="0" y1="32" x2="64" y2="32"/></g>`
+    : "";
+  return `<svg width="${px}" height="${px}" viewBox="0 0 ${FORM.box} ${FORM.box}" shape-rendering="geometricPrecision">`
+    + `<defs><clipPath id="${clip}"><path d="${TILE}"/></clipPath></defs>`
+    + `<g transform="translate(${off.toFixed(3)} ${off.toFixed(3)}) scale(${k})">${marks}${rules}</g></svg>`;
+}
+
+/** Drop the leading tile path so a mark can be judged with no field under it. */
+function stripTile(inner) {
+  return inner.replace(/^<path d="M[^"]*Z" fill="[^"]*"\/>/, "");
+}
+
+function draw() {
+  document.body.dataset.surface = state.surface;
+  const only = params.get("only");
+  const shown = only ? VARIANTS.filter((v) => only.split(",").includes(v.id)) : VARIANTS;
+  document.getElementById("cards").innerHTML = shown.map((v) => `
+    <div class="card${v.pick ? " pick" : ""}">
+      <h3>${v.name}<span class="fam">${v.family}</span>${v.pick ? '<span class="tag">Chosen</span>' : ""}</h3>
+      <div class="stage">${svg(v, 200)}</div>
+      <div class="ladder">${[128, 64, 32, 16].map((s) => `<div class="rung">${svg(v, s)}<span>${s}</span></div>`).join("")}</div>
+      <p>${v.thesis}</p>
+    </div>`).join("");
+
+  for (const [id, size] of [["dock64", 64], ["dock32", 32], ["dock16", 16]]) {
+    document.getElementById(id).innerHTML = shown
+      .map((v) => `<div class="rung">${svg(v, size)}<span>${v.name}</span></div>`).join("");
+  }
+}
+
+document.getElementById("surface").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  state.surface = b.dataset.v;
+  for (const other of e.currentTarget.querySelectorAll("button")) {
+    other.setAttribute("aria-pressed", String(other === b));
+  }
+  draw();
+});
+for (const id of ["inset", "mono", "tile", "grid"]) {
+  document.getElementById(id).checked = state[id];
+  document.getElementById(id).addEventListener("change", (e) => {
+    state[id] = e.target.checked;
+    draw();
+  });
+}
+for (const b of document.querySelectorAll("#surface button")) {
+  b.setAttribute("aria-pressed", String(b.dataset.v === state.surface));
+}
+draw();
+</script>
+</body>
+</html>
