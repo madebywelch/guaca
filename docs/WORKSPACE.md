@@ -1344,6 +1344,20 @@ somebody else's server. A local endpoint is marked as local because that changes
 what the key field means: an empty key beside a warning about a missing key is a
 state an operator will try to fix forever.
 
+About says which commit it is, rather than a version. The number in
+`package.json` and `tauri.conf.json` has not moved since the first commit and is
+not going to: what ships here is a commit, so a version read off either file
+tells an operator nothing and tells a bug report less. It used to be read
+through Tauri's `getVersion`, which is exactly that placeholder arriving over
+IPC. So `vite.config.ts` asks git for the short hash while the bundle is being
+built and `src/lib/build.ts` is the one place it is read back from. Nothing is
+asked at runtime, because the built app carries no repository to ask. A tree
+with uncommitted edits on top of that commit gets `-dirty`, because an
+unqualified hash sends whoever reads it to check out a commit that did not
+produce the build in front of them. And a build made outside a repository at all
+draws a dash: it is the same answer the pane already gave for a version it could
+not read, and it is still a thing to say rather than a failure worth a banner.
+
 ## The reading column has two surfaces; the rail has one
 
 `styles.css` used to say the surface never follows the OS, and the argument was
