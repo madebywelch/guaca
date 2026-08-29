@@ -102,7 +102,8 @@ export function Inspector({ agent, onEditProfile }: Props) {
     taken();
   }, [asked, taken]);
 
-  // Nothing to inspect on the activity board, which is about the whole crew.
+  // Nothing to inspect with no channel open, which is what going inside a crew
+  // the open one was not in leaves behind.
   if (!agent) return null;
 
   if (!open) {

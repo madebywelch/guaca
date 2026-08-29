@@ -8,7 +8,7 @@ import { useFollowBottom } from "./follow";
  *
  * The report behind this: being scrolled up in a channel and thrown back to
  * the end of it, at times nobody could name. Two of them were nameable. A
- * channel opened from the activity board was listening for scrolls on a node
+ * channel reopened after a pair thread was listening for scrolls on a node
  * that had already been thrown away, so it never learned the operator had
  * moved at all; and the eighty-pixel threshold it used when it did work could
  * not be climbed out of while text was arriving, because every frame put the
@@ -335,8 +335,8 @@ describe("following the newest line", () => {
   });
 
   it("listens to the box that is on screen now, not the one that was", () => {
-    // A transcript is unmounted whenever the pane shows a pair thread or the
-    // activity board, and comes back as a different node. Bound to the old one,
+    // A transcript is unmounted whenever the pane shows a pair thread, or
+    // nothing at all, and comes back as a different node. Bound to the old one,
     // nothing ever reported a scroll and every message won.
     const view = attach();
     view.hook.pin();

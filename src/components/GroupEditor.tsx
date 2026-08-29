@@ -28,6 +28,7 @@ import {
   type SubscriptionStatus,
 } from "../lib/types";
 import { CredentialList } from "./CredentialList";
+import { GroupActivity } from "./GroupActivity";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
@@ -38,7 +39,7 @@ interface Props {
   onClose: () => void;
 }
 
-const SECTIONS = ["general", "provider", "limits", "plugins", "repositories"] as const;
+const SECTIONS = ["general", "provider", "limits", "plugins", "repositories", "activity"] as const;
 
 type Section = (typeof SECTIONS)[number];
 
@@ -48,6 +49,7 @@ const SECTION_LABELS: Record<Section, string> = {
   limits: "Limits",
   plugins: "Plugins",
   repositories: "Repositories",
+  activity: "Activity",
 };
 
 /**
@@ -56,7 +58,7 @@ const SECTION_LABELS: Record<Section, string> = {
  * belong to something, and there is no row to hang any of them on until the
  * group is created.
  */
-const NEEDS_GROUP: readonly Section[] = ["plugins", "repositories"];
+const NEEDS_GROUP: readonly Section[] = ["plugins", "repositories", "activity"];
 
 /** What a group says when it has no opinion about who pays. */
 const INHERIT = "inherit";
@@ -366,7 +368,14 @@ export function GroupEditor({ group, onClose }: Props) {
             ))}
           </div>
 
-          <div className="settings__pane">
+          {/* The board brings its own scrolling and wants the whole pane, so
+              the pane stops being a padded column of prose for that one
+              section. See `.settings__pane--board`. */}
+          <div
+            className={
+              section === "activity" ? "settings__pane settings__pane--board" : "settings__pane"
+            }
+          >
             {section === "general" && (
               <>
                 <h3 className="settings__title">General</h3>
@@ -674,6 +683,17 @@ export function GroupEditor({ group, onClose }: Props) {
                   not inherit it.
                 </p>
                 <RepositoryList groupId={group.id} crew={members} />
+              </>
+            )}
+
+            {section === "activity" && group && (
+              <>
+                <h3 className="settings__title">Activity</h3>
+                <p className="settings__lede">
+                  Who spoke to whom in this crew, in order, one board per run. Click any arrow to
+                  read the message. Read when this pane was opened; reopen it for anything since.
+                </p>
+                <GroupActivity group={group.id} />
               </>
             )}
 

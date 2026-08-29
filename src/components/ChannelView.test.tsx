@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ACTIVITY_CHANNEL, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, AgentCard, Envelope, MessageId, Part, ToolOutcome } from "../lib/types";
 import { ChannelView } from "./ChannelView";
@@ -650,42 +650,21 @@ describe("a transcript scrolled up", () => {
     };
   }
 
-  it("stays where it was put when a message arrives, even opened from the activity board", () => {
-    // The report: reading back through a cascade and being thrown to the end of
-    // it, at times nobody could name. This was one of them. The transcript is
-    // unmounted while the activity board is up, so the channel opened after it
-    // is a different node, and the listener that noticed the operator scrolling
-    // was still bound to the one that had been thrown away. Nothing reported a
-    // scroll, so nothing had moved, so every message won.
-    const rows = Array.from({ length: 12 }, () => envelope({}));
-    useStore.setState({
-      agents: [card(MANAGER, "Manager"), card(CHEF, "Chef")],
-      messages: { [MANAGER]: rows },
-      streams: {},
-      reasoning: {},
-      activity: {},
-      lastActive: {},
-      banner: null,
+  /**
+   * Puts messages in the channel and waits for the frame the transcript writes
+   * its offset on.
+   *
+   * `follow` writes now and again on the next frame, and skips the second call
+   * while one is already booked. Both are deliberate — see `lib/follow.ts` —
+   * and both mean the offset this asserts against is settled a frame later
+   * than the state change that caused it.
+   */
+  async function settle(next: () => Envelope[]) {
+    await act(async () => {
+      useStore.setState({ messages: { [MANAGER]: next() } });
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
     });
-
-    const { container, rerender } = render(
-      <ChannelView channel={ACTIVITY_CHANNEL} onOpenMenu={() => {}} />,
-    );
-    rerender(<ChannelView channel={MANAGER} onOpenMenu={() => {}} />);
-
-    const scroller = container.querySelector<HTMLElement>(".pane__scroll");
-    if (!scroller) throw new Error("no transcript to scroll");
-    const box = measure(scroller, 4000, 400);
-    // At the end, and then reading back through it.
-    box.to(3600);
-    box.to(1200);
-
-    act(() => {
-      useStore.setState({ messages: { [MANAGER]: [...rows, fromPeer("and another thing")] } });
-    });
-
-    expect(box.at()).toBe(1200);
-  });
+  }
 
   it("stays where it was put after a pair thread has been read and closed", async () => {
     // The transcript is unmounted while a thread is up, so what comes back is a
@@ -705,12 +684,20 @@ describe("a transcript scrolled up", () => {
     const scroller = container.querySelector<HTMLElement>(".pane__scroll");
     if (!scroller) throw new Error("no transcript to scroll");
     const box = measure(scroller, 4000, 400);
-    box.to(3600);
+
+    // The box only acquires a size here, so the transcript is brought to the
+    // end the way a real one arrives there: a message lands and it follows.
+    // Setting the offset by hand instead leaves the hook holding the end of a
+    // box that had no height when it last looked, which is a state no window
+    // can be in and which decided this assertion by whichever timer fired
+    // first.
+    await settle(() => [...rows, fromPeer("something newer")]);
+    expect(box.at()).toBe(3600);
+
+    // And now read back up it.
     box.to(900);
 
-    act(() => {
-      useStore.setState({ messages: { [MANAGER]: [...rows, fromPeer("and another thing")] } });
-    });
+    await settle(() => [...rows, fromPeer("something newer"), fromPeer("and another thing")]);
 
     expect(box.at()).toBe(900);
   });

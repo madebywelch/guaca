@@ -72,78 +72,106 @@ describe("the file reading view", () => {
   });
 });
 
-describe("the dark columns", () => {
+describe("the columns that are not the page", () => {
   /**
-   * The rail and the group column are dark under both surfaces, so a token the
-   * reading column redefines for dark paper repaints them unless they pin it.
-   * `--flesh` on dark paper is a bright leaf green meant to sit on a near-black
-   * page; landing it on the rail turns Guaca's one accent into a highlighter,
-   * and no DOM assertion notices, which is the whole of the note about it in
-   * `docs/WORKSPACE.md`.
+   * The rail, the crews' column and the inspector follow the surface, and every
+   * value they are drawn from has to be declared for both of them.
+   *
+   * They used to be ink whichever surface the operator picked, which meant they
+   * pinned their own `--flesh`, `--flesh-soft` and `--alarm` against a reading
+   * column that could go dark underneath them. That is gone: the left edge of
+   * the app and the right edge of it are now the same ground, a shade off the
+   * page rather than opposite it. What is left to keep true is the other half
+   * of the same trap. A `--rail-*` name declared for paper and forgotten in the
+   * ink block is a column that stays off-white in a dark room, and no DOM
+   * assertion sees a color.
    *
    * Checked in the source rather than through the cascade, and that is not
    * laziness: jsdom resolves a custom property declared on an element but does
-   * not inherit one down a subtree, so reading `--alarm` off a child of the
-   * column reports nothing at all whether it is pinned or not. The declaration
-   * is the thing that has to be there, so the declaration is what is read.
-   *
-   * Only the two families that are drawn nowhere else are covered. A rule under
-   * `.agent-row` reaching for an unpinned token is the same defect and is not
-   * caught here: that family predates this check and pinning is a property of a
-   * column, so the map below has to say which column a class is inside.
+   * not inherit one down a subtree, so reading a token off a child of a column
+   * reports nothing at all whether it is declared or not. The declaration is
+   * the thing that has to be there, so the declaration is what is read.
    */
-  const SURFACE_VARYING = new Set(
-    [
-      ...(css.match(/:root\[data-surface="dark"\] \{[\s\S]*?\n\}/)?.[0] ?? "").matchAll(
-        /^\s{2}(--[a-z-]+):/gm,
-      ),
-    ].map((found) => found[1]!),
-  );
+  function declared(selector: string): Set<string> {
+    const block = css.match(
+      new RegExp(`${selector.replace(/[[\]"=]/g, "\\$&")} \\{[\\s\\S]*?\\n\\}`),
+    );
+    if (!block) throw new Error(`no ${selector} block`);
+    return new Set([...block[0].matchAll(/^\s{2}(--[a-z-]+):/gm)].map((found) => found[1]!));
+  }
+
+  /** What a block declares a token as, trimmed. */
+  function declaredAs(selector: string, token: string): string {
+    const block = css.match(
+      new RegExp(`${selector.replace(/[[\]"=]/g, "\\$&")} \\{[\\s\\S]*?\\n\\}`),
+    );
+    return block?.[0].match(new RegExp(`^\\s{2}${token}: (.+);$`, "m"))?.[1]?.trim() ?? "";
+  }
+
+  const PAPER = declared(":root");
+  const INK = declared(':root[data-surface="dark"]');
 
   /** Every rule in the file, as its selector and its body. */
   const RULES = [...css.matchAll(/^([^\n@}][^{\n]*)\{\n([\s\S]*?)^\}/gm)];
 
-  /**
-   * Selectors naming one of these class families.
-   *
-   * The suffixes are part of the match on purpose: `.orb__waiting` is drawn
-   * inside the group column exactly as `.orb` is, and a pattern that stopped at
-   * the base class would skip every element that carries the color.
-   */
-  function family(...names: string[]): RegExp {
-    return new RegExp(`(?:^|[\\s,>])\\.(?:${names.join("|")})(?:__|--)?[\\w-]*`);
-  }
-
-  /** What a scope's own base rule declares. */
-  function pinnedOn(scope: string): Set<string> {
-    const base = RULES.find((rule) => rule[1]!.trim() === scope);
-    if (!base) throw new Error(`no base rule for ${scope}`);
-    return new Set([...base[2]!.matchAll(/^\s{2}(--[a-z-]+):/gm)].map((found) => found[1]!));
-  }
-
-  it("found the tokens a surface moves", () => {
-    // Every assertion below is vacuous if this regex stops matching.
-    expect(SURFACE_VARYING.has("--flesh")).toBe(true);
-    expect(SURFACE_VARYING.has("--alarm")).toBe(true);
+  it("found both surface blocks", () => {
+    // Every assertion below is vacuous if these regexes stop matching.
+    expect(PAPER.has("--rail-ground")).toBe(true);
+    expect(INK.has("--ground")).toBe(true);
     expect(RULES.length).toBeGreaterThan(50);
   });
 
-  it.each([
-    [".grail", family("grail", "orb")],
-    [".rail", family("rail")],
-  ])("pin every accent %s draws with", (scope, family) => {
-    const pinned = pinnedOn(scope);
+  /**
+   * The column values that are colors. A width is geometry and has no surface:
+   * `--grail-w` is the same four rem in a dark room. Told apart by the value
+   * rather than by a list, so a color added to the family tomorrow is covered
+   * without anybody remembering to add it here.
+   */
+  const COLORS = [...PAPER].filter(
+    (token) =>
+      /^--(?:rail|grail)-/.test(token) && /^#[0-9a-f]{3,8}$/i.test(declaredAs(":root", token)),
+  );
 
-    for (const [, selector, body] of RULES) {
-      if (!family.test(selector!)) continue;
-      for (const [, token] of body!.matchAll(/var\((--[a-z-]+)/g)) {
-        if (!SURFACE_VARYING.has(token!)) continue;
-        expect(
-          pinned.has(token!),
-          `${selector!.trim()} draws with ${token}, which ${scope} does not pin`,
-        ).toBe(true);
-      }
+  it.each(COLORS)("moves %s with the surface", (token) => {
+    expect(INK.has(token)).toBe(true);
+  });
+
+  /**
+   * Nothing in either navigation column pins an accent any more.
+   *
+   * The pins were right while the columns were ink under both surfaces and are
+   * exactly wrong now: the app has one amber, it means "answer me", and a
+   * column holding a second value for it is a column where the same state is a
+   * different color on the wrong side of a border.
+   */
+  it.each([".rail", ".grail"])("pins no accent of its own (%s)", (scope) => {
+    for (const token of declared(scope)) {
+      expect(
+        /^--(?:flesh|pit|mint|alarm)/.test(token),
+        `${scope} pins ${token}, which the reading column owns`,
+      ).toBe(false);
     }
+  });
+
+  /**
+   * A column's recessed surface is recessed from the column.
+   *
+   * `--sunken` is a hair off white, which is a field on paper and nothing at
+   * all on an off-white panel. It is remapped once, on the three elements every
+   * rule in those columns descends from, so a row added to the inspector
+   * tomorrow is recessed from what it is actually drawn on. This asserts the
+   * remap exists and covers all three, because losing one of them is a panel
+   * whose fields quietly stop having edges.
+   */
+  it("recesses from the column rather than from the page", () => {
+    // Matched against the source rather than against `RULES`, whose selector
+    // group stops at a newline: this rule names its three scopes one per line.
+    const remap = css.match(/([^{}]*)\{\s*--sunken: var\(--rail-sunken\);\s*\}/);
+    expect(remap, "no rule remaps --sunken onto --rail-sunken").toBeTruthy();
+    for (const scope of [".rail,", ".grail,", ".inspector"]) {
+      expect(remap![1]!).toContain(scope);
+    }
+    expect(PAPER.has("--rail-sunken")).toBe(true);
   });
 });
 
@@ -581,12 +609,19 @@ describe("every length is named, not spelled", () => {
    * The px ones this replaced are why the rule mentions units at all: in an app
    * where every other length is a rem, a `24px` blur is a blur that ignores the
    * operator's interface scale.
+   *
+   * `--stage-lift` is the fourth and only lives on one surface, the full-window
+   * machine viewer, which is ink whichever surface the operator picked and so
+   * cannot spend a lift resolved against the reading column. It is named beside
+   * the three other values that surface pins, which is what makes it a decision
+   * rather than a shadow somebody typed.
    */
   it("shadows are a lift, a ring or a glow", () => {
     const bad = declarations()
       .filter((d) => d.property === "box-shadow")
       .filter((d) => d.value !== "none")
       .filter((d) => !d.value.includes("var(--lift-"))
+      .filter((d) => d.value !== "var(--stage-lift)")
       .filter((d) => !d.value.includes("inset"))
       // A glow sits on the thing that casts it: no offset, so nothing about it
       // is claiming height off the page.
