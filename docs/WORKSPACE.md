@@ -895,10 +895,12 @@ different badges and the number of people in each is legible before any single
 face is. Every crew of two or more used to draw the same square of four, which
 made the circle read as the app's own mark rather than as these agents. The
 seating is `src/lib/orb.ts`, in fractions of the ring rather than in pixels, and
-it is sized against the ink instead of the box the ink is drawn in: a character
-fills 62% of its box across and 83% of it down, so the tight axis is vertical
-and `orb.test.ts` holds every ring to the catalog's own construction spec rather
-than to a number copied out of it.
+it is sized against the ink instead of the box the ink is drawn in. Against two
+numbers, since a creature is round and moves: `FORM.reach` is the furthest it
+ever gets from its own center and is what has to stay inside the rim, and
+`FORM.radius` is the body sitting still and is what two faces are spaced on.
+`orb.test.ts` holds every ring to the geometry itself rather than to a number
+copied out of it.
 
 Six is where it stops. A seventh face is a smudge and it makes the six already
 there smaller, so the rest are a count, hung off the rim rather than laid on it:
@@ -1190,10 +1192,11 @@ questions: what to build is decided at the first and settled at the second.
 
 The catalog cannot grow past the character cast, and that is a rule rather than
 an accident. A crew is whatever subset the operator ticked, so two presets
-sharing a silhouette are two agents that look the same in one rail, and the
-silhouette is the only thing that separates them at 22px. A new preset is a new
-ingredient in `avatars/catalog.tsx` or it is not a preset. `lib/cafeteria.test.ts`
-is where that is enforced.
+sharing a character are two agents that look the same in one rail. A new preset
+is a new row in `avatars/catalog.ts` or it is not a preset, and
+`lib/cafeteria.test.ts` is where that is enforced. Since the cast is one species
+told apart by its resting lump and the set of its eyes, a new character is a row
+of numbers rather than a drawing: `docs/CHARACTERS.md`.
 
 A hire copies the preset's fields into an ordinary `AgentDraft` and forgets
 where they came from: there is no preset id on

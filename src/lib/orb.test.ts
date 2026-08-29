@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest";
 
-import { FORM } from "../avatars/catalog";
+import { FORM } from "../avatars/form";
 import { cluster, SEATS } from "./orb";
 
-/** The viewBox every character is drawn in. `AgentAvatar` sets it. */
-const BOX = 64;
-
 /**
- * How far a face's ink reaches from its own center, as a fraction of its box.
+ * How far a face reaches from its own center, as a fraction of its box.
  *
- * Taken from the catalog's construction spec rather than assumed, because the
- * seating is sized against the drawing and not against the box around it: a
- * character that grew inside `FORM` would make every ring here too wide, and
- * nothing else in the app would notice.
+ * Two numbers, because a creature has two extents and they answer different
+ * questions. `most` is the worst case across every mood and every point of
+ * every cycle, and it is what has to stay inside the rim: a face may not be
+ * clipped by its own crew's circle at the moment it looks somewhere. `rest` is
+ * the body sitting still, and it is what two faces are spaced on, because
+ * spacing them on the worst case would push a pair of them apart for a bulge
+ * that happens a fraction of the time and touches nothing when it does.
+ *
+ * Taken from the geometry rather than assumed, so a mood that grew could not
+ * quietly push a face through the rim with nothing in the app noticing.
  */
-const INK = {
-  x: Math.max(FORM.right - BOX / 2, BOX / 2 - FORM.left) / BOX,
-  y: Math.max(FORM.bottom - BOX / 2, BOX / 2 - FORM.top) / BOX,
-};
+const INK = { most: FORM.reach / FORM.box, rest: FORM.radius / FORM.box };
 
 /** The rim of the ring, which is 1px of inset shadow on a 2.4rem circle. */
 const RIM = 0.5 - 1 / 38.4;
@@ -50,8 +50,8 @@ describe("seating a crew", () => {
 
   it.each(Array.from({ length: SEATS }, (_, i) => i + 1))("keeps %i inside the ring", (n) => {
     for (const seat of cluster(crew(n)).seats) {
-      expect(Math.abs(seat.x - 0.5) + INK.x * seat.size).toBeLessThanOrEqual(RIM);
-      expect(Math.abs(seat.y - 0.5) + INK.y * seat.size).toBeLessThanOrEqual(RIM);
+      expect(Math.abs(seat.x - 0.5) + INK.most * seat.size).toBeLessThanOrEqual(RIM);
+      expect(Math.abs(seat.y - 0.5) + INK.most * seat.size).toBeLessThanOrEqual(RIM);
     }
   });
 
@@ -63,7 +63,7 @@ describe("seating a crew", () => {
       for (const b of seats) {
         if (a === b) continue;
         const apart = Math.hypot(a.x - b.x, a.y - b.y);
-        expect(apart).toBeGreaterThanOrEqual(INK.x * 2 * a.size);
+        expect(apart).toBeGreaterThanOrEqual(INK.rest * 2 * a.size);
       }
     }
   });

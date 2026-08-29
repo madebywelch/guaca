@@ -76,6 +76,10 @@ export function Sidebar({
   const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
+  /* The rail is the one surface that draws a whole crew at once, so it is the
+     one that pays for the signals the quieter moods are read from. */
+  const trail = useStore((s) => s.trail);
+  const finishedAt = useStore((s) => s.finishedAt);
   const lastActive = useStore((s) => s.lastActive);
   const selected = useStore((s) => s.selected);
   const select = useStore((s) => s.select);
@@ -395,6 +399,9 @@ export function Sidebar({
           color={agent.color}
           activity={activity[agent.id]}
           lifecycle={agent.lifecycle}
+          work={trail[agent.id]}
+          escalated={stuck.some((one) => one.agentId === agent.id)}
+          finishedAt={finishedAt[agent.id]}
           seed={agent.id}
           gesture={role.gesture}
           look={facing(agent.id, role.facing ?? undefined)}

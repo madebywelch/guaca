@@ -45,7 +45,7 @@ import { MessageModal } from "./WireRow";
  */
 const LANE_REM = 4.5;
 
-const YOU: WirePeer = { id: "human", name: "You", color: "#54524d", avatar: "plain" };
+const YOU: WirePeer = { id: "human", name: "You", color: "#54524d", avatar: "orb" };
 
 interface Props {
   messages: Envelope[];
@@ -368,7 +368,7 @@ function buildBlocks(messages: Envelope[], byId: (id: AgentId) => AgentCard | un
           : participant.kind === "human"
             ? { peer: YOU, gone: false }
             : {
-                peer: { id: "system", name: "Guaca", color: "#2f4858", avatar: "plain" },
+                peer: { id: "system", name: "Guaca", color: "#2f4858", avatar: "orb" },
                 gone: false,
               };
 

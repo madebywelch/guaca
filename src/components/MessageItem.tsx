@@ -328,8 +328,8 @@ export function StreamingMessage({ agent, text }: { agent: AgentCard | undefined
     <article className="msg">
       <div className="msg__gutter">
         <AgentAvatar
-          avatar={agent?.avatar ?? "plain"}
-          color={agent?.color ?? "#c7d96b"}
+          avatar={agent?.avatar ?? "orb"}
+          color={agent?.color ?? "#5a7d99"}
           size="sm"
           seed={agent?.id}
           activity={{ state: "thinking" }}
