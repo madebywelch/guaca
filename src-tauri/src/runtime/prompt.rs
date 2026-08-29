@@ -880,7 +880,8 @@ pub fn system_prompt(
              Do not write to a peer to acknowledge one. Nobody is waiting on you, so a thank-you \
              or a note that you have read something will be refused. The one exception is real \
              work: if what you have just read means a peer has something to do, send it with \
-             `send_message` and intent \"work\", saying plainly what you need done. Wanting to \
+             `send_message` and intent \"work\", saying plainly what you need done. They will \
+             report back to you when it is done, so do not chase them for it. Wanting to \
              stay in touch is not work. Anything else you still need belongs in your note rather \
              than in a message.\n\n\
              If something does need saying, your final message is filed as a short note in your \
@@ -893,11 +894,10 @@ pub fn system_prompt(
              woke you asked for an action, and reading it is not doing it. If part of it is \
              beyond you or a check fails, do the part you can and say exactly what stopped the \
              rest.\n\n\
-             Do not answer the agent that asked. Your reply is filed as a short note in your own \
-             channel, where the operator reads it, so write what you did and what came of it: \
-             what you sent, to whom, and what the result was. Saying nothing here is the one \
-             wrong answer, because it leaves the operator watching an agent that appears to have \
-             stopped.\n"
+             Your reply is filed as a short note in your own channel, where the operator reads \
+             it, so write what you did and what came of it: what you sent, to whom, and what the \
+             result was. Saying nothing here is the one wrong answer, because it leaves the \
+             operator watching an agent that appears to have stopped.\n"
         }
     });
 

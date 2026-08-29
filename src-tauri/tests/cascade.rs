@@ -404,6 +404,171 @@ async fn replies_queued_together_are_read_in_a_single_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_reply_still_being_worked_on_is_waited_for_rather_than_read_alone() {
+    // The gather used to run on a 2.5-second clock sized to this suite's own
+    // stub, which answers in milliseconds. Real model calls land tens of
+    // seconds apart, so in production the window expired before the second
+    // answer of every fan-out and a coordinator read its replies one whole
+    // prompt and one model call at a time. The wait now follows the work: as
+    // long as a peer that owes an answer is still on it, the gatherer holds
+    // out. Grocer's answer here takes longer than the whole of the old window,
+    // and it must still be read in the same turn as Chef's.
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if reading_peer_replies(body) {
+                Script::Say("Both heard from.".into())
+            } else if has_tool_result(body) {
+                Script::Say("Sent.".into())
+            } else {
+                Script::SendTo {
+                    recipients: vec!["Chef".into(), "Grocer".into()],
+                    text: "Hello there.".into(),
+                }
+            }
+        } else {
+            if who == "Grocer" {
+                std::thread::sleep(Duration::from_millis(3200));
+            }
+            Script::Say(format!("Acknowledged, from {who}."))
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef", "Grocer"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Say hello to both.").unwrap();
+    h.settle(run).await;
+
+    let prompts_reading_replies: Vec<usize> = stub
+        .transcript
+        .lock()
+        .iter()
+        .filter(|body| speaker(body) == "Manager" && reading_peer_replies(body))
+        .map(|body| {
+            body["messages"]
+                .as_array()
+                .and_then(|m| m.last())
+                .and_then(|m| m["content"].as_str())
+                .map(|c| c.matches("[AGENT").count())
+                .unwrap_or(0)
+        })
+        .collect();
+    assert_eq!(
+        prompts_reading_replies.len(),
+        1,
+        "a slow reply must be waited for, not read in a turn of its own\n{}",
+        h.transcript()
+    );
+    assert_eq!(
+        prompts_reading_replies[0], 2,
+        "both replies must appear in the single reading prompt"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_answer_owed_by_a_peer_that_failed_is_not_waited_out() {
+    // The other half of the generous window, and the reason it can be generous
+    // at all. A peer whose model call fails every attempt never answers, and
+    // an agent that waited the full window for it would hold its own turn, and
+    // the run's settlement, open for two minutes of nothing. The gather ends
+    // when nobody owing an answer is still working, so the failed peer ends it
+    // within this test's ordinary settle window rather than at the ceiling.
+    let stub = serve(move |body| {
+        let who = speaker(body);
+        if who == "Manager" {
+            if reading_peer_replies(body) {
+                Script::Say("Heard from Chef.".into())
+            } else if has_tool_result(body) {
+                Script::Say("Sent.".into())
+            } else {
+                Script::SendTo {
+                    recipients: vec!["Chef".into(), "Grocer".into()],
+                    text: "Hello there.".into(),
+                }
+            }
+        } else if who == "Grocer" {
+            Script::Unavailable
+        } else {
+            Script::Say("Acknowledged, from Chef.".into())
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef", "Grocer"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Say hello to both.").unwrap();
+    // The whole assertion: 20 seconds covers Grocer's retries and nothing like
+    // the gather ceiling, so settling here means the wait ended with the peer.
+    h.settle(run).await;
+
+    assert!(
+        h.channel_texts("Manager").iter().any(|t| t.contains("Acknowledged, from Chef.")),
+        "Chef's reply still has to arrive:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_second_operator_line_reaches_the_model_after_the_first_rather_than_above_it() {
+    // `deliver` writes to the store before the inbox, so an operator's second
+    // line typed while the first is being picked up is in the history the turn
+    // reads while still queued behind the batch. Rendered from the history it
+    // sat *above* the message it follows, because the batch is rendered last:
+    // a correction read before the thing it corrects. It is kept out of the
+    // history now and reaches the model through intake, in the order it was
+    // said.
+    let stub = serve(|body| {
+        let _ = body;
+        Script::Say("Both noted.".into())
+    })
+    .await;
+
+    let h = harness(&stub, &["Writer"], GuardLimits::default());
+    let writer = h.id("Writer");
+
+    h.pause("Writer");
+    let run = h.runtime.send_from_human(writer, "First thing: book the 4pm slot.").unwrap();
+    // Distinct millisecond stamps, so the second line is provably newer than
+    // the batch. Two lines in one millisecond have no order to restore.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    h.runtime.send_from_human(writer, "Second thing: actually make that 5pm.").unwrap();
+    h.wait_until("both lines to be filed", |h| h.channel_texts("Writer").len() == 2).await;
+    h.resume("Writer");
+    h.settle(run).await;
+
+    let order: Vec<(usize, usize)> = stub
+        .transcript
+        .lock()
+        .iter()
+        .filter(|body| speaker(body) == "Writer")
+        .map(|body| {
+            let contents: Vec<&str> = body["messages"]
+                .as_array()
+                .map(|m| {
+                    m.iter()
+                        .filter(|m| m["role"] != "system")
+                        .filter_map(|m| m["content"].as_str())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let position = |needle: &str| {
+                contents.iter().position(|c| c.contains(needle)).unwrap_or(usize::MAX)
+            };
+            (position("First thing"), position("Second thing"))
+        })
+        .collect();
+
+    assert!(!order.is_empty(), "the turn never reached the model");
+    for (first, second) in order {
+        assert!(first != usize::MAX && second != usize::MAX, "both lines must reach the model");
+        assert!(
+            first < second,
+            "the second line was rendered above the first: correction before the thing corrected\n{}",
+            h.transcript()
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_agents_told_to_talk_forever_stop_on_their_own() {
     // Both agents are scripted to always message the other. Without the guard
     // this never terminates.
@@ -1748,6 +1913,10 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
             } else {
                 Script::Say("Ready, but I need you to confirm before I send.".into())
             }
+        } else if text.contains("Sent.") {
+            // The answer to the second instruction came back, so the Manager
+            // can close the loop it opened.
+            Script::Say("Done: Chef sent the mailing.".into())
         } else if text.contains("I need you to confirm") {
             // The turn this test exists for: woken by an answer, nobody is
             // waiting on the Manager, and it has genuinely new work to give.
@@ -1777,9 +1946,17 @@ async fn a_second_instruction_to_a_peer_that_already_answered_is_delivered() {
         to_chef.iter().any(|t| t.contains("go ahead and send it")),
         "the follow-up instruction never reached Chef: {to_chef:?}"
     );
+    // The instruction was work, so its answer comes back to the agent that
+    // gave it rather than stranding in Chef's own channel: the Manager can
+    // assemble what came of the work it placed.
     assert!(
-        h.channel_texts("Chef").iter().any(|t| t.contains("Sent.")),
-        "and Chef never acted on it:\n{}",
+        h.channel_texts("Manager").iter().any(|t| t.contains("Sent.")),
+        "Chef's answer never reached the Manager that instructed it:\n{}",
+        h.transcript()
+    );
+    assert!(
+        h.channel_texts("Manager").iter().any(|t| t.contains("Done: Chef sent the mailing.")),
+        "and the Manager never closed the loop for the operator:\n{}",
         h.transcript()
     );
 }
@@ -1794,7 +1971,9 @@ async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_qui
     // Nothing was waiting on a reply, so the turn ran in the mode that tells an
     // agent nobody is asking it for anything and silence is usually right. It
     // spent a model call and complied. From the operator's side an agent had
-    // simply stopped.
+    // simply stopped. Work re-arms the reply path now, so the second
+    // instruction runs as an ordinary reply turn: the prompt says someone is
+    // waiting, and the answer lands with them.
     let stub = serve(|body| {
         let who = speaker(body);
         let text = body["messages"]
@@ -1806,14 +1985,16 @@ async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_qui
             if !text.contains("go ahead and send it") {
                 Script::Say("I have the file open, confirm before I send.".into())
             } else if text.contains("Nothing here needs an answer") {
-                // A model that reads its prompt. Told nothing is being asked of
-                // it and that silence is usually right, it stays silent, which
-                // is exactly what the live agent did with a real instruction to
-                // send an email in front of it.
+                // The old failure, kept as a tripwire: if the second
+                // instruction ever runs in the silent mode again, this arm
+                // plays the model that reads its prompt and complies, and the
+                // assertion below fails on an agent that went quiet.
                 Script::Say(String::new())
             } else {
                 Script::Say("Sent it.".into())
             }
+        } else if text.contains("Sent it.") {
+            Script::Say("Mailing confirmed sent.".into())
         } else if text.contains("confirm before I send") {
             Script::Instruct {
                 recipients: vec!["Chef".into()],
@@ -1832,8 +2013,8 @@ async fn a_peer_instructed_after_it_answered_does_the_work_rather_than_going_qui
     h.settle(run).await;
 
     assert!(
-        h.channel_texts("Chef").iter().any(|t| t.contains("Sent it.")),
-        "the instruction landed and the agent went quiet:\n{}",
+        h.channel_texts("Manager").iter().any(|t| t.contains("Sent it.")),
+        "the instruction landed and the agent went quiet, or its answer stranded:\n{}",
         h.transcript()
     );
 }
@@ -1868,7 +2049,8 @@ async fn work_and_a_reply_are_different_questions_on_the_wire() {
     assert!(instruction.intent.is_work(), "what the sender declared has to survive the wire");
     assert!(
         instruction.expects_reply,
-        "the first message of an exchange still expects an answer; only a settled pair does not"
+        "work expects an answer wherever in the exchange it lands; only a courtesy into a \
+         settled pair does not"
     );
 }
 
@@ -3676,11 +3858,12 @@ async fn retrying_something_that_is_no_longer_there_says_so() {
 #[tokio::test]
 async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing() {
     // The shipped bug, from the operator's side, on the path that produces it:
-    // a peer that has already answered is instructed again, so the message
-    // carries work and expects no reply. That is `ReplyMode::Assigned`, whose
-    // own prompt says silence is the one wrong answer. A turn that produced no
-    // text used to produce no envelope either, so there was nothing in Chef's
-    // channel, nothing in the feed, and an agent that to the operator had
+    // a peer that has already answered is instructed again. Work re-arms the
+    // reply path, so the second instruction expects an answer and the turn
+    // runs as an ordinary reply turn — whose silence used to be the invisible
+    // kind. A turn that produced no text produced no envelope either, so there
+    // was nothing in Chef's channel, nothing in the feed, nothing for the
+    // Manager that was owed the answer, and an agent that to the operator had
     // simply stopped. The turn may still be silent; it may no longer be silent
     // invisibly.
     let stub = serve(|body| {
@@ -3725,8 +3908,8 @@ async fn an_agent_given_work_that_says_nothing_is_reported_rather_than_vanishing
         .expect("the second instruction reached Chef");
     assert!(instruction.intent.is_work(), "the scenario depends on this arriving as work");
     assert!(
-        !instruction.expects_reply,
-        "work with nobody waiting is the combination that produces Assigned"
+        instruction.expects_reply,
+        "work re-arms the reply path even for a peer that has already answered"
     );
 
     // Read as a notice part rather than as text: this is Guaca speaking into
