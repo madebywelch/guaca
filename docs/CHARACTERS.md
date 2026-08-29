@@ -24,9 +24,16 @@ supplies.
 | `src/avatars/form.ts` | The body. `FORM`, the types, and the maths that turns a character and a mood into points. |
 | `src/avatars/eyes.ts` | The eye primitive, the blink, and the gaze. |
 | `src/avatars/catalog.ts` | The cast, the accents, and the alias table that keeps every key an older build wrote still meaning something. |
-| `src/avatars/moods.ts` | The ten expressions, and `moodFor`, which is the only place a runtime signal becomes a face. |
+| `src/avatars/moods.ts` | The ten expressions, the marks drawn beside a head, and `moodFor`, which is the only place a runtime signal becomes a face. |
 | `src/avatars/clock.ts` | One frame loop for every creature on screen. |
 | `src/avatars/AgentAvatar.tsx` | What is true right now, written to three attributes a frame. |
+| `scripts/make-crew.ts` | The strip on the README's front page, drawn from the files above rather than redrawn. |
+
+**The README's strip is generated, not drawn.** `./scripts/make-crew.sh` holds
+one frame of eight creatures in eight moods and writes `docs/img/crew.svg`, so a
+redesign updates the front page by re-running it. It has to be re-run, and it
+was not: the strip was still showing a cast of vegetables three casts after they
+were deleted.
 
 ## The body is a function, not a path
 
