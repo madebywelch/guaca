@@ -364,7 +364,7 @@ impl Envelope {
             .to_string()
     }
 
-    /// True when both ends are agents, which is what the activity feed shows.
+    /// True when both ends are agents, which is what the flow board shows.
     pub fn is_inter_agent(&self) -> bool {
         self.from.is_agent() && self.to.is_agent()
     }

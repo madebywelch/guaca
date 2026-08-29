@@ -15,6 +15,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/presence.ts     A crew, in the two marks its circle can carry.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
+  lib/reach.ts        How close the pointer comes before the crews slide out.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/figure.ts       A fenced block the transcript draws instead of printing.
@@ -136,6 +137,8 @@ repo: the frontend renders state and forwards intent.
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
+| When the crews' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
+| Who spoke to whom, what a run cost, where that board lives | *The flow board is analysis, so it is in a crew's settings* in `docs/WORKSPACE.md`, then `src/components/GroupActivity.tsx` and `Store::conversation_flow` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
@@ -167,6 +170,7 @@ repo: the frontend renders state and forwards intent.
 | Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
+| What color a column is, a surface a panel is drawn on, anything about light or dark | *The page is the only white thing, and both edges are the same off-white* in `docs/WORKSPACE.md`, then the two token blocks in `src/styles.css` and the columns suite in `styles.test.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
@@ -174,7 +178,7 @@ repo: the frontend renders state and forwards intent.
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
@@ -824,7 +828,7 @@ the model takes a screenshot to see what `browse` did.
   it wrote and checks the box is still there before writing again, which is why
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
-  pair thread or the activity board, and an effect cannot re-bind on that. The
+  pair thread or nothing at all, and an effect cannot re-bind on that. The
   size observer beside it is bound there for that reason too, and it is not
   decoration: everything under a transcript takes height from it without
   anything arriving or scrolling, so a composer growing a line or the working
@@ -1109,6 +1113,28 @@ the model takes a screenshot to see what `browse` did.
   stale card looks exactly like a live one. Both events invalidate it and the
   answer comes back from `pending_approvals`. The consequence is the feature:
   nothing can appear on the desk that is not a row somewhere.
+- **The flow board is not a channel, and `ACTIVITY_CHANNEL` is gone.** Who
+  spoke to whom is analysis: somebody arrives at it having decided to look into
+  something, and it sat at the top of the rail under the wordmark, which is a
+  claim about how often anybody wants it that every other row in the rail paid
+  for. It is a pane in the group editor now. Deleting the key is most of the
+  value: a board addressed as a channel meant seven functions took a channel
+  that was not an agent and carried a branch for it, including which crew the
+  rail follows, what `loadChannel` reads, and what `messageAppended` maintains
+  against a board nobody had necessarily opened. It is one crew's traffic,
+  scoped in SQL, because the board is the newest four hundred messages and a
+  busy crew filling that window would hand a quiet one an empty board.
+  `docs/WORKSPACE.md`.
+- **The crews' column slides out; it does not stand open.** Two thresholds, not
+  one, or a hand resting at the boundary flickers it. Both distances are read
+  off a box CSS sizes rather than written in the component, so they are lengths
+  in the one stylesheet at the operator's own scale. The zone starts below the
+  top of the window because macOS floats the close button over that corner, and
+  it is decided from the pointer rather than from `:hover` on a strip: a strip
+  wide enough to aim at is a strip laid over the left edge of every agent row
+  behind it. Proximity, a drag in progress and focus inside it each hold it out;
+  the drag one is load-bearing, since a column that slid away mid-gesture would
+  take the drop target with it. `src/lib/reach.ts`.
 - **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
   One invariant from two ends — the rail draws the row of whatever the pane is
   showing — and the asymmetry is deliberate. `select` is the operator naming an
@@ -1116,6 +1142,10 @@ the model takes a screenshot to see what `browse` did.
   them naming a crew, and following the channel back out of it would undo the
   click. Before the crews had a column of their own, `select` dropped out to the
   overview instead, because that was the only view where every row was drawable.
+  What `focusGroup` falls back to is nothing, rather than the first row of the
+  crew being entered: opening a channel is the operator naming somebody, and a
+  crew that picked one for them would put an agent's history on screen as a side
+  effect of a click that was about the crew.
 - **A key in settings says what the workspace can hand out; the card says who
   was given it.** Both have to be true, and `Surfaces::given_to` is the only
   place they meet. Deciding from the key alone is what this replaced: every
@@ -1209,10 +1239,28 @@ the model takes a screenshot to see what `browse` did.
   parked on one run therefore cannot see that another run's work is queued behind
   it, which is why the pause park drains the queue whenever anything is stopped.
   Survivors go to a holding queue and stay counted in `depth`.
-- **`--flesh` and `--flesh-soft` are pinned on `.rail`.** The rail is dark in
-  both surfaces and reads both tokens, so a dark value for either would repaint
-  it and no test would notice. Pinning them on the one element every rail rule
-  descends from makes the rail a color scope rather than a naming convention.
+- **The rail and the inspector are one ground, and it is not the page's.** They
+  were a near-black column on the left and a white panel on the right, which is
+  three surfaces for two jobs: the app's own two edges did not look like each
+  other and the heavier of them carried the least reading. They do the same job,
+  so they are the same off-white, the page is the only white thing on screen,
+  and the only saturation left is an agent's color and the one amber. The
+  columns used to pin `--flesh` and `--flesh-soft` — the crews' column `--alarm`
+  too — because they were ink under a reading column that could go dark. Nothing
+  is pinned now, and what replaced the pins is the same trap read the other way:
+  a `--rail-*` or `--grail-*` color declared for paper and forgotten in the ink
+  block is a column that stays off-white in a dark room, which no DOM assertion
+  sees. `styles.test.ts` reads both blocks and is the gate.
+- **A column's recessed surface is not the page's either.** `--sunken` is a hair
+  off white, which is a field on paper and nothing at all on an off-white panel,
+  so the three columns remap it onto `--rail-sunken` in one rule that names all
+  of them. Remapped there rather than at each rule inside, so a row added to the
+  inspector tomorrow is recessed from what it is actually drawn on.
+- **One surface is ink whichever surface the operator picked, and it says so
+  itself.** The full-window machine viewer pins `--stage-*` on `.screen`,
+  shadow included: a pale chrome around somebody else's desktop is a chrome the
+  eye keeps reading instead of the picture, and a `--lift-*` there would resolve
+  against the reading column and put a paper-weight ring on a black surface.
 - **`data-surface` is only ever `light` or `dark`.** `system` is resolved before
   it reaches the document. A stylesheet rule keyed on `system` would have to
   duplicate the one keyed on `dark`, and CSS has no way to share them.

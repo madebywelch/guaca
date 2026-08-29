@@ -285,10 +285,12 @@ describe("where a hire lands", () => {
     expect(screen.getByRole("button", { name: /hire 1 into kitchen/i })).toBeTruthy();
   });
 
-  it("keeps the crew it opened on when the activity board is what is open", () => {
+  it("keeps the crew it opened on with no channel open at all", () => {
+    // Which is where going inside a crew the open channel was not in leaves the
+    // operator, and the rail's own focus is still the answer.
     open([group(KITCHEN, "Kitchen"), group(GARDEN, "Garden")], [], {
       railGroup: GARDEN,
-      selected: "activity",
+      selected: null,
     });
     fireEvent.click(tile("Executive Assistant"));
     expect(screen.getByRole("button", { name: /hire 1 into garden/i })).toBeTruthy();

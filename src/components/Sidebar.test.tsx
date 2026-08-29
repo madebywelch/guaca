@@ -357,8 +357,94 @@ describe("pins", () => {
   });
 });
 
+describe("what the rail offers", () => {
+  it("does not offer the flow board", () => {
+    // It sat here, under the wordmark and above the search box: the first thing
+    // in the app after Guaca's own name, and one of the least pressed things in
+    // it. Who spoke to whom and what a run cost is analysis, so it is in a
+    // crew's settings where somebody who has decided to look into something
+    // will find it.
+    draw([group("everyone")], [agent("Manager")]);
+    expect(screen.queryByRole("button", { name: /activity/i })).toBeNull();
+  });
+});
+
 describe("groups as places", () => {
   const RESEARCH = "00000000-0000-4000-8000-000000000002";
+
+  /**
+   * Gives the two boxes the proximity decision reads a size.
+   *
+   * jsdom does no layout, so both come back as zeros and every threshold
+   * collapses onto the same pixel. These are the numbers a real window has: a
+   * zone reaching 20px in and starting under the window's own buttons, and a
+   * column that is 8px of itself when it is in and 64px when it is out.
+   */
+  function laid(out: boolean) {
+    const box = (over: Partial<DOMRect>) => () => ({ top: 0, right: 0, ...over }) as DOMRect;
+    document.querySelector<HTMLElement>(".grail__reach")!.getBoundingClientRect = box({
+      top: 36,
+      right: 20,
+    });
+    document.querySelector<HTMLElement>(".grail__slab")!.getBoundingClientRect = box({
+      right: out ? 64 : 8,
+    });
+  }
+
+  /** Whether the crews are drawn out over the rail. */
+  function out(): boolean {
+    return screen.getByLabelText("Groups").getAttribute("data-out") === "true";
+  }
+
+  it("keeps the crews in until the pointer comes at them", () => {
+    // The column stood open and charged every window four rem of its width for
+    // a choice most operators make a few times a day, in front of the rail that
+    // is read constantly.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+    laid(false);
+
+    fireEvent.pointerMove(window, { clientX: 700, clientY: 400 });
+    expect(out()).toBe(false);
+
+    fireEvent.pointerMove(window, { clientX: 6, clientY: 400 });
+    expect(out()).toBe(true);
+  });
+
+  it("leaves the window's own buttons alone", () => {
+    // macOS floats close, minimize and zoom over the top left corner, which is
+    // this column. Coming out on the way to them would put the crews under the
+    // pointer at the moment it was aimed at the button that closes the app.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+    laid(false);
+
+    fireEvent.pointerMove(window, { clientX: 6, clientY: 18 });
+    expect(out()).toBe(false);
+  });
+
+  it("stays out for the whole of a drag, wherever the hand has got to", async () => {
+    // A drop onto a circle is the one thing this column is load-bearing for. A
+    // column that slid away as the hand carried a row across the app would take
+    // the target with it half way through the gesture.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+    laid(false);
+
+    fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 240 });
+
+    expect(out()).toBe(true);
+
+    fireEvent.pointerUp(window, { clientX: 400, clientY: 240 });
+    expect(out()).toBe(false);
+  });
 
   it("keeps the column out of the way while there is one group", () => {
     draw([group("everyone")], [agent("Manager")]);
@@ -577,7 +663,7 @@ describe("groups as places", () => {
     useStore.setState({ selected: "Chief" });
 
     fireEvent.click(screen.getByLabelText("research, 1 agent"));
-    await vi.waitFor(() => expect(useStore.getState().selected).toBe("activity"));
+    await vi.waitFor(() => expect(useStore.getState().selected).toBeNull());
 
     fireEvent.click(screen.getByLabelText("All groups, 2 agents"));
     fireEvent.click(row("Chief of research"));

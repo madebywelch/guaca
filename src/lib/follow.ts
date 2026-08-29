@@ -104,11 +104,12 @@ export function useFollowBottom(): FollowBottom {
 
   // A ref callback rather than an effect, because the element this listens to
   // is not the element that was here last render. A transcript is unmounted
-  // whenever the pane shows something else (a pair thread, the activity board)
-  // and comes back as a new node with the same class. An effect can only
-  // re-bind on a dependency it was given, and the node it holds is not one: a
-  // channel opened from the activity board bound its listener to the node that
-  // had just been thrown away, so the operator was never noticed coming back.
+  // whenever the pane shows something else — a pair thread, or nothing at all
+  // once the operator has gone inside a crew the open channel was not in — and
+  // comes back as a new node with the same class. An effect can only re-bind on
+  // a dependency it was given, and the node it holds is not one: a channel
+  // reopened after one of those bound its listener to the node that had just
+  // been thrown away, so the operator was never noticed coming back.
   const ref = useCallback<RefCallback<HTMLElement>>(
     (box) => {
       node.current = box;
