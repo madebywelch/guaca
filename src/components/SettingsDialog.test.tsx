@@ -81,7 +81,6 @@ function signedIn(over: Partial<SubscriptionStatus> = {}): SubscriptionStatus {
 const updateSettings = vi.fn<(patch: SettingsPatch) => Promise<Settings>>(async () => stored());
 const testConnection = vi.fn<(patch?: SettingsPatch) => Promise<string>>(async () => "Reached it.");
 const notifyOperator = vi.fn<(title: string, body: string) => Promise<boolean>>(async () => true);
-const getVersion = vi.fn<() => Promise<string>>(async () => "0.4.2");
 const subscriptionStatus = vi.fn<() => Promise<SubscriptionStatus>>(async () => signedOut());
 const beginSubscriptionSignin = vi.fn<() => Promise<DeviceCode>>(async () => ({
   verificationUrl: "https://auth.openai.com/codex/device",
@@ -171,10 +170,6 @@ vi.mock("../lib/ipc", () => ({
   notifyOperator: (title: string, body: string) => notifyOperator(title, body),
   openExternal: (url: string) => openExternal(url),
 }));
-
-// The About pane reads the version through a dynamic import, so the module has
-// to answer here or the whole tree comes down on a webview with no Tauri host.
-vi.mock("@tauri-apps/api/app", () => ({ getVersion: () => getVersion() }));
 
 const { SettingsDialog } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
@@ -277,9 +272,6 @@ beforeEach(() => {
   signInAccount.mockResolvedValue(linked());
   accountConnectors.mockResolvedValue(held());
   signOutAccount.mockResolvedValue(noAccount());
-  // No Tauri host behind this webview, which is the state the About pane is
-  // built to shrug off. The one test that wants a version asks for one.
-  getVersion.mockRejectedValue(new Error("no host"));
 });
 
 describe("when the runtime refuses", () => {
@@ -1386,20 +1378,15 @@ describe("shortcuts", () => {
 });
 
 describe("about", () => {
-  it("shows a dash rather than a banner when the version cannot be read", async () => {
+  it("says which commit this build was made from", () => {
     open();
     pane("About");
 
-    await waitFor(() => expect(getVersion).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("Version —")).toBeTruthy();
-    expect(document.querySelector(".banner")).toBeNull();
-  });
-
-  it("shows the version once the app reports one", async () => {
-    getVersion.mockResolvedValueOnce("0.4.2");
-    open();
-    pane("About");
-
-    expect(await screen.findByText("Version 0.4.2")).toBeTruthy();
+    // The value is baked in at build time, so the assertion is on the shape:
+    // a short hash, dirty or not, or the dash a build with no repository behind
+    // it draws. Nothing here is read from a host, so nothing can fail.
+    expect(document.querySelector(".about__version")?.textContent).toMatch(
+      /^Version (—|[0-9a-f]{7,}(-dirty)?)$/,
+    );
   });
 });
