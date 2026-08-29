@@ -7,7 +7,7 @@ import { lookupCharacter } from "./catalog";
 import { join, type Painter } from "./clock";
 import { blendEyes, type Drawn, eyePath, eyesAt, gazeAt, SETTLE } from "./eyes";
 import { blend, bodyPoints, FORM, outline, type Point } from "./form";
-import { MOODS, type Mood, moodFor } from "./moods";
+import { MOODS, type Mood, markFor, moodFor } from "./moods";
 
 /** Where the character is looking. Used to make a send visibly aimed at someone. */
 export type Look = "up" | "down" | null;
@@ -73,29 +73,6 @@ function phaseOf(seed: string): number {
   let hash = 0;
   for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
   return (hash % 1000) / 1000;
-}
-
-/**
- * The marks drawn beside a head.
- *
- * Written as markup rather than as elements React keeps, because they change on
- * a mood change and nothing else, and re-rendering the component every time a
- * transient mood expires is the timer this design exists to avoid. The place
- * and the animation are two nested groups on purpose: a CSS `transform` beats a
- * `transform` attribute on the same element, so a mark that animated and
- * positioned itself on one node drew at the corner of the viewBox.
- */
-function markup(mood: Mood): string {
-  switch (MOODS[mood].mark) {
-    case "dots":
-      return `<g class="avatar__dots" fill="var(--eye)" opacity="0.7"><circle cx="48" cy="12" r="1.5"/><circle cx="52.6" cy="9.4" r="1.8"/><circle cx="57.4" cy="6.2" r="2.1"/></g>`;
-    case "bang":
-      return `<g transform="translate(52 11)"><circle class="avatar__halo" r="9" fill="none" stroke="var(--flesh)" stroke-width="2"/><circle r="7" fill="var(--flesh)"/><path d="M0 -3.6v4.4" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cy="3.4" r="1.1" fill="#fff"/></g>`;
-    case "z":
-      return `<g transform="translate(45 15)"><g class="avatar__z"><path d="M-3.2 -3.2h6.4l-6.4 6.4h6.4" stroke="var(--eye)" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/></g></g>`;
-    default:
-      return "";
-  }
 }
 
 /**
@@ -201,7 +178,7 @@ export function AgentAvatar({
        a change of mood and not on every frame. */
     if (state.marked !== state.mood) {
       state.marked = state.mood;
-      if (mark.current) mark.current.innerHTML = markup(state.mood);
+      if (mark.current) mark.current.innerHTML = markFor(state.mood);
       box.current?.setAttribute("data-mood", state.mood);
     }
 

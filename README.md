@@ -6,7 +6,7 @@ A local desktop app where you talk to LLM agents and those agents talk to each
 other. Slack-shaped: a rail of agents on the left, a conversation on the right,
 and an activity view showing every message they send between themselves.
 
-![Guaca, showing a crew of eleven agents, with the Manager's own computer open beside the transcript as it works through a Craigslist search](docs/img/guaca.png)
+![Guaca, showing a crew of five: two engineers at work in their own worktrees of two repositories, and the iOS Software Engineer's reply reporting a TestFlight build against a table of what it verified for itself](docs/img/guaca.png)
 
 Give one of them a job. It works out who on its team can help, sends them each a
 message, and they think at once rather than in turn. You watch it happen: who is
@@ -18,14 +18,23 @@ agents type, sent to whichever provider you point it at.
 
 ## The crew
 
-![Eight of the characters: an avocado, a tomato, a lime, a chilli, a radish, an ear of corn, a mushroom and a carrot, each looking a different way](docs/img/crew.svg)
+![Eight agents, one species: idle, thinking, working, pleased, frustrated, waiting on a person, stuck, and paused](docs/img/crew.svg)
 
-Sixteen of them, one per agent. They are not decoration: an agent's character is
-how you find it in a rail of eight, and it is doing something at any moment. It
-blinks and glances around while idle, looks toward whoever it is writing to,
-winds up and throws when a message goes out, and gets visibly hit when one
-arrives. Watching the rail tells you what your crew is doing before you have
-read a single word of it.
+An agent is a round creature made of clay, and nothing about it is drawn. A
+character is a row of numbers, an expression is another row, and the outline is
+a function of the two, recomputed every frame. Twenty-one characters and ten
+expressions, and not one picture in the repo for anybody to get wrong.
+
+They are not decoration. A rail of eight is read by shape before it is read by
+name, and each one is doing something at any moment: glancing about while idle,
+narrowing and kneading on a beat while a tool call is out, looking up at its own
+badge when it is parked waiting on you, sagging when it is stuck. A message
+going out winds the sender up and throws; one landing knocks the receiver out of
+shape. The eyes move first and the mass follows half a second later, so a
+creature reads as being pulled rather than as a picture being moved around.
+Watching the rail tells you what your crew is doing before you have read a word
+of it. `docs/CHARACTERS.md` argues all of it, including why there are no
+eyebrows.
 
 ## Run it
 
