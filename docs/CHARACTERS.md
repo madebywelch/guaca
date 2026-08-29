@@ -1,7 +1,7 @@
 # Characters
 
-An agent is a round creature made of clay. There is one species, twenty-one of
-it, and everything it has to say it says by changing shape.
+An agent is a creature made of clay, cut from one of five shapes, and everything
+it has to say it says by changing shape.
 
 This is the fourth cast. The three before it were emoji, then a hand-drawn set
 of creatures, then an egg with props, then sixteen vegetables, and every one of
@@ -11,16 +11,23 @@ the same way. They were charming at six agents and childish at sixty, every
 character was a bezier somebody had to draw to a written spec, and a test had to
 check the drawing afterwards because the spec could not enforce itself.
 
-Nothing is drawn now. A character is a row of numbers, an expression is another
-row of numbers, and the geometry is a function of the two. A character cannot
-leave its box, cannot sit at a different optical weight and cannot take light
-from a different direction, because none of those is a thing a character
-supplies.
+Nothing is drawn now. A character is a silhouette and a row of numbers, an
+expression is another row of numbers, and the geometry is a function of the
+three. A character cannot leave its box, cannot sit at a different optical
+weight and cannot take light from a different direction, because none of those
+is a thing a character supplies.
+
+**There is more than one shape because one was not enough.** The first version
+of this cast was a single round species varying by a few percent of stretch and
+where the eyes sat, and at that amplitude a rail of sixty is a rail you read by
+color. The outline has to carry some of an identity or the eyes carry all of it.
+So it is two decisions now: which of five shapes, and then the lump on top.
 
 ## Where it lives
 
 | File | What is in it |
 |---|---|
+| `src/avatars/silhouette.ts` | The five shapes, as one radius function each, and the two numbers they are sized against. |
 | `src/avatars/form.ts` | The body. `FORM`, the types, and the maths that turns a character and a mood into points. |
 | `src/avatars/eyes.ts` | The eye primitive, the blink, and the gaze. |
 | `src/avatars/catalog.ts` | The cast, the accents, and the alias table that keeps every key an older build wrote still meaning something. |
@@ -37,9 +44,21 @@ were deleted.
 
 ## The body is a function, not a path
 
-A creature is a closed curve through 28 radii around one center, smoothed into
-cubics. Everything a mood does is a term in that radius, or a scale applied to
-the point after it.
+A creature is a closed curve through 32 radii around one center, smoothed into
+cubics. The first term of every radius is its silhouette; everything a mood does
+is another term added to it, or a scale applied to the point after it.
+
+**Nothing below `silhouette.ts` knows how many shapes there are.** A cloud
+kneads, leans, sags and settles through the code a circle does, because a shape
+is a resting radius and a mood is what gets added. A sixth shape is a function
+in one file, a row in the cast, and nothing else: no component, no stylesheet,
+no branch in `form.ts`.
+
+**The count of radii is divisible by eight, and that is load-bearing.** A
+square's corners are at 45 degrees and an octagon's at 22.5, and a corner that
+falls between two samples is a corner that gets chamfered off. At the 28 this
+started with, the octagons drew as lumpy circles and every test still passed.
+`silhouette.test.ts` holds the count and checks both shapes keep their corners.
 
 **No transform is ever put on the drawing.** A character that slides around
 inside its own box reads as a sprite being moved; one whose outline changes
@@ -62,6 +81,43 @@ grew could not quietly push a face through a rim with nothing noticing.
 `FORM.radius` is the resting body and is what two faces are *spaced* on, because
 spacing them on the worst case would push a pair apart for a bulge that happens
 a fraction of the time and touches nothing when it does.
+
+## Five shapes, one weight
+
+Circle, octagon, square, water drop, cloud. Each is a function from an angle to
+a radius, written at whatever scale was easiest to think in, and then sized by
+two rules that between them are why nobody has to balance a cast by eye.
+
+**Every silhouette encloses the same area as the circle.** Sizing five shapes by
+hand is how a cast ends up with one member that reads as the small one, so the
+scaling is computed at load rather than typed in. A sixth shape is a function
+and nothing else.
+
+**And none of them rests past `CREST`.** This is the part that costs something.
+The moods spend nearly all of the room between `FORM.radius` and `FORM.reach` on
+the swell that follows a look: the worst frame in the whole space landed two
+hundredths of a pixel under the limit, and it did that back when every creature
+was a circle. So a shape with a long point or a flat underside, which are both
+ways of putting the same area further out, gives area back rather than taking
+room the moods need. The square gives up an eighth of its area, the drop and the
+cloud a fifth each, and all three end up taller or wider than the circle rather
+than bigger than it.
+
+The two rules pull against each other on purpose. A shape that has to give up
+more than a quarter of its area to fit the crest is a shape to redraw rounder,
+not one to scale down, and `silhouette.test.ts` fails on it.
+
+**The cloud is a union of balls cut off at a line.** It is the one shape here
+that is not convex, and the notches between its puffs are the whole of what says
+cloud rather than lump. A wobble added to an ellipse was tried first: at an
+amplitude deep enough to notch, the middle puff came to a spike.
+
+**A character varies its silhouette; it never replaces one.** The stretch and
+the lobes in the cast are bounded, and separately every character's resting
+outline is held under `CREST` plus a small allowance, because everything past
+that belongs to the moods. Without that second bound a character that rested too
+far out would not fail in `catalog.test.ts`, where somebody typed the number: it
+would fail in `form.test.ts`, in one frame of one mood, months later.
 
 ## The eye is one stroke
 
@@ -164,11 +220,17 @@ stop every other face in the app for the rest of the session.
 
 ## Identity
 
-One species means the outline carries less of an identity than it used to, so
-the eyes carry the rest: how far apart they are set, how big they are, how high
-they sit, and whether there is one of them. `catalog.test.ts` holds every
-character to a distinguishable pair, and to being round — a lump that stretched
-past a tenth would read as a second kind of creature standing in the same rail.
+The silhouette carries the first half and the eyes carry the rest: how far apart
+they are set, how big they are, how high they sit, and whether there is one of
+them. `catalog.test.ts` holds every character to a distinguishable pair, because
+four characters share a shape and the pair is all that is left to tell them
+apart. It also holds every one of the five to being used by somebody: a shape
+nobody is cut from is a shape that could break with nothing on screen to say so.
+
+Where the eyes sit is a per-shape decision rather than a global one. A drop is
+narrower at the sides than a circle and its mass is low, so its characters look
+out of the ball rather than out of the middle of the box, and the seating test
+measures against the character's own silhouette rather than against a circle.
 
 The cast cannot be smaller than the cafeteria's preset list. A crew is whatever
 subset the operator ticked, so two presets sharing a character are two agents

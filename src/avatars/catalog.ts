@@ -1,11 +1,17 @@
 /**
  * The cast.
  *
- * One species, twenty-one of it. Every agent is the same round creature, and
- * what tells two of them apart is the resting lump: how round it sits, which
- * way it leans, where its lobes are, and how its eyes are set. Nobody draws a
- * silhouette, so nobody can draw a bad one, and a new character is a row of
+ * Five silhouettes, twenty-one characters. What tells two of them apart is,
+ * first, which shape they are cut from, and then the resting lump on top of it:
+ * how it leans, where its lobes are, and how its eyes are set. Nobody draws an
+ * outline, so nobody can draw a bad one, and a new character is a row of
  * numbers rather than a path somebody has to get right.
+ *
+ * There was one shape before this and it was not enough. A rail of sixty round
+ * creatures is a rail you read by color, because the only thing varying across
+ * it was a few percent of stretch and where the eyes sat; the shape has to
+ * carry some of the identity or the eyes carry all of it. So the outline is now
+ * two decisions rather than one, and `silhouette.ts` holds the first.
  *
  * This replaced a cast of sixteen hand-drawn vegetables. The vegetables were
  * charming at six agents and childish at sixty, and every one of them was a
@@ -27,6 +33,7 @@ export const CHARACTERS: Character[] = [
   {
     key: "orb",
     label: "Orb",
+    form: "circle",
     ax: 1,
     ay: 1,
     sig: [{ k: 2, amp: 0.02, phase: 0.4 }],
@@ -35,60 +42,64 @@ export const CHARACTERS: Character[] = [
   {
     key: "egg",
     label: "Egg",
-    ax: 0.94,
-    ay: 1.07,
-    sig: [{ k: 1, amp: 0.045, phase: 1.57 }],
-    eye: { spread: 5.9, r: 2.8, y: -1.4 },
+    form: "drop",
+    ax: 0.98,
+    ay: 1.01,
+    sig: [{ k: 2, amp: 0.02, phase: 1.4 }],
+    eye: { spread: 5.9, r: 2.8, y: 2.2 },
   },
   {
     key: "pebble",
     label: "Pebble",
-    ax: 1.08,
-    ay: 0.93,
+    form: "circle",
+    ax: 1.07,
+    ay: 0.94,
     sig: [
-      { k: 2, amp: 0.028, phase: 0.2 },
-      { k: 3, amp: 0.02, phase: 1.1 },
+      { k: 2, amp: 0.026, phase: 0.2 },
+      { k: 3, amp: 0.018, phase: 1.1 },
     ],
     eye: { spread: 7.4, r: 2.8 },
   },
   {
     key: "drop",
     label: "Drop",
-    ax: 0.98,
-    ay: 1.04,
-    sig: [{ k: 1, amp: 0.055, phase: -1.57 }],
-    eye: { spread: 6.2, r: 2.9, y: 1.6 },
+    form: "drop",
+    ax: 1,
+    ay: 1,
+    sig: [{ k: 3, amp: 0.018, phase: 0.9 }],
+    eye: { spread: 6.2, r: 2.9, y: 3 },
   },
   {
     key: "bean",
     label: "Bean",
-    ax: 1.04,
+    form: "cloud",
+    ax: 1.01,
     ay: 0.99,
-    sig: [
-      { k: 1, amp: 0.04, phase: 0.6 },
-      { k: 2, amp: 0.04, phase: 2.4 },
-    ],
-    eye: { spread: 6.4, r: 2.8, x: -1.4 },
+    sig: [{ k: 1, amp: 0.028, phase: 0.6 }],
+    eye: { spread: 6.4, r: 2.8, x: -1.4, y: 1 },
   },
   {
     key: "lobe",
     label: "Lobe",
+    form: "cloud",
     ax: 1.02,
     ay: 1,
-    sig: [{ k: 3, amp: 0.05, phase: -1.57 }],
-    eye: { spread: 6.4, r: 3 },
+    sig: [{ k: 2, amp: 0.022, phase: -1.57 }],
+    eye: { spread: 6.4, r: 3, y: 1 },
   },
   {
     key: "puck",
     label: "Puck",
-    ax: 1.07,
-    ay: 0.92,
-    sig: [{ k: 2, amp: 0.032, phase: 1.57 }],
+    form: "octagon",
+    ax: 1.04,
+    ay: 0.95,
+    sig: [{ k: 2, amp: 0.022, phase: 1.57 }],
     eye: { spread: 7.2, r: 2.7 },
   },
   {
     key: "cell",
     label: "Cell",
+    form: "circle",
     ax: 1.02,
     ay: 1.02,
     sig: [{ k: 4, amp: 0.03, phase: 0.8 }],
@@ -97,17 +108,16 @@ export const CHARACTERS: Character[] = [
   {
     key: "knot",
     label: "Knot",
+    form: "square",
     ax: 1,
-    ay: 1.02,
-    sig: [
-      { k: 4, amp: 0.036, phase: 0.4 },
-      { k: 2, amp: 0.014, phase: 1.2 },
-    ],
+    ay: 1.01,
+    sig: [{ k: 2, amp: 0.02, phase: 1.2 }],
     eye: { spread: 5.6, r: 2.7 },
   },
   {
     key: "moon",
     label: "Moon",
+    form: "circle",
     ax: 1.02,
     ay: 1,
     sig: [
@@ -119,22 +129,25 @@ export const CHARACTERS: Character[] = [
   {
     key: "wave",
     label: "Wave",
-    ax: 1.04,
+    form: "cloud",
+    ax: 1.03,
     ay: 0.98,
-    sig: [{ k: 5, amp: 0.03, phase: 0 }],
-    eye: { spread: 6.2, r: 2.8 },
+    sig: [{ k: 3, amp: 0.018, phase: 0 }],
+    eye: { spread: 6.2, r: 2.8, y: 1 },
   },
   {
     key: "mote",
     label: "Mote",
-    ax: 1.05,
+    form: "octagon",
+    ax: 1.02,
     ay: 0.97,
-    sig: [{ k: 2, amp: 0.03, phase: 2 }],
+    sig: [{ k: 2, amp: 0.022, phase: 2 }],
     eye: { spread: 8, r: 2.2 },
   },
   {
     key: "bead",
     label: "Bead",
+    form: "circle",
     ax: 1,
     ay: 1,
     sig: [{ k: 2, amp: 0.015, phase: 0.9 }],
@@ -143,74 +156,73 @@ export const CHARACTERS: Character[] = [
   {
     key: "gourd",
     label: "Gourd",
-    ax: 0.97,
-    ay: 1.03,
-    sig: [
-      { k: 1, amp: 0.05, phase: -1.2 },
-      { k: 2, amp: 0.02, phase: 0.3 },
-    ],
-    eye: { spread: 6, r: 2.9, y: 1.1 },
+    form: "drop",
+    ax: 0.99,
+    ay: 1,
+    sig: [{ k: 2, amp: 0.024, phase: 0.3 }],
+    eye: { spread: 6, r: 2.9, y: 3.6 },
   },
   {
     key: "slab",
     label: "Slab",
-    ax: 1.09,
-    ay: 0.94,
-    sig: [{ k: 4, amp: 0.018, phase: 0.4 }],
+    form: "square",
+    ax: 1.04,
+    ay: 0.96,
+    sig: [],
     eye: { spread: 7, r: 3.3 },
   },
   {
     key: "pip",
     label: "Pip",
+    form: "drop",
     ax: 0.99,
     ay: 1.02,
-    sig: [{ k: 3, amp: 0.022, phase: 1 }],
-    eye: { spread: 5.4, r: 2.5, y: -1.8 },
+    sig: [{ k: 4, amp: 0.016, phase: 1 }],
+    eye: { spread: 5.4, r: 2.5, y: 1.6 },
   },
   {
     key: "husk",
     label: "Husk",
-    ax: 1.05,
-    ay: 0.96,
-    sig: [{ k: 5, amp: 0.038, phase: 1.3 }],
+    form: "octagon",
+    ax: 1.03,
+    ay: 0.98,
+    sig: [{ k: 1, amp: 0.026, phase: 1.3 }],
     eye: { spread: 7, r: 2.6 },
   },
   {
     key: "loop",
     label: "Loop",
+    form: "octagon",
     ax: 1.01,
     ay: 1.01,
-    sig: [{ k: 2, amp: 0.04, phase: -0.6 }],
+    sig: [{ k: 2, amp: 0.024, phase: -0.6 }],
     eye: { spread: 0, r: 2.8, one: true },
   },
   {
     key: "crumb",
     label: "Crumb",
+    form: "square",
     ax: 1.02,
     ay: 1,
-    sig: [
-      { k: 1, amp: 0.045, phase: 0 },
-      { k: 4, amp: 0.02, phase: 1.8 },
-    ],
+    sig: [{ k: 1, amp: 0.03, phase: 0 }],
     eye: { spread: 6, r: 2.7, x: 1, y: 1.4 },
   },
   {
     key: "tide",
     label: "Tide",
-    ax: 0.95,
-    ay: 1.06,
-    sig: [{ k: 2, amp: 0.045, phase: 0 }],
-    eye: { spread: 5.8, r: 3.1 },
+    form: "cloud",
+    ax: 0.98,
+    ay: 1.02,
+    sig: [{ k: 2, amp: 0.026, phase: 0 }],
+    eye: { spread: 5.8, r: 3.1, y: 1 },
   },
   {
     key: "cinder",
     label: "Cinder",
-    ax: 1.03,
+    form: "square",
+    ax: 1.01,
     ay: 0.99,
-    sig: [
-      { k: 6, amp: 0.03, phase: 0.5 },
-      { k: 2, amp: 0.015, phase: 1.4 },
-    ],
+    sig: [{ k: 3, amp: 0.02, phase: 0.5 }],
     eye: { spread: 6.8, r: 2.4 },
   },
 ];

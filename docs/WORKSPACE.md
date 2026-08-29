@@ -1245,9 +1245,9 @@ The catalog cannot grow past the character cast, and that is a rule rather than
 an accident. A crew is whatever subset the operator ticked, so two presets
 sharing a character are two agents that look the same in one rail. A new preset
 is a new row in `avatars/catalog.ts` or it is not a preset, and
-`lib/cafeteria.test.ts` is where that is enforced. Since the cast is one species
-told apart by its resting lump and the set of its eyes, a new character is a row
-of numbers rather than a drawing: `docs/CHARACTERS.md`.
+`lib/cafeteria.test.ts` is where that is enforced. Since the cast is five
+silhouettes told apart further by the resting lump and the set of the eyes, a
+new character is a row of numbers rather than a drawing: `docs/CHARACTERS.md`.
 
 A hire copies the preset's fields into an ordinary `AgentDraft` and forgets
 where they came from: there is no preset id on
