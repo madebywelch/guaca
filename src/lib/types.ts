@@ -157,6 +157,37 @@ export interface Approval {
   decidedAt: number | null;
 }
 
+export type EscalationId = string;
+
+/**
+ * Work that has stopped, and that only the operator can move.
+ *
+ * Not an {@link Approval} and deliberately not a third {@link Request}: nothing
+ * is parked on one, so there is no verdict, no value and no ten minute fuse.
+ * The agent raised it on its way out of a turn and carried on without it.
+ *
+ * What makes a row worth more than the message it replaces is the pair at the
+ * bottom. `raisedAt` never moves and `times` only goes up, so an agent that
+ * hits the same wall on six turns is one row that says it has been true since
+ * Tuesday and that six turns have gone into it.
+ */
+export interface Escalation {
+  id: EscalationId;
+  agentId: AgentId;
+  groupId: GroupId;
+  runId: RunId;
+  /** The agent's own words, so every surface draws it as text. */
+  summary: string;
+  /** When it first went up. Never moved by a later raise. */
+  raisedAt: number;
+  /** When it was last restated, which is not the same question. */
+  saidAt: number;
+  /** How many turns have run into it. One when it goes up. */
+  times: number;
+  /** Set once the operator has taken it off the desk. */
+  clearedAt: number | null;
+}
+
 export interface Envelope {
   id: MessageId;
   runId: RunId;
@@ -920,6 +951,8 @@ export type UiEvent =
   | { type: "runSettled"; runId: RunId; stepsUsed: number }
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
   | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
+  | { type: "escalationRaised"; escalationId: EscalationId; agentId: AgentId }
+  | { type: "escalationCleared"; escalationId: EscalationId }
   /**
    * One agent's schedule changed: it set a routine, edited one, canceled one,
    * or one came due and moved. The list refetches; nothing here is patched,

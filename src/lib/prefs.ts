@@ -25,14 +25,26 @@ export type SurfaceMode = "light" | "dark" | "system";
 /**
  * What an agent doing something can interrupt you for.
  *
- * Four kinds rather than one switch, because they are not the same question.
- * A permission request is blocking and stays blocking until you answer it. A
- * routine fires in a channel you were never looking at. A conversation
- * finishing is only interesting if you were waiting for it.
+ * Five kinds rather than one switch, because they are not the same question.
+ * A permission request is blocking and stays blocking until you answer it. An
+ * agent that has stopped is blocking and has no clock on it at all. A routine
+ * fires in a channel you were never looking at. A conversation finishing is
+ * only interesting if you were waiting for it.
+ *
+ * The first two are close enough to look like one switch and are not: an
+ * operator who turns off permission prompts because a crew asks too often has
+ * not said they want to stop hearing that an agent has stopped dead, and one
+ * switch would take that decision for them.
  */
-export type NotifyKind = "approval" | "routine" | "settled" | "failed";
+export type NotifyKind = "approval" | "stuck" | "routine" | "settled" | "failed";
 
-export const NOTIFY_KINDS: readonly NotifyKind[] = ["approval", "routine", "settled", "failed"];
+export const NOTIFY_KINDS: readonly NotifyKind[] = [
+  "approval",
+  "stuck",
+  "routine",
+  "settled",
+  "failed",
+];
 
 export interface NotifyPrefs {
   /** The master switch. Off means no kind fires, whatever the kinds say. */
@@ -72,7 +84,13 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   surface: "light",
   notify: Object.freeze({
     on: true,
-    kinds: Object.freeze({ approval: true, routine: true, settled: true, failed: true }),
+    kinds: Object.freeze({
+      approval: true,
+      stuck: true,
+      routine: true,
+      settled: true,
+      failed: true,
+    }),
   }),
 }) as Prefs;
 

@@ -47,6 +47,8 @@ src-tauri/src/
     worknote.rs       A line about work in flight, and why it is not memory.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
+    escalation.rs     The third thing, which stops nothing: work an agent
+                      cannot move and only the operator can.
     group.rs          A crew's wall, and the settings its agents run on.
     plugin.rs         The servers a crew can sign in to, what it got, and
                       which of its agents may spend it.
@@ -130,6 +132,7 @@ repo: the frontend renders state and forwards intent.
 | What a job inherits from the operator's own Claude Code, and what that costs | *A job inherits the operator's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
 | A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
+| An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
@@ -433,6 +436,32 @@ the model takes a screenshot to see what `browse` did.
   against 16,000 and told operators their memory was about to be cut by a runtime
   storing it whole. A warning is read as a fact about what will happen, so the
   number is only worth drawing while it is the runtime's number.
+- **An escalation is not an approval with the parking taken out, and folding
+  it into one would break the half that matters.** Both mean the operator, and
+  everything else about them is opposite. A request stops a turn mid-flight to
+  get something back, holds a run booking while it waits, and lapses after ten
+  minutes because holding one costs money. An escalation is a turn that has run
+  out of road saying so on its way out: nothing parks, so nothing expires, so a
+  row can sit for the two days it has actually been true. Given ten minutes it
+  would lapse before the operator got back from lunch, having spent a booking
+  proving that a broken tool chain was still broken. `docs/ATTENTION.md`.
+- **`raised_at` never moves and `times` only goes up.** An agent that hits the
+  same wall on six turns raises six times and holds one row. Refreshing the
+  stamp is the obvious implementation and it destroys the only thing the row is
+  worth: *stuck since Tuesday, six turns into it* is a fact nothing else in the
+  app can see, and *stuck just now* is what the message in the channel already
+  said five times. Same argument a working note's stamp is built on, one store
+  over, and the same reason nothing lets an agent withdraw its own escalation:
+  it would take the record of a lost fortnight with it at the moment it decided
+  things were fine.
+- **`Store::raise_escalation` takes an immediate transaction and a deferred one
+  would look identical until it did not.** The read and the insert are one
+  decision, and an agent writes from every thread it holds. Deferred, two turns
+  both read "nothing open", both try to insert, and the second is refused with
+  `SQLITE_BUSY_SNAPSHOT`, which no busy timeout can wait out because the
+  snapshot it read from is already stale. The failure lands inside a turn that
+  had already given up on getting anywhere, which is the worst place in the app
+  for one. The test is the eight-thread one beside it.
 - **A deleted agent is `Terminated` with a stamp, not a fourth lifecycle.** The
   compost holds it for thirty days and everything it owns privately waits with
   it, but to the rest of the app it is deleted: unreachable, undiscoverable, out

@@ -381,6 +381,42 @@ describe("a progress note", () => {
   });
 });
 
+describe("an escalation", () => {
+  it("says what it is, and is not called asking", () => {
+    // Nothing was asked. The word has to separate it from the two calls that
+    // stop a turn to get something back, in a chip that is one line.
+    const [step] = steps(call("escalate", { summary: "The deploy needs a key only you have." }));
+    expect(step!.title).toBe("Escalated to the operator");
+    expect(step!.target).toBe("The deploy needs a key only you have.");
+    expect(callInFlight("escalate", { summary: "x" })).toBe("Escalating to the operator");
+  });
+
+  it("adds nothing beside a chip that already said it", () => {
+    // What comes back is an instruction to the model, and the two numbers in it
+    // the operator would want are on the desk, read live from the row. Frozen
+    // into a transcript, "2d ago" is wrong by the next morning.
+    const [step] = steps(
+      call(
+        "escalate",
+        { summary: "The tooling is down." },
+        ok("That is on the operator's desk now, and it stays there until they clear it."),
+      ),
+    );
+    expect(tellsMore(step!)).toBe(false);
+  });
+
+  it("shows what went wrong when one could not be raised", () => {
+    const [step] = steps(
+      call(
+        "escalate",
+        { summary: "The tooling is down." },
+        { status: "failed", error: "database is locked" },
+      ),
+    );
+    expect(tellsMore(step!)).toBe(true);
+  });
+});
+
 describe("what the turn has done, on one line", () => {
   it("counts the calls that came back, and says nothing about their kind", () => {
     // The kinds are what the chips behind the count are for. A line naming the

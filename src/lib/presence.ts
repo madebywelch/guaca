@@ -7,9 +7,10 @@
  *
  * Two marks, and they are deliberately not one:
  *
- *   a count    turns in this crew parked on the operator. A number, because
- *              "three" and "one" are different amounts of work and a dot says
- *              neither. This is the one state a person is the fix for.
+ *   a count    things in this crew that a person is the fix for: turns parked
+ *              on the operator, and agents that have stopped and said so. A
+ *              number, because "three" and "one" are different amounts of work
+ *              and a dot says neither.
  *   a ring     somebody here is working. No number: how many agents are
  *              mid-turn is not a thing anybody acts on, and a second number
  *              beside the first would make the first harder to read.
@@ -27,10 +28,18 @@
  * migration, not a badge, and it is not in this change.
  */
 
-import type { Activity, AgentCard, AgentId } from "./types";
+import type { Activity, AgentCard, AgentId, Escalation } from "./types";
 
 export interface Presence {
-  /** Turns in this crew parked on the operator, waiting to be answered. */
+  /**
+   * What in this crew is waiting on the operator: turns parked on a request,
+   * plus escalations nobody has cleared.
+   *
+   * One number over two sources, because the circle is answering one question
+   * and the question is "is anything over there mine". They are worth
+   * distinguishing on the desk, which can afford two cards, and not here, where
+   * the whole statement is a digit on a circle the size of a thumbnail.
+   */
   blocked: number;
   /** Anyone here is mid-turn or holding queued work. */
   working: boolean;
@@ -41,12 +50,18 @@ export const QUIET: Presence = { blocked: 0, working: false };
 /**
  * What one crew amounts to right now.
  *
- * Counted off `activity` rather than off the pending requests, because this is
- * a question about agents and that is a table of requests. The two are one to
- * one by construction: an agent runs one turn at a time and a turn parks on one
- * request, so a crew with two parked agents has two rows in `approvals` and a
- * crew with none has none. Reading the activity map is what lets this be a fold
- * over the roster the column is already drawing, with nothing else fetched.
+ * Parked turns are counted off `activity` rather than off the pending requests,
+ * because that half is a question about agents. The two are one to one by
+ * construction: an agent runs one turn at a time and a turn parks on one
+ * request, so a crew with two parked agents has two rows in `approvals`.
+ *
+ * Escalations are not, and cannot be. Nothing parks on one -- the turn that
+ * raised it ended -- so the agent holding one is idle, or working on something
+ * else, and its activity says so correctly. The list is the only place it
+ * exists, which is why it is an argument rather than something read off the
+ * roster. An agent parked on a request while an older escalation of its own is
+ * still open counts twice, and that is right: they are two things to deal with,
+ * and the desk has two cards for them.
  *
  * Every state is named rather than defaulted, and that is what makes this safe
  * to leave alone. A variant added to the runtime and not weighed here would
@@ -54,9 +69,18 @@ export const QUIET: Presence = { blocked: 0, working: false };
  * draw as idle: the one reading that makes the column not worth a glance. Named
  * exhaustively, the same addition fails the build instead.
  */
-export function presenceOf(members: AgentCard[], activity: Record<AgentId, Activity>): Presence {
+export function presenceOf(
+  members: AgentCard[],
+  activity: Record<AgentId, Activity>,
+  stuck: readonly Escalation[],
+): Presence {
   let blocked = 0;
   let working = false;
+
+  const here = new Set(members.map((member) => member.id));
+  for (const one of stuck) {
+    if (here.has(one.agentId)) blocked += 1;
+  }
 
   for (const member of members) {
     const state = activity[member.id];

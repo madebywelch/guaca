@@ -236,6 +236,38 @@ describe("what each interruption says", () => {
     expect(said?.channel).toBe(SCRIBE);
   });
 
+  it("names the agent that has stopped, and sends the operator to its channel", () => {
+    const said = announcementFor(
+      { type: "escalationRaised", escalationId: "escalation-1", agentId: SCRIBE },
+      nameOf,
+    );
+    expect(said?.kind).toBe("stuck");
+    expect(said?.title).toBe("Scribe is stuck");
+    expect(said?.channel).toBe(SCRIBE);
+  });
+
+  // The event carries an id and an agent, exactly as a request does, so what
+  // the agent is stuck on is not here to be said. The body must not pretend
+  // otherwise: a notification quoting an empty summary is worse than one that
+  // says where to look.
+  it("says what an escalation does rather than what it is about", () => {
+    const said = announcementFor(
+      { type: "escalationRaised", escalationId: "escalation-1", agentId: CHEF },
+      nameOf,
+    );
+    expect(said?.body).toContain("until you clear it");
+    expect(said?.body).not.toMatch(/undefined/);
+  });
+
+  // Nothing is announced when one comes off the desk. The operator took it off
+  // themselves, or the agent that raised it was thrown out, and neither is news
+  // to interrupt somebody with.
+  it("says nothing when an escalation is cleared", () => {
+    expect(
+      announcementFor({ type: "escalationCleared", escalationId: "escalation-1" }, nameOf),
+    ).toBeNull();
+  });
+
   it("keys a permission request on the agent rather than on the request", () => {
     // Two requests from one agent within the second are one interruption; the
     // burst check can only collapse them if the approval id is not in the key.
