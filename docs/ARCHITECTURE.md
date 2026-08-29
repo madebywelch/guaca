@@ -63,9 +63,9 @@ The loop guard (`runtime/guard.rs`) bounds the worst case, but bounding is not
 the same as terminating well. What actually makes a cascade converge is
 `expects_reply`:
 
-- A human message, or a message to a peer that has not written to this agent in
-  this run, expects an answer.
-- A message back to someone who has already written expects nothing: it is a
+- A human message, a message to a peer that has not written to this agent in
+  this run, or a message declared `work` wherever it lands, expects an answer.
+- A courtesy back to someone who has already written expects nothing: it is a
   continuation, not an approach.
 
 An agent that receives a non-reply-expecting message still takes a turn to read
@@ -100,22 +100,38 @@ delegation that takes two rounds died at exactly that point.
 
 **Being asked for an answer and being given work are different questions.**
 `expects_reply` is the first and `intent` is the second, and they came apart the
-moment an agent could instruct a peer that had already answered: such a message
-carries work and expects no reply. The runtime had only `expects_reply` to go
-on, so that turn ran in the mode whose prompt says nothing is being asked of it
-and that silence is usually right. The agent read an explicit instruction to
-send an email, spent a model call, said nothing, and to the operator had simply
-stopped. `intent` is now on the envelope and `ReplyMode::Assigned` is the
-combination of work with nobody waiting: do it, then file what you did as a note
-in your own channel. The asymmetry that terminates cascades is untouched, because
-what changed is what the recipient is told, not where its answer goes.
+moment an agent could instruct a peer that had already answered. The runtime had
+only `expects_reply` to go on, so that turn ran in the mode whose prompt says
+nothing is being asked of it and that silence is usually right. The agent read
+an explicit instruction to send an email, spent a model call, said nothing, and
+to the operator had simply stopped. `intent` went onto the envelope for that,
+and for a while the combination of work with a peer that had already written ran
+as `ReplyMode::Assigned`: do it, then file what you did as a note in your own
+channel.
+
+That filing rule turned out to be its own defect, one layer up. The doer did the
+work and reported it into its own channel, but the coordinator that asked was
+told nothing: its prompt's own outstanding-asks list, which is derived from
+`intent` on sent messages, went on saying the peer owed it an answer, and the
+list's advice is to chase. Work now re-arms the reply path instead —
+`expects_reply` is true for any message declared `work`, wherever in the
+exchange it lands — so a second instruction runs exactly as the first did, as an
+ordinary `ToPeer` turn whose answer is delivered to the agent that asked. The
+asymmetry that terminates cascades is untouched, because it lives on the answer:
+a reply still expects nothing, whatever the message it answers declared, so a
+chain of instruction and report still costs its own declared work each round and
+still runs out of pair budget, hops and steps. `Assigned` remains for work with
+no peer behind it, which is a routine coming due, a coding job reporting in, or
+an operator line absorbed into a turn that was already running: there the note
+in the agent's own channel is exactly where the person who asked is reading.
 
 The mode follows the work rather than the sender, and the second incident is
 why. The first version matched on who the message came from, and a routine
 coming due comes from neither the operator nor a peer: it matched no arm of that
 match and fell through to the silent mode, so every schedule an agent kept was
 answered by an agent that had just been told nothing was being asked of it.
-Anything carrying work is `Assigned`, whoever sent it. See `ROUTINES.md`.
+Anything carrying work with nobody to answer is `Assigned`, whoever sent it.
+See `ROUTINES.md`.
 
 The field is trusted, and that is deliberate. A model can label a courtesy as
 work, and then the run pays for one extra turn and hits the same per-pair,
@@ -145,12 +161,21 @@ went is the only part of the turn that has reached nobody at all, and the agent
 that asked for the work is who it belongs to. It goes to them, guard and all.
 
 Messages that do not expect a reply are batched: an agent waking to four replies
-reads all four in one turn. Because real replies arrive seconds apart rather
-than together, an agent will also wait briefly for replies it is still owed,
-counted as peers it has written to that have not written back, before reading
-what it already has. Waiting instead on "is anyone in this run still busy" was
-tried and was wrong: it made an agent sit through peers that had already
-answered and were finishing their own notes.
+reads all four in one turn. Because real replies land tens of seconds apart
+rather than together, an agent also waits for answers it is still owed — sends
+of its own that expected a reply and have not had one — as long as somebody who
+owes one is still working on it, before reading what it already has. Both
+halves of that condition replaced something that was tried and was wrong.
+Waiting on "is anyone in this run still busy" made an agent sit through peers
+that had already answered and were finishing their own notes. Waiting on owed
+alone, under a 2.5-second clock sized to a scripted server, expired before the
+second answer of every real fan-out, so a coordinator read its replies one
+model call at a time: the offline suite could not see that, because a stub
+answers in milliseconds. The activity check is what lets the window be generous
+(two minutes) rather than a guess at model latency: a peer that failed, went
+quiet or had its answer refused by the guard reads as idle, and the gather ends
+in milliseconds rather than sitting out a window for an answer that is not
+coming.
 
 ## A working turn reads its inbox, and only what it can answer where it stands
 
@@ -553,9 +578,14 @@ it, which is worth doing whether or not the agent can see.
 ## A failed model call is retried before the operator hears about it
 
 `stream_with_retries` is the loop and `LlmError::is_transient` decides. Rate
-limits, timeouts, transport failures and 5xx are worth another attempt; a
-rejected key or an unknown model is not, because it answers the same way every
-time and retrying only delays the message the operator needs to read. Three
+limits, timeouts, transport failures, 5xx, and an error frame arriving inside
+an accepted 200 stream are worth another attempt; a rejected key or an unknown
+model is not, because it answers the same way every time and retrying only
+delays the message the operator needs to read. The 200 case is the one that
+does not look transient and is: everything about the request was validated
+before the stream opened, so what broke was the provider mid-answer, and read
+as a rejection one "Upstream idle timeout exceeded" frame killed each of four
+concurrent live turns on its only attempt. Three
 attempts, one and three seconds apart, or the provider's own `Retry-After`
 capped at twenty seconds.
 
@@ -1221,13 +1251,6 @@ Stated plainly rather than discovered later.
   the machine's own screen, because a screenshot carries no URL to match. Both
   predate the split into a computer and a browser and neither was made worse by
   it. Wording is still the only thing holding them.
-- **A peer's answer to a follow-up instruction goes to its own channel, not back
-  to the agent that instructed it.** `expects_reply` stays false for a message
-  to a peer that has already written, because that asymmetry is what makes
-  cascades terminate. So a coordinator can now instruct twice in one run, but
-  reads the outcome where the operator does rather than being handed it. Routing
-  it back means recording the declared intent on the envelope, which is a
-  schema change.
 - **Prompt instructions are guidance, not guarantees.** Several behaviors here
   are steered by wording in `runtime/prompt.rs`: staying quiet when there is
   nothing to add, and not narrating that silence. A model can ignore any of it, so

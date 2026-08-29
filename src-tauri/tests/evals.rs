@@ -461,11 +461,15 @@ async fn replies_that_arrive_apart_are_still_read_together() {
             return report_once(body, "the team knows");
         }
         if text.contains("hello from manager") {
-            // Staggered, the way real model calls come back.
+            // Staggered, the way real model calls come back — and both gaps
+            // are past what the old fixed window covered, because that window
+            // was sized to this stub and expired before the second answer of
+            // every real fan-out. With one slow peer instead of two, a run
+            // that reads one reply late still slips under the call ceiling.
             let pause = if text.contains("Baker") {
-                500
+                2800
             } else if text.contains("Grocer") {
-                1000
+                5600
             } else {
                 0
             };
