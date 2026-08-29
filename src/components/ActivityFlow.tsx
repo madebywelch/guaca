@@ -6,7 +6,7 @@ import { useStore } from "../lib/store";
 import type { WirePeer } from "../lib/transcript";
 import type { AgentCard, AgentId, Envelope, Participant, RunId, Tokens } from "../lib/types";
 import { plainText } from "../lib/types";
-import { compact, money, priced } from "./TokenMeter";
+import { compact, money, priced } from "./Spend";
 import { MessageModal } from "./WireRow";
 
 /**

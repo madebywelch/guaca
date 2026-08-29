@@ -25,7 +25,7 @@ import {
   type RoutineId,
   type RoutineRun,
 } from "../lib/types";
-import { compact, money, priced } from "./TokenMeter";
+import { compact, money, priced } from "./Spend";
 
 interface Props {
   agentId: AgentId;

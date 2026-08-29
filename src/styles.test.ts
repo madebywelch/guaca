@@ -191,6 +191,33 @@ describe("the navigation columns", () => {
   });
 });
 
+describe("what a crew has spent", () => {
+  /**
+   * The card is held open by the heading underneath it.
+   *
+   * It opens downward over the first rows of the crew, and those rows are drop
+   * targets and buttons. Taking the pointer, it would take it off the heading
+   * that is the only reason it is open, close itself, hand the pointer back and
+   * open again: a panel flickering under a hand that has not moved. jsdom lays
+   * nothing out and stacks nothing, so no DOM assertion sees any of it.
+   */
+  it("lets the pointer through to the heading and the rows it covers", () => {
+    expect(getComputedStyle(nest("spend")).pointerEvents).toBe("none");
+  });
+
+  /**
+   * And it is laid over the rail rather than opening a space in it.
+   *
+   * The whole argument for moving the numbers off the heading was that the rail
+   * is fifteen rem wide and the crew's name was paying for them. A card that
+   * reflowed the column on hover would spend that width back, on a surface that
+   * appears and disappears under the pointer.
+   */
+  it("takes no width from the column it hangs off", () => {
+    expect(getComputedStyle(nest("spend")).position).toBe("fixed");
+  });
+});
+
 describe("dialog modifiers", () => {
   /**
    * A modifier declared above `.dialog` silently loses to it.

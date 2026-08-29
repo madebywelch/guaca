@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
@@ -636,6 +636,62 @@ describe("groups as places", () => {
 
     fireEvent.click(screen.getByLabelText(`${long}, 0 agents`));
     expect(document.querySelector(".rail__open-name")?.getAttribute("title")).toBe(long);
+  });
+
+  // The name is the heading of the whole column once the rail is inside a crew,
+  // and it was the only thing on that line able to give up width. Both readouts
+  // that used to take it are gone: the count entirely, and the spend into the
+  // card that hovering the heading opens.
+  it("keeps the crew's spend and its count off the line the name is on", () => {
+    draw([group("everyone"), group("StopTheScam", null, RESEARCH)], [agent("Manager")]);
+    fireEvent.click(screen.getByLabelText("StopTheScam, 0 agents"));
+
+    const head = document.querySelector(".rail__open-head");
+    expect(head?.textContent).toBe("StopTheScam⚙");
+    expect(document.querySelector(".spend")).toBeNull();
+  });
+
+  // A crew's heading is a band across the top of its own rows, so a pointer on
+  // its way to an agent crosses one every time. Opening on contact flashed a
+  // panel over the row being aimed at.
+  it("opens the spend card on a heading held, and not on one passed over", () => {
+    vi.useFakeTimers();
+    try {
+      draw([group("everyone")], [agent("Manager")]);
+      const head = document.querySelector(".rail__group-head") as HTMLElement;
+
+      fireEvent.pointerEnter(head);
+      act(() => void vi.advanceTimersByTime(120));
+      expect(document.querySelector(".spend")).toBeNull();
+
+      act(() => void vi.advanceTimersByTime(400));
+      expect(document.querySelector(".spend__total")?.textContent).toBe("1.8M");
+
+      fireEvent.pointerLeave(head);
+      expect(document.querySelector(".spend")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The pointer is already carrying something, and what the card would cover is
+  // the rows being aimed at.
+  it("keeps the card shut while an agent is being dragged", () => {
+    vi.useFakeTimers();
+    try {
+      draw([group("everyone")], [agent("Manager"), agent("Reader", { railOrder: 1 })]);
+      const head = document.querySelector(".rail__group-head") as HTMLElement;
+
+      fireEvent.pointerEnter(head);
+      act(() => void vi.advanceTimersByTime(400));
+      expect(document.querySelector(".spend")).toBeTruthy();
+
+      fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 100, clientY: 300 });
+      fireEvent.pointerMove(window, { clientX: 100, clientY: 250 });
+      expect(document.querySelector(".spend")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("draws only that group after clicking into it, and everyone again after leaving", () => {

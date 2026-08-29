@@ -308,8 +308,15 @@ describe("App", () => {
 
     await waitFor(() => expect(screen.getByText("Chef")).toBeTruthy());
     expect(screen.queryByText("Pinned")).toBeNull();
-    expect(railRow("Chef").closest(".rail__group")?.textContent).toContain("Everyone");
-    expect(screen.getByText("Everyone").closest(".rail__group-head")?.textContent).toContain("2");
+    const crew = railRow("Chef").closest(".rail__group");
+    expect(crew?.textContent).toContain("Everyone");
+    // Both rows under the one heading, with the pinned one at the head of them.
+    // The crew's size used to be read off a digit in that heading; the heading
+    // gave the digit's width back to the crew's name, so what says a pinned
+    // agent is still in the crew is that it is drawn inside it.
+    expect(
+      [...(crew?.querySelectorAll(".agent-row__name") ?? [])].map((n) => n.textContent),
+    ).toEqual(["Chef", "Manager"]);
   });
 
   it("pins and duplicates from the menu that right-clicking opens", async () => {

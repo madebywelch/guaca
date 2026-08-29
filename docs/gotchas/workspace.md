@@ -37,6 +37,23 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   scoped in SQL, because the board is the newest four hundred messages and a
   busy crew filling that window would hand a quiet one an empty board.
   `docs/WORKSPACE.md`.
+- **A crew's spend is a card over the rail, and nothing may put it back on the
+  heading.** A readout is a fixed width and a crew's name is not, so the name is
+  the only item on that line with anything to give and flex takes it:
+  "StopTheScam" was drawn as "StopTh…" as the heading of its own column. Two
+  things about the card are load-bearing and neither is visible in a DOM
+  assertion, because jsdom lays nothing out and the node is there whatever the
+  rule says. It is `position: fixed`, so hovering a heading cannot reflow the
+  column the change existed to widen. And it is `pointer-events: none`, or it
+  takes the pointer off the heading that is the only reason it is open, closes
+  itself, hands the pointer back and opens again, under a hand that has not
+  moved. `styles.test.ts` reads the cascade and is the gate.
+- **It opens on a dwell, and the timer is cleared on the way out.** A heading is
+  a band across the top of its own rows, so a pointer travelling from the search
+  box to an agent crosses one every time and opening on contact flashed a panel
+  over the row being aimed at. The heading is measured when the pointer arrives
+  rather than when the timer fires: `currentTarget` is null by the time React is
+  finished with the event.
 - **The crews' column slides out; it does not stand open.** Two thresholds, not
   one, or a hand resting at the boundary flickers it. Both distances are read
   off a box CSS sizes rather than written in the component, so they are lengths
