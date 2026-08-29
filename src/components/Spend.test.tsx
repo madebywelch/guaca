@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { PULSE_WINDOW_MS, useStore } from "../lib/store";
 import type { Tokens } from "../lib/types";
-import { bars, compact, money, priced, TokenMeter } from "./TokenMeter";
+import { bars, compact, money, priced, SpendTag } from "./Spend";
 
 describe("compact", () => {
   it("is exact while the numbers are small", () => {
@@ -89,7 +89,7 @@ describe("priced", () => {
   });
 });
 
-describe("TokenMeter", () => {
+describe("SpendTag", () => {
   const GROUP = "00000000-0000-4000-8000-000000000001";
 
   function draw(total: Tokens | undefined, points: { at: number; tokens: number }[] = []) {
@@ -97,7 +97,7 @@ describe("TokenMeter", () => {
       usage: total ? { [GROUP]: total } : {},
       pulse: { [GROUP]: points },
     });
-    return render(<TokenMeter groupId={GROUP} />);
+    return render(<SpendTag groupId={GROUP} at={{ x: 0, y: 0 }} />);
   }
 
   function spent(over: Partial<Tokens> = {}): Tokens {
@@ -110,30 +110,48 @@ describe("TokenMeter", () => {
     ["a paid model", 0.0234],
     ["a free model", 0],
     ["a local server", null],
-  ])("draws the count under %s", (_what, cost) => {
+  ])("leads with the count under %s", (_what, cost) => {
     const { container } = draw(spent({ cost }));
-    expect(container.querySelector(".meter__count")?.textContent).toBe("1.5k");
+    expect(container.querySelector(".spend__total")?.textContent).toBe("1.5k");
   });
 
   it("drops the price a free model reports, and keeps the count", () => {
     // The whole complaint: free inference charged a real zero, the price won
-    // the one slot, and the rail spent seven characters on $0.0000 while the
-    // only figure going anywhere was not drawn at all.
+    // the one slot the heading had, and the rail spent seven characters on
+    // $0.0000 while the only figure going anywhere was not drawn at all.
     const { container } = draw(spent({ cost: 0 }));
     expect(container.textContent).toContain("1.5k");
     expect(container.textContent).not.toContain("$");
-    expect(container.querySelector(".meter")?.getAttribute("title")).not.toContain("$");
   });
 
   it("draws the price beside the count once there is one", () => {
     const { container } = draw(spent({ cost: 0.0234 }));
-    expect(container.textContent).toContain("$0.023");
-    expect(container.querySelector(".meter")?.getAttribute("title")).toContain("$0.023");
+    expect(container.querySelector(".spend__cost")?.textContent).toBe("$0.023");
   });
 
-  it("draws nothing at all for a group that has never spent anything", () => {
-    // An idle rail is not a column of zeros.
+  // Exact, and only here. The heading had room for four characters, which is
+  // why the split and the call count were in a `title` nobody hovered long
+  // enough to read; opening the card is the operator asking for them.
+  it("splits the total, in full, rather than rounding it twice", () => {
+    const { container } = draw(spent({ prompt: 1_200_000, completion: 345_000 }));
+    const figures = [...container.querySelectorAll(".spend__figure")].map((n) => n.textContent);
+
+    expect(container.querySelector(".spend__total")?.textContent).toBe("1.5M");
+    expect(figures).toEqual(["1,200,000", "345,000", "4"]);
+  });
+
+  it("answers a crew that has never spent anything, rather than opening empty", () => {
+    // A card that appears for the crews with something to say and stays shut
+    // for the rest is a hover nobody can tell from a broken one.
     const { container } = draw(undefined);
-    expect(container.textContent).toBe("");
+    expect(container.querySelector(".spend__quiet")?.textContent).toBe("Nothing spent yet.");
+  });
+
+  it("says nothing to a screen reader, because the numbers have a home", () => {
+    // The same figures are in the crew's settings, where the flow board reports
+    // what every run cost. Drawn into the tree as well, a sweep across the rail
+    // is a crew announcing its token count at somebody who asked for none of it.
+    const { container } = draw(spent());
+    expect(container.querySelector(".spend")?.getAttribute("aria-hidden")).toBe("true");
   });
 });

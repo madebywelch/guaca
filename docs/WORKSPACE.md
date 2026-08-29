@@ -820,6 +820,39 @@ either view. Neither view gives them a heading: everybody drawn under a crew is
 in that crew already, and a heading over one or two rows would divide nothing.
 The mark on the row is what says which rows are pinned.
 
+**A heading is a crew's name, and what it costs is what hovering it says.** The
+heading used to carry three things: the name, a readout of tokens and price, and
+the way into the crew's settings. Two of them are fixed widths, so the name was
+the only item on the line able to give any room up, and it did. A crew called
+"StopTheScam" was drawn as "StopTh…" at the top of its own column, at the one
+size in the rail where a name is meant to be read rather than scanned. Nothing
+about the numbers earned that: what a crew is costing is a question asked a few
+times a day, and the name is read every time the eye passes the rail.
+
+So the numbers came off the line and became a card, laid over the rows rather
+than opening a space for them, which costs the rail no width and the layout no
+reflow. Off the line it can hold the whole picture instead of the four
+characters that fit: the total, the price, the split between what was sent and
+what came back, and how many calls made it. That was already the sentence the
+readout hid in a `title`, which is a tooltip nobody waits a second for; it is
+drawn now instead of spelled. `src/components/Spend.tsx`.
+
+It opens on a dwell rather than on contact, because a heading is a band across
+the top of its own rows and a pointer on its way to an agent crosses one every
+time. It is out of the accessibility tree and it is suppressed for the whole of
+a drag, when the rows it would cover are the targets being aimed at. Neither
+costs anybody the number: the same figures are in the crew's settings, behind
+the gear beside the name, where the flow board already reports what every run
+cost. A hover is a shortcut to a figure that has a home, not the only way to
+reach one.
+
+**How many are in a crew is not in either heading either.** It was a digit
+taking width from the name, and it is the third place the app says the same
+number: the faces on a circle are seated by how many there are, one as a
+portrait and six on a ring, and the tag under the pointer says it in words. A
+number in the rail as well was a fourth thing on a line that could not hold
+three.
+
 The circles live in a column of their own on the far left, and that column is
 the second change here. They were a strip inside the rail: a wrapping row of
 circles that fit four across, went to a second line at five and a third at nine.
@@ -1634,9 +1667,9 @@ reason: `actOnBehalf` is never offered an "always".
 
 **Spend is two lines, session and all time.** A price with no places is a working
 crew reading `$0.00` for its first hour, so the precision follows the number,
-exactly as the group meters do. The token count is always there and the price
-joins it only when there is one worth the width, under the same floor as the
-meters: a local server and a subscription plan price nothing at all, and a free
+exactly as a crew's spend card does. The token count is always there and the
+price joins it only when there is one worth the width, under the same floor as
+that card: a local server and a subscription plan price nothing at all, and a free
 model prices every call at a real zero, so `$0.0000` is what a strip shared with
 every other app would otherwise spend seven characters saying. No price is not a
 price of zero either, which is why a workspace with one local crew and one hosted
