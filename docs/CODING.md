@@ -77,7 +77,8 @@ would report the repository as broken rather than as fenced.
 ### The gate is asked from the same function, and that is the point
 
 `Gate::AskBeforePushing` stops a job before a push, a merge, a pull request or a
-release. It stops `shell` at the same commands, decided by the same
+release, whether the line says so itself or keeps it in one of the repository's
+own scripts. It stops `shell` at the same commands, decided by the same
 `bridge::outward` call, answered on the same desk through the same
 `Runtime::ask_about_push`. Two doors into one directory that disagreed about
 what counts as outward-facing would be a gate an agent walks around by picking
@@ -393,10 +394,83 @@ merge, a release. `bridge::outward` reads the shell line, and it errs toward
 asking, because a wrong yes costs one card on the desk and a wrong no is the
 behavior the operator switched it on to stop.
 
+### The line is read, and then what the line runs is read
+
+Reading the words alone is what one level of indirection walks straight past.
+`./scripts/ship.sh` is not `git push` and never will be, so a repository whose
+release lives in a script had a gate that was switched on, said it was holding,
+and stopped nothing. That is worse than having no gate: the operator turned it
+on and was told it was working.
+
+So a line that names nothing outward-facing is looked at again, for the scripts
+*in this tree* that it runs. A `package.json` entry behind `npm run release`,
+`pnpm release` or `yarn release`; a file in the work tree behind
+`./scripts/ship.sh` or `bash scripts/ship.sh`. Each one is read and asked the
+same question, three deep, with a set carried across the whole walk so that two
+scripts that run each other are read once rather than forever.
+
+The card then has to carry both halves, because they are not the same sentence.
+`./scripts/ship.sh` is what the agent asked for and says nothing about what it
+does; `git push` is what the operator is being asked to allow. `Reach` is that
+pair, and the summary leads with the push: *wants to run `git push` in guaca, by
+way of `./scripts/ship.sh`*. That order is the emphasis, not a preference. What
+is being authorized is the thing that cannot be taken back, and the script is
+how the agent got there.
+
+The `Command` detail field holds the line the model actually wrote, flags and
+all, which is what it should always have held: it carried the summary instead,
+so an operator was shown `git push` about a `git push --force`, which is the one
+detail on a card that changes the answer.
+
+### And what it deliberately does not read
+
+A Makefile target. A compiled program. Anything it cannot parse as text. Those
+are indirection too, and reading none of them is a decision rather than a gap.
+
+The alternative is to treat *there is something here I cannot see through* as a
+reason to ask, which sounds like the safe direction and is not. The ordinary
+case for it is `./target/release/app` and `./node_modules/.bin/vite`: every
+locally built program in the tree, on every line that runs one. A gate that
+parks a turn for running the binary it just compiled is exactly the wrong yes
+that teaches an operator to switch it off, and a gate that is off holds nothing
+at all. The rule stays what the paragraph below says it is: the ordinary case,
+followed honestly, and not a boundary.
+
+### One no settles the question for the rest of the run
+
+A model that has just been refused a push tries the push. That is ordinary
+rather than confused — the refusal it reads back says the operator did not allow
+it, not that they never will — and the operator is the one who pays for it, in a
+second card and a third, for a question they are sitting there answering.
+
+`Runs::refused` holds what each run has already been told no about, and
+`ask_about_push` reads it before it parks anything. Three things about the shape
+of it are load-bearing:
+
+- **A no is remembered and nothing else is.** An expiry is the operator being
+  somewhere else rather than the operator answering. Held against them, a
+  request nobody saw would refuse the one they would have seen two minutes
+  later.
+- **It is keyed by the outward action the card named, not by the line.**
+  Somebody who refused `git push` refused it whether the next attempt spells it
+  with a different flag or reaches it through a script. A key that told those
+  apart would remember nothing a retry could not walk around.
+- **It is per run, and that is the whole of how it is forgotten.** The
+  operator's next message is a new run, so a no holds for the work it was said
+  about and for nothing after it. Nothing is stored, for the reason a job's lock
+  is not: a refusal that outlived the process would be a repository quietly
+  refusing pushes with no decision anybody could find behind it.
+
+An ordinary run's entry goes when the run settles, on the same line `stopped`
+goes. A job's run never settles, because nothing is ever booked against it, so
+it is dropped where the job ends, beside `release_parked`.
+
 It parks as `ProtectedAction::ActOnBehalf` rather than as a new variant, because
 that is what that one already means. It also means the standing grant means what
 it says: an operator who has told this agent it may act on their behalf is not
-asked again per push.
+asked again per push, and a grant given after a refusal outranks it. That is the
+one place the run's memory is consulted alongside the store, and it is the right
+way round: the grant is the broader answer and the newer one.
 
 `Runtime::park_with` is `park` with one difference, and it is one thing: whether
 the agent's own activity is this request's to move. A parked turn is an agent
