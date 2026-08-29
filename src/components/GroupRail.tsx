@@ -23,10 +23,12 @@ interface Props {
   /**
    * Whether the operator is currently holding an agent.
    *
-   * Held out for the whole of a drag, whatever the pointer is doing. A drop
-   * onto a circle is the one thing this column is load-bearing for, and a
-   * column that slid away as the hand carried a row across it would take the
-   * target with it halfway through the gesture.
+   * Holds the column where it is rather than holding it out. A drop onto a
+   * circle is the one thing this column is load-bearing for, so a column
+   * already reached for must not slide away as the hand carries the row back
+   * across the app; a column that came out for every drag would instead cover
+   * the left edge of every row in the rail during a reorder, which is what
+   * most drags are. `lib/reach.ts` has the rest of it.
    */
   dragging: boolean;
 }
@@ -56,11 +58,10 @@ interface Props {
  * heading for the left edge is already making. `lib/reach.ts` owns when, and
  * the two thresholds it uses and why there are two.
  *
- * Three things hold it out, and none of them is a click. Proximity, a drag in
- * progress, and focus inside it, which is what makes the column reachable from
- * the keyboard: tabbing into a circle slides the column out around it, and a
- * column that came out only for a pointer would be one nobody could see what
- * they had selected in.
+ * Two things bring it out and none of them is a click: proximity, and focus
+ * inside it, which is what makes the column reachable from the keyboard, since
+ * tabbing into a circle nobody can see is a selection nobody can read. A drag
+ * brings it out for neither, and only keeps it wherever it already was.
  *
  * Still absent while there is one group, which is the state most workspaces are
  * in and the same rule the strip had. A column offering a choice of one is a
@@ -95,16 +96,20 @@ export function GroupRail({
       const reach = zone.current?.getBoundingClientRect();
       const column = slab.current?.getBoundingClientRect();
       if (!reach || !column) return;
-      setNear((open) => reaches(open, { x: event.clientX, y: event.clientY }, { reach, column }));
+      setNear((open) =>
+        reaches(open, { x: event.clientX, y: event.clientY }, { reach, column }, dragging),
+      );
     };
     window.addEventListener("pointermove", move);
     return () => window.removeEventListener("pointermove", move);
-  }, []);
+    // Twice a drag, which is what it costs to have the rule read one boolean
+    // rather than a ref that says what it was on the last frame.
+  }, [dragging]);
 
   if (groups.length < 2) return null;
 
   return (
-    <nav className="grail" aria-label="Groups" data-out={near || dragging ? "true" : undefined}>
+    <nav className="grail" aria-label="Groups" data-out={near ? "true" : undefined}>
       {/* The proximity zone, as a box. It carries no pixels and cannot be
           clicked; what it is for is that its size and its distance from the top
           of the window are lengths, and every length in this app is named in

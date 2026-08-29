@@ -427,10 +427,10 @@ describe("groups as places", () => {
     expect(out()).toBe(false);
   });
 
-  it("stays out for the whole of a drag, wherever the hand has got to", async () => {
-    // A drop onto a circle is the one thing this column is load-bearing for. A
-    // column that slid away as the hand carried a row across the app would take
-    // the target with it half way through the gesture.
+  it("stays in for a drag that never goes near it", () => {
+    // It came out for the whole of every drag, and the column comes out over
+    // the rail: picking up a row anywhere in the window covered the left edge
+    // of every row behind it, which is what a reorder is aimed at.
     draw(
       [group("everyone"), group("research", null, RESEARCH)],
       [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
@@ -440,9 +440,30 @@ describe("groups as places", () => {
     fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 400, clientY: 200 });
     fireEvent.pointerMove(window, { clientX: 400, clientY: 240 });
 
+    expect(out()).toBe(false);
+  });
+
+  it("stays out for the rest of a drag that has reached it", () => {
+    // A drop onto a circle is the one thing this column is load-bearing for. A
+    // column that slid away as the hand carried a row back across the app would
+    // take the target with it half way through the gesture.
+    draw(
+      [group("everyone"), group("research", null, RESEARCH)],
+      [agent("Manager"), agent("Reader", { groupId: RESEARCH, railOrder: 1 })],
+    );
+    laid(false);
+
+    fireEvent.pointerDown(row("Manager"), { button: 0, clientX: 400, clientY: 200 });
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 240 });
+    fireEvent.pointerMove(window, { clientX: 6, clientY: 240 });
+    expect(out()).toBe(true);
+
+    laid(true);
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 240 });
     expect(out()).toBe(true);
 
     fireEvent.pointerUp(window, { clientX: 400, clientY: 240 });
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 240 });
     expect(out()).toBe(false);
   });
 

@@ -24,6 +24,14 @@
  * A strip wide enough to be aimed at is a strip that swallows clicks on the
  * left edge of every agent row behind it, and a row that does nothing when it
  * is clicked near its left side is a worse bug than the one this fixes.
+ *
+ * A drag suspends the far threshold and nothing else. Held out for the whole of
+ * a drag instead, the column came over the rail the moment a row was picked up
+ * anywhere in the window, covering the left edge of every row behind it while
+ * the operator was aiming at one of them: most drags are a reorder, and a
+ * reorder never goes near the crews. What the drag is load-bearing for is that
+ * a circle already reached for cannot slide out from under the hand halfway
+ * through the gesture, and that is the closing threshold, not the opening one.
  */
 
 export interface Reach {
@@ -42,9 +50,11 @@ export interface At {
   y: number;
 }
 
-export function reaches(open: boolean, at: At, boxes: Reach): boolean {
+export function reaches(open: boolean, at: At, boxes: Reach, holding: boolean): boolean {
   const { reach, column } = boxes;
   if (at.x <= reach.right && at.y >= reach.top) return true;
+  // A row in hand: whatever is out stays out until it is dropped.
+  if (holding) return open;
   if (at.x > column.right + reach.right) return false;
   return open;
 }

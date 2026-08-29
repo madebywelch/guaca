@@ -61,9 +61,12 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   top of the window because macOS floats the close button over that corner, and
   it is decided from the pointer rather than from `:hover` on a strip: a strip
   wide enough to aim at is a strip laid over the left edge of every agent row
-  behind it. Proximity, a drag in progress and focus inside it each hold it out;
-  the drag one is load-bearing, since a column that slid away mid-gesture would
-  take the drop target with it. `src/lib/reach.ts`.
+  behind it. Proximity and focus inside it bring it out. A drag does neither: it
+  suspends the closing threshold, so a column already reached for cannot slide
+  away mid-gesture and take the drop target with it. Held out for the whole of
+  every drag instead, it came over the rail the moment a row was picked up
+  anywhere in the window, covering the left edge of every row a reorder was
+  aimed at, which is what most drags are. `src/lib/reach.ts`.
 - **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
   One invariant from two ends — the rail draws the row of whatever the pane is
   showing — and the asymmetry is deliberate. `select` is the operator naming an
