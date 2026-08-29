@@ -20,7 +20,7 @@ import { describe, expect, it } from "vitest";
 import { MAX_SCATTER_HUES, SCATTER_MARKS, SLOTS, seriesColor, seriesMark } from "./palette";
 
 /** The surface a figure card is drawn on, which is `--raised` in both. */
-const SURFACE = { paper: "#ffffff", ink: "#222622" };
+const SURFACE = { paper: "#ffffff", ink: "#171715" };
 
 /** Neighbors must clear this under simulated colorblindness. */
 const CVD_TARGET = 8;

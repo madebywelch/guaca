@@ -15,7 +15,7 @@
  * choice cost nothing: of the orders that pass, this is one of the best.
  *
  * Measured on this app's own chart surface (`--raised`: `#ffffff` on paper,
- * `#222622` on ink), simulating protanopia and deuteranopia at full severity,
+ * `#171715` on ink), simulating protanopia and deuteranopia at full severity,
  * as OKLab distance ×100:
  *
  * | gate                        | target | paper | ink  |
