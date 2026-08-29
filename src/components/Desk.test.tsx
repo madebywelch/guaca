@@ -2,19 +2,23 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { AgentCard, Approval, ApprovalId } from "../lib/types";
+import type { AgentCard, Approval, ApprovalId, Escalation } from "../lib/types";
 import { DEFAULT_GROUP } from "../test-fixtures";
 import { Desk } from "./Desk";
 
 const decideApproval = vi.fn<(id: string, decision: string) => Promise<Approval>>();
 const answerQuestion = vi.fn<(id: string, answer: string) => Promise<Approval>>();
 const pendingApprovals = vi.fn<() => Promise<Approval[]>>();
+const clearEscalation = vi.fn<(id: string) => Promise<void>>();
+const openEscalations = vi.fn<() => Promise<Escalation[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     decideApproval: (id: string, decision: string) => decideApproval(id, decision),
     answerQuestion: (id: string, answer: string) => answerQuestion(id, answer),
     pendingApprovals: () => pendingApprovals(),
+    clearEscalation: (id: string) => clearEscalation(id),
+    openEscalations: () => openEscalations(),
     approvalStates: async () => ({}),
     channelMessages: async () => [],
     conversationFlow: async () => [],
@@ -63,8 +67,24 @@ function request(over: Partial<Approval> = {}): Approval {
   };
 }
 
-function draw(pending: Approval[]) {
-  useStore.setState({ agents: [agent("Manager")], pending, approvals: {}, banner: null });
+/** An escalation, raised a fortnight ago unless a test says otherwise. */
+function stuckOn(over: Partial<Escalation> = {}): Escalation {
+  return {
+    id: "esc-1",
+    agentId: "Manager",
+    groupId: DEFAULT_GROUP,
+    runId: "run-1",
+    summary: "The deploy needs a key only you have.",
+    raisedAt: Date.now() - 2 * 24 * 60 * 60 * 1000,
+    saidAt: Date.now(),
+    times: 1,
+    clearedAt: null,
+    ...over,
+  };
+}
+
+function draw(pending: Approval[], stuck: Escalation[] = []) {
+  useStore.setState({ agents: [agent("Manager")], pending, stuck, approvals: {}, banner: null });
   return render(<Desk />);
 }
 
@@ -85,7 +105,11 @@ beforeEach(() => {
   decideApproval.mockResolvedValue(request({ state: "allow" }));
   pendingApprovals.mockReset();
   pendingApprovals.mockResolvedValue([]);
-  useStore.setState({ agents: [], pending: [], approvals: {}, banner: null });
+  clearEscalation.mockReset();
+  clearEscalation.mockResolvedValue(undefined);
+  openEscalations.mockReset();
+  openEscalations.mockResolvedValue([]);
+  useStore.setState({ agents: [], pending: [], stuck: [], approvals: {}, banner: null });
 });
 
 describe("the desk", () => {
@@ -234,5 +258,75 @@ describe("the desk", () => {
     await vi.waitFor(() =>
       expect(screen.getByRole<HTMLButtonElement>("button", { name: "Allow" }).disabled).toBe(false),
     );
+  });
+});
+
+describe("an escalation on the desk", () => {
+  it("is on it with nothing parked, because nothing has to be parked", () => {
+    draw([], [stuckOn()]);
+    expect(screen.getByText("The deploy needs a key only you have.")).toBeTruthy();
+    expect(screen.getByText("1 agent is stuck on you")).toBeTruthy();
+  });
+
+  // The two numbers the message in a channel could not carry. "Stuck" is a
+  // state; "stuck for two days, six turns into it" is a decision.
+  it("says how long it has been true and how many turns have hit it", () => {
+    draw([], [stuckOn({ times: 6 })]);
+    expect(screen.getByText("Manager · stuck 2d")).toBeTruthy();
+    expect(screen.getByText("6 turns have run into this")).toBeTruthy();
+  });
+
+  // Opening the channel is what actually unblocks the agent. Clearing only
+  // takes the row away, so it must not be the loud button.
+  it("leads with the channel and not with the clear", () => {
+    draw([], [stuckOn()]);
+    const open = screen.getByRole("button", { name: "Open channel" });
+    expect(open.className).toContain("btn--primary");
+    expect(screen.getByRole("button", { name: "Clear" }).className).toContain("btn--ghost");
+  });
+
+  it("opens the channel of the agent that raised it", () => {
+    draw([], [stuckOn()]);
+    fireEvent.click(screen.getByRole("button", { name: "Open channel" }));
+    expect(useStore.getState().selected).toBe("Manager");
+  });
+
+  it("clears the one it was asked about", () => {
+    draw([], [stuckOn({ id: "esc-9" })]);
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(clearEscalation).toHaveBeenCalledWith("esc-9");
+  });
+
+  // A clear that failed must not leave the desk missing a row the store still
+  // has: the read is what decides, exactly as it does for a refused verdict.
+  it("reads the queue back after a clear that was refused", async () => {
+    clearEscalation.mockRejectedValue(new Error("gone"));
+    openEscalations.mockResolvedValue([stuckOn()]);
+    draw([], [stuckOn()]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await vi.waitFor(() => expect(useStore.getState().stuck).toHaveLength(1));
+    expect(useStore.getState().banner?.tone).toBe("error");
+  });
+
+  // One of these has ten minutes to be answered in and the other has as long as
+  // it takes. Sorting the perishable half under the durable half is how a
+  // permission lapses while the operator reads about a two-day-old wall.
+  it("draws requests above escalations, whatever their ages are", () => {
+    const { container } = draw([request()], [stuckOn()]);
+    const cards = [...container.querySelectorAll(".desk__card")];
+    expect(cards).toHaveLength(2);
+    expect(cards[0]?.getAttribute("data-kind")).toBeNull();
+    expect(cards[1]?.getAttribute("data-kind")).toBe("stuck");
+  });
+
+  it("counts both kinds in one line without adding them up for the operator", () => {
+    draw([request()], [stuckOn()]);
+    expect(screen.getByText("2 things are waiting on you")).toBeTruthy();
+  });
+
+  it("names the agent as deleted rather than drawing an empty card", () => {
+    draw([], [stuckOn({ agentId: "gone" })]);
+    expect(screen.getByText(/A deleted agent · stuck/)).toBeTruthy();
   });
 });

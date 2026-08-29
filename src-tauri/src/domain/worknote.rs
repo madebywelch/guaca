@@ -92,19 +92,9 @@ pub struct WorkingNote {
 /// hands back its own truncation: an agent that believes it recorded something
 /// it did not will not write it again.
 pub fn store_as(body: &str) -> (String, bool) {
-    let trimmed = body.trim();
-    if trimmed.chars().count() <= MAX_NOTE {
-        return (trimmed.to_string(), false);
-    }
     // Cut on a word so the fragment that survives is still readable. A note is
     // one line, so there is no line boundary to fall back on the way memory has.
-    let mut kept: String = trimmed.chars().take(MAX_NOTE).collect();
-    if let Some(space) = kept.rfind(char::is_whitespace) {
-        if space > MAX_NOTE / 2 {
-            kept.truncate(space);
-        }
-    }
-    (kept.trim_end().to_string(), true)
+    super::cut_to(body, MAX_NOTE)
 }
 
 /// How long ago, in the coarsest unit that is still true.

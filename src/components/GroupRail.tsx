@@ -1,5 +1,5 @@
 import type { DropTarget } from "../lib/rail";
-import type { Activity, AgentCard, AgentId, Group, GroupId } from "../lib/types";
+import type { Activity, AgentCard, AgentId, Escalation, Group, GroupId } from "../lib/types";
 import { GroupOrb } from "./GroupOrb";
 import { OrbTag, useOrbTag } from "./OrbTag";
 
@@ -8,6 +8,8 @@ interface Props {
   /** Every live agent, across every crew. */
   agents: AgentCard[];
   activity: Record<AgentId, Activity>;
+  /** Every open escalation, so a circle can say a crew has stopped. */
+  stuck: readonly Escalation[];
   /** The crew the rail is inside, or `null` for all of them. */
   focused: GroupId | null;
   onFocus: (id: GroupId | null) => void;
@@ -43,6 +45,7 @@ export function GroupRail({
   groups,
   agents,
   activity,
+  stuck,
   focused,
   onFocus,
   isOver,
@@ -92,6 +95,7 @@ export function GroupRail({
             group={group}
             members={agents.filter((a) => a.groupId === group.id)}
             activity={activity}
+            stuck={stuck}
             current={focused === group.id}
             over={isOver({ kind: "group", id: group.id })}
             onOpen={() => onFocus(focused === group.id ? null : group.id)}

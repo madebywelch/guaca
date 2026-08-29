@@ -2,7 +2,8 @@ import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useStore } from "../lib/store";
-import type { AgentCard, Approval, Decision } from "../lib/types";
+import { relativeTime } from "../lib/time";
+import type { AgentCard, Approval, Decision, Escalation } from "../lib/types";
 
 /**
  * Everything waiting on the operator, wherever they are in the app.
@@ -23,15 +24,19 @@ import type { AgentCard, Approval, Decision } from "../lib/types";
  * is a thing it refuses to do.
  *
  * **It holds stopped work and nothing else.** A parked turn qualifies by
- * definition. A run that failed does not: nothing is waiting, and the channel
- * is where a failure is understood. Neither does a run that finished, a routine
- * that fired, or a paused agent. Guaca already has a surface for "something
- * happened" and it is a notification; this is for "something has stopped, and
- * you are the reason".
+ * definition, and so does an escalation, which is the same sentence without the
+ * parking: an agent that cannot go on until the operator does something. A run
+ * that failed does not: nothing is waiting, and the channel is where a failure
+ * is understood. Neither does a run that finished, a routine that fired, or a
+ * paused agent. Guaca already has a surface for "something happened" and it is
+ * a notification; this is for "something has stopped, and you are the reason".
  *
  * **It is usually absent.** No queue, no surface, not even a small empty one.
  * A panel that is always there is furniture within a week, and furniture is not
  * read. Being gone almost all the time is what buys the corner of the screen.
+ * An escalation is the one thing here that can stay up for days, and it is
+ * allowed to for the reason it exists: a crew stuck since Tuesday should be
+ * furniture in the corner of the operator's screen until they deal with it.
  *
  * **It has no composer and no scrollback.** Every control on it is bounded, and
  * what has been answered is gone from it. The transcript is the record; a
@@ -44,11 +49,14 @@ import type { AgentCard, Approval, Decision } from "../lib/types";
  */
 export function Desk() {
   const pending = useStore((s) => s.pending);
+  const stuck = useStore((s) => s.stuck);
   const agents = useStore((s) => s.agents);
   const select = useStore((s) => s.select);
   const decide = useStore((s) => s.decideApproval);
   const answerQuestion = useStore((s) => s.answerQuestion);
+  const clear = useStore((s) => s.clearEscalation);
   const [open, setOpen] = useState(true);
+  const count = pending.length + stuck.length;
 
   // Opens itself again for a queue that has refilled. Collapsing is about the
   // requests that were on screen at the time, not a standing instruction to
@@ -56,9 +64,9 @@ export function Desk() {
   // silently hold the one thing that has stopped work.
   const wasEmpty = useRef(true);
   useEffect(() => {
-    if (wasEmpty.current && pending.length > 0) setOpen(true);
-    wasEmpty.current = pending.length === 0;
-  }, [pending.length]);
+    if (wasEmpty.current && count > 0) setOpen(true);
+    wasEmpty.current = count === 0;
+  }, [count]);
 
   // The lowest-priority owner of Escape: a dialog, a menu or a drag all have
   // something more urgent to close, and every one of them stops the event
@@ -72,10 +80,9 @@ export function Desk() {
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  if (pending.length === 0) return null;
+  if (count === 0) return null;
 
-  const count = pending.length;
-  const summary = count === 1 ? "1 turn is waiting on you" : `${count} turns are waiting on you`;
+  const summary = deskSummary(pending.length, stuck.length);
 
   return (
     <section className="desk" aria-label="Waiting on you" data-open={open ? "true" : undefined}>
@@ -101,6 +108,11 @@ export function Desk() {
 
       {open && (
         <div className="desk__queue">
+          {/* Requests first, and that ordering is not arbitrary: one of these
+              has ten minutes to be answered in and the other has as long as it
+              takes. Sorting the perishable half under the durable half is how a
+              permission lapses while the operator reads about a wall that has
+              been there since Tuesday. */}
           {pending.map((request) => (
             <DeskCard
               key={request.id}
@@ -111,9 +123,97 @@ export function Desk() {
               onOpenChannel={() => void select(request.agentId)}
             />
           ))}
+          {stuck.map((one) => (
+            <StuckCard
+              key={one.id}
+              escalation={one}
+              agent={agents.find((a) => a.id === one.agentId)}
+              onClear={() => void clear(one.id)}
+              onOpenChannel={() => void select(one.agentId)}
+            />
+          ))}
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The line at the top, over a queue that holds two different things.
+ *
+ * One sentence rather than two counts, because the operator is answering one
+ * question with it and a head that read "2 waiting, 1 stuck" makes them add up
+ * before they can decide whether to open it. The kinds are named while there is
+ * only one kind, since that is when the word is worth something: "1 agent is
+ * stuck on you" says where to go and "3 things are waiting on you" says how
+ * many, and the queue underneath says the rest.
+ */
+export function deskSummary(waiting: number, stuck: number): string {
+  if (stuck === 0) {
+    return waiting === 1 ? "1 turn is waiting on you" : `${waiting} turns are waiting on you`;
+  }
+  if (waiting === 0) {
+    return stuck === 1 ? "1 agent is stuck on you" : `${stuck} agents are stuck on you`;
+  }
+  return `${waiting + stuck} things are waiting on you`;
+}
+
+interface StuckProps {
+  escalation: Escalation;
+  agent: AgentCard | undefined;
+  onClear: () => void;
+  onOpenChannel: () => void;
+}
+
+/**
+ * One escalation, and the two things that can be done about it.
+ *
+ * Open is the primary and Clear is not, which is the whole card. Clearing takes
+ * the row away and changes nothing about the agent: what actually unblocks it
+ * is a message in the channel, and an operator who only ever presses the
+ * cheaper button is running a desk they tidy instead of a desk they work. So
+ * the button that leads somewhere is the loud one, and the one that ends it
+ * quietly is the quiet one.
+ *
+ * The age and the count are on the card rather than in the summary because they
+ * are the news. "Stuck" is a state; "stuck since Tuesday, six turns into it" is
+ * a decision. Neither number can be recovered from the transcript without
+ * reading a week of it.
+ */
+function StuckCard({ escalation, agent, onClear, onOpenChannel }: StuckProps) {
+  const asker = agent?.name ?? "A deleted agent";
+  const age = relativeTime(escalation.raisedAt, Date.now());
+  const turns = escalation.times === 1 ? "1 turn" : `${escalation.times} turns`;
+
+  return (
+    <article className="desk__card" data-kind="stuck">
+      <header className="desk__who">
+        <AgentAvatar
+          avatar={agent?.avatar ?? "blank"}
+          color={agent?.color ?? "#8aa0a6"}
+          size="sm"
+          seed={agent?.id ?? escalation.id}
+        />
+        <div className="desk__whotext">
+          <p className="desk__asker">
+            {asker} · stuck {age}
+          </p>
+          {/* The agent's own words, drawn as text under a heading Guaca wrote,
+              exactly as a request's detail is. */}
+          <p className="desk__summary">{escalation.summary}</p>
+        </div>
+      </header>
+
+      <div className="desk__actions">
+        <button type="button" className="btn btn--primary btn--small" onClick={onOpenChannel}>
+          Open channel
+        </button>
+        <button type="button" className="btn btn--ghost btn--small" onClick={onClear}>
+          Clear
+        </button>
+        <span className="desk__aside">{turns} have run into this</span>
+      </div>
+    </article>
   );
 }
 

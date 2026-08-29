@@ -36,11 +36,11 @@ import { NOTIFY_KINDS, type NotifyKind, type NotifyPrefs } from "./prefs";
  * case worth interrupting for and the one `document.hidden` misses.
  */
 
-/** The master switch on and all four kinds wanted: prefs are never the refusal. */
+/** The master switch on and every kind wanted: prefs are never the refusal. */
 function wanted(): NotifyPrefs {
   return {
     on: true,
-    kinds: { approval: true, routine: true, settled: true, failed: true },
+    kinds: { approval: true, stuck: true, routine: true, settled: true, failed: true },
   };
 }
 
@@ -121,8 +121,15 @@ describe("the quiet window after a launch", () => {
 });
 
 describe("the class of news a kind is", () => {
-  it("makes a permission request the only thing that can break through", () => {
+  it("makes a permission request one of the two that can break through", () => {
     expect(classOf("approval")).toBe("attention");
+  });
+
+  // The same class from the other end, and the case for it is stronger rather
+  // than weaker: a permission expires in ten minutes and stops mattering, and
+  // an agent that has stopped stays stopped until somebody does something.
+  it("makes an agent that has stopped the other one", () => {
+    expect(classOf("stuck")).toBe("attention");
   });
 
   it("treats a schedule firing as ambient, because it was pointed somewhere else", () => {

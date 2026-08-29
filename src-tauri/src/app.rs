@@ -460,6 +460,8 @@ pub fn run() {
             commands::disband_group,
             commands::approval_states,
             commands::pending_approvals,
+            commands::open_escalations,
+            commands::clear_escalation,
             commands::decide_approval,
             commands::answer_question,
             commands::agent_grants,

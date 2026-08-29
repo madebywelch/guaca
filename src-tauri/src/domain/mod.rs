@@ -3,6 +3,7 @@ pub mod approval;
 pub mod attachment;
 pub mod connector;
 pub mod envelope;
+pub mod escalation;
 pub mod group;
 pub mod ids;
 pub mod plugin;
@@ -32,6 +33,27 @@ pub fn now_ms() -> i64 {
     LAST.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| Some(wall.max(prev + 1)))
         .map(|prev| wall.max(prev + 1))
         .unwrap_or(wall)
+}
+
+/// Trims a string and cuts it to `max` characters, on a word where it can.
+///
+/// Characters rather than bytes, which is not a detail: a line of emoji is a
+/// quarter of the bytes it looks like and must not be cut four times as early.
+/// The flag is what makes this honest — every caller hands it back to whoever
+/// wrote the text, because an agent that believes it recorded something it did
+/// not will not write it again.
+pub fn cut_to(body: &str, max: usize) -> (String, bool) {
+    let trimmed = body.trim();
+    if trimmed.chars().count() <= max {
+        return (trimmed.to_string(), false);
+    }
+    let mut kept: String = trimmed.chars().take(max).collect();
+    if let Some(space) = kept.rfind(char::is_whitespace) {
+        if space > max / 2 {
+            kept.truncate(space);
+        }
+    }
+    (kept.trim_end().to_string(), true)
 }
 
 #[cfg(test)]
