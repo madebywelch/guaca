@@ -77,6 +77,8 @@ src-tauri/src/
   oauth.rs            Signing a crew in to a plugin's server. PKCE, no client id.
   plugins.rs          Where those two meet the store, and a turn spends a grant.
   repo.rs             Whether a directory is one an agent may be given. Runs git.
+                      Also the work tree each agent gets of its own, and when
+                      that one may be put back on the default branch.
   shell.rs            One line in that directory, run and answered in the turn
                       that asked. The small door; `coding/` is the big one.
   coding/             Starting something that writes code, and reading it back.
@@ -131,6 +133,7 @@ repo: the frontend renders state and forwards intent.
 | Permission prompts, parked turns, acting in the operator's name | *A protected action parks the turn that asked for it* |
 | An agent writing code at all: the repository, the grant, the `code` tool, the job | `docs/CODING.md`, then `domain/repository.rs` and `Runtime::start_job` |
 | An agent running one command in its repository, and which of the two doors a piece of work goes through | *A repository has two doors, and the small one is `shell`* in `docs/CODING.md`, then `src-tauri/src/shell.rs` and `Runtime::run_in_repository` |
+| Which directory a job actually runs in, worktrees, resetting a tree between jobs, two agents working in one codebase at once | *Each agent gets a work tree of its own, and Guaca resets it* in `docs/CODING.md`, then `domain::repository::Bench`, `repo::prepare` and `Footing::resettable` |
 | Which program writes the code, a spent plan, a harness that will not start | *There are two harnesses because a subscription is spent by one program* in `docs/CODING.md`, then `domain::repository::Harness` and `coding/mod.rs` |
 | What branch a coding job starts on, and what it is told about the tree | *A job is told where it is standing before it is told what to do* in `docs/CODING.md`, then `repo::footing` and the brief assembled in `Runtime::start_job` |
 | An argument either harness is started with, or how its stream is read | *One process lifecycle, two of what genuinely differs* in `docs/CODING.md`, then `coding/pi.rs` and `coding/claude_code.rs`, and run the live half of `tests/coding.rs` |

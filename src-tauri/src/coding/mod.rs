@@ -142,6 +142,11 @@ pub enum CodingError {
     NoAnswer(String),
     #[error("the job ran for {0} minutes without finishing and was stopped")]
     TooLong(u64),
+    #[error(
+        "{repository} gives each agent a git worktree of its own to work in, and one could not \
+         be made at `{at}`: {why}. Or set the repository to work in the linked directory instead"
+    )]
+    NoWorkTree { repository: String, at: String, why: &'static str },
 }
 
 /// What one job did, as the agent that started it is told.

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AgentCard,
+  Bench,
   Gate,
   Harness,
   HarnessOnMachine,
@@ -22,8 +23,14 @@ vi.mock("../lib/ipc", () => ({
   api: {
     groupRepositories: (groupId: string) => groupRepositories(groupId),
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
-    updateRepository: (id: string, name: string, note: string, harness: Harness, gate: Gate) =>
-      updateRepository(id, name, note, harness, gate),
+    updateRepository: (
+      id: string,
+      name: string,
+      note: string,
+      harness: Harness,
+      gate: Gate,
+      bench: Bench,
+    ) => updateRepository(id, name, note, harness, gate, bench),
     deleteRepository: (id: string) => deleteRepository(id),
     setAgentRepository: vi.fn(),
     codingHarnesses: () => codingHarnesses(),
@@ -68,6 +75,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     note: "",
     harness: "pi",
     gate: "open",
+    bench: "own",
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -159,6 +167,7 @@ describe("RepositoryList", () => {
         note: "",
         harness: "pi",
         gate: "open",
+        bench: "own",
       }),
     );
   });
@@ -210,6 +219,7 @@ describe("RepositoryList", () => {
         "run ./scripts/ci.sh",
         "pi",
         "open",
+        "own",
       ),
     );
   });
@@ -235,6 +245,7 @@ describe("RepositoryList", () => {
         "never touch migrations",
         "claude",
         "open",
+        "own",
       ),
     );
   });
@@ -252,7 +263,7 @@ describe("RepositoryList", () => {
     fireEvent.click(screen.getByRole("button", { name: "Coding harness: Claude Code" }));
 
     await waitFor(() =>
-      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "claude", "open"),
+      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "claude", "open", "own"),
     );
   });
 
@@ -285,6 +296,7 @@ describe("RepositoryList", () => {
         note: "",
         harness: "claude",
         gate: "open",
+        bench: "own",
       }),
     );
   });
@@ -303,7 +315,14 @@ describe("RepositoryList", () => {
     fireEvent.click(screen.getByRole("checkbox"));
 
     await waitFor(() =>
-      expect(updateRepository).toHaveBeenCalledWith("r1", "guaca", "", "pi", "askBeforePushing"),
+      expect(updateRepository).toHaveBeenCalledWith(
+        "r1",
+        "guaca",
+        "",
+        "pi",
+        "askBeforePushing",
+        "own",
+      ),
     );
   });
 

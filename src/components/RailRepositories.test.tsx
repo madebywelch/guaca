@@ -40,6 +40,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     note: "",
     harness: "pi",
     gate: "open",
+    bench: "own",
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -196,7 +197,7 @@ describe("RailRepositories", () => {
     // The job outlives the turn that started it, so the agent that asked has
     // already gone idle. Without this the crew reads as stopped at exactly the
     // moment it is building, which is what the operator asked about.
-    draw([repository()], [member("a1", "Ada", "r1")], false, {}, { r1: "a1" });
+    draw([repository()], [member("a1", "Ada", "r1")], false, {}, { a1: "r1" });
     expect(screen.getByText("building")).toBeTruthy();
     expect(screen.getByTitle("a coding agent is working here")).toBeTruthy();
   });

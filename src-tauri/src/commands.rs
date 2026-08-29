@@ -30,7 +30,9 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
-use crate::domain::repository::{Gate, Harness, Repository, RepositoryDraft, RepositoryEdit};
+use crate::domain::repository::{
+    Bench, Gate, Harness, Repository, RepositoryDraft, RepositoryEdit,
+};
 use crate::domain::routine::{self, Routine, RoutineRun, Trigger};
 use crate::domain::search::SearchHits;
 use crate::domain::signin::Signin;
@@ -128,9 +130,9 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             RuntimeError::NothingToRetry => CommandError::new("notFound", err.to_string()),
             // A precondition the operator can fix from the rail, so it says so
             // rather than reading as something that broke.
-            RuntimeError::NoRepository(_) | RuntimeError::RepositoryBusy { .. } => {
-                CommandError::new("badRequest", err.to_string())
-            }
+            RuntimeError::NoRepository(_)
+            | RuntimeError::RepositoryBusy { .. }
+            | RuntimeError::NoWorkTree { .. } => CommandError::new("badRequest", err.to_string()),
             // A `shell` failure is answered to the model inside its turn and
             // never to the webview: no command here runs one. The arm exists
             // because the enum is one enum, and it says what it would say if a
@@ -598,8 +600,8 @@ pub async fn create_repository(
     Ok(repository)
 }
 
-/// Renames one, rewrites the line its agents read on every turn, or changes
-/// which program does the writing.
+/// Renames one, rewrites the line its agents read on every turn, changes which
+/// program does the writing, or moves where that program works.
 ///
 /// The path is not editable and is not a parameter. A different directory is a
 /// different repository: editing the path in place would move every named
@@ -616,7 +618,12 @@ pub async fn create_repository(
 ///
 /// A job already running is not affected. It is a process that was started with
 /// the old answer, and reaching into it would be a second way to stop a job that
-/// `Runtime::start_job` does not have.
+/// `Runtime::start_job` does not have. That covers the bench too: switching a
+/// repository to the linked directory while a job is writing in a worktree
+/// leaves that job exactly where it is, and the next one starts in the new
+/// place. Worktrees an agent is no longer using are left on disk rather than
+/// removed here, because a switch back has to find its caches where it left
+/// them, and `repo::release_bench` is what actually takes one away.
 #[tauri::command]
 pub fn update_repository(
     state: State<'_, AppState>,
@@ -625,14 +632,16 @@ pub fn update_repository(
     note: String,
     harness: Harness,
     gate: Gate,
+    bench: Bench,
 ) -> Reply<Repository> {
-    let clean = RepositoryEdit { name, note, harness, gate }.clean()?;
+    let clean = RepositoryEdit { name, note, harness, gate, bench }.clean()?;
     let repository = state.runtime.store().update_repository(
         id,
         &clean.name,
         &clean.note,
         clean.harness,
         clean.gate,
+        clean.bench,
     )?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(repository)
@@ -708,10 +717,10 @@ pub async fn coding_harnesses() -> Reply<Vec<HarnessOnMachine>> {
 #[tauri::command]
 pub fn message_coding_job(
     state: State<'_, AppState>,
-    repository_id: RepositoryId,
+    agent_id: AgentId,
     message: String,
 ) -> Reply<()> {
-    state.runtime.message_job(repository_id, &message).map_err(Into::into)
+    state.runtime.message_job(agent_id, &message).map_err(Into::into)
 }
 
 /// Stops a coding job that is running, leaving whatever it has committed.
@@ -722,14 +731,19 @@ pub fn message_coding_job(
 /// The agent that started the job is told, on the same path it is told about
 /// one that finished: an agent never told is an agent waiting forever.
 #[tauri::command]
-pub fn stop_coding_job(state: State<'_, AppState>, repository_id: RepositoryId) -> Reply<()> {
-    state.runtime.stop_job(repository_id).map_err(Into::into)
+pub fn stop_coding_job(state: State<'_, AppState>, agent_id: AgentId) -> Reply<()> {
+    state.runtime.stop_job(agent_id).map_err(Into::into)
 }
 
-/// Unlinks a repository. Nothing on the operator's disk is touched.
+/// Unlinks a repository.
+///
+/// Nothing in the operator's own checkout is touched. The work trees this app
+/// made for the agents that worked here do go, because each one is a
+/// registration in that checkout and one left behind is an entry in their
+/// `git worktree list` pointing into an app that has forgotten the directory.
 #[tauri::command]
-pub fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> Reply<()> {
-    state.runtime.store().delete_repository(id)?;
+pub async fn delete_repository(state: State<'_, AppState>, id: RepositoryId) -> Reply<()> {
+    state.runtime.unlink_repository(id).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

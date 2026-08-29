@@ -16,7 +16,7 @@ interface Props {
   isOver: (target: DropTarget) => boolean;
   onDragOver: (target: DropTarget) => void;
   onDragLeave: () => void;
-  /** Which repositories have a coding job running right now. */
+  /** Which agents have a coding job running right now, and where. */
   building: Record<string, string>;
   /** Whether a drag is in flight, which is when these become targets. */
   dragging: boolean;
@@ -87,7 +87,7 @@ export function RailRepositories({
               {/* A coding job outlives the turn that started it, so the agent
                   that asked has already gone idle. Without this the crew reads
                   as stopped at exactly the moment it is building. */}
-              {building[repository.id] ? (
+              {Object.values(building).includes(repository.id) ? (
                 <span className="rail__repo-building" title="a coding agent is working here">
                   building
                 </span>

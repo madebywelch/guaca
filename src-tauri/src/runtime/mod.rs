@@ -556,12 +556,24 @@ pub enum RuntimeError {
     /// the message it is already going to get, because the alternative it will
     /// otherwise reach for is starting the job again.
     #[error(
-        "a coding agent is already working in {repository}, started by {who}. Two of them in one \
-         repository overwrite each other's work. Do not start another: whoever asked for the \
+        "a coding agent is already working in {repository}, started by {who}. Two harnesses in \
+         one work tree overwrite each other's work. Do not start another: whoever asked for the \
          first one gets a message when it finishes, and that is when the next piece of work can \
          begin. Say that it is already in progress"
     )]
     RepositoryBusy { repository: String, who: String },
+    /// A repository that gives each agent its own work tree, where this agent's
+    /// could not be made.
+    ///
+    /// Refused rather than run in the linked directory. The fallback is what
+    /// this arrangement exists to prevent, and it would happen on the one path
+    /// where nothing on screen says a decision was taken.
+    #[error(
+        "{repository} gives each agent a git worktree of its own to work in, and one could not \
+         be made at `{at}`: {why}. Nothing can run there until it exists. Tell the operator, who \
+         can also set this repository to work in the linked directory instead"
+    )]
+    NoWorkTree { repository: String, at: String, why: &'static str },
     /// Asked to reach a job in a repository where none is running.
     ///
     /// Reachable in the ordinary course of things rather than only from a
@@ -681,17 +693,28 @@ struct Inner {
     /// When each machine was last asked what it is signed in to, so browsing
     /// does not pay for that question on every call.
     last_signin_scan: Mutex<HashMap<AgentId, Instant>>,
-    /// Which repositories have a coding job running, and who started it.
+    /// Which work trees have a coding job running in them, by directory.
     ///
-    /// Keyed by repository rather than by agent, because the thing that can
-    /// only happen once is a harness working in a directory. Two `pi` processes
-    /// in one work tree interleave their edits and run git against each other,
-    /// and nothing downstream would say which of them wrote what.
+    /// Keyed by the directory itself, because the directory is the thing that
+    /// can only take one harness. Two `pi` processes in one work tree interleave
+    /// their edits and run git against each other, and nothing downstream would
+    /// say which of them wrote what.
+    ///
+    /// It was keyed by repository, which was the same statement while a
+    /// repository had exactly one work tree. It stopped being one the day
+    /// `Bench::Own` gave each agent a worktree of its own: two agents in one
+    /// codebase are then two directories and two jobs that cannot touch each
+    /// other, and a lock on the repository would refuse the second for a
+    /// collision that cannot happen. The key is now what the invariant is
+    /// actually about.
     ///
     /// In memory rather than on the row: a job does not survive a restart, and
     /// a stored flag would come back true forever after a crash and lock a
-    /// repository nobody was working in.
-    coding: Mutex<HashMap<RepositoryId, Running>>,
+    /// directory nobody was working in.
+    coding: Mutex<HashMap<String, Running>>,
+    /// Where the per-agent work trees live, one directory per repository under
+    /// it. `repo::bench_path` is the whole of the naming.
+    benches: std::path::PathBuf,
     /// The loopback end of every running coding job.
     ///
     /// One for the app rather than one per job: it is a socket, and a workspace
@@ -733,25 +756,43 @@ pub struct Runtime {
     inner: Arc<Inner>,
 }
 
+/// The three directories the runtime keeps things in.
+///
+/// One argument rather than three because they are one decision: all three live
+/// under the app's data directory, they are made together, and a caller that
+/// had two of them and invented the third would be pointing part of the runtime
+/// at somewhere nobody chose. [`OnDisk::under`] is what every real caller wants.
+pub struct OnDisk {
+    /// Per-agent memory, one markdown file each.
+    pub workspace: Workspace,
+    /// Attachments, addressed by the SHA-256 of their contents.
+    pub files: FileStore,
+    /// Where the per-agent git work trees live, one directory per repository
+    /// under it. `repo::bench_path` is the whole of the naming.
+    pub benches: std::path::PathBuf,
+}
+
+impl OnDisk {
+    /// The three of them under one root, which is how they are always arranged.
+    pub fn under(root: &std::path::Path) -> Self {
+        Self {
+            workspace: Workspace::new(root.join("workspace")),
+            files: FileStore::new(root.join("files")),
+            benches: root.join("worktrees"),
+        }
+    }
+}
+
 impl Runtime {
     /// Uses the ambient tokio runtime. Convenient inside `#[tokio::test]`.
     pub fn new(
         store: Store,
         llm: LlmClient,
         config: AppConfig,
-        workspace: Workspace,
-        files: FileStore,
+        disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
-        Self::with_handle(
-            tokio::runtime::Handle::current(),
-            store,
-            llm,
-            config,
-            workspace,
-            files,
-            events,
-        )
+        Self::with_handle(tokio::runtime::Handle::current(), store, llm, config, disk, events)
     }
 
     pub fn with_handle(
@@ -759,10 +800,10 @@ impl Runtime {
         store: Store,
         llm: LlmClient,
         config: AppConfig,
-        workspace: Workspace,
-        files: FileStore,
+        disk: OnDisk,
         events: Arc<dyn EventSink>,
     ) -> Self {
+        let OnDisk { workspace, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
                 handle,
@@ -778,6 +819,7 @@ impl Runtime {
                 files,
                 last_signin_scan: Mutex::new(HashMap::new()),
                 coding: Mutex::new(HashMap::new()),
+                benches,
                 bridge: crate::coding::Bridge::new(),
                 viewer_port: AtomicU16::new(0),
                 plugin_endpoints: std::sync::OnceLock::new(),
@@ -1049,6 +1091,22 @@ impl Runtime {
             // the cookies.
             if let Err(err) = client.delete_profile(&id.to_string()).await {
                 tracing::warn!(%err, agent = %id, "could not destroy the agent's browser profile");
+            }
+        }
+
+        // And its work tree, if the repository gave it one. Forced, because a job
+        // killed at the ceiling leaves a dirty tree and this agent is not coming
+        // back to tidy it. Nothing committed is lost: removing a worktree
+        // removes a checkout, and the repository keeps the history and every
+        // branch made in it, which is the only copy of this agent's work the
+        // operator could still want.
+        //
+        // Read before the row is marked, because `agent_repository` asks for a
+        // live agent and a terminated one has no repository to look up.
+        if let Ok(Some(repository)) = self.inner.store.agent_repository(id) {
+            if repository.bench.is_own() {
+                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, id);
+                crate::repo::release_bench(&repository.path, &bench).await;
             }
         }
 
@@ -1841,8 +1899,37 @@ impl Runtime {
             .agent_repository(card.id)?
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
 
+        // The same directory `code` works in, which is the whole of what makes
+        // two doors into one repository one repository. An agent whose job runs
+        // in a worktree and whose `git status` reads the linked directory is an
+        // agent being told about a tree it is not working in, and it is the
+        // read it most wants while a job is going.
+        //
+        // Made if it is not there yet, rather than falling back: the fallback is
+        // the disagreement. `ensure_bench` is the half of the preparation that
+        // does not fetch and does not reset, because a line run inside a turn
+        // must not pay for a network round trip and must not move a branch
+        // somebody asked a question about.
+        let directory = match repository.bench.is_own() {
+            false => repository.path.clone(),
+            true => {
+                let bench = crate::repo::bench_path(&self.inner.benches, repository.id, card.id);
+                crate::repo::ensure_bench(&repository.path, &bench)
+                    .await
+                    .map(|made| made.path)
+                    .map_err(|why| RuntimeError::NoWorkTree {
+                        repository: repository.name.clone(),
+                        at: bench.to_string_lossy().to_string(),
+                        why: why.why(),
+                    })?
+            }
+        };
+
         if repository.gate == Gate::AskBeforePushing {
-            let root = std::path::Path::new(&repository.path);
+            // Rooted at the tree the line will actually run in, so a script the
+            // gate follows is the copy that is about to be executed rather than
+            // the operator's own.
+            let root = std::path::Path::new(&directory);
             if let Some(reach) = crate::coding::bridge::outward(command, root).await {
                 if !self
                     .ask_about_push(
@@ -1860,7 +1947,7 @@ impl Runtime {
             }
         }
 
-        Ok(Line::Ran(shell::run(&repository.path, command, shell::PATIENCE).await?))
+        Ok(Line::Ran(shell::run(&directory, command, shell::PATIENCE).await?))
     }
 
     /// Starts a coding job and returns the repository it is working in.
@@ -1882,6 +1969,20 @@ impl Runtime {
             .store
             .agent_repository(card.id)?
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
+
+        // Which directory this job will run in, decided before the lock because
+        // the lock is on the directory. Pure: `bench_path` is two ids joined to
+        // a root, so the answer is knowable here without touching the disk,
+        // which is what lets `start_job` stay synchronous while the work tree
+        // it names is made minutes-of-work later, inside the spawn.
+        let bench = repository
+            .bench
+            .is_own()
+            .then(|| crate::repo::bench_path(&self.inner.benches, repository.id, card.id));
+        let directory = bench
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or(repository.path.clone());
 
         // One harness per work tree. Taken before anything is spawned and held
         // for the life of the job: two `pi` processes in one directory
@@ -1907,22 +2008,30 @@ impl Runtime {
         let job_run = RunId::new();
         {
             let mut coding = self.inner.coding.lock();
-            if let Some(busy) = coding.get(&repository.id) {
-                let who = self
-                    .inner
-                    .store
-                    .get_agent(busy.agent)
-                    .ok()
-                    .flatten()
-                    .map(|card| card.name)
-                    .unwrap_or_else(|| "another agent".to_string());
+            if let Some(busy) = coding.get(&directory) {
+                // Named as themselves when it is themselves. On a bench of its
+                // own the only agent that can collide here is this one, calling
+                // `code` twice before the first job came back, and "another
+                // agent is working here" sends it to look for somebody who does
+                // not exist.
+                let who = match busy.agent == card.id {
+                    true => "you".to_string(),
+                    false => self
+                        .inner
+                        .store
+                        .get_agent(busy.agent)
+                        .ok()
+                        .flatten()
+                        .map(|card| card.name)
+                        .unwrap_or_else(|| "another agent".to_string()),
+                };
                 return Err(RuntimeError::RepositoryBusy {
                     repository: repository.name.clone(),
                     who,
                 });
             }
             coding.insert(
-                repository.id,
+                directory.clone(),
                 Running {
                     agent: card.id,
                     mailbox: match repository.harness {
@@ -1954,23 +2063,60 @@ impl Runtime {
         });
 
         tokio::spawn(async move {
-            // Where the tree is standing, then the work, then the operator's
-            // note. All three are things the harness cannot see for itself and
-            // would not go looking for.
+            // The work tree, then where it is standing, then the work, then the
+            // operator's note. All four are things the harness cannot see for
+            // itself and would not go looking for.
             //
-            // The footing leads because it is read before the first edit or it
-            // is not read at all: a harness handed a brief starts working where
-            // it is standing, and where it is standing is wherever the last job
-            // left it. `repo::footing` is the argument. Read here rather than
-            // before the spawn because it is several subprocesses and one
-            // network round trip, and `start_job` has already returned to a
+            // Making the tree leads because nothing after it is true until it
+            // exists, and it is done here rather than before the spawn for the
+            // reason the footing is: a fetch and a checkout are subprocesses and
+            // a network round trip, and `start_job` has already returned to a
             // turn that must not wait on any of it.
+            let prepared = match &bench {
+                None => Ok((path.clone(), String::new())),
+                Some(dir) => match crate::repo::prepare(&path, dir).await {
+                    Ok(ready) => {
+                        let said = ready.brief();
+                        Ok((ready.path, said))
+                    }
+                    // Refused rather than quietly run in the linked directory.
+                    // That fallback would put a harness in the operator's own
+                    // checkout holding a lock taken on a path it is not in, so
+                    // a second agent failing the same way would join it there.
+                    Err(why) => Err(crate::coding::CodingError::NoWorkTree {
+                        repository: name.clone(),
+                        at: dir.to_string_lossy().to_string(),
+                        why: why.why(),
+                    }),
+                },
+            };
+            let (working, preamble) = match prepared {
+                Ok(ready) => ready,
+                Err(err) => {
+                    // The same teardown the ordinary path runs, minus a session
+                    // and a process that were never made. Written out rather
+                    // than shared, because every line of it is about something
+                    // this exit did not do.
+                    runtime.release_parked(job_run);
+                    runtime.forget_refusals(job_run);
+                    runtime.inner.coding.lock().remove(&directory);
+                    runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
+                    runtime.job_finished(agent, &name, harness, Err(err));
+                    return;
+                }
+            };
+
+            // The footing comes after the preamble and before the task because
+            // it is read before the first edit or it is not read at all: a
+            // harness handed a brief starts working where it is standing, and
+            // where it is standing is wherever the last job left it.
+            // `repo::footing` is the argument.
             //
             // The note is last because it is the one thing the operator wrote
             // to be read at exactly this moment, and the harness cannot see the
             // conversation it was attached to.
-            let mut brief = String::new();
-            if let Some(footing) = crate::repo::footing(&path).await {
+            let mut brief = preamble;
+            if let Some(footing) = crate::repo::footing(&working).await {
                 brief.push_str(&footing.brief());
                 brief.push_str("\n\n");
             }
@@ -1996,12 +2142,12 @@ impl Runtime {
                 Harness::Pi => None,
                 Harness::Claude => match crate::coding::presence(harness).await {
                     crate::coding::Presence::Installed { bridged: true, .. } => {
-                        runtime.inner.bridge.open(signals, gate, path.clone().into()).await
+                        runtime.inner.bridge.open(signals, gate, working.clone().into()).await
                     }
                     _ => None,
                 },
             };
-            if let Some(job) = runtime.inner.coding.lock().get_mut(&repository_id) {
+            if let Some(job) = runtime.inner.coding.lock().get_mut(&directory) {
                 match &session {
                     Some(session) => job.mailbox = Mailbox::At(session.session_id().to_string()),
                     // Only a job that was expecting one. `pi` already carries a
@@ -2027,7 +2173,7 @@ impl Runtime {
 
             let watcher = runtime.clone();
             let running =
-                crate::coding::run(harness, &path, &brief, wiring.as_ref(), move |progress| {
+                crate::coding::run(harness, &working, &brief, wiring.as_ref(), move |progress| {
                     let (tool, detail) = match progress {
                         crate::coding::Progress::Using { tool, detail } => (tool, detail),
                         crate::coding::Progress::Said(said) => (String::new(), said),
@@ -2106,9 +2252,9 @@ impl Runtime {
             runtime.forget_refusals(job_run);
 
             // Released before the result is delivered, so the turn that reads
-            // "it finished" can start the next job in the same repository. The
+            // "it finished" can start the next job in the same work tree. The
             // other order is a lane that has to wait a turn to carry on.
-            runtime.inner.coding.lock().remove(&repository_id);
+            runtime.inner.coding.lock().remove(&directory);
             runtime.emit(UiEvent::CodingJobFinished { agent_id: agent, repository_id });
 
             // Dropped before the message goes out rather than at the end of the
@@ -2870,15 +3016,49 @@ impl Runtime {
         }
     }
 
+    /// Unlinks a repository, and takes the work trees it handed out with it.
+    ///
+    /// The trees have to go here rather than being left for a sweep, because a
+    /// worktree is a registration in the *operator's own* repository: one left
+    /// behind is an entry in their `git worktree list` pointing into an app
+    /// that has forgotten the directory ever existed. Their own checkout is not
+    /// touched, and neither is anything committed in it, which is the whole of
+    /// what unlinking has always promised.
+    ///
+    /// Read before the row is deleted, for the reason `purge_agent` reads
+    /// before it marks: afterwards there is no path to run git against.
+    pub async fn unlink_repository(&self, id: RepositoryId) -> Result<bool, RuntimeError> {
+        let repository = self.inner.store.get_repository(id)?;
+        let gone = self.inner.store.delete_repository(id)?;
+        if let Some(repository) = repository {
+            crate::repo::release_benches(
+                &repository.path,
+                &self.inner.benches.join(id.to_string()),
+            )
+            .await;
+        }
+        Ok(gone)
+    }
+
     /// Sends a correction into a coding job that is already running.
     ///
     /// Staged rather than delivered: the job reads it at its next tool
     /// boundary, or when it tries to finish, whichever comes first.
     /// `coding/bridge.rs` owns both halves of that.
-    pub fn message_job(&self, repository: RepositoryId, message: &str) -> Result<(), RuntimeError> {
+    ///
+    /// Addressed by the agent running the job rather than by the repository it
+    /// is in. Those were the same address while a repository had one work tree;
+    /// with a worktree per agent, two jobs can be running in one codebase and a
+    /// repository names neither of them. The agent is the address that stays
+    /// unique, because an agent works in at most one repository and holds at
+    /// most one work tree in it. It is also the address the panel already used:
+    /// `CodingPanel` had to search the map by agent to find the repository to
+    /// send to.
+    pub fn message_job(&self, agent: AgentId, message: &str) -> Result<(), RuntimeError> {
         let token = {
             let coding = self.inner.coding.lock();
-            let job = coding.get(&repository).ok_or(RuntimeError::NoJobRunning)?;
+            let job =
+                coding.values().find(|job| job.agent == agent).ok_or(RuntimeError::NoJobRunning)?;
             match &job.mailbox {
                 Mailbox::At(token) => token.clone(),
                 Mailbox::Starting => return Err(RuntimeError::JobStillStarting),
@@ -2902,12 +3082,17 @@ impl Runtime {
     ///
     /// Taking the sender rather than dropping the whole entry: the job's own
     /// task is what removes it, after the process has actually gone, and
-    /// removing it here would free the repository lock while a harness was
+    /// removing it here would free the work tree's lock while a harness was
     /// still writing in it.
-    pub fn stop_job(&self, repository: RepositoryId) -> Result<(), RuntimeError> {
+    ///
+    /// By agent, for [`Runtime::message_job`]'s reason.
+    pub fn stop_job(&self, agent: AgentId) -> Result<(), RuntimeError> {
         let stop = {
             let mut coding = self.inner.coding.lock();
-            let job = coding.get_mut(&repository).ok_or(RuntimeError::NoJobRunning)?;
+            let job = coding
+                .values_mut()
+                .find(|job| job.agent == agent)
+                .ok_or(RuntimeError::NoJobRunning)?;
             job.stop.take()
         };
 

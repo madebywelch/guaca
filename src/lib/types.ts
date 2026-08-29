@@ -317,6 +317,41 @@ export type RepositoryId = string;
 export type Harness = "pi" | "claude";
 
 /**
+ * Where a coding job in a repository actually runs.
+ *
+ * `own` gives every agent a git worktree of its own, off the linked repository,
+ * and runs its jobs there. The operator's checkout is never switched, never
+ * cleaned and never left standing on a branch that landed a week ago; two
+ * agents in one codebase get two directories and can work at the same time; and
+ * because Guaca owns the tree it resets it to the default branch before every
+ * job, whenever nothing in it would be lost.
+ *
+ * `shared` runs jobs in the linked directory itself, which is what every
+ * repository did before worktrees. It is the right answer where a second
+ * checkout is expensive: submodules, LFS, or a tree large enough that another
+ * copy is real disk.
+ *
+ * `own` is the default for anything linked from now on. Repositories linked
+ * before it existed stayed `shared`, because moving somebody's jobs into a new
+ * directory is not an upgrade's decision to take.
+ */
+export type Bench = "own" | "shared";
+
+/** What an operator is shown for each, and what the panel offers in order. */
+export const BENCHES: { readonly id: Bench; readonly label: string; readonly hint: string }[] = [
+  {
+    id: "own",
+    label: "A worktree per agent",
+    hint: "Jobs run in a worktree of their own, reset before each one. Your checkout is never touched, and two agents can work at once.",
+  },
+  {
+    id: "shared",
+    label: "The linked directory",
+    hint: "Jobs run in the directory you linked, one at a time. Choose this where a second checkout is expensive: submodules, LFS, a very large tree.",
+  },
+];
+
+/**
  * A directory on this machine that a crew may write code in.
  *
  * There is no engineer flag beside this and there is not meant to be. An agent
@@ -340,6 +375,8 @@ export interface Repository {
   harness: Harness;
   /** Whether a job here asks before it reaches outside the directory. */
   gate: Gate;
+  /** Where a job here runs: a worktree of the agent's own, or this directory. */
+  bench: Bench;
   createdAt: number;
   updatedAt: number;
 }
@@ -429,6 +466,7 @@ export interface RepositoryDraft {
   note: string;
   harness: Harness;
   gate: Gate;
+  bench: Bench;
 }
 
 export type PluginId = string;

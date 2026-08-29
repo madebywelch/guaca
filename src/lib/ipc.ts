@@ -26,6 +26,7 @@ import type {
   ApprovalId,
   ApprovalState,
   Attachment,
+  Bench,
   Browser,
   CatalogKind,
   Computer,
@@ -170,12 +171,19 @@ export const api = {
   createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
 
   /**
-   * Renames one, rewrites the line its agents read, or changes which program
-   * does the writing. The path is not among them: a different directory is a
-   * different repository, because reach was granted for that one.
+   * Renames one, rewrites the line its agents read, changes which program does
+   * the writing, or moves where that program works. The path is not among them:
+   * a different directory is a different repository, because reach was granted
+   * for that one.
    */
-  updateRepository: (id: RepositoryId, name: string, note: string, harness: Harness, gate: Gate) =>
-    invoke<Repository>("update_repository", { id, name, note, harness, gate }),
+  updateRepository: (
+    id: RepositoryId,
+    name: string,
+    note: string,
+    harness: Harness,
+    gate: Gate,
+    bench: Bench,
+  ) => invoke<Repository>("update_repository", { id, name, note, harness, gate, bench }),
 
   /** Unlinks it. Nothing on disk is touched. */
   deleteRepository: (id: RepositoryId) => invoke<void>("delete_repository", { id }),
@@ -195,9 +203,14 @@ export const api = {
    * or when it tries to finish, whichever comes first. Refused when nothing
    * takes it, and the two reasons are different sentences the operator can act
    * on: the job has already ended, or its harness cannot be reached at all.
+   *
+   * Addressed by the agent running the job rather than by the repository. With
+   * a worktree per agent two jobs can be running in one codebase, so the
+   * repository names neither of them; an agent works in at most one repository
+   * and holds at most one work tree in it, so it always names exactly one.
    */
-  messageCodingJob: (repositoryId: RepositoryId, message: string) =>
-    invoke<void>("message_coding_job", { repositoryId, message }),
+  messageCodingJob: (agentId: AgentId, message: string) =>
+    invoke<void>("message_coding_job", { agentId, message }),
 
   /**
    * Stops one, leaving whatever it has committed.
@@ -206,7 +219,7 @@ export const api = {
    * operator's checkpoints, and throwing them away is not this button's
    * decision to take. The agent that started it is told it was stopped.
    */
-  stopCodingJob: (repositoryId: RepositoryId) => invoke<void>("stop_coding_job", { repositoryId }),
+  stopCodingJob: (agentId: AgentId) => invoke<void>("stop_coding_job", { agentId }),
 
   /**
    * Gives one agent a repository, or takes it back. One agent per call, so a

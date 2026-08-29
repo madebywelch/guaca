@@ -29,8 +29,7 @@ use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::Runtime;
-use guac_lib::workspace::Workspace;
+use guac_lib::runtime::{OnDisk, Runtime};
 
 use harness::*;
 
@@ -2202,8 +2201,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         store,
         LlmClient::new().unwrap(),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        guac_lib::files::FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         sink.clone(),
     );
     runtime.start_all().unwrap();
@@ -2294,8 +2292,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         store,
         LlmClient::new().unwrap(),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        guac_lib::files::FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         sink.clone(),
     );
     runtime.start_all().unwrap();

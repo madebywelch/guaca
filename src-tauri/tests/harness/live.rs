@@ -16,11 +16,9 @@ use guac_lib::config::AppConfig;
 use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::approval::Decision;
-use guac_lib::files::FileStore;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{EventSink, NullSink, RecordingSink, UiEvent};
-use guac_lib::runtime::Runtime;
-use guac_lib::workspace::Workspace;
+use guac_lib::runtime::{OnDisk, Runtime};
 
 use super::Harness;
 
@@ -140,8 +138,7 @@ pub fn live_crew_watched(
         store,
         LlmClient::new().unwrap(),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         Arc::new(Tee { watching, kept: kept.clone() }),
     );
     runtime.start_all().unwrap();

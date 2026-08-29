@@ -1258,6 +1258,39 @@ CREATE UNIQUE INDEX escalations_open_per_agent
 CREATE INDEX escalations_open ON escalations (raised_at) WHERE cleared_at IS NULL;
 "#,
     ),
+    (
+        44,
+        r#"
+-- Where a coding job in this directory actually runs.
+--
+-- Until today it ran in the linked directory, which is the operator's own
+-- checkout, and that made three things true at once. The job and the operator
+-- shared one branch. Two agents in one codebase could not work at the same
+-- time, because `Runtime::start_job` takes a lock per work tree and there was
+-- only ever one. And a job that opened a pull request left the tree standing on
+-- the branch it made, so the rail went on reporting a feature branch for the
+-- weeks after it landed.
+--
+-- `'own'` gives each agent a linked git worktree of its own, off the same
+-- repository, under the app's data directory. The operator's checkout is never
+-- checked out, never switched and never cleaned; Guaca owns the other tree and
+-- so can reset it to the default branch before every job.
+--
+-- `'shared'` is what every row written before today was doing, so that is what
+-- they are backfilled with. This is the one column in this table whose SQL
+-- default and whose Rust default disagree, and the disagreement is the point:
+-- `ALTER TABLE ... DEFAULT` only ever runs against rows that already exist, and
+-- moving somebody's jobs into a new directory is not an upgrade's decision to
+-- take. What a *new* repository gets is `Bench::default`, which is `own`, and
+-- `create_repository` always writes the value explicitly.
+--
+-- Unrecognized values read back as `shared` rather than failing the row, for
+-- `Harness::parse`'s reason and `Gate::parse`'s: reading a string a downgrade
+-- wrote as the variant that relocates work is the wrong direction to be wrong
+-- in.
+ALTER TABLE repositories ADD COLUMN bench TEXT NOT NULL DEFAULT 'shared';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2272,6 +2305,38 @@ mod tests {
             .query_row("SELECT harness FROM repositories WHERE id='r1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(harness, "pi", "an upgrade must not change what a directory starts");
+    }
+
+    #[test]
+    fn a_repository_linked_before_there_were_work_trees_keeps_working_where_it_did() {
+        // The one place `Bench`'s SQL default and its Rust default disagree, and
+        // the reason they have to. A new repository gets a worktree per agent,
+        // because that is the better arrangement and the operator is choosing it
+        // now. A repository already linked gets what it already had: moving
+        // somebody's jobs into a directory that has none of their installed
+        // dependencies in it, on launch, with no gesture, is not an upgrade's
+        // decision to take.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 44) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO repositories (id,group_id,name,path,note,harness,gate,created_at,updated_at)
+             VALUES ('r1',?1,'guaca','/dev/guaca','','pi','open',1,1)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let bench: String = conn
+            .query_row("SELECT bench FROM repositories WHERE id='r1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(bench, "shared", "an upgrade must not move where a directory's jobs run");
     }
 
     #[test]

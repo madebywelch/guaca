@@ -69,6 +69,14 @@ and every other suite in this repo still passes. Its `#[ignore]`d half asks the
 real programs whether they still accept those vectors and still answer in the
 shape this build reads, and it spends the operator's own plan.
 
+The stand-ins are also what makes *where* a job ran an assertion. Each one
+records into whatever directory it was started in, so a repository that gives
+each agent a work tree of its own is checked by there being no recording in the
+operator's own checkout and one in the worktree, and two agents in one codebase
+are checked by there being two. Nothing else in the build can see that: the
+directory a harness is handed is one argument, and a wrong one is a job that
+works perfectly in the wrong tree.
+
 ```sh
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored

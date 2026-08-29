@@ -49,6 +49,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     note: "",
     harness: "pi",
     gate: "open",
+    bench: "own",
     createdAt: 0,
     updatedAt: 0,
     ...over,

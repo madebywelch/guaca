@@ -333,7 +333,7 @@ export function Sidebar({
     // way while a coding agent works in its repository for twenty minutes.
     // Read off `building` rather than off `Activity` for the same reason —
     // `Activity` is cleared when a turn ends, and this is not a turn.
-    if (Object.values(building).includes(id)) {
+    if (building[id]) {
       return { text: "writing code", kind: "thinking" };
     }
 

@@ -21,10 +21,9 @@ use crate::llm::catalog::Catalog;
 use crate::llm::openrouter::LlmClient;
 use crate::proxy;
 use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
-use crate::runtime::Runtime;
+use crate::runtime::{OnDisk, Runtime};
 use crate::subscription::Subscription;
 use crate::tray::{self, Tray};
-use crate::workspace::Workspace;
 
 /// Bridges runtime events onto the webview's event bus, and onto the menu bar.
 ///
@@ -262,13 +261,19 @@ pub fn run() {
 
             let db_path = data_dir.join("guac.db");
             let config_path = config_dir.join("config.json");
-            // Plain markdown on disk, one file per agent, so the operator can
-            // read and edit an agent's memory without going through the app.
+            // Three directories under the data directory, made together because
+            // they are one decision. Plain markdown for each agent's memory, so
+            // the operator can read and edit it without going through the app;
+            // attachments addressed by content, kept beside the memories rather
+            // than in SQLite because a proposal document does not belong in a
+            // table read forty rows at a time; and one git worktree per agent
+            // per repository, so a coding job never works in the operator's own
+            // checkout. The last one is here rather than beside the repository:
+            // inside it would be a directory the operator has to gitignore in a
+            // file that is not Guaca's to edit, and beside it would be Guaca
+            // writing into a parent nobody linked.
+            let disk = OnDisk::under(&data_dir);
             let workspace_dir = data_dir.join("workspace");
-            // Attachments, addressed by content and shared by every agent. Kept
-            // beside the memories rather than in SQLite: a proposal document
-            // does not belong in a table that is read forty rows at a time.
-            let files_dir = data_dir.join("files");
 
             let store = Store::open(&db_path)?;
             // A permission request is answered by a turn that is holding the
@@ -298,8 +303,7 @@ pub fn run() {
                 store,
                 LlmClient::new()?.with_subscription(subscription.clone()),
                 app_config,
-                Workspace::new(workspace_dir.clone()),
-                FileStore::new(files_dir),
+                disk,
                 sink,
             );
 
