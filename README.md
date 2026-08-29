@@ -460,8 +460,10 @@ being changed. `docs/ARCHITECTURE.md` is the long version, including why agent
 conversations end rather than going round forever, which is the hardest thing
 here. `docs/PLUGINS.md`, `docs/ACCOUNT.md`, `docs/ROUTINES.md`,
 `docs/MACHINES.md`, `docs/BROWSERS.md` and `docs/WORKSPACE.md` cover the
-subsystems it does not, and `docs/PROTOCOL.md` records what the interoperability
-literature contributed.
+subsystems it does not, `docs/PROTOCOL.md` records what the interoperability
+literature contributed, and `docs/TESTING.md` says which suite answers which
+question. `docs/gotchas/` is the short form of all of it: one file per
+subsystem, listing the changes that looked obviously right and were not.
 
 ## Status
 
