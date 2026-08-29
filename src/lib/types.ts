@@ -1247,7 +1247,7 @@ export function errorMessage(value: unknown): string {
  * Concatenated text of an envelope, matching the Rust `plain_text`.
  *
  * A fired routine's instruction counts, exactly as it does there: it is what
- * the model was sent, so the activity board naming what opened a run has to be
+ * the model was sent, so the flow board naming what opened a run has to be
  * able to say it. Drawing a firing as a bubble is prevented by the transcript
  * choosing a row for the part, not by this hiding the words.
  */

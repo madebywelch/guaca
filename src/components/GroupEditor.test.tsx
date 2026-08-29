@@ -1,7 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Group, GroupDraft, GroupReset, Settings, SubscriptionStatus } from "../lib/types";
+import type {
+  Envelope,
+  Group,
+  GroupDraft,
+  GroupReset,
+  Settings,
+  SubscriptionStatus,
+} from "../lib/types";
 import { aGroup } from "../test-fixtures";
 
 /**
@@ -78,6 +85,10 @@ const groupPlugins = vi.fn(async () => []);
 const pluginCatalog = vi.fn(async () => []);
 const groupRepositories = vi.fn(async () => []);
 const codingHarnesses = vi.fn(async () => []);
+const conversationFlow = vi.fn<(group: string, limit?: number) => Promise<Envelope[]>>(
+  async () => [],
+);
+const usageForRuns = vi.fn(async () => []);
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -93,6 +104,8 @@ vi.mock("../lib/ipc", () => ({
     pluginCatalog: () => pluginCatalog(),
     groupRepositories: () => groupRepositories(),
     codingHarnesses: () => codingHarnesses(),
+    conversationFlow: (group: string, limit?: number) => conversationFlow(group, limit),
+    usageForRuns: () => usageForRuns(),
   },
 }));
 
@@ -482,5 +495,61 @@ describe("deleting a group", () => {
     open(null);
     expect(screen.queryByText("Delete")).toBeNull();
     expect(screen.queryByText("Start fresh")).toBeNull();
+  });
+});
+
+/**
+ * The flow board, which is here rather than in the rail.
+ *
+ * It sat at the top of the rail under the wordmark, one row above the search
+ * box: the first thing in the app after Guaca's own name, and one of the least
+ * pressed things in it. Who spoke to whom and what a run cost is analysis, and
+ * somebody arrives at it having decided to look into something.
+ */
+describe("a crew's activity", () => {
+  function said(over: Partial<Envelope> = {}): Envelope {
+    return {
+      id: "m1",
+      runId: "r1",
+      channelId: "chef",
+      from: { kind: "human" },
+      to: { kind: "agent", id: "chef" },
+      parts: [{ type: "text", text: "how is the prep going" }],
+      trust: "operator",
+      hop: 0,
+      expectsReply: true,
+      intent: "work",
+      cause: null,
+      createdAt: 1_700_000_000_000,
+      ...over,
+    };
+  }
+
+  it("reads this crew's conversation and nobody else's", async () => {
+    // Scoped in SQL rather than filtered here, and the limit is why: the board
+    // is the newest few hundred messages, so a busy crew filling that window
+    // would hand a quiet crew an empty board.
+    conversationFlow.mockResolvedValueOnce([said()]);
+    open(aGroup({ id: KITCHEN, name: "Kitchen" }));
+    pane("Activity");
+
+    await waitFor(() => expect(conversationFlow).toHaveBeenCalled());
+    expect(conversationFlow.mock.calls[0]![0]).toBe(KITCHEN);
+    // Twice on purpose: the run's own opening line, and the row inside it.
+    expect(await screen.findAllByText(/how is the prep going/)).toHaveLength(2);
+  });
+
+  it("says nothing has happened rather than drawing an empty board", async () => {
+    open();
+    pane("Activity");
+
+    expect(await screen.findByText(/Nothing has happened yet/)).toBeTruthy();
+  });
+
+  it("is not offered on a group that does not exist yet", () => {
+    // Nothing has been said in a crew nobody has created, and the read would
+    // have no id to ask about.
+    open(null);
+    expect(screen.getByRole("tab", { name: "Activity" }).hasAttribute("disabled")).toBe(true);
   });
 });

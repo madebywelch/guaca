@@ -5,7 +5,7 @@ import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
 import { composted } from "../lib/compost";
 import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
-import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "../lib/store";
+import { useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupRail } from "./GroupRail";
@@ -329,7 +329,7 @@ export function Sidebar({
     // way while a coding agent works in its repository for twenty minutes.
     // Read off `building` rather than off `Activity` for the same reason —
     // `Activity` is cleared when a turn ends, and this is not a turn.
-    if (Object.values(building).includes(id)) {
+    if (building[id]) {
       return { text: "writing code", kind: "thinking" };
     }
 
@@ -460,6 +460,7 @@ export function Sidebar({
         isOver={isOver}
         onDragOver={hover}
         onDragOut={() => hover(null)}
+        dragging={drag !== null}
       />
 
       <nav className="rail" aria-label="Agents" data-dragging={drag ? "true" : undefined}>
@@ -480,18 +481,6 @@ export function Sidebar({
           </span>
           <span className="rail__search-label">Search</span>
           <kbd className="rail__key">{FIND_KEY}</kbd>
-        </button>
-
-        <button
-          type="button"
-          className="btn btn--rail"
-          data-current={selected === ACTIVITY_CHANNEL}
-          onClick={() => void select(ACTIVITY_CHANNEL)}
-        >
-          <span aria-hidden="true" className="rail__hash">
-            #
-          </span>
-          activity
         </button>
 
         {/* The wire lives on this wrapper rather than on the scroll container, so

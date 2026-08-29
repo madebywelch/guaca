@@ -486,8 +486,9 @@ export const api = {
   pairMessages: (a: AgentId, b: AgentId, limit?: number) =>
     invoke<Envelope[]>("pair_messages", { a, b, limit }),
 
-  /** The whole conversation, for the activity flow board. */
-  conversationFlow: (limit?: number) => invoke<Envelope[]>("conversation_flow", { limit }),
+  /** One crew's conversation, for the flow board in its settings. */
+  conversationFlow: (group: GroupId, limit?: number) =>
+    invoke<Envelope[]>("conversation_flow", { group, limit }),
 
   /**
    * Messages, files, links and routines matching a query.

@@ -1734,10 +1734,14 @@ pub fn pair_messages(
     Ok(state.runtime.store().pair_messages(a, b, limit.unwrap_or(200).min(1000))?)
 }
 
-/// The whole conversation, for the flow board.
+/// One crew's conversation, for the flow board in its settings.
 #[tauri::command]
-pub fn conversation_flow(state: State<'_, AppState>, limit: Option<u32>) -> Reply<Vec<Envelope>> {
-    Ok(state.runtime.store().conversation_flow(limit.unwrap_or(400).min(2000))?)
+pub fn conversation_flow(
+    state: State<'_, AppState>,
+    group: GroupId,
+    limit: Option<u32>,
+) -> Reply<Vec<Envelope>> {
+    Ok(state.runtime.store().conversation_flow(group, limit.unwrap_or(400).min(2000))?)
 }
 
 /// What the transcript has to say about a query.

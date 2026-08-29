@@ -51,9 +51,15 @@ import type {
 } from "./types";
 import { errorMessage } from "./types";
 
-/** The activity feed is addressed like a channel but is not an agent. */
-export const ACTIVITY_CHANNEL = "activity" as const;
-export type ChannelKey = AgentId | typeof ACTIVITY_CHANNEL;
+/**
+ * A channel is an agent, and nothing else is one.
+ *
+ * The flow board used to be addressed as a channel here, which made every
+ * function that took a channel take a value that was not an agent and cost
+ * seven of them a branch. It is analysis rather than a place you talk, so it
+ * moved into the group editor and reads its own history: `GroupActivity`.
+ */
+export type ChannelKey = AgentId;
 
 export interface StreamBuffer {
   channelId: AgentId;
@@ -391,9 +397,8 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
  * Which crew the rail is inside once a channel has been opened.
  *
  * One invariant, from this end: the rail has to be drawing the row of whatever
- * the pane is showing. A search hit or a click on the flow board can land on a
- * member of any crew, and a rail still showing the one you were in has the open
- * channel nowhere on it.
+ * the pane is showing. A search hit can land on a member of any crew, and a
+ * rail still showing the one you were in has the open channel nowhere on it.
  *
  * It follows the agent rather than dropping out to the overview, which is what
  * it used to do. Dropping out was the only honest answer while the crews lived
@@ -407,7 +412,7 @@ function insert(existing: Envelope[] | undefined, message: Envelope): Envelope[]
  * it is already on screen and there is nothing to repair.
  */
 function keptFocus(state: State, key: ChannelKey): GroupId | null {
-  if (state.railGroup === null || key === ACTIVITY_CHANNEL) return state.railGroup;
+  if (state.railGroup === null) return state.railGroup;
   const agent = state.agents.find((a) => a.id === key);
   return agent ? agent.groupId : state.railGroup;
 }
@@ -417,8 +422,7 @@ function keptFocus(state: State, key: ChannelKey): GroupId | null {
  *
  * The same invariant as `keptFocus` read from the other end: the rail has to be
  * able to draw the channel that is open. Going back out to the overview keeps
- * whatever was open, because the overview draws everybody. The activity feed
- * belongs to no group and is never closed.
+ * whatever was open, because the overview draws everybody.
  *
  * This end still lets go rather than following, and the asymmetry is the point.
  * `select` is the operator naming an agent, so taking them to that agent's crew
@@ -427,7 +431,7 @@ function keptFocus(state: State, key: ChannelKey): GroupId | null {
  */
 function keptChannel(state: State, group: GroupId | null): boolean {
   const key = state.selected;
-  if (group === null || key === null || key === ACTIVITY_CHANNEL) return true;
+  if (group === null || key === null) return true;
   const agent = state.agents.find((a) => a.id === key);
   return agent === undefined || agent.groupId === group;
 }
@@ -543,11 +547,11 @@ export const useStore = create<State>((set, get) => ({
     // If the open channel was just deleted, fall back rather than showing a
     // dead pane.
     const selected = get().selected;
-    if (selected && selected !== ACTIVITY_CHANNEL) {
+    if (selected) {
       const still = agents.find((a) => a.id === selected && a.lifecycle !== "terminated");
       if (!still) {
         const next = agents.find((a) => a.lifecycle !== "terminated");
-        set({ selected: next ? next.id : ACTIVITY_CHANNEL });
+        set({ selected: next ? next.id : null });
         if (next) await get().loadChannel(next.id);
       }
     }
@@ -577,14 +581,14 @@ export const useStore = create<State>((set, get) => ({
    * a member of the group you are looking at, working while nobody here is. The
    * agent goes on working. It is the reading of it that was wrong.
    *
-   * Through `select` rather than by writing `selected`, so the feed the pane
-   * falls back to is read before it is drawn instead of arriving empty. It
-   * belongs to no group, so the focus set just above survives `keptFocus`.
+   * What it falls back to is nothing, rather than the first row of the crew
+   * being entered. Opening a channel is the operator naming somebody, and a
+   * crew that picked one for them would put an agent's history on screen as a
+   * side effect of a click that was about the crew.
    */
   async focusGroup(id) {
     const closing = !keptChannel(get(), id);
-    set({ railGroup: id });
-    if (closing) await get().select(ACTIVITY_CHANNEL);
+    set({ railGroup: id, ...(closing ? { selected: null, focused: null } : {}) });
   },
 
   /**
@@ -668,10 +672,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadChannel(key, through) {
-    const messages =
-      key === ACTIVITY_CHANNEL
-        ? await api.conversationFlow(400)
-        : await api.channelMessages(key, 300, through);
+    const messages = await api.channelMessages(key, 300, through);
     set((state) => ({ messages: { ...state.messages, [key]: messages } }));
   },
 
@@ -771,11 +772,6 @@ export const useStore = create<State>((set, get) => ({
         set((state) => {
           const messages = { ...state.messages };
           messages[message.channelId] = insert(messages[message.channelId], message);
-          // The flow board covers the whole conversation, so everything except
-          // an agent's private activity record belongs on it.
-          if (message.to.kind !== "system") {
-            messages[ACTIVITY_CHANNEL] = insert(messages[ACTIVITY_CHANNEL], message);
-          }
 
           // Draw the pulse from the event, not from a channel read, so it
           // fires whether or not either channel is open. Bound to locals
@@ -958,14 +954,13 @@ export const useStore = create<State>((set, get) => ({
         set((state) => {
           const messages = { ...state.messages };
           for (const key of Object.keys(messages) as ChannelKey[]) {
-            // The activity feed draws from every channel, so it is stale too.
-            if (emptied.has(key) || key === ACTIVITY_CHANNEL) delete messages[key];
+            if (emptied.has(key)) delete messages[key];
           }
           return { messages };
         });
 
         const open = get().selected;
-        if (open && (emptied.has(open) || open === ACTIVITY_CHANNEL)) {
+        if (open && emptied.has(open)) {
           void get().loadChannel(open);
         }
         // The panels beside the transcript hold the two stores a reset also

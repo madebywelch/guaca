@@ -930,14 +930,21 @@ impl Harness {
     }
 
     /// Peer traffic only, which is what most of these tests reason about.
+    ///
+    /// Every crew's board, merged. The store scopes a flow to one group,
+    /// because that is the only unit the board is ever drawn for; a test that
+    /// puts agents in two groups is still asking about the whole run.
     pub fn feed(&self) -> Vec<Envelope> {
-        self.runtime
-            .store()
-            .conversation_flow(400)
+        let store = self.runtime.store();
+        let mut messages: Vec<Envelope> = store
+            .list_groups()
             .unwrap()
             .into_iter()
+            .flat_map(|group| store.conversation_flow(group.id, 400).unwrap())
             .filter(|e| e.from.is_agent() && e.to.is_agent())
-            .collect()
+            .collect();
+        messages.sort_by_key(|e| (e.created_at, e.id));
+        messages
     }
 
     /// What the run's machinery did, read from the events the UI is drawn
