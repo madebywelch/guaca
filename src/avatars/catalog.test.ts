@@ -10,7 +10,8 @@ import {
   suggestAccent,
   suggestCharacter,
 } from "./catalog";
-import { FORM } from "./form";
+import { bodyPoints, FORM } from "./form";
+import { CREST, SILHOUETTES, type Silhouette } from "./silhouette";
 
 /**
  * Keys that have been written into somebody's database by a shipped build.
@@ -93,6 +94,9 @@ const SHIPPED = [
   "satellite",
 ];
 
+/** How far past its silhouette a character's own stretch and lobes may push. */
+const LUMP = 0.05;
+
 describe("the cast", () => {
   it("has a unique key and label for every character", () => {
     expect(new Set(CHARACTERS.map((c) => c.key)).size).toBe(CHARACTERS.length);
@@ -122,8 +126,8 @@ describe("the cast", () => {
     }
   });
 
-  /* One species means the eyes carry as much of an identity as the outline
-     does, so no two characters may have the same pair in the same place. */
+  /* Shape carries some of an identity now and the eyes carry the rest, so two
+     characters cut from the same silhouette may not also wear the same pair. */
   it("gives every character a distinguishable set of eyes", () => {
     const seen = CHARACTERS.map((c) =>
       [c.eye.one ? 1 : 2, c.eye.spread, c.eye.r, c.eye.x ?? 0, c.eye.y ?? 0].join(":"),
@@ -131,10 +135,19 @@ describe("the cast", () => {
     expect(new Set(seen).size, "two characters wear the same face").toBe(CHARACTERS.length);
   });
 
-  it("keeps every character round", () => {
+  /* Five shapes are five things to keep working, and one nobody is cut from is
+     one that could break with nothing on screen to show it. */
+  it("uses every silhouette there is", () => {
+    const cut = new Set(CHARACTERS.map((c) => c.form));
+    for (const key of Object.keys(SILHOUETTES) as Silhouette[]) {
+      expect(cut.has(key), `nothing in the cast is a ${key}`).toBe(true);
+    }
+  });
+
+  it("keeps every character to the silhouette it was cut from", () => {
     for (const c of CHARACTERS) {
-      // The species is a ball. A lump that stretched past this would read as a
-      // second kind of creature standing in the same rail.
+      // A lump varies a shape, it does not replace one: a square stretched past
+      // this is a brick, which is a sixth silhouette nobody declared.
       expect(Math.abs(c.ax - 1), c.key).toBeLessThanOrEqual(0.12);
       expect(Math.abs(c.ay - 1), c.key).toBeLessThanOrEqual(0.12);
       const lumpy = c.sig.reduce((sum, lobe) => sum + Math.abs(lobe.amp), 0);
@@ -142,10 +155,33 @@ describe("the cast", () => {
     }
   });
 
+  /*
+   * The one bound that is arithmetic rather than taste. `CREST` is what a shape
+   * may rest at and `LUMP` is what the character on top of it may add, so this
+   * is the only place the two are read together. Everything between here and
+   * `FORM.reach` belongs to the moods, and `form.test.ts` is where they spend
+   * it: a character over this line does not fail here, it fails there, in one
+   * frame of one mood, months later.
+   */
+  it("leaves the moods the room they need", () => {
+    for (const c of CHARACTERS) {
+      let most = 0;
+      for (const [x, y] of bodyPoints(c, {}, 0).pts) {
+        most = Math.max(most, Math.hypot(x - FORM.center, y - FORM.center));
+      }
+      expect(most / FORM.radius, `${c.key} rests too far out`).toBeLessThanOrEqual(CREST + LUMP);
+    }
+  });
+
+  /* Against the character's own silhouette rather than against a circle: a
+     drop is narrower at the sides than at the top, so a pair of eyes that fits
+     one shape is not a pair that fits all five. */
   it("seats both eyes inside the body", () => {
     for (const c of CHARACTERS) {
-      const reach = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r * (c.eye.one ? 1.5 : 1);
-      expect(Math.hypot(reach, Math.abs(c.eye.y ?? 0)), c.key).toBeLessThan(FORM.radius * 0.75);
+      const out = Math.abs(c.eye.x ?? 0) + c.eye.spread + c.eye.r * (c.eye.one ? 1.5 : 1);
+      const down = c.eye.y ?? 0;
+      const edge = SILHOUETTES[c.form](Math.atan2(down, out)) * FORM.radius;
+      expect(Math.hypot(out, down), c.key).toBeLessThan(edge * 0.8);
     }
   });
 });

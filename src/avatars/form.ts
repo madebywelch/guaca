@@ -2,16 +2,24 @@
  * The body of an agent, as a function rather than a drawing.
  *
  * A creature is a closed curve through `FORM.samples` radii around one center.
- * Every expression is a term in that radius, or a scale applied to the point
- * after it. No transform is ever put on the drawing itself: a character that
- * slides around inside its own box reads as a sprite being moved, and one whose
- * outline changes reads as a thing that is alive. That distinction is the whole
- * design, and it is why there is no path data anywhere in this directory.
+ * The first term of that radius is its silhouette, which is one of the five in
+ * `silhouette.ts`; every expression is another term added to it, or a scale
+ * applied to the point after it. No transform is ever put on the drawing
+ * itself: a character that slides around inside its own box reads as a sprite
+ * being moved, and one whose outline changes reads as a thing that is alive.
+ * That distinction is the whole design, and it is why there is no path data
+ * anywhere in this directory.
+ *
+ * Nothing else in this file knows how many silhouettes there are. A cloud
+ * kneads, leans, sags and settles through the code a circle does, because a
+ * shape is the resting radius and a mood is what gets added to it.
  *
  * The amplitudes here are deliberately small. The body breathes, leans and
  * settles; it does not act. What acts is `eyes.ts`, because a body that emotes
  * as hard as a face is a body nobody can read a face on.
  */
+
+import { SILHOUETTES, type Silhouette } from "./silhouette";
 
 /** How far a look carries, what it costs the shape, and where the box is. */
 export const FORM = {
@@ -28,8 +36,15 @@ export const FORM = {
    * its group's circle.
    */
   reach: 30,
-  /** Radii in the outline. Enough that Catmull-Rom reads as a curve. */
-  samples: 28,
+  /**
+   * Radii in the outline.
+   *
+   * Divisible by eight, which is the part that matters: a square's corners sit
+   * at 45 degrees and an octagon's at 22.5, and a corner that falls between two
+   * samples is a corner that gets chamfered off. At the 28 this started with,
+   * an octagon drew as a lumpy circle and nothing failed.
+   */
+  samples: 32,
 } as const;
 
 const TAU = Math.PI * 2;
@@ -65,10 +80,16 @@ export interface Press {
 export interface Lump {
   key: string;
   label: string;
-  /** Standing stretch. Kept near 1: the species is round. */
+  /** Which of the five it is cut from. */
+  form: Silhouette;
+  /**
+   * Standing stretch. Kept near 1: it varies a silhouette, it does not replace
+   * one, and a square stretched far enough to read as a brick is a sixth shape
+   * nobody declared.
+   */
   ax: number;
   ay: number;
-  /** The resting silhouette. */
+  /** Lobes on top of the silhouette. What tells two clouds apart. */
   sig: Lobe[];
   eye: {
     /** Half the gap between the eyes, in viewBox units. */
@@ -141,10 +162,11 @@ export function bodyPoints(lump: Lump, shape: Shape, t: number, gaze?: Point) {
     : 0;
 
   const towards = reach > 0.004 ? Math.atan2(gy, gx) / TAU : 0;
+  const silhouette = SILHOUETTES[lump.form];
   const pts: Point[] = [];
   for (let i = 0; i < FORM.samples; i++) {
     const a = (i / FORM.samples) * TAU;
-    let rr = 1;
+    let rr = silhouette(a);
     for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
     if (shape.wob) for (const w of shape.wob) rr += w.amp * Math.sin(w.k * a + w.spd * t);
     if (reach > 0.004) {
