@@ -67,6 +67,20 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   every drag instead, it came over the rail the moment a row was picked up
   anywhere in the window, covering the left edge of every row a reorder was
   aimed at, which is what most drags are. `src/lib/reach.ts`.
+- **A crew's circle is not a toggle, and the mark on the current one is ink.**
+  Clicking the crew the rail is already inside used to take it back out to the
+  overview, so the gesture for opening a crew went in and straight back out when
+  it was made twice, and there was nothing on screen saying which of the two
+  states it had ended in: the mark for the current crew was a bar spelled
+  `--flesh-soft`, which is the accent's ground rather than an ink, at 1.06 to 1
+  on paper and 1.31 to 1 in a dark room. Two fixes for one complaint. The way
+  out of a crew is the circle at the top of the column, which is on screen for
+  the whole of every gesture, so a circle does not have to be its own way out;
+  and the current crew is a band plus an ink bar, which is what `.agent-row`
+  draws for the open channel one column over. `styles.test.ts` holds the bar to
+  three to one against `--grail-ground` on both surfaces, because the element
+  was in the document with the right class on it the whole time and no DOM
+  assertion sees a color. `docs/WORKSPACE.md`.
 - **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
   One invariant from two ends — the rail draws the row of whatever the pane is
   showing — and the asymmetry is deliberate. `select` is the operator naming an

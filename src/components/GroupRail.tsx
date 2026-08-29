@@ -157,7 +157,15 @@ export function GroupRail({
               stuck={stuck}
               current={focused === group.id}
               over={isOver({ kind: "group", id: group.id })}
-              onOpen={() => onFocus(focused === group.id ? null : group.id)}
+              // Clicking the crew the rail is already inside does nothing. It
+              // used to take the rail back out to the overview, which made the
+              // circle a toggle: a double-click on a crew went in and straight
+              // back out again, and a click on the crew you were already in put
+              // you somewhere you had not asked to go. The way out is the
+              // circle at the top of this column, above the rule, which is on
+              // screen for the whole of that gesture. A control with its own
+              // way out beside it does not need to be one.
+              onOpen={() => onFocus(group.id)}
               onDragOver={() => onDragOver({ kind: "group", id: group.id })}
               onDragOut={onDragOut}
             />

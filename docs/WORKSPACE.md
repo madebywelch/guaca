@@ -974,6 +974,32 @@ that gesture better rather than worse: the target never scrolls out from under
 the hand, and pointer events cross a column boundary for free where HTML5 drag
 and drop would not.
 
+**Clicking the crew the rail is already inside does nothing, and that is the
+whole of it.** It used to take the rail back out to the overview, which made
+each circle a toggle: the natural way to open something is to click it twice
+when the first click seems not to have landed, and that gesture went in and
+straight back out again. Nothing in the column said which of the two states you
+had ended in. The way out is a circle of its own at the top of the column, above
+the rule, on screen for the whole of that gesture and for the whole of every
+other one, so a circle does not also have to be its own way out.
+
+**Which crew that is, is a band and an edge, which is what the rail draws one
+column over.** The row the current crew sits on is filled with the accent's
+ground and an ink bar is drawn down the window edge of it: the same two marks
+`.agent-row` uses for the open channel, because it is the same question asked at
+the other granularity. There was only ever the bar, and it was spelled
+`--flesh-soft`, which is the accent's *ground* rather than an ink: #fdeed9 over
+a #eceae2 column and #33240e over a #0b0b0a one, 1.06 to 1 and 1.31 to 1. So the
+one permanent statement in the app about where the operator is standing was
+drawn in a color neither surface shows, on the column whose entire argument is
+that "which crew am I in" has an answer in a fixed place. Nothing caught it for
+as long as the column has existed: the bar was in the document with the right
+class on it the whole time, and no DOM assertion sees a color. `styles.test.ts`
+holds it to three to one against the column it is drawn on, on both surfaces,
+which is what WCAG asks of a mark that is not text. The band is deliberately not
+held to the same floor. It is a wash under a row, which is what the rail does,
+and a wash that met a text ratio would be a block of accent with faces on it.
+
 **What the circle says, it says in two marks, and they are deliberately not
 one.** A ring means somebody in this crew is working, with no number on it,
 because how many agents are mid-turn is not a thing anybody acts on. A count in

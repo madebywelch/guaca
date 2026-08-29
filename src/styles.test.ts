@@ -163,6 +163,65 @@ describe("the columns that are not the page", () => {
    * remap exists and covers all three, because losing one of them is a panel
    * whose fields quietly stop having edges.
    */
+  /**
+   * How visible a color is against another one, as WCAG reads it.
+   *
+   * Here rather than through the cascade for the reason everything else in this
+   * block is: jsdom does not inherit a custom property down a subtree, so a
+   * token read off a child of a column comes back empty whether or not it was
+   * ever declared. Both values are hex in the two `:root` blocks, which is what
+   * makes them arithmetic at all.
+   */
+  function contrast(one: string, other: string): number {
+    const light = (hex: string) => {
+      const packed = Number.parseInt(hex.slice(1), 16);
+      const channel = (at: number) => {
+        const part = ((packed >> at) & 255) / 255;
+        return part <= 0.03928 ? part / 12.92 : ((part + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+    };
+    const [high, low] = [light(one), light(other)].sort((a, b) => b - a) as [number, number];
+    return (high + 0.05) / (low + 0.05);
+  }
+
+  /**
+   * The mark saying which crew the rail is inside has to be visible on the
+   * column it is drawn on, on both surfaces.
+   *
+   * It was `--flesh-soft` for as long as the column existed, which is the
+   * accent's *ground* rather than an ink: #fdeed9 over a #eceae2 column and
+   * #33240e over a #0b0b0a one, 1.06 to 1 and 1.31 to 1. So the one permanent
+   * statement in the app about where the operator is standing was drawn in a
+   * color neither surface shows, on the column whose whole argument is that
+   * "which crew am I in" has an answer in a fixed place. Nothing caught it: the
+   * bar was in the document with the right class on it the entire time, and no
+   * DOM assertion sees a color.
+   *
+   * Three to one is what WCAG 1.4.11 asks of a mark that is not text, and a
+   * bar this thin has nothing else to lean on. The band behind it is
+   * deliberately not held to the same floor: it is a wash under the whole row,
+   * which is what `.agent-row` does one column over for the open channel, and a
+   * wash that met a text ratio would be a block of accent with faces on it.
+   */
+  it("marks the crew the rail is inside in something the column shows", () => {
+    const rule = css.match(/\.orb\[aria-current="true"\]::before \{[\s\S]*?\n\}/)?.[0];
+    expect(rule, "no mark for the crew the rail is inside").toBeTruthy();
+
+    const token = rule!.match(/background: var\((--[a-z-]+)\);/)?.[1];
+    expect(token, `the mark is not spelled from a token: ${rule}`).toBeTruthy();
+
+    for (const surface of [":root", ':root[data-surface="dark"]']) {
+      const ink = declaredAs(surface, token!);
+      const ground = declaredAs(surface, "--grail-ground");
+      expect(/^#[0-9a-f]{6}$/i.test(ink) && /^#[0-9a-f]{6}$/i.test(ground)).toBe(true);
+      expect(
+        contrast(ink, ground),
+        `${token} on --grail-ground in ${surface} is ${contrast(ink, ground).toFixed(2)} to 1`,
+      ).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it("recesses from the column rather than from the page", () => {
     // Matched against the source rather than against `RULES`, whose selector
     // group stops at a newline: this rule names its three scopes one per line.

@@ -1616,20 +1616,46 @@ button {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--rail-text) 30%, transparent);
 }
 
-/* The crew the rail is inside. A bar on the edge of the column and not a ring,
-   because the ring already carries whether anyone here is working, and a circle
-   saying two things at once says neither. The bar is also readable down a
-   column of twelve in a way a 2px inset is not. */
+/* The crew the rail is inside. Two marks, and neither of them is the ring: the
+   ring already carries whether anyone here is working, and a circle saying two
+   things on one channel says neither. The same two the rail uses one column
+   over for the open channel — a plate under the row and an ink edge on it —
+   because it is the same question asked at the other granularity.
+
+   The bar is the accent. It was `--flesh-soft`, which is the *ground* the app
+   fills boxes with rather than an ink: #fdeed9 over a #eceae2 column and
+   #33240e over a #0b0b0a one, which is 1.06 to 1 and 1.31 to 1. The one
+   permanent statement in the app about where the operator is standing was
+   drawn in a color neither surface shows. `styles.test.ts` holds it to a ratio
+   now, because no DOM assertion sees a color: the bar was always in the
+   document with the right class on it.
+
+   The band is the mark that answers at a glance, which is how the question is
+   asked. A 0.2rem edge is findable once you know to look for it, and down a
+   column of twelve nobody looks. `--flesh-soft` is the right name here, because
+   here it is a ground.
+
+   Remapping `--grail-ground` with it is what keeps the two badges hung off the
+   rim right: the overflow count is filled with it and the waiting count is
+   ringed in it, both so they sit on the column, and under this one circle the
+   column is the band. Remapped once here for the reason `--sunken` is remapped
+   once on the columns themselves, rather than at each rule inside. */
+.orb[aria-current="true"] {
+  --grail-ground: var(--flesh-soft);
+
+  background: var(--flesh-soft);
+}
+
 .orb[aria-current="true"]::before {
   content: "";
   position: absolute;
   left: 0;
   top: 50%;
   width: 0.2rem;
-  height: 1.6rem;
+  height: 2rem;
   transform: translateY(-50%);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
-  background: var(--flesh-soft);
+  background: var(--flesh);
 }
 
 /* Faces, standing in a ring. Where each one goes is `lib/orb.ts`: a crew of
