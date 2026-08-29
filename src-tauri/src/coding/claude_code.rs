@@ -6,7 +6,7 @@
 //! subscription is spent by this program and by nothing else holding its
 //! credential.
 
-use super::{one_line, Outcome, Progress, Wiring};
+use super::{first_line, Outcome, Progress, Wiring};
 
 pub(super) const BINARY: &str = "claude";
 
@@ -196,7 +196,7 @@ fn detail_of(tool: &str, input: &serde_json::Value) -> String {
         "Task" => "description",
         _ => return String::new(),
     };
-    one_line(input[pick].as_str().unwrap_or_default())
+    first_line(input[pick].as_str().unwrap_or_default()).to_string()
 }
 
 #[cfg(test)]

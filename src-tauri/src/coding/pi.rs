@@ -3,7 +3,7 @@
 //! Two functions: the argument vector, and the fold from one of its events into
 //! an [`Outcome`]. The process itself is [`super::run`]'s.
 
-use super::{one_line, Outcome, Progress};
+use super::{first_line, Outcome, Progress};
 
 pub(super) const BINARY: &str = "pi";
 
@@ -113,7 +113,7 @@ fn detail_of(tool: &str, args: &serde_json::Value) -> String {
         "grep" | "find" => "pattern",
         _ => return String::new(),
     };
-    one_line(args[pick].as_str().unwrap_or_default())
+    first_line(args[pick].as_str().unwrap_or_default()).to_string()
 }
 
 /// Every text part of a message, joined.

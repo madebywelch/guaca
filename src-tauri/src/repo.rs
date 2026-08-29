@@ -600,11 +600,20 @@ impl Prepared {
     /// onto the same stack as the operator's own checkout and every other
     /// agent's tree. A `git stash pop` in any of them then takes somebody
     /// else's work. Nothing about standing in a worktree hints at that.
+    ///
+    /// The path is named because a job that has to say where it is working
+    /// needs it, and naming it is also what makes a model write `cd` in front
+    /// of every command it runs. The harness is started in the tree, so that
+    /// prefix is a hundred characters of nothing, and it filled the whole of
+    /// the line the panel draws a command on. Hence the sentence after it.
+    /// [`crate::coding`] takes it off the line for the model that writes it
+    /// anyway, which is the half that does not depend on being read.
     pub fn brief(&self) -> String {
         let mut out = format!(
             "You are working in a git worktree of your own at `{}`, linked to the repository at \
              `{}`. Nobody else works in this tree, so the branch you are on and the state of \
-             this directory are yours alone.\n",
+             this directory are yours alone. You are already standing in it and every command \
+             you run starts there, so there is nothing to `cd` into first.\n",
             self.path, self.root
         );
 
@@ -1366,6 +1375,24 @@ mod tests {
 
         let _ = tokio::fs::remove_dir_all(&root).await;
         let _ = tokio::fs::remove_dir_all(&bare).await;
+    }
+
+    #[test]
+    fn the_preamble_says_the_job_is_already_standing_in_its_work_tree() {
+        // Named the path and stopped there, a model reads it as somewhere to
+        // go and writes `cd` in front of every command for the rest of the
+        // job. The panel drawing those commands then says the path nine times
+        // and what ran none.
+        let ready = Prepared {
+            path: "/benches/r1/a1".to_string(),
+            root: "/repos/site".to_string(),
+            fresh: false,
+            reset_onto: None,
+        };
+        let brief = ready.brief();
+        assert!(brief.contains("`/benches/r1/a1`"), "{brief}");
+        assert!(brief.contains("already standing in it"), "{brief}");
+        assert!(brief.contains("nothing to `cd` into first"), "{brief}");
     }
 
     #[tokio::test]
