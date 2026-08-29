@@ -10,8 +10,10 @@
  *   ./scripts/make-crew.sh
  *
  * One frame, held still. The strip has to say in a static picture what the app
- * says by moving, so what varies down the row is the expression rather than the
- * silhouette: eight characters, eight moods, eight directions of gaze.
+ * says by moving, so what varies down the row is the expression: eight
+ * characters, eight moods, eight directions of gaze. The eight are chosen to
+ * cover all five silhouettes, because the strip is also the only place a reader
+ * sees the cast is more than one shape.
  */
 
 import { CHARACTERS } from "../src/avatars/catalog";
@@ -28,7 +30,7 @@ import { markFor, MOODS, type Mood } from "../src/avatars/moods";
  */
 const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[] = [
   { key: "orb", color: "#8b8f45", mood: "idle", gaze: [0.26, -0.06], t: 0.9 },
-  { key: "bean", color: "#4f5f96", mood: "thinking", gaze: [-0.22, -0.16], t: 2.1 },
+  { key: "husk", color: "#4f5f96", mood: "thinking", gaze: [-0.22, -0.16], t: 2.1 },
   { key: "crumb", color: "#bf5f3c", mood: "working", gaze: [0.12, 0.09], t: 0.32 },
   { key: "wave", color: "#5e8158", mood: "pleased", gaze: [0, -0.05], t: 1.1 },
   { key: "pip", color: "#a8453a", mood: "frustrated", gaze: [-0.04, 0.02], t: 0.7 },
@@ -80,8 +82,8 @@ function cell(member: (typeof CREW)[number], index: number): string {
 
 const width = CREW.length * CELL + (CREW.length - 1) * GAP;
 const label =
-  "Eight agents, one species: idle, thinking, working, pleased, frustrated, " +
-  "waiting on a person, stuck, and paused";
+  "Eight agents across the five shapes: idle, thinking, working, pleased, " +
+  "frustrated, waiting on a person, stuck, and paused";
 
 process.stdout.write(
   [

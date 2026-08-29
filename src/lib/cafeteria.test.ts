@@ -56,8 +56,8 @@ describe("the cafeteria catalog", () => {
   it("gives every preset a character nothing else in the catalog has", () => {
     // Across the whole catalog, not per station. A crew is whatever subset the
     // operator ticked, so two presets sharing a character are two agents that
-    // look the same in one rail. Color is not the answer: it is one species, so
-    // what separates two of them is the resting lump and the set of the eyes.
+    // look the same in one rail. Color is not the answer: what separates two of
+    // them is the silhouette, the resting lump and the set of the eyes.
     //
     // The consequence is the point. The catalog cannot grow past the cast, so
     // a new preset is a new row in `avatars/catalog.ts` or it is not a preset.

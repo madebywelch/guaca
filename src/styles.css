@@ -1860,8 +1860,8 @@ button {
 /* ==========================================================================
    Avatars
 
-   Every agent is the same round creature, drawn by `avatars/form.ts` from a
-   handful of numbers rather than from a path. Nothing in here animates it:
+   Every agent is one of five shapes, drawn by `avatars/form.ts` from a handful
+   of numbers rather than from a path. Nothing in here animates it:
    the outline is recomputed per frame and written as one `d`, because what a
    creature does is change shape, and a keyframe can only move a drawing about.
 

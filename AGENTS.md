@@ -11,7 +11,8 @@ table below says which one to open before changing something.
 
 ```
 src/                  React + TypeScript. A view over the runtime, nothing more.
-  avatars/            An agent's character. One species, drawn from numbers.
+  avatars/            An agent's character. Five shapes, drawn from numbers.
+    silhouette.ts     The five, as one radius function each, and what sizes them.
     form.ts           The body, as a function of a character and a mood.
     eyes.ts           One stroke, four numbers, and where it is looking.
     catalog.ts        The cast, and every key an older build wrote.
@@ -174,6 +175,7 @@ repo: the frontend renders state and forwards intent.
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | An agent's character: the drawing, a new one, or why there are no eyebrows | `docs/CHARACTERS.md`, then `src/avatars/form.ts` |
+| A sixth shape, a shape that lost its corners, or why the drop is not bigger | *Five shapes, one weight* in `docs/CHARACTERS.md`, then `src/avatars/silhouette.ts` and the suite beside it, which is the gate |
 | A new expression, or what the app reads one from | *Moods* in `docs/CHARACTERS.md`, then `moods.ts`, whose table and `moodFor` are the whole of it |
 | Anything that moves on a creature: a look, a blink, a message landing | *The gaze moves the body* in `docs/CHARACTERS.md`, then `AgentAvatar.tsx`, which is the only place the three meet |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
@@ -281,15 +283,25 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 its loop over because it is a different unit of work with its own budget. A turn
 cannot: it is the unit the five limits are written in.
 
-**A creature is a shape, not a drawing.** Every agent is one round species,
-recomputed every frame from a character (a row of numbers) and a mood (another
-row). No path is ever drawn by hand and no transform is ever put on the drawing:
-a character that slides around inside its own box reads as a sprite being moved,
+**A creature is a shape, not a drawing.** Every agent is cut from one of five
+silhouettes (circle, octagon, square, water drop, cloud) and recomputed every
+frame from that shape, a character (a row of numbers) and a mood (another row).
+No path is ever drawn by hand and no transform is ever put on the drawing: a
+character that slides around inside its own box reads as a sprite being moved,
 and one whose outline changes reads as a thing that is alive. The body only
 breathes, leans and settles, because a body that acts as hard as a face is a
 body nobody can read a face on; what acts is two eyes, each one stroke with four
 numbers on it. Four casts of hand-drawn characters preceded this and every one
 of them failed the same way. `docs/CHARACTERS.md`.
+
+Nothing below `silhouette.ts` knows how many shapes there are: a shape is the
+first term of the resting radius and a mood is what gets added to it, so a cloud
+kneads, sags and settles through the code a circle does. The two numbers that
+size them are the whole of the design. Every silhouette encloses the circle's
+area, computed at load rather than balanced by eye, and none rests past `CREST`,
+because the moods already spend nearly all the room between `FORM.radius` and
+`FORM.reach` on the swell that follows a look. A shape with a point or a flat
+underside gives area back rather than taking that room.
 
 **Every length is named, not spelled.** A size, a space, a radius, a duration,
 an easing and a shadow are each spelled from a closed set of tokens at the top

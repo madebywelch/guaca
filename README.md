@@ -18,11 +18,12 @@ agents type, sent to whichever provider you point it at.
 
 ## The crew
 
-![Eight agents, one species: idle, thinking, working, pleased, frustrated, waiting on a person, stuck, and paused](docs/img/crew.svg)
+![Eight agents across the five shapes: idle, thinking, working, pleased, frustrated, waiting on a person, stuck, and paused](docs/img/crew.svg)
 
-An agent is a round creature made of clay, and nothing about it is drawn. A
-character is a row of numbers, an expression is another row, and the outline is
-a function of the two, recomputed every frame. Twenty-one characters and ten
+An agent is a creature made of clay, and nothing about it is drawn. It is cut
+from one of five shapes, a character is a row of numbers on top of that, an
+expression is another row, and the outline is a function of the three,
+recomputed every frame. Five silhouettes, twenty-one characters and ten
 expressions, and not one picture in the repo for anybody to get wrong.
 
 They are not decoration. A rail of eight is read by shape before it is read by
