@@ -29,6 +29,28 @@ code.
   they were written. The outcome alone was enough until `replaced` arrived, at
   which point a live memory rewrite silently stopped opening as a diff while the
   recorded one still did.
+- **A turn ends when the model stops calling tools, so a closing promise is
+  silence.** "Checking both properly" was the last thing that happened in a turn
+  with a working plugin, two calls left to make and rounds and budget to make
+  them in: the loop broke on an empty `tool_calls`, the message was filed, and
+  the operator waited for a check that was never going to run. Three things
+  answer it and none of them is enough alone. The prompt states the mechanism
+  rather than a rule, because "do not announce work" is something a model talks
+  itself out of and "nothing of yours runs after this message" is not. The
+  runtime gives such a turn one more round, once, claimed from the same budget.
+  `eval` counts it afterward as `PromisedAndStopped`, which is the only half CI
+  can fail on, and the only reason a prompt change here is measurable at all.
+  The rule itself is `domain::promise`, in one place because a copy in the
+  runtime and a copy in the eval drift into a prompt fix that measures clean
+  while the runtime goes on nudging.
+- **The nudge is not gated on an empty tool trail, and is gated on `code`.** The
+  turn this was written for had already made two calls and still closed on a
+  promise about two more: what backs a sentence is a call made *before* it, not
+  anywhere in the turn. The one exemption is a started `code` job, which
+  genuinely outlives the message announcing it, and which `## Your repository`
+  explicitly tells an agent to announce. Without that exemption the nudge fires
+  on the one announcement the app asks for and every coding job buys a wasted
+  model call.
 - **A turn reads its inbox between rounds, and reads nothing that would change
   where its answer goes.** Those are one decision, not a rule with an exception
   bolted on. The mode, the reply target, the placeholder's channel and `cause`
