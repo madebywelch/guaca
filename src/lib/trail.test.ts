@@ -331,10 +331,95 @@ describe("a call while it is still happening", () => {
     expect(callInFlight("browse", { action: "click", id: 4 })).toBe("Working the browser");
   });
 
-  it("names a tool this build has never heard of after the tool", () => {
-    // A crew's plugin tools are named by that crew's servers. Guessing at what
-    // one does is how `update_memory` once drew as a message sent to nobody.
-    expect(callInFlight("linear__create_issue", {})).toBe("Using linear__create_issue");
+  it("names the server a plugin call is waiting on, and the tool it called", () => {
+    // A crew's plugin tools are named by that crew's servers, so what one does
+    // is not something this build can say: guessing at it is how
+    // `update_memory` once drew as a message sent to nobody. Where the wait is
+    // is a different question, and the name answers it.
+    expect(callInFlight("linear__create_issue", {})).toBe("Using create_issue on Linear");
+    expect(callInFlight("run_code", { source: "print(1)" })).toBe("Using run_code");
+  });
+});
+
+describe("a call to a plugin", () => {
+  const google = (tool: string) => call(`google__${tool}`, {}, ok(`Google · ${tool}`));
+
+  it("says which server the work went to, without the name a model calls it by", () => {
+    // `Used google__gmail_search` is the wire name of a function, drawn beside
+    // the runtime's summary saying the same thing in words: the row said it
+    // twice, once in a spelling nobody reads.
+    const groups = foldTrail(steps(google("gmail_search")));
+    expect(groups[0]?.label).toBe("Used gmail_search on Google");
+    expect(groups[0]?.steps[0]?.where).toBe("Google");
+  });
+
+  it("keeps the server on the chip and off the calls under it", () => {
+    // A step is only ever drawn under a chip that has already said where the
+    // work went.
+    const [step] = steps(google("gmail_search"));
+    expect(step?.title).toBe("Used gmail_search");
+  });
+
+  it("says nothing more beside a chip that already said it", () => {
+    // `Google · gmail_search` is what the runtime writes so that whatever draws
+    // the call can name the server. The chip names it itself now.
+    const [step] = steps(google("gmail_search"));
+    expect(tellsMore(step as Step)).toBe(false);
+  });
+
+  it("says what went wrong when the server refused, which no title could have", () => {
+    const failed = call("google__gmail_search", {}, { status: "failed", error: "not connected" });
+    const [step] = steps(failed);
+    expect(tellsMore(step as Step)).toBe(true);
+    // Never folded, and still the one chip that has to name the server itself.
+    expect(foldTrail(steps(google("gmail_search"), failed)).map((group) => group.label)).toEqual([
+      "Used gmail_search on Google",
+      "Used gmail_search on Google",
+    ]);
+  });
+
+  it("calls a server the operator added what they called it", () => {
+    // Nobody else has a name for it, and inventing one would be this build
+    // naming somebody else's software.
+    const groups = foldTrail(
+      steps(call("home_assistant__turn_on", {}, ok("home_assistant · turn_on"))),
+    );
+    expect(groups[0]?.label).toBe("Used turn_on on home_assistant");
+  });
+
+  it("gathers a turn's work at one server, the way it gathers a turn in a browser", () => {
+    // A plugin is a place and its tools are what the turn did there. Grouped by
+    // tool, the same turn is three chips saying Google three times.
+    const groups = foldTrail(
+      steps(google("drive_list_files"), google("drive_read_file"), google("gmail_search")),
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.label).toBe("3 calls to Google");
+    // Which tools those were is the whole of what the chip opens onto.
+    expect(hasDetail(groups[0]!)).toBe(true);
+    expect(groups[0]?.steps.map((step) => step.title)).toEqual([
+      "Used drive_list_files",
+      "Used drive_read_file",
+      "Used gmail_search",
+    ]);
+  });
+
+  it("keeps two servers apart, because they are two places", () => {
+    const groups = foldTrail(
+      steps(google("gmail_search"), call("linear__create_issue", {}, ok("Linear · create_issue"))),
+    );
+    expect(groups.map((group) => group.label)).toEqual([
+      "Used gmail_search on Google",
+      "Used create_issue on Linear",
+    ]);
+  });
+
+  it("leaves a tool with no server in front of it alone", () => {
+    // Two underscores are what the runtime prefixes with, and one is what MCP
+    // servers use inside their own tool names constantly.
+    const [step] = steps(call("run_code", { source: "print(1)" }, ok("exit 0")));
+    expect(step?.title).toBe("Used run_code");
+    expect(step?.where).toBeNull();
   });
 });
 
