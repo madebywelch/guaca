@@ -28,6 +28,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
         note: "",
         harness: "pi",
         gate: "open",
+        bench: "own",
         createdAt: 0,
         updatedAt: 0,
       },
@@ -52,7 +53,7 @@ describe("CodingPanel", () => {
   });
 
   it("names the repository being worked in", () => {
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
     expect(screen.getByText(/Writing code in vision-ios/)).toBeTruthy();
   });
@@ -60,14 +61,14 @@ describe("CodingPanel", () => {
   it("says it is starting before the first tool call arrives", () => {
     // Several seconds of model call sit between starting the harness and its
     // first tool. Silence there reads as a broken panel.
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
     expect(screen.getByText(/Starting the coding agent/)).toBeTruthy();
   });
 
   it("shows what the coding agent is running, with the argument worth reading", () => {
     seed({
-      building: { [REPO]: AGENT },
+      building: { [AGENT]: REPO },
       coding: {
         [AGENT]: [
           { tool: "bash", detail: "swift test" },
@@ -84,7 +85,7 @@ describe("CodingPanel", () => {
     // Prose is the part worth reading and wraps; a command is a line that is
     // clipped. Telling them apart is the whole reason `tool` can be empty.
     seed({
-      building: { [REPO]: AGENT },
+      building: { [AGENT]: REPO },
       coding: { [AGENT]: [{ tool: "", detail: "The pause flow has no test coverage." }] },
     });
     const { container } = render(<CodingPanel agent={AGENT} />);
@@ -94,7 +95,7 @@ describe("CodingPanel", () => {
 
   it("keeps two identical lines, because two test runs are two test runs", () => {
     seed({
-      building: { [REPO]: AGENT },
+      building: { [AGENT]: REPO },
       coding: {
         [AGENT]: [
           { tool: "bash", detail: "swift test" },
@@ -110,7 +111,7 @@ describe("CodingPanel", () => {
     // The gap this closes: a job runs for up to forty-five minutes and used to
     // be write-only. An operator watching one go wrong at minute three could
     // only wait for it to finish.
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
 
     const box = screen.getByLabelText("Send a correction to the running coding job");
@@ -118,7 +119,7 @@ describe("CodingPanel", () => {
     fireEvent.click(screen.getByText("Send"));
 
     await waitFor(() =>
-      expect(messageCodingJob).toHaveBeenCalledWith(REPO, "use the staging bucket"),
+      expect(messageCodingJob).toHaveBeenCalledWith(AGENT, "use the staging bucket"),
     );
     // Said, because what was typed never becomes a message anywhere: without a
     // word here the only evidence it arrived is the job changing course later.
@@ -127,7 +128,7 @@ describe("CodingPanel", () => {
   });
 
   it("says why a correction was refused rather than looking like it landed", async () => {
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     messageCodingJob.mockRejectedValue(new Error("pi has no way to be reached"));
     render(<CodingPanel agent={AGENT} />);
 
@@ -148,7 +149,7 @@ describe("CodingPanel", () => {
   it("arms the stop before it fires it, and says what survives", async () => {
     // This ends work that cannot be resumed. The confirmation is drawn where
     // the click happened rather than somewhere the operator has to go and find.
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
 
     fireEvent.click(screen.getByText("Stop"));
@@ -156,11 +157,11 @@ describe("CodingPanel", () => {
     expect(screen.getByText(/Whatever it has committed stays/)).toBeTruthy();
 
     fireEvent.click(screen.getByText("Stop it"));
-    await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(REPO));
+    await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(AGENT));
   });
 
   it("lets an armed stop be called off", async () => {
-    seed({ building: { [REPO]: AGENT } });
+    seed({ building: { [AGENT]: REPO } });
     render(<CodingPanel agent={AGENT} />);
 
     fireEvent.click(screen.getByText("Stop"));
@@ -173,7 +174,7 @@ describe("CodingPanel", () => {
   it("belongs to the agent that started the job and nobody else", () => {
     // The panel hangs in one channel. Another agent's job is another agent's
     // business, and drawing it here would say this agent was working.
-    seed({ building: { [REPO]: "someone-else" } });
+    seed({ building: { "someone-else": REPO } });
     const { container } = render(<CodingPanel agent={AGENT} />);
     expect(container.firstChild).toBeNull();
   });

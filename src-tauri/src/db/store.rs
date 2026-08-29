@@ -28,7 +28,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
-use crate::domain::repository::{CleanRepository, Gate, Harness, Repository};
+use crate::domain::repository::{Bench, CleanRepository, Gate, Harness, Repository};
 use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
@@ -1656,8 +1656,8 @@ impl Store {
 
         conn.execute(
             "INSERT INTO repositories \
-             (id,group_id,name,path,note,harness,gate,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8)",
+             (id,group_id,name,path,note,harness,gate,bench,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
             params![
                 id.to_string(),
                 clean.group_id.to_string(),
@@ -1666,6 +1666,10 @@ impl Store {
                 clean.note,
                 clean.harness.as_str(),
                 clean.gate.as_str(),
+                // Written explicitly rather than left to the column default,
+                // which is `shared` and exists only to backfill rows migration
+                // 44 found already there.
+                clean.bench.as_str(),
                 now,
             ],
         )
@@ -1753,12 +1757,21 @@ impl Store {
         note: &str,
         harness: Harness,
         gate: Gate,
+        bench: Bench,
     ) -> Result<Repository, StoreError> {
         let conn = self.conn()?;
         let changed = conn.execute(
-            "UPDATE repositories SET name=?2, note=?3, harness=?4, gate=?5, updated_at=?6 \
-             WHERE id=?1",
-            params![id.to_string(), name, note, harness.as_str(), gate.as_str(), now_ms()],
+            "UPDATE repositories SET name=?2, note=?3, harness=?4, gate=?5, bench=?6, \
+             updated_at=?7 WHERE id=?1",
+            params![
+                id.to_string(),
+                name,
+                note,
+                harness.as_str(),
+                gate.as_str(),
+                bench.as_str(),
+                now_ms()
+            ],
         )?;
         if changed == 0 {
             return Err(StoreError::RepositoryNotFound(id));
@@ -3850,7 +3863,8 @@ pub enum PluginReach {
 }
 
 const REPOSITORY_COLUMNS: &str =
-    "SELECT id,group_id,name,path,note,harness,gate,created_at,updated_at FROM repositories";
+    "SELECT id,group_id,name,path,note,harness,gate,bench,created_at,updated_at FROM \
+     repositories";
 
 /// A unique-index failure here is one directory linked twice, and the operator
 /// wants to be told which rather than told the database said no.
@@ -3880,8 +3894,9 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             note: row.get(4)?,
             harness: Harness::parse(&row.get::<_, String>(5)?),
             gate: Gate::parse(&row.get::<_, String>(6)?),
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            bench: Bench::parse(&row.get::<_, String>(7)?),
+            created_at: row.get(8)?,
+            updated_at: row.get(9)?,
         })
     })())
 }
@@ -4239,6 +4254,7 @@ mod tests {
             path: path.into(),
             note: String::new(),
             harness: Harness::default(),
+            bench: Bench::default(),
         }
     }
 
@@ -8286,7 +8302,14 @@ mod tests {
 
         let renamed = f
             .store
-            .update_repository(repo.id, "guac", "run ./scripts/ci.sh", Harness::Pi, Gate::Open)
+            .update_repository(
+                repo.id,
+                "guac",
+                "run ./scripts/ci.sh",
+                Harness::Pi,
+                Gate::Open,
+                Bench::Own,
+            )
             .unwrap();
         assert_eq!(renamed.name, "guac");
         assert_eq!(renamed.note, "run ./scripts/ci.sh");
@@ -8311,14 +8334,41 @@ mod tests {
         assert_eq!(made.harness, Harness::Claude);
         assert_eq!(f.store.get_repository(made.id).unwrap().unwrap().harness, Harness::Claude);
 
-        let moved =
-            f.store.update_repository(made.id, "guaca", "", Harness::Pi, Gate::Open).unwrap();
+        let moved = f
+            .store
+            .update_repository(made.id, "guaca", "", Harness::Pi, Gate::Open, Bench::Own)
+            .unwrap();
         assert_eq!(moved.harness, Harness::Pi);
         // Read back through the path a turn takes, which is a different query
         // and its own column list.
         let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
         f.store.set_agent_repository(ada.id, Some(made.id)).unwrap();
         assert_eq!(f.store.agent_repository(ada.id).unwrap().unwrap().harness, Harness::Pi);
+    }
+
+    #[test]
+    fn where_jobs_work_is_stored_and_read_back_through_both_queries() {
+        // Two queries read a repository and each has its own column list: the
+        // one a panel reads and the one a turn takes to find an agent's own.
+        // A column added to one and not the other is a setting that saves,
+        // draws correctly, and is ignored by the thing that acts on it.
+        let f = fixture();
+        let group = f.store.create_group(&group_named("Platform")).unwrap();
+        let mut clean = repo_at(group.id, "/dev/guaca");
+        clean.bench = Bench::Shared;
+        let made = f.store.create_repository(&clean).unwrap();
+        assert_eq!(made.bench, Bench::Shared);
+        assert_eq!(f.store.get_repository(made.id).unwrap().unwrap().bench, Bench::Shared);
+
+        let moved = f
+            .store
+            .update_repository(made.id, "guaca", "", Harness::Pi, Gate::Open, Bench::Own)
+            .unwrap();
+        assert_eq!(moved.bench, Bench::Own);
+
+        let ada = f.store.create_agent(&draft_in("Ada", group.id)).unwrap();
+        f.store.set_agent_repository(ada.id, Some(made.id)).unwrap();
+        assert_eq!(f.store.agent_repository(ada.id).unwrap().unwrap().bench, Bench::Own);
     }
 
     #[test]

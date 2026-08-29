@@ -33,13 +33,11 @@ use guac_lib::config::{AppConfig, InferenceConfig, Provider};
 use guac_lib::db::Store;
 use guac_lib::domain::group::{CleanGroup, InferenceOverrides};
 use guac_lib::domain::ids::AgentId;
-use guac_lib::files::FileStore;
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::RecordingSink;
 use guac_lib::runtime::guard::GuardLimits;
-use guac_lib::runtime::Runtime;
+use guac_lib::runtime::{OnDisk, Runtime};
 use guac_lib::subscription::Subscription;
-use guac_lib::workspace::Workspace;
 
 use harness::{draft, frame};
 
@@ -512,8 +510,7 @@ fn signed_in_where(
         store,
         LlmClient::new().unwrap().with_subscription(subscription.clone()),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         sink.clone(),
     );
     runtime.start_all().unwrap();
@@ -932,8 +929,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         store,
         LlmClient::new().unwrap().with_subscription(subscription.clone()),
         config,
-        Workspace::new(dir.path().join("workspace")),
-        FileStore::new(dir.path().join("files")),
+        OnDisk::under(dir.path()),
         sink.clone(),
     );
     runtime.start_all().unwrap();

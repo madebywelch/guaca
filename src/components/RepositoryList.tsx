@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../lib/ipc";
 import {
   type AgentCard,
+  BENCHES,
+  type Bench,
   errorMessage,
   type Gate,
   type GroupId,
@@ -146,6 +148,54 @@ function GateChoice({
   );
 }
 
+/**
+ * Where a job in this directory works.
+ *
+ * Two buttons rather than a checkbox, unlike the gate above, because neither
+ * answer is the absence of the other: a worktree per agent and the linked
+ * directory are two arrangements, and an operator choosing the second is
+ * choosing it for a reason a checkbox called "off" would not prompt them to
+ * think about.
+ *
+ * The hint under it is the whole of the argument, because this is the one
+ * setting here whose cost is invisible from the panel. A worktree is a fresh
+ * checkout, so the first job in one has no installed dependencies and no
+ * gitignored environment file, and pays to get them; every job after that is
+ * free, and the operator's own checkout is never touched again.
+ */
+function BenchChoice({
+  chosen,
+  disabled,
+  onChoose,
+}: {
+  chosen: Bench;
+  disabled: boolean;
+  onChoose: (bench: Bench) => void;
+}) {
+  const hint = BENCHES.find((known) => known.id === chosen)?.hint;
+  return (
+    <div className="field">
+      <span className="field__label">Where jobs work</span>
+      <div className="choice">
+        {BENCHES.map((bench) => (
+          <button
+            key={bench.id}
+            type="button"
+            className="btn btn--small"
+            aria-label={`Where jobs work: ${bench.label}`}
+            aria-pressed={bench.id === chosen}
+            disabled={disabled}
+            onClick={() => onChoose(bench.id)}
+          >
+            {bench.label}
+          </button>
+        ))}
+      </div>
+      <span className="field__hint">{hint}</span>
+    </div>
+  );
+}
+
 /** What an operator is shown for a harness, including one this build predates. */
 function labelOf(harness: Harness): string {
   return HARNESSES.find((known) => known.id === harness)?.label ?? harness;
@@ -227,6 +277,7 @@ export function RepositoryList({ groupId, crew }: Props) {
     note: "",
     harness: "pi",
     gate: "open",
+    bench: "own",
   });
   const [editing, setEditing] = useState<RepositoryId | null>(null);
   const [edit, setEdit] = useState<{
@@ -234,11 +285,13 @@ export function RepositoryList({ groupId, crew }: Props) {
     note: string;
     harness: Harness;
     gate: Gate;
+    bench: Bench;
   }>({
     name: "",
     note: "",
     harness: "pi",
     gate: "open",
+    bench: "own",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -297,7 +350,7 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
-    setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open" });
+    setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open", bench: "own" });
   };
 
   const add = () =>
@@ -325,6 +378,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                   note: repository.note,
                   harness: repository.harness,
                   gate: repository.gate,
+                  bench: repository.bench,
                 });
               }}
             >
@@ -367,6 +421,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                         edit.note,
                         edit.harness,
                         edit.gate,
+                        edit.bench,
                       ),
                     ).then((ok) => ok && setEditing(null))
                   }
@@ -390,6 +445,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                       repository.note,
                       harness,
                       repository.gate,
+                      edit.bench,
                     ),
                   );
                 }}
@@ -410,6 +466,26 @@ export function RepositoryList({ groupId, crew }: Props) {
                       repository.note,
                       edit.harness,
                       gate,
+                      edit.bench,
+                    ),
+                  );
+                }}
+              />
+              <BenchChoice
+                chosen={edit.bench}
+                disabled={busy !== null}
+                onChoose={(bench) => {
+                  // The stored name and note, for the reason the two above use
+                  // them: a half-typed rename is not what this click saves.
+                  setEdit({ ...edit, bench });
+                  void run(`${repository.id}-bench`, () =>
+                    api.updateRepository(
+                      repository.id,
+                      repository.name,
+                      repository.note,
+                      edit.harness,
+                      edit.gate,
+                      bench,
                     ),
                   );
                 }}
@@ -430,9 +506,12 @@ export function RepositoryList({ groupId, crew }: Props) {
               question it answers is asked about the list: which of these
               directories is running on the plan that has stopped paying. */}
           <p className="field__hint">
-            Code here is written by {labelOf(repository.harness)}. Worked in by{" "}
-            {worksIn(repository, crew)}. Put an agent in it by dragging it onto this repository in
-            the rail.
+            Code here is written by {labelOf(repository.harness)}
+            {repository.bench === "own"
+              ? ", each agent in a worktree of its own"
+              : ", in this directory"}
+            . Worked in by {worksIn(repository, crew)}. Put an agent in it by dragging it onto this
+            repository in the rail.
           </p>
         </div>
       ))}

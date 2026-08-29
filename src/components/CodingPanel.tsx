@@ -60,10 +60,9 @@ export function CodingPanel({ agent }: Props) {
     floor.current?.scrollIntoView({ block: "end" });
   }, []);
 
-  const working = Object.entries(building).find(([, who]) => who === agent);
-  if (!working) return null;
+  const repositoryId = building[agent];
+  if (!repositoryId) return null;
 
-  const repositoryId = working[0];
   const repository = repositories.find((r) => r.id === repositoryId);
   const held = lines ?? [];
 
@@ -72,7 +71,7 @@ export function CodingPanel({ agent }: Props) {
     if (!message) return;
     setBusy(true);
     try {
-      await api.messageCodingJob(repositoryId, message);
+      await api.messageCodingJob(agent, message);
       setCorrection("");
       // Said rather than left to the transcript. What the operator typed goes
       // to the harness and never becomes a message anywhere, so without this
@@ -88,7 +87,7 @@ export function CodingPanel({ agent }: Props) {
   const stop = async () => {
     setBusy(true);
     try {
-      await api.stopCodingJob(repositoryId);
+      await api.stopCodingJob(agent);
     } catch (err) {
       setNote(errorMessage(err));
     } finally {
