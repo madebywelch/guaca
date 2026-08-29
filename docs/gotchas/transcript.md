@@ -37,9 +37,10 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   prompt and no hash.
 - **The line drawn is the last sentence that *finished*, under the model's own
   heading.** Not the tail. A tail replaced every sixteen milliseconds is a
-  flicker that says a turn is alive, which is what the pulse already said, and
-  nobody can read a sentence as it is typed. Waiting for the period costs a
-  second of staleness and is the difference between a line and a blur.
+  flicker that says a turn is alive, which is what the creature beside it
+  already said, and nobody can read a sentence as it is typed. Waiting for the
+  period costs a second of staleness and is the difference between a line and a
+  blur.
 - **The live trail and the thinking have one lifetime, because they have one
   mechanism.** `ToolStarted` and `ToolFinished` are addressed to the placeholder
   exactly as `ReasoningDelta` is, so a retry that reopens under a new id starts
