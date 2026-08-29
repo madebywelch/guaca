@@ -8,6 +8,12 @@ which `tray.rs` embeds at compile time.
 36 pixels because the tray crate scales whatever it is given to 18 points tall,
 so 36 is exactly 2x and anything larger is a resample for nothing.
 
+One agent, not the two the app icon carries. The dock has the room to say what
+the app is; the menu bar gets the protagonist alone, because two outlined
+figures at 18 points is a texture rather than a glyph. Same species and the same
+lean, imported from `make-icon.py` rather than re-derived here, so the two marks
+stay one family and editing the icon's shape moves this one with it.
+
 Three glyphs, and the difference between them has to survive being 18 points
 tall on a strip shared with a dozen other apps:
 
@@ -32,10 +38,24 @@ on a dark taskbar is an icon nobody can see, and there is nothing to tint it.
 
 from __future__ import annotations
 
+import importlib.util
+import math
 import struct
 import sys
 import zlib
 from pathlib import Path
+
+# The species lives in the icon's generator, and the glyph is the same shape at
+# another size. Loaded by path because the file it is in has a hyphen in its
+# name, which is right for something run as a script and not importable as one.
+# Bytecode off first: this is a two-file build script, and it should not leave a
+# __pycache__ in a directory that has never had one.
+sys.dont_write_bytecode = True
+_spec = importlib.util.spec_from_file_location(
+    "make_icon", Path(__file__).resolve().parent / "make-icon.py"
+)
+make_icon = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(make_icon)
 
 SIZE = 36
 SUPERSAMPLE = 4
@@ -47,46 +67,54 @@ ALARM = (0xD9, 0x5F, 0x43)
 
 INK = (0x00, 0x00, 0x00)
 
-# The glyph, in fractions of the canvas. Inset top and bottom so the shape does
-# not touch the edges of the menu bar.
-TOP = 0.085
-BOTTOM = 0.915
-WIDEST = 0.315
+# How much of the canvas the glyph fills, in the 64-unit box the species is
+# drawn in. Short of the full height so the shape does not touch the edges of
+# the menu bar, which is what makes a glyph look pasted on rather than set.
+SPAN = 52.0
 
-# Where the pit sits, and how big it is. Low, like the stone in the fruit.
-PIT_AT = 0.615
-PIT_R = 0.098
+# The outline's weight, in box units. 3 pixels of 36 is 1.5 points, which is the
+# line the rest of the menu bar is drawn with.
+STROKE = 3.0 / SIZE * make_icon.BOX
 
-# The outline's weight. 3 pixels of 36 is 1.5 points, which is the line the rest
-# of the menu bar is drawn with.
-STROKE = 3.0 / SIZE
+# The app icon's protagonist, re-seated to fill this canvas. The lean, the
+# taper and the eye all come from there; only the size and the seat are local.
+GLYPH = make_icon.Body({**make_icon.BIG, "span": SPAN, "at": (32.0, 32.0)})
 
 
-def profile(t: float) -> float:
-    """Half-width at height `t`, 0 at the top and 1 at the bottom.
-
-    A skewed superellipse: the exponent rounds the ends so the shape does not
-    come to a point, and the skew makes the bottom heavier than the top, which
-    is the whole difference between an avocado and an egg.
-    """
-    if t <= 0.0 or t >= 1.0:
-        return 0.0
-    span = abs(2.0 * t - 1.0)
-    return (1.0 - span**2.4) ** 0.5 * (0.60 + 0.40 * t**0.9)
+def to_box(x: float, y: float) -> tuple[float, float]:
+    """Canvas fractions into the 64-unit box the species is drawn in."""
+    return x * make_icon.BOX, y * make_icon.BOX
 
 
 def inside(x: float, y: float, shrink: float) -> bool:
-    """Point in the silhouette, optionally eroded by `shrink` of the canvas."""
-    top, bottom = TOP + shrink, BOTTOM - shrink
-    if not (top <= y <= bottom):
-        return False
-    t = (y - top) / (bottom - top)
-    return abs(x - 0.5) <= profile(t) * (WIDEST - shrink)
+    """Point in the silhouette, optionally inset by `shrink` box units.
+
+    The inset is a fixed distance taken off the radius, not a smaller copy of
+    the whole shape. Scaling the shape down about its own center takes off a
+    share of the local radius, so the band it leaves is thick where the body is
+    wide and thin where it tapers, which on a leaning body is a brush stroke
+    rather than an outline and breaks first at the thin end. Here the radius at
+    each angle is reduced by the same amount, corrected for the body's own
+    stretch so that a constant in the species' space is a constant on screen.
+    """
+    bx, by = to_box(x, y)
+    u = (GLYPH.mx + (bx - GLYPH.tx) / GLYPH.k - GLYPH.cx) / make_icon.AX
+    v = (GLYPH.my + (by - GLYPH.ty) / GLYPH.k - GLYPH.cy) / make_icon.AY
+    d = math.hypot(u, v)
+    if d == 0.0:
+        return True
+    limit = make_icon.RADIUS * make_icon.radius(math.atan2(v, u), GLYPH.gaze)
+    if shrink:
+        # Box units per unit of radius in this direction, so the stroke is the
+        # width it was asked for on every side of a body that is not a circle.
+        stretch = math.hypot(make_icon.AX * u / d, make_icon.AY * v / d) * GLYPH.k
+        limit -= shrink / stretch
+    return d <= limit
 
 
 def in_pit(x: float, y: float) -> bool:
-    cy = TOP + (BOTTOM - TOP) * PIT_AT
-    return (x - 0.5) ** 2 + (y - cy) ** 2 <= PIT_R**2
+    """The eye, which is the pit. One hole, and the same one in both marks."""
+    return GLYPH.in_eye(*to_box(x, y))
 
 
 def idle(x: float, y: float) -> tuple[int, int, int, int]:
