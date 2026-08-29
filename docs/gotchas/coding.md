@@ -185,6 +185,19 @@ the code.
   arguments, and a wrong guess there prints somebody's file contents into a
   channel. A tool in neither table draws no detail at all, which is every MCP
   tool the operator has connected.
+- **A tool call's line is cut after the `cd` comes off it, not before.** Both
+  harnesses are started in the work tree with `current_dir` and the preamble
+  names that tree by its absolute path, so a model reads the path as somewhere
+  to go and writes `cd "<110 characters>" && pnpm test` in front of every
+  command it runs. Cut from the head at 120, that drew a panel of nine
+  identical lines, each one most of a path and none of what ran. So `detail_of`
+  hands up the whole first line and `run` cuts it: `run` is the level that
+  knows where the job is standing, and a `cd` is only redundant against that.
+  `cd frontend && pnpm test` and `cd elsewhere || echo no` both stay whole, one
+  because it says where the tests ran and the other because it runs *because*
+  the `cd` failed. The preamble says the job is already standing in the tree,
+  which is the half that stops the prefix being written; this is the half that
+  does not depend on being read.
 - **A cost from either harness is what it *said*, not money that moved.** On a
   subscription both report the equivalent API price. They agree with each other,
   and `Outcome::cost` claims no more than that; zero is absent rather than free,

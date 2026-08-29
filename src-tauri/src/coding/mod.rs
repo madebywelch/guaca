@@ -386,6 +386,18 @@ pub async fn run(
         ..Outcome::default()
     };
 
+    // Every tool call the panel draws goes through here rather than through the
+    // two parsers, because this is the level that knows where the job is
+    // standing and a `cd` is only redundant against that.
+    let mut drawing = |progress: Progress| {
+        watching(match progress {
+            Progress::Using { tool, detail } => {
+                Progress::Using { tool, detail: shown(repository, &detail) }
+            }
+            said => said,
+        });
+    };
+
     let reading = async {
         // Split on `\n` and nothing else: pi's own protocol note, and the
         // reason is that `U+2028` and `U+2029` are legal inside JSON strings.
@@ -394,7 +406,7 @@ pub async fn run(
             let Ok(event) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
-            fold(&mut outcome, &event, &mut watching);
+            fold(&mut outcome, &event, &mut drawing);
         }
     };
 
@@ -444,17 +456,136 @@ pub async fn run(
     Ok(outcome)
 }
 
-/// One line of a tool call, cut to fit.
+/// The first line of something a harness wrote, and nothing after it.
 ///
 /// A heredoc in a shell command is a screen of text that would push everything
 /// else out of the panel, and a `write` carries an entire file in it.
+pub(crate) fn first_line(raw: &str) -> &str {
+    raw.trim().lines().next().unwrap_or_default()
+}
+
+/// One line of what a harness said, cut to fit.
+///
+/// What a hook hands the bridge goes through here on its way to being stored.
+/// A tool call does not: it is cut by [`shown`] instead, once the part of it
+/// that says nothing has come off, because cutting it here would cut it before
+/// anything worth reading had arrived.
 pub(crate) fn one_line(raw: &str) -> String {
-    let first = raw.trim().lines().next().unwrap_or_default();
-    if first.chars().count() > 120 {
-        format!("{}…", first.chars().take(120).collect::<String>())
+    clip(first_line(raw))
+}
+
+/// How much of a line the panel drawing it can hold.
+const DETAIL: usize = 120;
+
+/// Cut to that, saying that it was cut.
+fn clip(line: &str) -> String {
+    if line.chars().count() > DETAIL {
+        format!("{}…", line.chars().take(DETAIL).collect::<String>())
     } else {
-        first.to_string()
+        line.to_string()
     }
+}
+
+/// What the panel draws for one tool call.
+///
+/// The command that ran, with the `cd` that only says where it already was
+/// taken off the front, cut to fit whatever is left.
+fn shown(here: &str, detail: &str) -> String {
+    clip(without_cd(here, detail))
+}
+
+/// A command with a `cd` back to the directory it is already in taken off it.
+///
+/// Both harnesses are started in the work tree with `current_dir`, and
+/// [`crate::repo::Prepared::brief`] names that tree by its absolute path, which
+/// a model reads as somewhere to go: it writes `cd "/Users/…/worktrees/<id>/<agent>"
+/// && pnpm test` in front of every command it runs. A work tree path runs to
+/// around 110 characters and a line has [`DETAIL`] of them to spend, so the cut
+/// landed inside the path and nine commands drew nine copies of it and none of
+/// what ran. The prefix is worth nothing even when it fits.
+///
+/// Only a `cd` to exactly this directory, and only where something follows it
+/// unconditionally. `cd frontend && pnpm test` says where the tests ran, and
+/// `cd somewhere || echo no` runs the rest *because* the `cd` failed: both are
+/// part of what happened, and a panel that quietly dropped either would be
+/// wrong about a command it is drawing as the thing that ran. Anything this
+/// cannot read confidently is left exactly as it was written, for the same
+/// reason.
+fn without_cd<'a>(here: &str, line: &'a str) -> &'a str {
+    let mut rest = line.trim_start();
+    loop {
+        let Some(after) = rest.strip_prefix("cd") else { return rest };
+        if !(after.starts_with(' ') || after.starts_with('\t')) {
+            return rest;
+        }
+        let Some((where_to, after)) = one_word(after.trim_start()) else { return rest };
+        if !same_place(here, &where_to) {
+            return rest;
+        }
+        let after = after.trim_start();
+        let Some(next) = after.strip_prefix("&&").or_else(|| after.strip_prefix(';')) else {
+            return rest;
+        };
+        let next = next.trim_start();
+        // A `cd` with nothing after it is the whole of what the harness ran,
+        // which is a step like any other and the only thing on the line.
+        if next.is_empty() {
+            return rest;
+        }
+        rest = next;
+    }
+}
+
+/// One shell word off the front, unquoted, and what follows it.
+///
+/// Unquoted, a word ends at whitespace or at the operator that follows it:
+/// `cd /w/tree; git status` has no space in front of the `;`, and a word read
+/// up to the space instead is `/w/tree;`, which matches no directory and left
+/// the prefix on the line it was written to take off.
+///
+/// `None` where reading it would be a guess: a quote that never closes, or a
+/// space escaped outside quotes, which means the word did not end where the
+/// space is. Neither is a shape a model writes a `cd` in, and the caller leaves
+/// the line alone rather than cutting it somewhere arbitrary.
+fn one_word(text: &str) -> Option<(String, &str)> {
+    let quote = text.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        let ends = |c: char| c.is_whitespace() || c == ';' || c == '&' || c == '|';
+        let end = text.find(ends).unwrap_or(text.len());
+        if text[..end].ends_with('\\') {
+            return None;
+        }
+        return Some((text[..end].to_string(), &text[end..]));
+    }
+
+    let body = &text[quote.len_utf8()..];
+    let mut word = String::new();
+    let mut chars = body.char_indices();
+    while let Some((at, ch)) = chars.next() {
+        if ch == quote {
+            return Some((word, &body[at + ch.len_utf8()..]));
+        }
+        // Only inside double quotes: a backslash in a single-quoted string is a
+        // backslash, which is what the shell does with it.
+        if ch == '\\' && quote == '"' {
+            let (_, escaped) = chars.next()?;
+            word.push(escaped);
+            continue;
+        }
+        word.push(ch);
+    }
+    None
+}
+
+/// Whether a `cd` names the directory the job is already standing in.
+///
+/// Compared as written, plus the two spellings of the same place a model
+/// actually produces. Nothing is resolved against the filesystem: this runs on
+/// every tool call of every job, for a line that is only being drawn, and a
+/// symlink answered wrong here leaves a `cd` on the front of a command rather
+/// than doing anything worse.
+fn same_place(here: &str, where_to: &str) -> bool {
+    where_to == "." || where_to.trim_end_matches('/') == here.trim_end_matches('/')
 }
 
 #[cfg(test)]
@@ -508,5 +639,68 @@ mod tests {
         assert!(long.ends_with('…'));
         // A heredoc is a screen of text and only its first line says what ran.
         assert_eq!(one_line("cat <<'EOF' > a\nline\nEOF"), "cat <<'EOF' > a");
+
+        // A tool call is cut by the other one, which has taken the part that
+        // says nothing off the front first.
+        let call = shown("/w/tree", &"x".repeat(400));
+        assert!(call.chars().count() <= 121, "{}", call.chars().count());
+        assert!(call.ends_with('…'));
+    }
+
+    #[test]
+    fn a_cd_back_into_the_work_tree_is_not_what_the_command_did() {
+        // A real bench path. The harness is already standing in it, so a model
+        // that read it in the brief and wrote it in front of every command has
+        // spent the whole line saying where it was.
+        let here = concat!(
+            "/Users/robert/Library/Application Support/com.madebywelch.guac",
+            "/worktrees/5f2c2995-c0fb-42a2-8a29-49ca803fdae3/b2baae"
+        );
+        assert!(
+            format!("cd \"{here}\" && ").chars().count() > DETAIL,
+            "the prefix alone is more than a line holds, which is why the cut landed inside it"
+        );
+
+        assert_eq!(shown(here, &format!("cd \"{here}\" && pnpm test")), "pnpm test");
+        assert_eq!(shown(here, &format!("cd '{here}' && pnpm build")), "pnpm build");
+        // No space in front of the operator, which is where a word read up to
+        // the next space swallows the `;` and matches nothing.
+        assert_eq!(shown(here, &format!("cd \"{here}\"; git status")), "git status");
+        assert_eq!(shown(here, &format!("cd '{here}'&& ls")), "ls");
+        assert_eq!(shown(here, &format!("cd \"{here}/\" && ls")), "ls");
+        assert_eq!(shown(here, &format!("cd \"{here}\" && cd \"{here}\" && ls")), "ls");
+        assert_eq!(shown(here, &format!("cd \"{here}\" && cd . && ls")), "ls");
+
+        // The failure as the operator met it: nine commands in a row, drawn
+        // identically, because everything that differed was past the cut.
+        assert_ne!(
+            shown(here, &format!("cd \"{here}\" && pnpm test")),
+            shown(here, &format!("cd \"{here}\" && pnpm build")),
+        );
+        // And what is left is cut from its own start, not from the path's.
+        let long = shown(here, &format!("cd \"{here}\" && {}", "y".repeat(400)));
+        assert!(long.starts_with("yyy"), "{long}");
+    }
+
+    #[test]
+    fn a_cd_that_says_where_the_work_happened_stays_on_the_line() {
+        let here = "/w/tree";
+        // Somewhere below, and somewhere else: both are part of what ran.
+        assert_eq!(shown(here, "cd frontend && pnpm test"), "cd frontend && pnpm test");
+        assert_eq!(shown(here, "cd /other && ls"), "cd /other && ls");
+        // `||` runs the rest *because* the `cd` failed, which is not a prefix.
+        assert_eq!(shown(here, "cd /w/tree || echo no"), "cd /w/tree || echo no");
+        // Nothing follows it, so it is the whole of what the harness ran.
+        assert_eq!(shown(here, "cd /w/tree"), "cd /w/tree");
+        assert_eq!(shown(here, "cdefg /w/tree && ls"), "cdefg /w/tree && ls");
+        // Unquoted, and the operator is where the word ends.
+        assert_eq!(shown(here, "cd /w/tree;ls"), "ls");
+        assert_eq!(shown(here, "cd /w/tree&&ls"), "ls");
+        // Unquoted with a space in it is a `cd` to `/w`, whatever was meant.
+        assert_eq!(shown("/w/t wo", "cd /w/t wo && ls"), "cd /w/t wo && ls");
+        // Quoting this cannot read is left exactly as it was written, rather
+        // than cut somewhere guessed at.
+        assert_eq!(shown(here, "cd \"/w/tree && ls"), "cd \"/w/tree && ls");
+        assert_eq!(shown(here, "cd /w/tree\\ two && ls"), "cd /w/tree\\ two && ls");
     }
 }
