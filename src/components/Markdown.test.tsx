@@ -66,6 +66,85 @@ describe("Markdown", () => {
   });
 });
 
+describe("a callout in a body", () => {
+  /** The markup a marker actually produces, which is what the CSS hangs off. */
+  function drawn(body: string) {
+    return render(<Markdown>{body}</Markdown>).container;
+  }
+
+  it("draws the box the operator is meant to land on first", () => {
+    const container = drawn("> [!IMPORTANT]\n> Rotate the staging key before Friday.");
+
+    const box = container.querySelector(".callout--asks");
+    expect(box).toBeTruthy();
+    expect(box?.querySelector(".callout__label")?.textContent).toBe("Needs you");
+    expect(box?.textContent).toContain("Rotate the staging key before Friday.");
+  });
+
+  it("draws the quiet box for a marker that needs nobody", () => {
+    const container = drawn("> [!NOTE]\n> The rebuild took nine minutes.");
+
+    expect(container.querySelector(".callout--aside")).toBeTruthy();
+    expect(container.querySelector(".callout__label")?.textContent).toBe("Note");
+  });
+
+  it("stops being a quote, so no rule written for one reaches it", () => {
+    // `.md blockquote` is a rule down the left and a muted color, which is the
+    // opposite of a box. The element is what decides, not a class beside it.
+    const container = drawn("> [!WARNING]\n> This deletes the production bucket.");
+
+    expect(container.querySelector("blockquote")).toBeNull();
+    expect(container.querySelector("div.callout")).toBeTruthy();
+  });
+
+  it("holds the prose a box is worth having: a list, a link, a name", () => {
+    // The whole reason this is a quote and not a fence. A fence holds text.
+    const container = render(
+      <Roster.Provider value={["Chef"]}>
+        <Markdown>
+          {"> [!IMPORTANT]\n> Two things:\n>\n> - ask @Chef\n> - read [the note](https://x.test)"}
+        </Markdown>
+      </Roster.Provider>,
+    ).container;
+
+    expect(container.querySelectorAll(".callout li")).toHaveLength(2);
+    expect(container.querySelector(".callout .mention")?.textContent).toBe("@Chef");
+    expect(container.querySelector(".callout a")?.textContent).toBe("the note");
+  });
+
+  it("leaves no blank line where the marker was", () => {
+    // The marker owns its line, so stripping it leaves an empty paragraph
+    // behind: a gap between the label and the first thing said.
+    const container = drawn("> [!NOTE]\n> One line.");
+
+    const paragraphs = [...container.querySelectorAll(".callout p")];
+    expect(paragraphs.map((p) => p.textContent)).toEqual(["Note", "One line."]);
+  });
+
+  it("leaves a quote a quote when the marker is not one this app draws", () => {
+    const container = drawn("> [!DANGER]\n> Mind the step.");
+
+    expect(container.querySelector(".callout")).toBeNull();
+    expect(container.querySelector("blockquote")?.textContent).toContain("[!DANGER]");
+  });
+
+  it("draws a plain quote as a quote", () => {
+    const container = drawn("> They said it shipped.");
+
+    expect(container.querySelector("blockquote")?.textContent).toContain("They said it shipped.");
+    expect(container.querySelector(".callout")).toBeNull();
+  });
+
+  it("survives the half-written marker a stream produces", () => {
+    // Mid-reply the marker is `[!IMPO`, which is a quote, and a token later it
+    // is a box. Neither may throw and blank the message.
+    for (const body of ["> [!IMPO", "> [!IMPORTANT]", "> [!IMPORTANT]\n> "]) {
+      expect(() => drawn(body)).not.toThrow();
+    }
+    expect(drawn("> [!IMPORTANT]").querySelector(".callout--asks")).toBeTruthy();
+  });
+});
+
 describe("a mention in a body", () => {
   const NAMES = ["Critic", "Head Chef"];
 
