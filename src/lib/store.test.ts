@@ -21,7 +21,7 @@ vi.mock("./ipc", () => ({
   onRuntimeEvent: vi.fn(),
 }));
 
-const { ACTIVITY_CHANNEL, useStore } = await import("./store");
+const { useStore } = await import("./store");
 const { DEFAULT_PREFS } = await import("./prefs");
 
 function envelope(overrides: Partial<Envelope> = {}): Envelope {
@@ -150,33 +150,6 @@ describe("messageAppended", () => {
     apply({ type: "messageAppended", message: envelope({ id: "z", createdAt: 100 }) });
     apply({ type: "messageAppended", message: envelope({ id: "a", createdAt: 100 }) });
     expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["a", "z"]);
-  });
-
-  it("puts the whole conversation on the flow board", () => {
-    // Including the operator's own messages: a flow that starts at the first
-    // agent-to-agent message hides who set it off.
-    reset({ chef: [], [ACTIVITY_CHANNEL]: [] });
-    apply({ type: "messageAppended", message: envelope({ id: "a" }) });
-    apply({
-      type: "messageAppended",
-      message: envelope({
-        id: "b",
-        from: { kind: "agent", id: "manager" },
-        to: { kind: "agent", id: "chef" },
-      }),
-    });
-    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toHaveLength(2);
-  });
-
-  it("keeps private activity records off the flow board", () => {
-    // An agent's own tool trail is bookkeeping, not a message between two
-    // participants, so it has no arrow to draw.
-    reset({ chef: [], [ACTIVITY_CHANNEL]: [] });
-    apply({
-      type: "messageAppended",
-      message: envelope({ from: { kind: "agent", id: "chef" }, to: { kind: "system" } }),
-    });
-    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toHaveLength(0);
   });
 });
 
@@ -480,13 +453,6 @@ describe("the group the rail is inside", () => {
     expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
   });
 
-  it("is left alone by the activity feed, which belongs to no group", async () => {
-    reset({ chef: [] });
-    await useStore.getState().focusGroup(AGENTS[0]!.groupId);
-    await useStore.getState().select(ACTIVITY_CHANNEL);
-    expect(useStore.getState().railGroup).toBe(AGENTS[0]!.groupId);
-  });
-
   it("follows the channel being opened into the crew it belongs to", async () => {
     // A search hit or a click on the flow board can land anywhere, and a rail
     // still showing one crew while the pane shows a member of another has the
@@ -561,11 +527,12 @@ describe("the channel open when the rail goes inside a crew", () => {
 
     await useStore.getState().focusGroup(AGENTS[1]!.groupId);
 
-    expect(useStore.getState().selected).toBe(ACTIVITY_CHANNEL);
+    // Nothing open, rather than the first row of the crew being entered.
+    // Opening a channel is the operator naming somebody, and a crew that
+    // picked one for them would put an agent's history on screen as a side
+    // effect of a click that was about the crew.
+    expect(useStore.getState().selected).toBeNull();
     expect(useStore.getState().railGroup).toBe(AGENTS[1]!.groupId);
-    // Landed on rather than merely pointed at: the feed the pane falls back to
-    // is read here, and nowhere else.
-    expect(useStore.getState().messages[ACTIVITY_CHANNEL]).toBeDefined();
   });
 
   it("stays open when it belongs to the crew being opened", async () => {
@@ -588,16 +555,6 @@ describe("the channel open when the rail goes inside a crew", () => {
     expect(useStore.getState().selected).toBe("chef-research");
     expect(useStore.getState().railGroup).toBeNull();
   });
-
-  it("leaves the activity feed alone, because it belongs to no crew", async () => {
-    twoCrews();
-    useStore.setState({ selected: ACTIVITY_CHANNEL });
-
-    await useStore.getState().focusGroup(RESEARCH);
-
-    expect(useStore.getState().selected).toBe(ACTIVITY_CHANNEL);
-    expect(useStore.getState().railGroup).toBe(RESEARCH);
-  });
 });
 
 describe("activity", () => {
@@ -617,20 +574,17 @@ describe("activity", () => {
 });
 
 describe("channelsCleared", () => {
-  it("drops what it is holding for the cleared channels, and the feed with them", async () => {
+  it("drops what it is holding for the cleared channels", async () => {
     // The bug this covers: clearing a group left the open transcript on screen
     // until the operator clicked away and back.
     reset({
       chef: [envelope()],
       manager: [envelope({ channelId: "manager" })],
-      activity: [envelope()],
     });
 
     apply({ type: "channelsCleared", agents: ["chef"] });
 
     expect(useStore.getState().messages.chef).toBeUndefined();
-    // The feed draws from every channel, so it is stale too.
-    expect(useStore.getState().messages.activity).toBeUndefined();
     // A channel that was not cleared keeps what it had.
     expect(useStore.getState().messages.manager).toHaveLength(1);
   });

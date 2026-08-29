@@ -25,9 +25,9 @@ import type { UiScale } from "./prefs";
  * Two of them are load-bearing past the obvious. `system` must never reach the
  * attribute, because the stylesheet has one dark block and it is keyed on
  * `dark`: written through verbatim, an operator who asked the OS gets paper in
- * a dark room. And no `--rail-*` name may be written at all, because the rail
- * is dark in both surfaces and a surface that quietly repainted it would look
- * deliberate.
+ * a dark room. And no `--rail-*` name may be written at all: the navigation
+ * columns follow the surface through the stylesheet's own dark block, so an
+ * inline override from here would pin them to one surface and look deliberate.
  */
 
 /** The stub `test-setup.ts` installs, so a test that replaces it can put it back. */
@@ -143,9 +143,9 @@ describe("what applying an appearance writes", () => {
   it("writes no --rail property, so a surface cannot repaint the rail", () => {
     applyAppearance(125, "dark");
 
-    // The rail is dark in both surfaces and pins its own accents. A `--rail-*`
-    // override written from here would look like a design decision, and no
-    // color assertion in jsdom could ever catch it.
+    // The columns follow the surface through the stylesheet's own dark block.
+    // A `--rail-*` override written from here would pin them to one surface and
+    // look like a design decision, and no color assertion in jsdom could catch it.
     expect(inlineProperties().filter((name) => name.startsWith("--rail"))).toEqual([]);
     expect(document.documentElement.getAttribute("style")).not.toContain("--rail");
   });

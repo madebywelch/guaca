@@ -78,9 +78,9 @@ if (!root) throw new Error("missing #root");
 /**
  * The names an `@` in a message body is allowed to resolve to.
  *
- * At the root because a body is drawn in a channel, in a pair's thread, in the
- * activity board and behind a search hit, and none of those should have to
- * remember to say so. The whole roster rather than the live one: a transcript
+ * At the root because a body is drawn in a channel, in a pair's thread, on the
+ * flow board and behind a search hit, and none of those should have to remember
+ * to say so. The whole roster rather than the live one: a transcript
  * is history, and an agent that has since been let go was still an agent when
  * somebody wrote to it. The composer answers the other question, which is who
  * a message can be delivered to, so it completes against the live crew.

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { HIREABLE, type Hireable, pick, STARTER_CREW, STATIONS, toDraft } from "../lib/cafeteria";
 import { api } from "../lib/ipc";
-import { ACTIVITY_CHANNEL, useStore } from "../lib/store";
+import { useStore } from "../lib/store";
 import { errorMessage, type GroupId } from "../lib/types";
 
 interface Props {
@@ -49,10 +49,7 @@ export function Cafeteria({ onClose }: Props) {
    * the first group as before.
    */
   const [groupId, setGroupId] = useState<GroupId | "">(() => {
-    const open =
-      selected !== null && selected !== ACTIVITY_CHANNEL
-        ? agents.find((a) => a.id === selected)?.groupId
-        : undefined;
+    const open = selected !== null ? agents.find((a) => a.id === selected)?.groupId : undefined;
     return railGroup ?? open ?? groups[0]?.id ?? "";
   });
   const [error, setError] = useState<string | null>(null);

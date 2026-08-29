@@ -28,7 +28,7 @@ import type { SurfaceMode, UiScale } from "./prefs";
  *
  * The same number appears in `styles.css` as `calc(16px * var(--ui-scale))`,
  * which is where it takes effect. This copy exists for the one thing that has
- * to do the arithmetic itself: the activity board draws its lanes as SVG
+ * to do the arithmetic itself: the flow board draws its lanes as SVG
  * coordinates, so it needs a width in pixels rather than in `rem`. If either
  * changes, both have to.
  */

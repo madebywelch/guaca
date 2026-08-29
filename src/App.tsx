@@ -17,7 +17,7 @@ import { applyAppearance, watchSystemSurface } from "./lib/appearance";
 import { api, notifyOperator, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
-import { ACTIVITY_CHANNEL, useLiveAgents, useStore } from "./lib/store";
+import { useLiveAgents, useStore } from "./lib/store";
 import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
 
 export default function App() {
@@ -192,8 +192,7 @@ export default function App() {
   // not set up yet" stopped meaning anything.
   const needsKey =
     ready && settings !== null && settings.provider === "compatible" && !settings.apiKeySet;
-  const openAgent =
-    selected && selected !== ACTIVITY_CHANNEL ? agents.find((a) => a.id === selected) : undefined;
+  const openAgent = selected ? agents.find((a) => a.id === selected) : undefined;
 
   return (
     <div className="app">
@@ -257,11 +256,17 @@ export default function App() {
               </button>
             </div>
           </div>
+        ) : selected === null ? (
+          // Nothing open. Reached by going inside a crew the open channel was
+          // not in, and by deleting the last agent that had one: both are the
+          // operator ending up somewhere with no conversation attached, and
+          // picking one for them would put an agent's history on screen as a
+          // side effect of a click that was about something else.
+          <div className="empty" style={{ margin: "auto" }}>
+            <p className="empty__body">Pick someone in the rail to open their channel.</p>
+          </div>
         ) : (
-          <ChannelView
-            channel={selected ?? ACTIVITY_CHANNEL}
-            onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
-          />
+          <ChannelView channel={selected} onOpenMenu={(agent, at) => setMenu({ agent, ...at })} />
         )}
       </main>
 

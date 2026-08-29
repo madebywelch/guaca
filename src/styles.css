@@ -25,9 +25,12 @@
 
    Paper is the default and does not win in a dark room, which is the whole
    reason the reading column is a token block behind `data-surface` rather
-   than a set of literals. The rail is not part of that question. It is dark
-   in both surfaces, and it pins its own accents so nothing the reading column
-   does can reach it.
+   than a set of literals. The two navigation columns are part of that
+   question rather than exempt from it: they are the same ground as each
+   other, a shade off the page, and they move with it. They used to be ink
+   under both surfaces and pin their own accents against the reading column,
+   which is what made the left edge of the app look like a different app from
+   the right edge of it.
 
    Type is three roles, not one. Instrument Sans carries names and titles,
    where a tight fit at a large size is the point. Inter carries everything
@@ -37,19 +40,32 @@
    ========================================================================== */
 
 :root {
-  /* The rail stays dark in both halves of the app: it is Guaca's face, and a
-     dark rail against a white page is what makes the reading column read as
-     paper rather than as another panel. */
-  --rail-ground: #0c0c0b;
-  --rail-raised: #191917;
-  --rail-edge: #2b2a27;
-  --rail-text: #faf8f3;
-  --rail-muted: #9c9992;
-  --rail-wire: #2b2a27;
+  /* The navigation columns, both of them. They were one dark column on the
+     left with a white page beside it and a white panel on the right, which is
+     three surfaces for two jobs: the app's own two edges did not look like
+     each other, and the heavier of them was the one carrying the least
+     reading. So the rail and the inspector are the same ground, a shade off
+     the page rather than opposite it, and the page is the only white thing on
+     screen. What is left with any saturation in it is an agent's own color and
+     the one amber, which is the whole point: a column that is itself a color
+     is a column every agent's color is competing with.
+
+     They follow the surface now rather than pinning ink under both of them,
+     which is why the dark block below redeclares all seven. */
+  --rail-ground: #f5f3ee;
+  --rail-raised: #ffffff;
+  --rail-edge: #e5e2da;
+  --rail-text: #0b0b0a;
+  --rail-muted: #54524d;
+  --rail-wire: #ded9d0;
+  /* Recessed from a column, which is not the same value as recessed from the
+     page: `--sunken` is a hair off white, which is a field on paper and
+     nothing at all on an off-white panel. */
+  --rail-sunken: #eae7df;
   /* A shade under the rail. The crews sit behind the crew, and a column that
      is the same ground as the one it borders needs a rule drawn between them
      to be a second surface at all. */
-  --grail-ground: #050504;
+  --grail-ground: #eceae2;
 
   /* The reading surface, and the only half of the app a surface choice moves.
      Messages are long-form text read for minutes at a time, and paper is the
@@ -166,8 +182,17 @@
      narrower than a message can draw. */
   --rail-w: min(15.5rem, 28vw);
   /* The crews' own column, which holds one circle across and nothing else, so
-     it is capped in the same proportion as the rail beside it. */
+     it is capped in the same proportion as the rail beside it. It is drawn
+     over the rail rather than beside it, so this is not width the layout
+     spends: `--grail-lip` is. */
   --grail-w: min(4rem, 8vw);
+  /* What the column leaves behind when it is in. Enough to read as a surface
+     at the edge of the window and not enough to be a column. */
+  --grail-lip: 0.5rem;
+  /* How far in the pointer comes before the column does. Wider than the band,
+     because what it is aiming at is the edge of the window rather than the
+     band itself, and half a rem is not a target. */
+  --grail-reach: 1.25rem;
 
   /* ---- Radius -------------------------------------------------------------
      Radius says what a box *is*, not how big it happens to be: a thing inside
@@ -250,29 +275,34 @@
   --lift-1: 0 0.125rem 0.5rem -0.25rem rgb(11 11 10 / 0.1);
   --lift-2: 0 0.5rem 1.25rem -0.625rem rgb(11 11 10 / 0.13), 0 0 0 1px var(--edge);
   --lift-3: 0 1.25rem 2.5rem -1rem rgb(11 11 10 / 0.17), 0 0 0 1px var(--edge);
-  /* For the things that are dark whatever the operator picked: the rail, and
-     anything sitting on top of a scrim. They cannot read `--lift-*`, because
-     those resolve against the reading column and would put a paper-weight ring
-     on a black surface. Same argument as `--rail-ground`, one level up. */
-  --lift-dark: 0 0.5rem 1.5rem -0.375rem rgb(0 0 0 / 0.45);
 }
 
 /* Ink instead of paper.
-   Seven neutrals, four accents, a scrim and three lifts. Nothing else, and in
-   particular not one `--rail-*` name: the rail is dark in both surfaces and
-   redefining an accent it drew with would repaint it silently, which no test
-   would catch. `.rail` pins the two accents it does read.
-   The reading column sits lighter than the rail here, which is the same
-   relationship as on paper read the other way round: the rail is still the
-   darker frame and the column is still the surface you read on.
+   Seven neutrals, seven column values, four accents, a scrim and three lifts.
+   Nothing else, and every `--rail-*` and `--grail-*` name is in here: the
+   columns follow the surface, so one of them declared for paper and not for
+   ink is a column that stays the wrong color in a dark room and no DOM
+   assertion notices. `styles.test.ts` reads both blocks and fails on a name
+   that is in one and not the other.
+   The columns sit *lighter* than the reading column here, which is the paper
+   relationship read the other way round rather than a second idea: on paper
+   the page is the brightest thing and its edges step back from it, on ink the
+   page is the darkest thing and its edges step up from it. Either way the page
+   is the surface you read on and the columns are what frames it.
    The accents are lifted rather than kept, because both are chosen against
    white and neither can be read on ink: the amber goes light and loses its
    burn, the slate goes pale enough to be a color rather than a shadow. They
-   stay recognizably the same two colors; they are not the same values.
-   The reading column here is the darkest ground in the app after the rail,
-   which is the poster read on ink: one surface, nothing framed, and the amber
-   doing every piece of work color does. */
+   stay recognizably the same two colors; they are not the same values. */
 :root[data-surface="dark"] {
+  --rail-ground: #151513;
+  --rail-raised: #1f1f1c;
+  --rail-edge: #2b2a27;
+  --rail-text: #f7f5f0;
+  --rail-muted: #a8a49c;
+  --rail-wire: #302f2b;
+  --rail-sunken: #0e0e0d;
+  --grail-ground: #0b0b0a;
+
   --ground: #0f0f0e;
   --raised: #171715;
   --sunken: #0a0a09;
@@ -302,6 +332,20 @@
 
 * {
   box-sizing: border-box;
+}
+
+/* The three surfaces that are not the page.
+   Everything drawn inside one of them reaches for `--sunken` when it wants to
+   be recessed, and recessed from white is a value that disappears on an
+   off-white panel. Remapped once here, on the three elements every rule in
+   those columns descends from, rather than at each rule inside: a row added to
+   the inspector tomorrow is then recessed from what it is actually drawn on
+   without having to know which half of the app it is in. `styles.test.ts` is
+   the gate, and it reads this rule to know which names are covered. */
+.rail,
+.grail,
+.inspector {
+  --sunken: var(--rail-sunken);
 }
 
 /* Said, never drawn. `display: none` and `visibility: hidden` both take an
@@ -607,37 +651,83 @@ button {
 /* ==========================================================================
    Group column
 
-   The crews, upright on the far left. This was a wrapping strip inside the
-   rail: four circles across, then a second line, then a third, taking the
-   height out of the list it sat above. `components/GroupRail.tsx` has the rest
-   of the argument.
+   The crews, upright on the far left, out of the way until they are reached
+   for. This was a wrapping strip inside the rail, then a column that stood
+   open and charged every window four rem for it. `components/GroupRail.tsx`
+   has the rest of the argument, and `lib/reach.ts` owns when it comes out.
    ========================================================================== */
 
-/* Pinned here for the same reason the rail pins them, and it is the same trap:
-   this column is dark under both surfaces, so a token the reading column
-   redefines for dark paper would repaint it and nothing would draw attention to
-   it. `--alarm` is on the list because the waiting badge is the one thing in
-   either dark column that is drawn in it. */
+/* What is left in the layout: a band of the column's own ground at the edge of
+   the window. It reserves the width so nothing reflows when the column comes
+   out, and it is what says there is something here at all. The column itself
+   is drawn out of this box and slides over the rail. */
 .grail {
-  --flesh: #4e6b16;
-  --flesh-soft: #eef2d8;
-  --alarm: #b03728;
-
-  width: var(--grail-w);
+  width: var(--grail-lip);
   flex: none;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  position: relative;
+  /* Over the rail, which is the next thing in the row. */
+  z-index: 30;
   min-height: 0;
   background: var(--grail-ground);
   border-right: 1px solid var(--rail-edge);
   color: var(--rail-text);
   /* Not selectable, for the reason the rail is not. */
   user-select: none;
-  /* The window's own buttons float over the top left corner, which is now this
-     column rather than the rail. The first circle starts under them. */
+}
+
+/* The proximity zone, as a box with nothing in it.
+   `lib/reach.ts` measures this rather than carrying a number, so how far in
+   the pointer has to come is a length in this file at the operator's own
+   interface scale, like every other length. It starts below the window's own
+   buttons: on macOS those float over the top left corner, and a zone that ran
+   to the top of the window would slide the crews out from under the pointer
+   every time somebody went to close the app. */
+.grail__reach {
+  position: absolute;
+  left: 0;
+  top: var(--space-8);
+  bottom: 0;
+  width: var(--grail-reach);
+  pointer-events: none;
+}
+
+/* The column. Translated rather than resized, so what moves is one composited
+   layer and the circles inside it never reflow: an animated width would relay
+   out the list on every frame, and the scroll position in it would jump. */
+.grail__slab {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--grail-w);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+  background: var(--grail-ground);
+  border-right: 1px solid var(--rail-edge);
+  /* The first circle starts under the window's own buttons. */
   padding: var(--space-8) 0 var(--space-4);
   gap: var(--space-2);
+  /* All the way off, rather than back by the width of the band. The band is
+     this element's own ground, so the column has nothing to contribute to it,
+     and leaving its last half rem on screen leaves whatever is drawn there:
+     the waiting badge hangs off the right of a circle, so a crew with a parked
+     turn in it put a red chip at the edge of the window with no circle under
+     it. */
+  transform: translateX(-100%);
+  transition: transform var(--tempo-move) var(--ease), box-shadow var(--tempo-move) var(--ease);
+}
+
+/* Out, and floating: over the rail rather than beside it, so the rail keeps
+   its measure and nothing under this moves. `:focus-within` is the third way
+   out and the one that makes the column reachable from the keyboard, since a
+   circle tabbed to inside a column nobody can see is a selection nobody can
+   read. */
+.grail[data-out="true"] .grail__slab,
+.grail:focus-within .grail__slab {
+  transform: none;
+  box-shadow: var(--lift-2);
 }
 
 .grail__rule {
@@ -672,17 +762,14 @@ button {
    Rail
    ========================================================================== */
 
-/* The rail is dark in both surfaces, so the two accents it draws with are the
-   paper values whatever the reading column is doing. Pinned here, on the one
-   element every rail rule descends from, rather than renamed at the twenty-odd
-   call sites in the reading half: this makes the rail a real color scope
-   instead of a naming convention, and a new dark value for either token cannot
-   reach it by accident. `:focus-visible` is deliberately not covered — a focus
-   ring is drawn in both halves and should follow the surface it is drawn on. */
+/* Nothing is pinned here. Both columns used to hold paper values for `--flesh`
+   and `--flesh-soft` — and the crews' column for `--alarm` as well — because
+   they were ink under both surfaces and a reading column that went dark would
+   otherwise have repainted them silently. They follow the surface now, so the
+   one amber in the app is the same amber in all three columns, which is what
+   it was always meant to be: the accent means "answer me" and had two values
+   for it depending on which side of a border it was drawn on. */
 .rail {
-  --flesh: #4e6b16;
-  --flesh-soft: #eef2d8;
-
   /* A right-click leaves nothing highlighted behind it. WebKit selects the word
      under the pointer before it dispatches `contextmenu`, for the menu it is
      about to draw, so a row that answers with a menu of its own cannot undo
@@ -1080,7 +1167,10 @@ button {
    something. A parked agent stays parked until the operator answers, and the
    request is in a channel they may not have open. */
 .agent-row__meta[data-state="asking"] {
-  color: var(--rail-ground);
+  /* On the amber rather than beside it, so the text is the page's ground and
+     not the column's: the amber is dark on paper and light on ink, and a
+     column-colored label is unreadable on one of the two. */
+  color: var(--ground);
   background: var(--flesh);
   border-radius: var(--radius-xs);
   padding: var(--space-1) var(--space-2);
@@ -1420,7 +1510,7 @@ button {
   border-radius: var(--radius-sm);
   background: var(--rail-raised);
   border: 1px solid var(--rail-edge);
-  box-shadow: var(--lift-dark);
+  box-shadow: var(--lift-2);
   opacity: 0.95;
 }
 
@@ -1605,7 +1695,7 @@ button {
   padding: var(--space-3) var(--space-5);
   border-radius: var(--radius-sm);
   background: var(--rail-raised);
-  box-shadow: inset 0 0 0 1px var(--rail-edge), var(--lift-dark);
+  box-shadow: inset 0 0 0 1px var(--rail-edge), var(--lift-2);
 }
 
 .orb__tag-name {
@@ -1910,14 +2000,6 @@ button {
   margin: 0;
 }
 
-.pane__subtitle {
-  font-size: var(--type-small);
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin: 0;
-}
 
 /* An agent that will not answer, said once. It replaces a Pause button whose
    label was the only place this was written down, which meant reading a
@@ -5166,8 +5248,12 @@ button {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  border-left: 1px solid var(--edge);
-  background: var(--ground);
+  /* The rail's ground, not the page's. These are the app's two edges and they
+     have the same job: everything about an agent that is not what it said.
+     Drawn on the page's own white it read as more transcript, which is the one
+     thing it is not, and it made the window three surfaces wide. */
+  border-left: 1px solid var(--rail-edge);
+  background: var(--rail-ground);
 }
 
 /* Closed it is the tab and nothing else, still holding its own sliver of the
@@ -5412,6 +5498,20 @@ button {
   /* Shared with the space held open below, so the picture and the gap it leaves
      behind cannot disagree about how tall the screen is. */
   --screen-aspect: 16 / 10;
+
+  /* The one surface in this app that is ink whichever surface the operator
+     picked, and the only thing left holding the values the rail used to. A
+     full-window frame around somebody else's desktop is a light-tight box on
+     purpose: a pale chrome around a picture is a chrome the eye keeps reading
+     instead of the picture. It cannot spend `--lift-*` either, because those
+     resolve against the reading column and would put a paper-weight ring on a
+     black surface. */
+  --stage-ground: #0c0c0b;
+  --stage-edge: #2b2a27;
+  --stage-text: #faf8f3;
+  --stage-muted: #9c9992;
+  --stage-lift: 0 0.5rem 1.5rem -0.375rem rgb(0 0 0 / 0.45);
+
   margin-bottom: var(--space-6);
 }
 
@@ -5531,10 +5631,10 @@ button {
   z-index: 40;
   display: flex;
   flex-direction: column;
-  background: var(--rail-ground);
-  border: 1px solid var(--rail-edge);
+  background: var(--stage-ground);
+  border: 1px solid var(--stage-edge);
   border-radius: var(--radius);
-  box-shadow: var(--lift-dark);
+  box-shadow: var(--stage-lift);
   overflow: hidden;
 }
 
@@ -5551,9 +5651,9 @@ button {
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-4) var(--space-5);
-  background: var(--rail-ground);
-  border-bottom: 1px solid var(--rail-edge);
-  color: var(--rail-text);
+  background: var(--stage-ground);
+  border-bottom: 1px solid var(--stage-edge);
+  color: var(--stage-text);
 }
 
 /* The actions, as one group rather than a row of equally-weighted buttons.
@@ -5570,7 +5670,7 @@ button {
 }
 
 .screen__bar .screen__state {
-  color: var(--rail-muted);
+  color: var(--stage-muted);
 }
 
 .screen__title {
@@ -6661,6 +6761,18 @@ button {
   flex: 1;
   overflow-y: auto;
   padding: var(--space-6) var(--space-7) var(--space-7);
+}
+
+/* The one pane that holds a board rather than a column of fields. `.flow` is a
+   flex column that scrolls itself and expects to be given a height, so the pane
+   stops scrolling and becomes that column: two scroll containers, one inside
+   the other, is a board whose header scrolls away and a run you cannot reach
+   the bottom of. */
+.settings__pane--board {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: var(--space-5);
 }
 
 .settings__title {

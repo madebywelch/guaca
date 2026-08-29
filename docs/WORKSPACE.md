@@ -656,12 +656,12 @@ message landing off screen with nothing following it is the same complaint
 pointing the other way.
 
 The listener is bound by a ref callback rather than an effect, and that is
-load-bearing. A transcript is unmounted whenever the pane shows something else,
-a pair thread or the activity board, and comes back as a new node with the same
-class. An effect can only re-bind on a dependency it was given, and the node it
-holds is not one: a channel opened from the activity board spent the session
-listening to a node that had been thrown away, which is the shape the report
-arrived in.
+load-bearing. A transcript is unmounted whenever the pane shows something else —
+a pair thread, or nothing at all once the operator has gone inside a crew the
+open channel was not in — and comes back as a new node with the same class. An
+effect can only re-bind on a dependency it was given, and the node it holds is
+not one: a channel reopened after one of those spent the session listening to a
+node that had been thrown away, which is the shape the report arrived in.
 
 ## A mention is one thing, in the box and in the message
 
@@ -811,11 +811,48 @@ navigation for it, and four was a hard wall nobody had chosen. Upright, the axis
 is the one there is room on, and the crews that do not fit scroll instead of
 folding.
 
-Two things follow from the column that the strip could not buy. The crews are on
-screen wherever the operator is, including while the rail is inside one of them,
-which is what lets a circle carry a permanent statement about the crews nobody is
-looking at. And "which crew am I in" stops being something the rail has to
-answer, because the answer is a lit circle in a fixed place.
+Two things follow from the column that the strip could not buy. The crews are
+reachable wherever the operator is, including while the rail is inside one of
+them, which is what lets a circle carry a permanent statement about the crews
+nobody is looking at. And "which crew am I in" stops being something the rail has
+to answer, because the answer is a lit circle in a fixed place.
+
+**The column does not stand open, and that is the third change.** Standing open
+it charged every window four rem of its width for a choice most operators make a
+few times a day, in front of the rail that is read constantly. So what is left in
+the layout is a band of its own ground at the edge of the window — enough to say
+there is something here, not enough to be a column — and the column slides out
+over the rail when the pointer comes at it. Over rather than beside: nothing
+reflows, the rail keeps its measure, and the gesture is the one somebody heading
+for the left edge of the window is already making.
+
+`src/lib/reach.ts` owns when, and it uses two thresholds rather than one. A
+single line means the column closes at exactly the pixel that opens it, so a hand
+resting at the boundary flickers it and the moment it starts to close the pointer
+is inside the zone again. Coming within the zone opens it, going past the far
+side of the column plus that same distance again closes it, and in between it is
+left as it was. Neither number is written in the component: the zone is a box CSS
+positions and sizes and nothing can click, and `reaches` reads its geometry, so
+both distances are lengths in the one stylesheet at the operator's own interface
+scale like every other length in the app.
+
+The zone starts below the top of the window, and that is not fussiness. On macOS
+the window's own close, minimize and zoom float over the top left corner, which
+is this column: a zone that ran to the top would slide the crews out from under
+the pointer every time somebody went to close the app.
+
+Decided from the pointer rather than from `:hover` on a strip. A strip wide
+enough to be aimed at is a strip laid over the left edge of every agent row
+behind it, and a row that does nothing when it is clicked near its left side is a
+worse bug than the one this fixes.
+
+Three things hold the column out and none of them is a click. Proximity; a drag
+in progress, whatever the pointer is doing, because a drop onto a circle is the
+one thing this column is load-bearing for and a column that slid away as the hand
+carried a row across it would take the target with it half way through the
+gesture; and focus inside it, which is what makes the column reachable from the
+keyboard, since a circle tabbed to inside a column nobody can see is a selection
+nobody can read.
 
 The circles are faces, and the name is beside them. A crew is recognized by who
 is in it long before its name is read, which is true and was never enough on its
@@ -903,8 +940,8 @@ the badge would.
 The group being looked inside is in the store rather than in the sidebar, because
 it and the open channel have to agree, and both are in the store. One invariant
 holds them together: the rail draws the row of whatever the pane is showing. A
-search hit or a click on the flow board can land on an agent in another crew, and
-`select` repairs that by following the agent into its crew. It used to drop out
+search hit can land on an agent in another crew, and `select` repairs that by
+following the agent into its crew. It used to drop out
 to the overview instead, which was the only honest answer while the crews were a
 strip inside the rail: the overview was the one view where every row was
 drawable. With a column that is on screen whichever crew you are in, following
@@ -915,8 +952,10 @@ rail changing shape.
 than following. The asymmetry is the point: `select` is the operator naming an
 agent, so taking them to that agent's crew is what they asked for, and
 `focusGroup` is the operator naming a crew, so following the channel back out of
-it would undo the click. The pane falls back to the activity feed, which belongs
-to no crew and is never closed.
+it would undo the click. The pane falls back to nothing rather than to the first
+row of the crew being entered: opening a channel is the operator naming somebody,
+and a crew that picked one for them would put an agent's history on screen as a
+side effect of a click that was about the crew.
 
 Closing it is not tidiness. Two crews can hold two agents with the same name and
 the same face, and a rail that is not drawing the row leaves nothing on screen
@@ -1025,6 +1064,44 @@ from the other and will not accept them, so a crew that tries the subscription f
 an hour and moves back has to find its endpoint model where it left it. Test
 connection is here for the same reason it is in Settings, and it sends what is on
 screen resolved over the app settings, which is what the next turn would do.
+
+## The flow board is analysis, so it is in a crew's settings
+
+Who spoke to whom, in what order, what set a run off and what the run cost. It
+is drawn as a sequence diagram cut into runs, newest first, and the reasoning
+for that shape is in `src/components/ActivityFlow.tsx` and has not changed.
+Where it lives has.
+
+It was a channel at the top of the rail, under the wordmark and one row above
+the search box: the first thing in the app after Guaca's own name, and one of
+the least pressed things in it. That placement is a claim about how often
+somebody wants it, and the claim was wrong. Nobody opens this board on the way
+past. They open it having decided to look into something — why a run went round
+four times, which agent started a cascade, what a Tuesday cost — and an entry in
+the primary navigation for a thing you arrive at deliberately is entry that
+every other thing in the rail pays for.
+
+So it is a pane in the group editor, beside the crew's provider and limits, and
+`ACTIVITY_CHANNEL` is gone. That last part is most of the value. A board
+addressed as a channel meant every function that took a channel took a value
+that was not an agent, and seven of them carried a branch for it: which crew the
+rail follows, whether the open channel survives going inside a crew, what
+`loadChannel` reads, what a fallback selects, and what `messageAppended` and
+`channelsCleared` maintain. A channel is an agent again.
+
+It is one crew's traffic, and scoped in SQL rather than filtered after the read.
+The board is the newest four hundred messages, so a workspace where one busy
+crew fills that window would hand a quiet crew a board with nothing on it and no
+way to tell that apart from a crew that has never spoken. The channel is the
+scope because agents in different groups cannot message each other: every
+message is filed under an agent, and that agent's group is the run's.
+
+Read when the pane is opened rather than held in the store, which is the same
+decision one more time. The store maintained a second copy of every arriving
+message against a board nobody had necessarily ever opened. A board somebody
+opens deliberately can afford one read at the moment they open it, and it does
+not follow the conversation afterward: a board that reshuffles under a reader is
+one they lose their place in, and what they came to read has already happened.
 
 ## Pinning is the head of a crew, and nothing else
 
@@ -1404,7 +1481,7 @@ produce the build in front of them. And a build made outside a repository at all
 draws a dash: it is the same answer the pane already gave for a version it could
 not read, and it is still a thing to say rather than a failure worth a banner.
 
-## The reading column has two surfaces; the rail has one
+## The page is the only white thing, and both edges are the same off-white
 
 `styles.css` used to say the surface never follows the OS, and the argument was
 sound as far as it went: a chat log is read for minutes at a time and white wins
@@ -1412,13 +1489,41 @@ that in a lit room. It does not win it in a dark one. So the reading column is a
 token block behind `data-surface` — the same seven neutrals, four accents, a
 scrim and a shadow, and nothing else.
 
-The rail is not part of the question. It is dark in both surfaces, which is what
-makes the column read as a surface rather than as another panel, and it pins the
-two accents it draws with on `.rail` itself. That last part is load-bearing: the
-rail reads `--flesh` in twelve rules and `--flesh-soft` in two, so a dark value
-for either would have repainted it silently and no test in this repo would have
-caught it. Pinning them on the one element every rail rule descends from turns
-the rail into a color scope instead of a naming convention.
+The two navigation columns are part of that question rather than exempt from it,
+and that is the change. They were ink whichever surface the operator picked, on
+the argument that a dark rail against a white page is what makes the page read
+as paper rather than as another panel. What it actually produced was an app with
+three surfaces for two jobs: a near-black column on the left, a white page, and
+a white panel on the right, so the app's own two edges did not look like each
+other and the heavier of them was the one carrying the least reading. The rail
+and the inspector do the same job — everything about an agent that is not what
+it said — so they are one ground, a shade off the page rather than opposite it,
+and the page is the only white thing on screen.
+
+What is left with any saturation in it is an agent's own color and the one
+amber. That is the point rather than a side effect: a column that is itself a
+color is a column every agent's color is competing with, and the accent that
+means "answer me" had two values depending on which side of a border it was
+drawn on. Both columns used to pin `--flesh` and `--flesh-soft` — and the crews'
+column `--alarm` as well — because a dark reading column would otherwise have
+repainted them silently. Nothing is pinned now. What replaced the pins is the
+other half of the same trap, asserted in `styles.test.ts`: every `--rail-*` and
+`--grail-*` value that is a color has to be declared in both surface blocks, or
+a column stays off-white in a dark room and no DOM assertion sees it.
+
+One value did not exist before and had to. `--sunken` is a hair off white, which
+is a recessed field on paper and nothing at all on an off-white panel, so the
+columns remap it onto `--rail-sunken` in one rule that names all three of them.
+Remapped there rather than at each rule inside, so a row added to the inspector
+tomorrow is recessed from what it is actually drawn on without having to know
+which half of the app it is in.
+
+One surface is still ink under both, and now says so itself. The full-window
+machine viewer is a light-tight box around somebody else's desktop, because a
+pale chrome around a picture is a chrome the eye keeps reading instead of the
+picture. It pins four values of its own on `.screen`, including its shadow: a
+lift resolved against the reading column would put a paper-weight ring on a
+black surface.
 
 `system` is resolved before it reaches the document, so `data-surface` is only
 ever `light` or `dark`. A rule keyed on `system` would have to duplicate the one
