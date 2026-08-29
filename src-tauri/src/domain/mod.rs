@@ -7,6 +7,7 @@ pub mod escalation;
 pub mod group;
 pub mod ids;
 pub mod plugin;
+pub mod promise;
 pub mod repository;
 pub mod routine;
 pub mod search;

@@ -53,6 +53,8 @@ src-tauri/src/
     repository.rs     A directory an agent may write code in, which of two
                       programs writes it, and whether it asks before pushing.
     worknote.rs       A line about work in flight, and why it is not memory.
+    promise.rs        A closing sentence that says the work is still coming,
+                      in a turn that is over. One rule, two readers.
     approval.rs       The two things an agent stops to ask a person, and why
                       only one of them may draw the model's own words.
     escalation.rs     The third thing, which stops nothing: work an agent
