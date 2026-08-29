@@ -897,13 +897,21 @@ enough to be aimed at is a strip laid over the left edge of every agent row
 behind it, and a row that does nothing when it is clicked near its left side is a
 worse bug than the one this fixes.
 
-Three things hold the column out and none of them is a click. Proximity; a drag
-in progress, whatever the pointer is doing, because a drop onto a circle is the
-one thing this column is load-bearing for and a column that slid away as the hand
-carried a row across it would take the target with it half way through the
-gesture; and focus inside it, which is what makes the column reachable from the
-keyboard, since a circle tabbed to inside a column nobody can see is a selection
-nobody can read.
+Two things bring the column out and neither of them is a click. Proximity; and
+focus inside it, which is what makes the column reachable from the keyboard,
+since a circle tabbed to inside a column nobody can see is a selection nobody can
+read.
+
+A drag brings it out for neither, and suspends the closing threshold instead. A
+drop onto a circle is the one thing this column is load-bearing for, so a column
+already reached for stays out until the row is dropped, wherever the hand goes in
+between: one that slid away as the row was carried back across the app would take
+the target with it half way through the gesture. It used to be held out for the
+whole of every drag, whatever the pointer was doing, and that reads as a bug from
+the other side of the window. The column comes out *over* the rail, so picking up
+a row anywhere put the crews across the left edge of every row behind it, and
+most drags are a reorder inside the rail aimed at exactly those rows. Opening is
+proximity in both cases; only closing knows about the hand.
 
 The circles are faces, and the name is beside them. A crew is recognized by who
 is in it long before its name is read, which is true and was never enough on its
