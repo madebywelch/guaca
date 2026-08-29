@@ -2280,6 +2280,56 @@ button {
   50%, 100% { opacity: 0; }
 }
 
+/* --- a callout -----------------------------------------------------------
+
+   A quote a model opened with an alert marker, drawn as a box rather than as a
+   rule down the side, so the one paragraph addressed to the operator is found
+   before the eight around it are read. `lib/callout.ts` is which markers open
+   one and why there are two of them.
+
+   The amber box is the only filled panel in the reading column, and that is
+   the token block's rule rather than a hole in it: what carries hierarchy here
+   is size, weight and air, and the one exception is the accent that means a
+   person has to do something. A quiet callout gets the hairline and no fill,
+   because it is a thing worth seeing rather than a thing being asked for, and
+   a second tint would make the first one furniture.
+   ------------------------------------------------------------------------ */
+
+.md .callout {
+  margin: var(--space-4) 0;
+  padding: var(--space-5);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+}
+
+/* A paragraph carries its own bottom margin, which inside a box is the last
+   line sitting a step off the floor it is standing on. */
+.md .callout > *:last-child {
+  margin-bottom: 0;
+}
+
+.md .callout--asks {
+  border-color: color-mix(in oklab, var(--flesh) 45%, var(--edge));
+  background: var(--flesh-soft);
+}
+
+/* The label is the app's word, not the model's, so it is drawn as the app's
+   own furniture: the same uppercase mono eyebrow every state in this file
+   is set in. */
+.md .callout__label {
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  line-height: var(--lead-ui);
+  text-transform: uppercase;
+  color: var(--faint);
+  margin: 0 0 var(--space-3);
+}
+
+.md .callout--asks .callout__label {
+  color: var(--flesh);
+}
+
 /* ==========================================================================
    Figures
 
