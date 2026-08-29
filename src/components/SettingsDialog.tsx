@@ -22,6 +22,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { applyAppearance, resolveSurface } from "../lib/appearance";
+import { buildLabel } from "../lib/build";
 import { api, openExternal } from "../lib/ipc";
 import { BINDINGS, comboLabel, SURFACES } from "../lib/keybinds";
 import { LIMITS } from "../lib/limits";
@@ -143,7 +144,6 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     null,
   );
   const [busy, setBusy] = useState(false);
-  const [version, setVersion] = useState<string | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // The sign-in, which is three states rather than a boolean: not signed in,
@@ -200,23 +200,6 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       .catch(() => {
         // Asked again next time Settings opens. A row that cannot say whether
         // the program is there says nothing, which is what null draws as.
-      });
-    return () => {
-      live = false;
-    };
-  }, []);
-
-  // Read on mount rather than at startup, so nothing pays for it until the one
-  // pane that shows it is opened.
-  useEffect(() => {
-    let live = true;
-    void import("@tauri-apps/api/app")
-      .then(({ getVersion }) => getVersion())
-      .then((value) => {
-        if (live) setVersion(value);
-      })
-      .catch(() => {
-        // A version nobody can read is worth a dash, not a banner.
       });
     return () => {
       live = false;
@@ -1232,7 +1215,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
               <>
                 <div className="about">
                   <h3 className="about__name">Guaca</h3>
-                  <p className="about__version">{version ? `Version ${version}` : "Version —"}</p>
+                  <p className="about__version">{buildLabel()}</p>
                 </div>
 
                 <div className="about__facts">

@@ -2,6 +2,7 @@ import { createContext, type ReactNode, useContext, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { LABEL, readCallout } from "../lib/callout";
 import { fenceLanguage, fenceText, readFigure } from "../lib/figure";
 import { openExternal } from "../lib/ipc";
 import { splitMentions } from "../lib/mentions";
@@ -38,7 +39,7 @@ export const Roster = createContext<string[]>([]);
  */
 export function Markdown({ children, live = false }: { children: string; live?: boolean }) {
   const names = useContext(Roster);
-  const plugins = useMemo(() => [remarkGfm, remarkMentions(names)], [names]);
+  const plugins = useMemo(() => [remarkGfm, remarkCallouts, remarkMentions(names)], [names]);
 
   return (
     <div className="md">
@@ -117,7 +118,7 @@ function asFence(children: ReactNode): { language: string; source: string } | nu
 }
 
 /**
- * mdast, in the shape this walk needs and no more.
+ * mdast, in the shape these walks need and no more.
  *
  * The real types live in `@types/mdast`, which is not a dependency of this app:
  * it arrives under `react-markdown` and would be a version nothing here pins.
@@ -193,4 +194,53 @@ function mark(node: Node, names: string[]): void {
   }
 
   node.children = next;
+}
+
+/**
+ * Draws a quote that opens with an alert marker as a box, before anything is
+ * rendered.
+ *
+ * A remark plugin for the reason {@link remarkMentions} is one: a callout
+ * holds prose, and prose is a list, a link, a name, a table and a line of
+ * code, which the tree is the one place all of are the same thing.
+ *
+ * It stops being a `blockquote` on the way out, because it is not a quote.
+ * `hName` is a `div`, so every rule under `.md blockquote` misses it and no
+ * landmark is opened in the middle of a message; the label goes in as the
+ * first child, so a screen reader reads *Needs you* in the place a sighted
+ * operator sees the box, with no ARIA holding the two together.
+ */
+function remarkCallouts() {
+  return (tree: Node) => box(tree);
+}
+
+function box(node: Node): void {
+  if (!node.children) return;
+  if (node.type === "blockquote") open(node);
+  for (const child of node.children) box(child);
+}
+
+function open(quote: Node): void {
+  const first = quote.children?.[0];
+  if (first?.type !== "paragraph") return;
+  const opening = first.children?.[0];
+  if (opening?.type !== "text" || typeof opening.value !== "string") return;
+
+  const found = readCallout(opening.value);
+  if (!found) return;
+
+  opening.value = found.rest;
+  // A marker on a line of its own leaves an empty paragraph where it was,
+  // which draws as a blank line between the label and the first thing said.
+  if (found.rest === "" && first.children?.length === 1) quote.children?.shift();
+
+  quote.data = {
+    hName: "div",
+    hProperties: { className: `callout callout--${found.register}` },
+  };
+  quote.children?.unshift({
+    type: "calloutLabel",
+    data: { hName: "p", hProperties: { className: "callout__label" } },
+    children: [{ type: "text", value: LABEL[found.register] }],
+  });
 }

@@ -356,6 +356,52 @@ either way, so the transcript does not fork from here on; `lib/trail.ts` answers
 to both because rows written before the rename cannot be migrated into a new
 spelling, which is the same reason `Part::Approval` was never widened.
 
+## A reply can mark the one part that needs a person
+
+An agent that has been working for ten minutes writes nine paragraphs, and one
+of them is the sentence that needs the operator: a key only they can rotate, a
+decision nobody else can take, a thing about to go out that should not. Written
+as prose it is the fourth paragraph of nine, and it is read last or not at all.
+So a quote a model opens with an alert marker is drawn as a box.
+
+**The syntax is GitHub's, and that is the point.** Models write `> [!IMPORTANT]`
+without being asked, so the box appears on a reply written before the prompt
+mentioned it, on one from an agent skimming its instructions, and on every
+transcript already in the database. A marker `lib/callout.ts` does not know
+stays a quote with its own words in it, which is the rule `figure.ts` keeps for
+a fence it cannot draw.
+
+**A quote and not a fence.** Figures are fences because a chart spec is text.
+What goes in a callout is prose: a list, a link, a mention, a table, a line of
+code, and a fence could hold none of them. It is a remark plugin for the reason
+mentions are one, and the element stops being a `blockquote` on the way out
+because it is not a quote: `hName` makes it a `div`, so no rule written for a
+quote reaches it and no landmark is opened in the middle of a message. The
+label goes in as the first child, so a screen reader reads *Needs you* where a
+sighted operator sees the box, with no ARIA holding the two together.
+
+**Five markers, two registers, two words.** `IMPORTANT`, `WARNING` and
+`CAUTION` draw the amber box; `NOTE` and `TIP` draw the quiet one. The amber is
+the app's one accent and it means here exactly what it means in the rail, on
+the desk and in the menu bar: a person has to do something. That is also why
+the label is the app's word rather than the model's. An agent that writes
+`[!CAUTION]` and one that writes `[!WARNING]` mean the same thing, and drawing
+both of their words is an operator learning a vocabulary that decides nothing;
+what they need off the box is whether it is for them, which is what *Needs you*
+says, in the words the rail already uses for an agent that is waiting on
+somebody.
+
+The amber box is the only filled panel in the reading column. That is the token
+block's own rule rather than a hole in it: hierarchy here is carried by size,
+weight and air, and the single exception is the accent that means answer me. A
+quiet callout gets the hairline and no fill, because a second tint would make
+the first one furniture.
+
+**And the prompt argues against it in the same breath.** An agent told it can
+draw an amber box draws one around every paragraph, which is the same failure
+the chart section is written to avoid and has the same fix: a reply with three
+boxes in it is a reply with none.
+
 ## A reply can be a figure, and a figure is a fenced block
 
 An operator asking for last quarter by region gets four numbers, and four
@@ -1420,6 +1466,20 @@ off by a path segment and fails on every turn of every agent with an error from
 somebody else's server. A local endpoint is marked as local because that changes
 what the key field means: an empty key beside a warning about a missing key is a
 state an operator will try to fix forever.
+
+About says which commit it is, rather than a version. The number in
+`package.json` and `tauri.conf.json` has not moved since the first commit and is
+not going to: what ships here is a commit, so a version read off either file
+tells an operator nothing and tells a bug report less. It used to be read
+through Tauri's `getVersion`, which is exactly that placeholder arriving over
+IPC. So `vite.config.ts` asks git for the short hash while the bundle is being
+built and `src/lib/build.ts` is the one place it is read back from. Nothing is
+asked at runtime, because the built app carries no repository to ask. A tree
+with uncommitted edits on top of that commit gets `-dirty`, because an
+unqualified hash sends whoever reads it to check out a commit that did not
+produce the build in front of them. And a build made outside a repository at all
+draws a dash: it is the same answer the pane already gave for a version it could
+not read, and it is still a thing to say rather than a failure worth a banner.
 
 ## The page is the only white thing, and both edges are the same off-white
 

@@ -815,6 +815,15 @@ pub fn system_prompt(
              Your reply is drawn, not printed. Markdown works, and a table is usually the right \
              shape for anything with rows and columns: write one rather than a run of \
              \"Name: value\" lines.\n\n\
+             A quote opened with a marker is drawn as a box, so the one part of a long reply \
+             that is addressed to the operator is found before the rest of it is read:\n\n\
+             > [!IMPORTANT]\n\
+             > The staging key expires on Friday. I cannot rotate it; you can.\n\n\
+             `IMPORTANT`, `WARNING` and `CAUTION` draw the box in the one color this app keeps \
+             for something a person has to do. Spend one on what needs the operator and on \
+             nothing else: a reply with three boxes in it is a reply with none. `NOTE` and \
+             `TIP` draw the quiet box, which is worth seeing and needs nobody. Any other word \
+             stays an ordinary quote.\n\n\
              Two fenced blocks are drawn as figures instead of as code.\n\n\
              A ```chart fence holds one JSON object and becomes a real chart:\n\n\
              ```chart\n\
@@ -1311,6 +1320,13 @@ mod tests {
         // Asked for a breakdown by region, one with all of this working still
         // wrote out four "Region: number" lines.
         let prompt = prompt_for(&card("Analyst"), &[], "", ReplyMode::ToOperator);
+        // The box round the one paragraph that is addressed to the operator.
+        // An agent not told about it marks nothing, and the sentence that
+        // needed a person stays the fourth paragraph of nine.
+        assert!(prompt.contains("> [!IMPORTANT]"), "the callout is never mentioned");
+        // With the restraint in the same breath, for the reason the chart has
+        // it: an agent told it can draw an amber box draws one per paragraph.
+        assert!(prompt.contains("a reply with three boxes in it is a reply with none"));
         assert!(prompt.contains("```chart"), "the chart fence is never mentioned");
         assert!(prompt.contains("bar, line, area, pie, donut, scatter"));
         assert!(prompt.contains("```html"));
@@ -1329,6 +1345,9 @@ mod tests {
         // is tokens spent drawing something nobody will look at.
         let prompt = prompt_for(&card("Analyst"), &[], "", ReplyMode::ToPeer);
         assert!(!prompt.contains("```chart"), "the peer path carries the figure section");
+        // And nothing in a peer's reply is drawn at all, so a box round part of
+        // it is a marker the agent on the other end reads as text.
+        assert!(!prompt.contains("[!IMPORTANT]"), "the peer path is offered the callout");
         // And a peer has no operator to hand a value back to, so a page it
         // could answer with is a page nobody will ever press a button on.
         assert!(!prompt.contains("guaca.answer"), "the peer path is offered the answer channel");

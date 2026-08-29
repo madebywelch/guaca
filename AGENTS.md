@@ -18,6 +18,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/reach.ts        How close the pointer comes before the crews slide out.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
+  lib/callout.ts      The one part of a reply that is for you, in a box.
   lib/figure.ts       A fenced block the transcript draws instead of printing.
   lib/chart.ts        A chart spec, and where every mark goes. No DOM.
   lib/palette.ts      Eight hues in one order, and why that order and not another.
@@ -161,6 +162,7 @@ repo: the frontend renders state and forwards intent.
 | The guaca.bot account: signing in, what it is for, why it is optional | `docs/ACCOUNT.md`, then `account.rs` |
 | Channels, the rail, search: what the operator sees | `docs/WORKSPACE.md`, then `src/lib/transcript.ts` |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
+| A box round the part of a reply that needs the operator, and which marker draws which one | *A reply can mark the one part that needs a person* in `docs/WORKSPACE.md`, then `src/lib/callout.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
 | Running a model's own HTML, or anything about that origin | *A page an agent wrote runs somewhere else* in `docs/WORKSPACE.md`, then `src-tauri/src/artifact.rs` |
 | A page the operator can work, and what it may hand back | *A page can hand one value back* in `docs/WORKSPACE.md`, then `BRIDGE` in `src-tauri/src/artifact.rs` and `Answering` in `src/components/HtmlArtifact.tsx` |
@@ -179,6 +181,7 @@ repo: the frontend renders state and forwards intent.
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
 | Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |
 | Whether a model can be shown a picture: an attachment, a screen, what an agent is told it is | *What a model can be sent is asked of the endpoint, not assumed* in `docs/ARCHITECTURE.md`, then `llm/modality.rs` and the four places `Modalities` is spent from `Runtime::run_turn` |
@@ -678,6 +681,18 @@ the model takes a screenshot to see what `browse` did.
   draws as a page that is all new. A truthiness check collapses the first two
   and loses the only write where the whole page is the news. `Part::ToolCall`
   in `domain/envelope.rs`, then `trailStep`.
+- **A callout is a quote and a figure is a fence, and neither could be the
+  other.** A chart spec is text, so it fits in the one block markdown has for
+  text. What goes in a callout is prose: a list, a link, a mention, a table, a
+  line of code, none of which survive a fence. The syntax is GitHub's alert
+  marker rather than one of ours because models write `> [!IMPORTANT]`
+  unprompted, so it draws on a reply written before the prompt mentioned it and
+  on every transcript already stored; a marker the closed set does not know
+  stays a quote with its own words in it. Five markers draw two boxes and carry
+  two labels, and the label is the app's word: an agent writing `[!CAUTION]`
+  and one writing `[!WARNING]` mean the same thing, and what the operator needs
+  off the box is whether it is for them. The amber one is the only filled panel
+  in the reading column, and it means there what it means in the rail.
 - **A figure is a fence in the reply, not a tool call and not a new part.** An
   agent has the numbers in hand at the moment it writes the sentence about them,
   so a chart behind a tool call is a round trip spent sending back something it
