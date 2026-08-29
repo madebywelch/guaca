@@ -323,6 +323,7 @@ enum Permission {
     /// Nobody was asked, because the request could not be recorded.
     Failed(String),
 }
+use crate::coding::bridge::Reach;
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{
     copy_name, AgentCard, CleanDraft, DirectoryEntry, Lifecycle, COMPOST_MS,
@@ -620,6 +621,30 @@ struct Runs {
     /// this is the size of what is live rather than of everything this process
     /// has ever stopped.
     stopped: HashSet<RunId>,
+    /// What each run has already been told no about, so one refusal is not put
+    /// to the operator again and again inside it.
+    ///
+    /// A model that has just been refused a push tries the push. That is
+    /// ordinary rather than confused — the refusal it reads says the operator
+    /// did not allow it, not that the operator will never allow it — and it is
+    /// the operator who pays for it, in a second card, and a third, for a
+    /// question they have already answered while they are sitting there
+    /// answering it.
+    ///
+    /// Keyed by the outward action the card named rather than by the line,
+    /// because that is the question that was actually put. Somebody who
+    /// refused `git push` refused it whether the next attempt spells it with a
+    /// different flag or reaches it through a script, and a key that told those
+    /// apart would remember nothing a retry could not walk around.
+    ///
+    /// Per run, which is the whole of how it is forgotten: the operator's next
+    /// message is a new run, so a no holds for the work it was said about and
+    /// for nothing after it. Nothing is stored, for the reason a job's lock is
+    /// not: a refusal that outlived the process would be a repository quietly
+    /// refusing pushes nobody could find the decision behind.
+    ///
+    /// Held exactly as long as the run is, on the same path `stopped` is.
+    refused: HashMap<RunId, HashSet<(AgentId, String)>>,
 }
 
 struct Inner {
@@ -1808,9 +1833,17 @@ impl Runtime {
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
 
         if repository.gate == Gate::AskBeforePushing {
-            if let Some(what) = crate::coding::bridge::outward(command) {
+            let root = std::path::Path::new(&repository.path);
+            if let Some(reach) = crate::coding::bridge::outward(command, root).await {
                 if !self
-                    .ask_about_push(card.id, run_id, &repository.name, &what, Asker::Agent)
+                    .ask_about_push(
+                        card.id,
+                        run_id,
+                        &repository.name,
+                        command,
+                        &reach,
+                        Asker::Agent,
+                    )
                     .await
                 {
                     return Ok(Line::Refused);
@@ -1954,7 +1987,7 @@ impl Runtime {
                 Harness::Pi => None,
                 Harness::Claude => match crate::coding::presence(harness).await {
                     crate::coding::Presence::Installed { bridged: true, .. } => {
-                        runtime.inner.bridge.open(signals, gate).await
+                        runtime.inner.bridge.open(signals, gate, path.clone().into()).await
                     }
                     _ => None,
                 },
@@ -2036,20 +2069,20 @@ impl Runtime {
                         // task, because a dropped sender is a deny and a job
                         // denied by Guaca's own plumbing is the one refusal
                         // that would be a lie.
-                        crate::coding::Signal::Permission { command, reply } => {
+                        crate::coding::Signal::Permission { line, reach, reply } => {
                             let asking = runtime.clone();
                             let repository = name.clone();
                             tokio::spawn(async move {
-                                let allowed =
-                                    asking
-                                        .ask_about_push(
-                                            agent,
-                                            job_run,
-                                            &repository,
-                                            &command,
-                                            Asker::Job,
-                                        )
-                                        .await;
+                                let allowed = asking
+                                    .ask_about_push(
+                                        agent,
+                                        job_run,
+                                        &repository,
+                                        &line,
+                                        &reach,
+                                        Asker::Job,
+                                    )
+                                    .await;
                                 let _ = reply.send(allowed);
                             });
                         }
@@ -2061,6 +2094,7 @@ impl Runtime {
             // window would close it in ten minutes anyway; this is what keeps a
             // card for a job that is already gone off the operator's desk.
             runtime.release_parked(job_run);
+            runtime.forget_refusals(job_run);
 
             // Released before the result is delivered, so the turn that reads
             // "it finished" can start the next job in the same repository. The
@@ -2298,6 +2332,7 @@ impl Runtime {
             if *entry == 0 {
                 runs.outstanding.remove(&run);
                 runs.stopped.remove(&run);
+                runs.refused.remove(&run);
                 true
             } else {
                 false
@@ -2642,26 +2677,55 @@ impl Runtime {
         agent: AgentId,
         run_id: RunId,
         repository: &str,
-        command: &str,
+        line: &str,
+        reach: &Reach,
         asker: Asker,
     ) -> bool {
         let Ok(Some(card)) = self.inner.store.get_agent(agent) else {
             return false;
         };
 
+        // Asked once per run, however many times the model reaches for it. See
+        // `Runs::refused`.
+        //
+        // The standing grant is consulted here and nowhere earlier, so that an
+        // operator who denied a push and then told this agent it may act on
+        // their behalf gets the second answer rather than the first. It is the
+        // broader and the newer of the two, and a memory that outranked it
+        // would be Guaca holding a decision the operator has since changed.
+        if self.already_refused(run_id, agent, &reach.what)
+            && !matches!(
+                self.inner.store.has_standing_grant(agent, ProtectedAction::ActOnBehalf),
+                Ok(true)
+            )
+        {
+            return false;
+        }
+
+        // The push leads, and the script is how it got there. That order is
+        // the emphasis the card needs: what the operator is authorizing is the
+        // thing that cannot be taken back, not the name the agent typed for it.
+        let by_way = match &reach.through {
+            None => String::new(),
+            Some(script) => format!(", by way of {script}"),
+        };
         let summary = match asker {
             Asker::Job => format!(
-                "The coding agent working in {repository} for {} wants to run `{command}`, which \
+                "The coding agent working in {repository} for {} wants to run `{}`{by_way}. That \
                  reaches outside the repository under your name.",
-                card.name
+                card.name, reach.what
             ),
             Asker::Agent => format!(
-                "{} wants to run `{command}` in {repository}, which reaches outside the \
+                "{} wants to run `{}` in {repository}{by_way}. That reaches outside the \
                  repository under your name.",
-                card.name
+                card.name, reach.what
             ),
         };
-        let detail = vec![DetailField { label: "Command".to_string(), value: command.to_string() }];
+        // The line the model wrote, not what this made of it. The label says
+        // Command and the field carried the summary instead, so an operator
+        // reading it was told `git push` about a `git push --force`, which is
+        // the one detail on the card that changes the answer.
+        let detail = vec![DetailField::new("Command", shown(line))];
 
         let settled = self
             .park_with(
@@ -2690,10 +2754,43 @@ impl Runtime {
             return true;
         }
 
+        // A no is remembered and nothing else is. An expiry is the operator
+        // being somewhere else rather than the operator answering, and holding
+        // it against them would mean a request they never saw refusing the one
+        // they would have seen two minutes later.
+        if matches!(settled, Ok(Some(Approval { state: ApprovalState::Deny, .. }))) {
+            self.remember_refusal(run_id, agent, &reach.what);
+            return false;
+        }
+
         matches!(
             settled,
             Ok(Some(Approval { state: ApprovalState::Allow | ApprovalState::AlwaysAllow, .. }))
         )
+    }
+
+    /// Whether this run has already put this question to the operator and been
+    /// told no.
+    fn already_refused(&self, run: RunId, agent: AgentId, what: &str) -> bool {
+        self.inner
+            .runs
+            .lock()
+            .refused
+            .get(&run)
+            .is_some_and(|refused| refused.contains(&(agent, what.to_string())))
+    }
+
+    fn remember_refusal(&self, run: RunId, agent: AgentId, what: &str) {
+        self.inner.runs.lock().refused.entry(run).or_default().insert((agent, what.to_string()));
+    }
+
+    /// Drops what a run was refused, once that run is over.
+    ///
+    /// The one caller is a coding job ending. An ordinary run is dropped by
+    /// `track_inflight` when it settles, which a job's run never does: nothing
+    /// is ever booked against it.
+    fn forget_refusals(&self, run: RunId) {
+        self.inner.runs.lock().refused.remove(&run);
     }
 
     /// Tells the agent that started a job that the operator ended it.
@@ -6621,6 +6718,23 @@ impl Pen {
         }
         self.last = Instant::now();
     }
+}
+
+/// One shell line, as much of it as a card can carry.
+///
+/// The whole line where it fits, because the flags are the part of a push that
+/// decides the answer. Cut rather than summarized where it does not: a summary
+/// is what the field held before, and is what made it worth nothing.
+fn shown(line: &str) -> String {
+    /// A long line on a card is a line nobody reads to the end of. Generous
+    /// enough that an ordinary push, however it is spelled, arrives whole.
+    const WIDTH: usize = 400;
+
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= WIDTH {
+        return line;
+    }
+    format!("{}…", line.chars().take(WIDTH).collect::<String>())
 }
 
 /// A message body and the files it carries, as parts.

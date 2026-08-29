@@ -129,6 +129,8 @@ repo: the frontend renders state and forwards intent.
 | Reaching a job that is already running, stopping one, or anything a hook does | *A job can be reached while it runs* in `docs/CODING.md`, then `coding/bridge.rs`, and run the live half of `tests/coding.rs`, which is the only thing that can check any of it |
 | Whether a job stops before it pushes, and what counts as outward-facing | *The gate is a decision the operator takes per repository* in `docs/CODING.md`, then `bridge::outward` and `Runtime::park_with` |
 | Whether a `shell` line stops before it pushes, and which asker the card names | *The gate is asked from the same function* in `docs/CODING.md`, then `Runtime::ask_about_push` and `Asker`, which have to answer for both doors |
+| A push kept in a script, what the gate follows and what it will not | *The line is read, and then what the line runs is read* and *And what it deliberately does not read* in `docs/CODING.md`, then `bridge::outward` and `bridge::Reach` |
+| An operator asked the same thing twice, and how long a no lasts | *One no settles the question for the rest of the run* in `docs/CODING.md`, then `Runs::refused` and `Runtime::ask_about_push` |
 | What a job inherits from the operator's own Claude Code, and what that costs | *A job inherits the operator's own Claude Code setup* in `docs/CODING.md`, which has the measurement and the one hazard in it |
 | A program that is installed and reported missing: `claude`, `pi`, `git`, `gh` | *A double-clicked app does not have the operator's `PATH`* below, then `src-tauri/src/programs.rs` |
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
@@ -538,6 +540,31 @@ the model takes a screenshot to see what `browse` did.
   readings of one gate is a gate an agent walks around by picking the other
   tool, which is worse than none: the operator switched it on and would be told
   it was holding. `docs/CODING.md`.
+- **The gate reads what a line runs, and stops short of what it cannot read.**
+  Those are one decision, not a rule and a hole in it. Reading the words alone
+  is what one level of indirection walks straight past: `./scripts/ship.sh` is
+  not `git push`, so a repository whose release is a script had a gate that was
+  switched on, said it was holding, and stopped nothing. So a package script and
+  a file in the work tree are read and asked the same question, three deep. A
+  Makefile target, a compiled program and anything that is not text are not, and
+  that is the decision rather than the gap: treating *there is something here I
+  cannot see through* as a reason to ask parks a turn for `./target/release/app`
+  and `./node_modules/.bin/vite`, which is the wrong yes that teaches an
+  operator to switch the gate off, after which it holds nothing at all.
+  `docs/CODING.md`.
+- **A no is remembered for the run, and only a no is.** A model that has just
+  been refused a push tries the push, which is ordinary rather than confused:
+  what it read says the operator did not allow it, not that they never will. The
+  operator pays, in a second card and a third for a question they are sitting
+  there answering. `Runs::refused` is keyed by the outward action the card
+  named rather than by the line, because a key that told `git push origin main`
+  from `git push --force` would remember nothing a retry could not walk around.
+  An expiry is not remembered: that is the operator being somewhere else rather
+  than answering, and held against them a request nobody saw would refuse the
+  one they would have seen two minutes later. Per run, so the operator's next
+  message clears it; in memory, for the reason a job's lock is, since a refusal
+  that outlived the process is a repository quietly refusing pushes with no
+  decision behind it.
 - **`shell` takes no lock, and `code` takes one.** They look like the same
   decision about one work tree and are opposite ones. Two harnesses in a
   directory interleave their edits over minutes and nothing downstream could say

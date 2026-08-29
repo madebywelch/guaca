@@ -69,7 +69,7 @@
 //! thing at more length, and neither should ever be softened into a claim about
 //! confinement.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -128,10 +128,14 @@ pub enum Signal {
     PullRequest { url: String, branch: String },
     /// It is about to do something outward-facing and the gate stopped it.
     ///
+    /// Both the line the model wrote and what [`outward`] made of it, because
+    /// they are not the same sentence and the operator needs both: `npm run
+    /// release` is what was typed and `git push` is what it does.
+    ///
     /// The `reply` is what unblocks the hook, and it must always be sent:
     /// dropping it answers `false`, which is a deny, which is the safe way for
     /// a bug here to fail but not a way to leave it.
-    Permission { command: String, reply: oneshot::Sender<bool> },
+    Permission { line: String, reach: Reach, reply: oneshot::Sender<bool> },
 }
 
 /// What a job's end of the bridge adds to the harness command line.
@@ -156,6 +160,12 @@ pub struct Wiring {
 struct Job {
     signals: mpsc::Sender<Signal>,
     gate: Gate,
+    /// The work tree this job runs in.
+    ///
+    /// Held only so the gate can read what a line in it actually runs. Nothing
+    /// else here needs it: the task on the other end of `signals` has the
+    /// repository already, which is why nothing else about it is on the wire.
+    root: PathBuf,
     /// Staged operator messages that have not reached the model yet.
     mail: Mutex<Vec<String>>,
 }
@@ -192,7 +202,12 @@ impl Bridge {
     /// deliberate: everything here is an improvement on a job that worked
     /// without any of it, so a bridge that cannot start must degrade to the
     /// job that worked, not to no job at all.
-    pub async fn open(&self, signals: mpsc::Sender<Signal>, gate: Gate) -> Option<Session> {
+    pub async fn open(
+        &self,
+        signals: mpsc::Sender<Signal>,
+        gate: Gate,
+        root: PathBuf,
+    ) -> Option<Session> {
         let port = *self.inner.port.get_or_try_init(|| listen(self.clone())).await.ok()?;
 
         let token = uuid::Uuid::new_v4().to_string();
@@ -203,11 +218,10 @@ impl Bridge {
         write_script(&script, port, &token)?;
         write_settings(&settings, &script, gate)?;
 
-        self.inner
-            .registry
-            .lock()
-            .jobs
-            .insert(token.clone(), Arc::new(Job { signals, gate, mail: Mutex::new(Vec::new()) }));
+        self.inner.registry.lock().jobs.insert(
+            token.clone(),
+            Arc::new(Job { signals, gate, root, mail: Mutex::new(Vec::new()) }),
+        );
 
         Some(Session {
             bridge: self.clone(),
@@ -618,12 +632,13 @@ async fn gate(job: &Job, payload: &serde_json::Value) -> String {
         return String::new();
     }
     let command = payload["tool_input"]["command"].as_str().unwrap_or_default();
-    let Some(what) = outward(command) else {
+    let Some(reach) = outward(command, &job.root).await else {
         return String::new();
     };
 
     let (reply, verdict) = oneshot::channel();
-    if job.signals.send(Signal::Permission { command: what, reply }).await.is_err() {
+    let asking = Signal::Permission { line: command.to_string(), reach, reply };
+    if job.signals.send(asking).await.is_err() {
         // Nothing is listening, which means the job's own task has gone. Say
         // nothing and let the run decide: this is the one place a refusal would
         // be about Guaca's plumbing rather than about the operator's answer.
@@ -650,6 +665,42 @@ async fn gate(job: &Job, payload: &serde_json::Value) -> String {
     .to_string()
 }
 
+/// What a line reaches outside the work tree with, and how it gets there.
+///
+/// Two fields rather than one string, because the operator needs both and they
+/// are usually not the same words. `git push` says what it does in the words
+/// the agent typed. `npm run release` says nothing at all, and a card that
+/// repeated that back would be asking somebody to approve something
+/// irreversible by its nickname.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reach {
+    /// The outward-facing command itself: `git push`, `gh pr create`.
+    pub what: String,
+    /// The script in the tree that runs it, when the line does not say so
+    /// itself: `package.json "release"`, `scripts/ship.sh`.
+    pub through: Option<String>,
+}
+
+/// How far the gate follows a line into the tree.
+///
+/// A script that runs a script that runs a script is already unusual. Four
+/// deep is a knot nobody ties by hand, and the bound is what stops a pair of
+/// scripts that call each other from being a question with no answer.
+const SCRIPT_DEPTH: usize = 3;
+
+/// How many distinct scripts one line may cost.
+///
+/// A `package.json` with two hundred entries that call each other is not a
+/// reason to stat two hundred files in front of one tool call.
+const MAX_SCRIPTS: usize = 16;
+
+/// The largest file this reads looking for a push.
+///
+/// A quarter of a megabyte is a very large shell script and a very small
+/// anything else. See [`file_script`] for why a file past it is left alone
+/// rather than asked about.
+const MAX_SCRIPT_BYTES: u64 = 256 * 1024;
+
 /// What an outward-facing command in this line is, if there is one.
 ///
 /// Outward-facing means it leaves the work tree under the operator's own name
@@ -657,34 +708,92 @@ async fn gate(job: &Job, payload: &serde_json::Value) -> String {
 /// Everything else, including every edit and every test run, is what the
 /// directory and git already cover.
 ///
+/// ## The line is read, and then what the line runs is read
+///
+/// [`named`] answers about the words themselves, which is the whole of what
+/// this used to do, and one level of indirection walked straight past it.
+/// `./scripts/ship.sh` is not `git push` and never will be, so a repository
+/// whose release is a script had a gate that was on, said it was holding, and
+/// stopped nothing. That is worse than no gate: an operator who switched it on
+/// was told it was working.
+///
+/// So a line that names nothing is looked at again for the scripts in *this
+/// tree* that it runs, and those are read and asked the same question. A
+/// package script and a file in the work tree, up to [`SCRIPT_DEPTH`] deep.
+///
+/// ## What it deliberately does not read
+///
+/// A Makefile target, a compiled program, an interpreted script it cannot
+/// parse as text. Those are all indirection too, and reading none of them is
+/// the decision rather than the gap. The alternative is to treat "there is
+/// something here I cannot see through" as a reason to ask, and the ordinary
+/// case for that is `./target/release/app` and `./node_modules/.bin/vite`:
+/// every locally built program in the tree, on every line that runs one. A
+/// gate that parks a turn for running the binary it just compiled is the
+/// wrong-yes that teaches an operator to switch it off, and then it holds
+/// nothing at all.
+///
 /// This is a judgment about the ordinary case and not a boundary. A shell line
 /// is not something anything can parse without a shell, and a job that wanted
 /// to get around this could: the process runs as the operator with their
 /// credentials either way, which was true before this existed and is stated at
 /// the top of this file and in `docs/CODING.md`. What it buys is that the
 /// ordinary push, made by a job doing what it was asked, is one the operator
-/// sees first.
+/// sees first — whether the job spells it out or keeps it in a script.
 ///
 /// It errs toward asking. A wrong yes costs one prompt on the desk; a wrong no
 /// is the behavior the operator switched this on to stop.
-pub fn outward(line: &str) -> Option<String> {
-    for segment in segments(line) {
-        let words = words(&segment);
-        let mut rest = words.iter().map(String::as_str);
-        // A wrapper is how the same command arrives wearing a hat. A leading
-        // environment assignment, `sudo`, and a shell handed the whole line as
-        // one `-c` argument are the three that turn up in practice, and none of
-        // them changes what actually runs. Flags are skipped with them, which
-        // is what takes the `-c` off in the third case.
-        let program = loop {
-            let word = rest.next()?;
-            let bare = word.rsplit('/').next().unwrap_or(word);
-            if WRAPPERS.contains(&bare) || bare.starts_with('-') || word.contains('=') {
-                continue;
+pub async fn outward(line: &str, root: &Path) -> Option<Reach> {
+    if let Some(what) = named(line) {
+        return Some(Reach { what, through: None });
+    }
+
+    // Once, rather than per candidate: every path found below is checked
+    // against it, and a root that is not there resolves nothing, which is the
+    // answer this gave before any of this existed.
+    let root = tokio::fs::canonicalize(root).await.ok()?;
+
+    let mut seen = HashSet::new();
+    let mut frontier = scripts_in(&root, line, &mut seen).await;
+    for _ in 0..SCRIPT_DEPTH {
+        let mut deeper = Vec::new();
+        for (script, body) in &frontier {
+            if let Some(what) = named(body) {
+                return Some(Reach { what, through: Some(script.clone()) });
             }
-            break bare;
+            // The script the *line* ran is what is carried down, not the one
+            // that happens to hold the push. An operator asked about
+            // `package.json "release"` can go and read it; asked about the
+            // third file in a chain they have to reconstruct how the agent got
+            // there before they can answer.
+            for (_, further) in scripts_in(&root, body, &mut seen).await {
+                deeper.push((script.clone(), further));
+            }
+        }
+        if deeper.is_empty() {
+            break;
+        }
+        frontier = deeper;
+    }
+    None
+}
+
+/// What this line says itself, with nothing read off the disk.
+///
+/// Split out of [`outward`] because it is asked twice: once about the words
+/// the agent wrote, and once per script those words turn out to run.
+fn named(line: &str) -> Option<String> {
+    for segment in segments(line) {
+        // `continue` rather than `?`, and that is a fix rather than a
+        // preference. A segment with no program in it used to end the whole
+        // walk, so `(cd sub); git push` — which `segments` splits into an
+        // empty piece and then the push — answered that nothing here reaches
+        // outside the repository.
+        let Some((word, args)) = invocation(&segment) else {
+            continue;
         };
-        let args: Vec<&str> = rest.collect();
+        let program = word.rsplit('/').next().unwrap_or(&word);
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
 
         let verb = match program {
             "git" => git_subcommand(&args),
@@ -696,6 +805,121 @@ pub fn outward(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The program one segment runs, as the word that named it, and its arguments.
+///
+/// A wrapper is how the same command arrives wearing a hat. A leading
+/// environment assignment, `sudo`, and a shell handed the whole line as one
+/// `-c` argument are the three that turn up in practice, and none of them
+/// changes what actually runs. Flags are skipped with them, which is what takes
+/// the `-c` off in the third case.
+///
+/// The word comes back whole rather than as its base name, because the two
+/// callers want different halves of it: `git` is a program name and
+/// `scripts/ship.sh` is a path, and taking the base name early is what left
+/// nothing to resolve the second one against.
+fn invocation(segment: &str) -> Option<(String, Vec<String>)> {
+    let mut rest = words(segment).into_iter();
+    let program = loop {
+        let word = rest.next()?;
+        let skip = {
+            let bare = word.rsplit('/').next().unwrap_or(word.as_str());
+            WRAPPERS.contains(&bare) || bare.starts_with('-') || word.contains('=')
+        };
+        if !skip {
+            break word;
+        }
+    };
+    Some((program, rest.collect()))
+}
+
+/// Every script in this tree that the line runs, with the text of each.
+///
+/// One level: what comes back is fed to [`named`], and to this again. The pair
+/// is what the operator would need to see — the script named as they would
+/// recognize it, and its body for the same rule to read.
+///
+/// `seen` is shared across the whole walk rather than per level, so a pair of
+/// scripts that run each other is read once and a file reached two ways is read
+/// once. It is also the budget: [`MAX_SCRIPTS`] distinct scripts per line.
+async fn scripts_in(root: &Path, line: &str, seen: &mut HashSet<String>) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for segment in segments(line) {
+        if seen.len() >= MAX_SCRIPTS {
+            break;
+        }
+        let Some((word, args)) = invocation(&segment) else {
+            continue;
+        };
+        let found = match word.rsplit('/').next().unwrap_or(&word) {
+            "npm" | "pnpm" | "yarn" | "bun" => package_script(root, &args).await,
+            _ => file_script(root, &word).await,
+        };
+        let Some((script, body)) = found else {
+            continue;
+        };
+        if seen.insert(script.clone()) {
+            out.push((script, body));
+        }
+    }
+    out
+}
+
+/// The body of the package script this invocation runs, if it runs one.
+///
+/// `npm run release`, `pnpm release` and `yarn release` all reach the same
+/// entry in the same file, so they are one case rather than three. A name with
+/// no entry behind it is a command that is about to fail, which is nothing to
+/// look into and nothing to ask about.
+///
+/// The file is the one at the root of the repository. A workspace that keeps
+/// its release script in a package one directory down is not read, for the
+/// reason in [`outward`]: this follows the ordinary case and says so.
+async fn package_script(root: &Path, args: &[String]) -> Option<(String, String)> {
+    let mut plain = args.iter().filter(|arg| !arg.starts_with('-'));
+    let mut name = plain.next()?.as_str();
+    // `npm run release` and `pnpm release` are the same request. Anything else
+    // in that position is a name, and a name with no script behind it stops
+    // this a line later.
+    if matches!(name, "run" | "run-script" | "exec") {
+        name = plain.next()?.as_str();
+    }
+    let text = read_text(&root.join("package.json")).await?;
+    let manifest: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let body = manifest.get("scripts")?.get(name)?.as_str()?;
+    Some((format!("package.json \"{name}\""), body.to_string()))
+}
+
+/// The text of the script this word runs, if it is one inside the tree.
+///
+/// Inside the work tree and readable as text is the whole of the test, and both
+/// halves are load-bearing. A path that resolves outside the repository is not
+/// this job's tree and is read by nothing here. Something that is not text is
+/// something this cannot judge, and is left exactly as it was found: see
+/// [`outward`] on why that is the decision and not the gap.
+async fn file_script(root: &Path, word: &str) -> Option<(String, String)> {
+    // `join` on an absolute path replaces rather than appends, so an absolute
+    // word arrives here as itself. That is what makes the check below the thing
+    // that keeps this inside the repository, rather than the join.
+    let path = tokio::fs::canonicalize(root.join(word)).await.ok()?;
+    if !path.starts_with(root) {
+        return None;
+    }
+    Some((word.to_string(), read_text(&path).await?))
+}
+
+/// A file's text, when it is a file, is small enough to be a script, and is
+/// text at all.
+///
+/// The size is asked of the metadata rather than of what was read, so a huge
+/// file costs a `stat` instead of its own length in memory.
+async fn read_text(path: &Path) -> Option<String> {
+    let meta = tokio::fs::metadata(path).await.ok()?;
+    if !meta.is_file() || meta.len() > MAX_SCRIPT_BYTES {
+        return None;
+    }
+    String::from_utf8(tokio::fs::read(path).await.ok()?).ok()
 }
 
 /// Programs that run another program, and are therefore not the answer.
@@ -961,8 +1185,30 @@ mod tests {
     use super::*;
 
     fn a_job(gate: Gate) -> (Arc<Job>, mpsc::Receiver<Signal>) {
+        job_in(gate, PathBuf::from("/nonexistent-work-tree"))
+    }
+
+    fn job_in(gate: Gate, root: PathBuf) -> (Arc<Job>, mpsc::Receiver<Signal>) {
         let (signals, heard) = mpsc::channel(8);
-        (Arc::new(Job { signals, gate, mail: Mutex::new(Vec::new()) }), heard)
+        (Arc::new(Job { signals, gate, root, mail: Mutex::new(Vec::new()) }), heard)
+    }
+
+    /// A work tree with the given files in it, and nothing else.
+    fn a_tree(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("guac-gate-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for (path, body) in files {
+            let at = root.join(path);
+            std::fs::create_dir_all(at.parent().unwrap()).unwrap();
+            std::fs::write(&at, body).unwrap();
+        }
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::canonicalize(&root).unwrap()
+    }
+
+    /// What the gate makes of a line, with no tree to read.
+    async fn reach(line: &str) -> Option<Reach> {
+        outward(line, Path::new("/nonexistent-work-tree")).await
     }
 
     // ---- what a job is started with --------------------------------------
@@ -1107,7 +1353,12 @@ mod tests {
         let (signals, _heard) = mpsc::channel(8);
         bridge.inner.registry.lock().jobs.insert(
             "t".into(),
-            Arc::new(Job { signals, gate: Gate::Open, mail: Mutex::new(Vec::new()) }),
+            Arc::new(Job {
+                signals,
+                gate: Gate::Open,
+                root: PathBuf::from("/nonexistent-work-tree"),
+                mail: Mutex::new(Vec::new()),
+            }),
         );
 
         for n in 0..MAX_STAGED + 3 {
@@ -1127,7 +1378,12 @@ mod tests {
         let (signals, _heard) = mpsc::channel(8);
         bridge.inner.registry.lock().jobs.insert(
             "t".into(),
-            Arc::new(Job { signals, gate: Gate::Open, mail: Mutex::new(Vec::new()) }),
+            Arc::new(Job {
+                signals,
+                gate: Gate::Open,
+                root: PathBuf::from("/nonexistent-work-tree"),
+                mail: Mutex::new(Vec::new()),
+            }),
         );
         assert!(bridge.post("t", &"x".repeat(MAX_MESSAGE_LEN * 2)));
 
@@ -1139,8 +1395,8 @@ mod tests {
 
     // ---- the gate --------------------------------------------------------
 
-    #[test]
-    fn a_push_is_outward_facing_however_it_is_spelled() {
+    #[tokio::test]
+    async fn a_push_is_outward_facing_however_it_is_spelled() {
         for line in [
             "git push",
             "git push --force-with-lease origin HEAD",
@@ -1150,13 +1406,16 @@ mod tests {
             "npm test && git push origin feature",
             "sh -c 'git push'",
             "sudo git push",
+            // A subshell puts an empty piece in front of the push. The walk
+            // used to end on it and answer that nothing here reaches outside.
+            "(cd sub); git push",
         ] {
-            assert!(outward(line).is_some(), "{line}");
+            assert!(reach(line).await.is_some(), "{line}");
         }
     }
 
-    #[test]
-    fn reading_is_never_outward_facing() {
+    #[tokio::test]
+    async fn reading_is_never_outward_facing() {
         // The wrong `no` here is a prompt on the desk. The wrong `yes` is a
         // job parked for reading its own history, which is what teaches an
         // operator to switch the gate off.
@@ -1173,21 +1432,138 @@ mod tests {
             "echo git push",
             "",
         ] {
-            assert_eq!(outward(line), None, "{line}");
+            assert_eq!(reach(line).await, None, "{line}");
         }
     }
 
-    #[test]
-    fn opening_and_merging_reach_outside_and_looking_does_not() {
-        assert_eq!(outward("gh pr create --fill").as_deref(), Some("gh pr create"));
-        assert_eq!(outward("gh pr merge 12 --squash").as_deref(), Some("gh pr merge"));
-        assert_eq!(outward("gh release create v1.2.0").as_deref(), Some("gh release create"));
-        assert_eq!(outward("glab mr create").as_deref(), Some("glab mr create"));
+    #[tokio::test]
+    async fn opening_and_merging_reach_outside_and_looking_does_not() {
+        let what = |line: &'static str| async move { reach(line).await.map(|r| r.what) };
+        assert_eq!(what("gh pr create --fill").await.as_deref(), Some("gh pr create"));
+        assert_eq!(what("gh pr merge 12 --squash").await.as_deref(), Some("gh pr merge"));
+        assert_eq!(what("gh release create v1.2.0").await.as_deref(), Some("gh release create"));
+        assert_eq!(what("glab mr create").await.as_deref(), Some("glab mr create"));
         // `gh api` is every one of those with the topic taken off, so it is
         // read by its method instead.
-        assert!(outward("gh api -X POST /repos/o/r/issues").is_some());
-        assert!(outward("gh api --method DELETE /repos/o/r").is_some());
-        assert_eq!(outward("gh api /user"), None, "a read is a read");
+        assert!(what("gh api -X POST /repos/o/r/issues").await.is_some());
+        assert!(what("gh api --method DELETE /repos/o/r").await.is_some());
+        assert_eq!(what("gh api /user").await, None, "a read is a read");
+    }
+
+    // ---- and what the line runs ------------------------------------------
+
+    /// The gap this was built to close.
+    ///
+    /// A repository whose release is a script had a gate that was on, said it
+    /// was holding, and stopped nothing: `./scripts/ship.sh` is not `git push`
+    /// and no amount of reading the words would ever make it one.
+    #[tokio::test]
+    async fn a_push_kept_in_a_script_is_still_a_push() {
+        let root = a_tree(
+            "in-a-script",
+            &[
+                (
+                    "scripts/ship.sh",
+                    "#!/bin/sh\nset -e\ncargo build --release\ngit push origin main\n",
+                ),
+                ("package.json", r#"{"scripts":{"release":"pnpm build && ./scripts/ship.sh"}}"#),
+            ],
+        );
+
+        for (line, through) in [
+            ("./scripts/ship.sh", "./scripts/ship.sh"),
+            ("scripts/ship.sh --yes", "scripts/ship.sh"),
+            ("bash scripts/ship.sh", "scripts/ship.sh"),
+            ("cd . && ./scripts/ship.sh", "./scripts/ship.sh"),
+            ("npm run release", "package.json \"release\""),
+            ("pnpm release", "package.json \"release\""),
+            ("yarn run release", "package.json \"release\""),
+        ] {
+            let found = outward(line, &root).await.unwrap_or_else(|| panic!("{line}"));
+            assert_eq!(found.what, "git push", "{line}");
+            // Named as the operator would recognize it. Asked about the third
+            // file in a chain they would have to work out how the agent got
+            // there before they could answer.
+            assert_eq!(found.through.as_deref(), Some(through), "{line}");
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// And the ordinary script is still ordinary.
+    #[tokio::test]
+    async fn a_script_that_does_not_reach_outside_asks_nobody() {
+        let root = a_tree(
+            "plain-script",
+            &[
+                ("scripts/ci.sh", "#!/bin/sh\ncargo test\ngit status --porcelain\n"),
+                ("package.json", r#"{"scripts":{"test":"vitest run","build":"vite build"}}"#),
+            ],
+        );
+
+        for line in [
+            "./scripts/ci.sh",
+            "npm test",
+            "pnpm build",
+            // No entry behind the name is a command about to fail, which is
+            // nothing to look into and nothing to ask about.
+            "npm run nonexistent",
+            // Outside the tree is not this job's tree.
+            "/usr/bin/env",
+            "../elsewhere/ship.sh",
+        ] {
+            assert_eq!(outward(line, &root).await, None, "{line}");
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A script that runs a script that pushes.
+    ///
+    /// And a pair that run each other, which is the reason the walk carries a
+    /// set rather than a depth alone: without it this is a question with no
+    /// answer rather than a slow one.
+    #[tokio::test]
+    async fn the_walk_goes_deeper_than_one_and_survives_a_cycle() {
+        let root = a_tree(
+            "deep",
+            &[
+                ("a.sh", "./b.sh\n"),
+                ("b.sh", "./c.sh\n"),
+                ("c.sh", "git push\n"),
+                ("loop-one.sh", "./loop-two.sh\n"),
+                ("loop-two.sh", "./loop-one.sh\n"),
+            ],
+        );
+
+        let found = outward("./a.sh", &root).await.unwrap();
+        assert_eq!(found.what, "git push");
+        assert_eq!(found.through.as_deref(), Some("./a.sh"), "the line's own script is named");
+
+        assert_eq!(outward("./loop-one.sh", &root).await, None);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// What it deliberately does not read.
+    ///
+    /// A compiled program in the tree is indirection this cannot see through,
+    /// and answering "ask" for it would park a turn for every locally built
+    /// binary on every line that runs one. That is the wrong yes that teaches
+    /// an operator to switch the gate off, after which it holds nothing.
+    #[tokio::test]
+    async fn something_this_cannot_read_is_left_exactly_as_it_was_found() {
+        let root = a_tree("unreadable", &[("scripts/keep", "keep")]);
+        std::fs::write(root.join("target-app"), [0xff, 0xfe, 0x00, 0x01]).unwrap();
+        std::fs::write(root.join("huge.sh"), "x".repeat(MAX_SCRIPT_BYTES as usize + 1)).unwrap();
+
+        assert_eq!(outward("./target-app --serve", &root).await, None);
+        assert_eq!(outward("./huge.sh", &root).await, None);
+        assert_eq!(outward("./not-there.sh", &root).await, None);
+        // A directory is not a script either.
+        assert_eq!(outward("./scripts", &root).await, None);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
@@ -1212,10 +1588,14 @@ mod tests {
         });
 
         let answering = tokio::spawn(async move {
-            let Some(Signal::Permission { command, reply }) = heard.recv().await else {
+            let Some(Signal::Permission { line, reach, reply }) = heard.recv().await else {
                 panic!("the gate has to reach the desk");
             };
-            assert_eq!(command, "git push");
+            assert_eq!(reach.what, "git push");
+            assert_eq!(reach.through, None);
+            // Both halves reach the desk: the operator is answering about the
+            // push, and the flags on it are what decides the answer.
+            assert_eq!(line, "git push origin main");
             reply.send(false).unwrap();
         });
 
@@ -1417,7 +1797,10 @@ mod tests {
     async fn a_job_ending_takes_its_mailbox_and_its_scratch_with_it() {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
-        let session = bridge.open(signals, Gate::Open).await.expect("the bridge has to start");
+        let session = bridge
+            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .await
+            .expect("the bridge has to start");
         let token = session.session_id().to_string();
 
         assert!(bridge.post(&token, "a correction"));
@@ -1436,7 +1819,10 @@ mod tests {
     async fn the_server_answers_a_hook_and_refuses_a_token_it_is_not_holding() {
         let bridge = Bridge::new();
         let (signals, _heard) = mpsc::channel(8);
-        let session = bridge.open(signals, Gate::Open).await.unwrap();
+        let session = bridge
+            .open(signals, Gate::Open, PathBuf::from("/nonexistent-work-tree"))
+            .await
+            .unwrap();
         let port = *bridge.inner.port.get().unwrap();
         let token = session.session_id().to_string();
         bridge.post(&token, "switch to the other library");
@@ -1472,8 +1858,9 @@ mod tests {
         let bridge = Bridge::new();
         let (one, _a) = mpsc::channel(8);
         let (two, _b) = mpsc::channel(8);
-        let first = bridge.open(one, Gate::Open).await.unwrap();
-        let second = bridge.open(two, Gate::AskBeforePushing).await.unwrap();
+        let elsewhere = || PathBuf::from("/nonexistent-work-tree");
+        let first = bridge.open(one, Gate::Open, elsewhere()).await.unwrap();
+        let second = bridge.open(two, Gate::AskBeforePushing, elsewhere()).await.unwrap();
 
         assert_ne!(first.session_id(), second.session_id());
         bridge.post(first.session_id(), "for the first one only");

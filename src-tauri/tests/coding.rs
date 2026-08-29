@@ -28,6 +28,7 @@ use std::path::{Path, PathBuf};
 use guac_lib::coding::{self, Progress};
 use guac_lib::domain::approval::Decision;
 use guac_lib::domain::repository::{CleanRepository, Gate, Harness as Which};
+use guac_lib::runtime::events::UiEvent;
 use guac_lib::runtime::guard::GuardLimits;
 
 use harness::*;
@@ -592,6 +593,118 @@ async fn an_ordinary_line_in_a_gated_repository_runs_without_asking_anybody() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
+/// The gate reads what the line runs, not only what it says.
+///
+/// `./scripts/ship.sh` is not `git push` and no amount of reading the words
+/// would ever make it one. So a repository whose release lives in a script had
+/// a gate that was switched on, said it was holding, and stopped nothing —
+/// which is worse than no gate, because the operator was told it was working.
+///
+/// The card has to carry both halves. `./scripts/ship.sh` is what the agent
+/// asked for and says nothing about what it does; `git push` is what the
+/// operator is actually being asked to allow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_push_kept_in_one_of_the_operators_own_scripts_still_asks_first() {
+    let repo = a_repository("shell-scripted");
+    std::fs::create_dir_all(repo.join("scripts")).unwrap();
+    std::fs::write(
+        repo.join("scripts/ship.sh"),
+        "#!/bin/sh\nset -e\ntouch shipped.txt\ngit push origin main\n",
+    )
+    .unwrap();
+
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("The operator did not allow the release.".into())
+        } else {
+            Script::InRepository("./scripts/ship.sh".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::AskBeforePushing);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "cut the release").unwrap();
+
+    let request = h.awaited_request().await;
+    let card = h
+        .runtime
+        .store()
+        .pending_approvals(10)
+        .unwrap()
+        .into_iter()
+        .find(|approval| approval.id == request)
+        .expect("the request the operator is looking at");
+    assert!(card.summary.contains("./scripts/ship.sh"), "{}", card.summary);
+    assert!(card.summary.contains("git push"), "{}", card.summary);
+    // The label says Command, so the field holds the line rather than what
+    // this made of it.
+    assert_eq!(
+        card.detail.iter().find(|field| field.label == "Command").map(|field| &field.value),
+        Some(&"./scripts/ship.sh".to_string()),
+        "{:?}",
+        card.detail
+    );
+
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    assert!(
+        !repo.join("shipped.txt").exists(),
+        "the call was refused, so no part of the script may have run"
+    );
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// One no settles the question for the rest of the run.
+///
+/// A model that has just been refused a push tries the push. That is ordinary
+/// rather than confused: what it reads back says the operator did not allow it,
+/// not that they never will. The operator is the one who pays for it, in a
+/// second card and a third, for a question they are sitting there answering.
+///
+/// The second line is deliberately spelled differently. What was refused is the
+/// push, and a memory that told `git push origin main` from `git push --force`
+/// would remember nothing a retry could not walk around.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_refusal_is_not_put_to_the_operator_twice_in_one_run() {
+    let repo = a_repository("shell-refused-twice");
+
+    let stub = serve(|body| {
+        let acted = body["messages"]
+            .as_array()
+            .map(|messages| messages.iter().filter(|m| m["role"] == "tool").count())
+            .unwrap_or(0);
+        match acted {
+            0 => Script::InRepository("git push origin main".into()),
+            1 => Script::InRepository("git push --force-with-lease origin main".into()),
+            _ => Script::Say("Both attempts were refused.".into()),
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    put_in_a_repository(&h, "Engineer", &repo, Gate::AskBeforePushing);
+
+    let run = h.runtime.send_from_human(h.id("Engineer"), "push it").unwrap();
+
+    let request = h.awaited_request().await;
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.settle(run).await;
+
+    assert_eq!(
+        h.sink.count_of(|event| matches!(event, UiEvent::ApprovalRequested { .. })),
+        1,
+        "the operator answered this once and was asked once"
+    );
+    // And the second attempt was still refused, rather than quietly allowed by
+    // a gate that had stopped asking. Every result the model was handed is a
+    // refusal, so neither line reached the shell.
+    let told = tool_results(&stub);
+    assert!(told.len() >= 2, "both lines have to have been tried: {told:?}");
+    assert!(told.iter().all(|result| result.contains("Refused")), "{told:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// The door that stays open when the other one will not.
 ///
 /// A work tree with a job already in it refuses `code`, on purpose: two
@@ -828,7 +941,7 @@ async fn the_real_claude_still_honors_what_the_bridge_asks_of_it() {
     let bridge = coding::Bridge::new();
     let (signals, mut heard) = tokio::sync::mpsc::channel(32);
     let session = bridge
-        .open(signals, Gate::AskBeforePushing)
+        .open(signals, Gate::AskBeforePushing, repo.clone())
         .await
         .expect("the bridge has to start before anything else here means anything");
     let named = session.session_id().to_string();
@@ -846,8 +959,8 @@ async fn the_real_claude_still_honors_what_the_bridge_asks_of_it() {
             match signal {
                 // Answered `false`, which is the half that proves the override:
                 // the run's own permission mode would have allowed this.
-                coding::Signal::Permission { command, reply } => {
-                    asked = Some(command);
+                coding::Signal::Permission { reach, reply, .. } => {
+                    asked = Some(reach.what);
                     let _ = reply.send(false);
                 }
                 coding::Signal::Note(note) => noted = Some(note),
@@ -903,7 +1016,7 @@ async fn a_bridged_job_is_started_with_its_own_session_hooks_and_server() {
 
     let bridge = coding::Bridge::new();
     let (signals, _heard) = tokio::sync::mpsc::channel(8);
-    let session = bridge.open(signals, Gate::AskBeforePushing).await.unwrap();
+    let session = bridge.open(signals, Gate::AskBeforePushing, repo.clone()).await.unwrap();
 
     coding::run(
         Which::Claude,
