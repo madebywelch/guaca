@@ -3,7 +3,7 @@ import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useFollowBottom } from "../lib/follow";
 import { api } from "../lib/ipc";
 import { thoughtNow } from "../lib/reasoning";
-import { ACTIVITY_CHANNEL, type ChannelKey, useAgentLookup, useStore } from "../lib/store";
+import { type ChannelKey, useAgentLookup, useStore } from "../lib/store";
 import { elapsed, useNow } from "../lib/time";
 import {
   callInFlight,
@@ -22,7 +22,6 @@ import {
   errorMessage,
   plainText,
 } from "../lib/types";
-import { ActivityFlow } from "./ActivityFlow";
 import { CodingPanel } from "./CodingPanel";
 import { Composer } from "./Composer";
 import { Answering } from "./HtmlArtifact";
@@ -66,8 +65,7 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   // cascade is worse than a scrollbar that does not move: `lib/follow.ts`.
   const { ref: scrollRef, node: transcript, follow, pin } = useFollowBottom();
 
-  const isActivity = channel === ACTIVITY_CHANNEL;
-  const agent = isActivity ? undefined : lookups.byId(channel);
+  const agent = lookups.byId(channel);
   // Held steady across renders: it is the value of a context read by every page
   // in the transcript, and a fresh object each time would redraw all of them
   // for every token that lands anywhere.
@@ -135,20 +133,7 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   return (
     <section className="pane">
       <header className="pane__header">
-        {isActivity ? (
-          <>
-            <span
-              aria-hidden="true"
-              style={{ color: "var(--muted)", fontFamily: "var(--font-mono)" }}
-            >
-              #
-            </span>
-            <h1 className="pane__title">activity</h1>
-            <p className="pane__subtitle">
-              Who spoke to whom, in order. Click any arrow to read the message.
-            </p>
-          </>
-        ) : agent ? (
+        {agent ? (
           <>
             <AgentAvatar
               avatar={agent.avatar}
@@ -183,112 +168,102 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
         )}
       </header>
 
-      {isActivity ? (
-        // A list cannot show who spoke to whom, so the activity view is a
-        // board rather than a transcript.
-        <ActivityFlow messages={messages ?? []} byId={lookups.byId} />
-      ) : (
-        // A log rather than a plain box, so a screen reader offers it as the
-        // transcript it is. `aria-live` is off deliberately: the role would
-        // otherwise announce politely, and opening a channel replaces three
-        // hundred rows at once, which is the whole history read aloud for the
-        // crime of clicking a name. What is worth hearing is announced by
-        // `Arrivals` below, one message at a time, as it lands.
-        <div
-          className="pane__scroll"
-          ref={scrollRef}
-          role="log"
-          aria-live="off"
-          aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
-        >
-          {/* Who a page in this transcript may answer. Only here: the operator
+      {/* A log rather than a plain box, so a screen reader offers it as the
+          transcript it is. `aria-live` is off deliberately: the role would
+          otherwise announce politely, and opening a channel replaces three
+          hundred rows at once, which is the whole history read aloud for the
+          crime of clicking a name. What is worth hearing is announced by
+          `Arrivals` below, one message at a time, as it lands. */}
+      <div
+        className="pane__scroll"
+        ref={scrollRef}
+        role="log"
+        aria-live="off"
+        aria-label={`Conversation with ${agent?.name ?? "this agent"}`}
+      >
+        {/* Who a page in this transcript may answer. Only here: the operator
               is one of the two participants in a channel, so a value handed
               back has an obvious next message and an obvious recipient. */}
-          <Answering.Provider value={answering}>
-            {messages === undefined ? (
-              <p className="hint" style={{ padding: "1rem 1.15rem" }}>
-                Loading…
-              </p>
-            ) : messages.length === 0 ? (
-              <div className="empty">
-                <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
-              </div>
-            ) : (
-              rows.map((row) => {
-                const stands = rowStandsFor(row);
-                return (
-                  // Wrapped rather than marked on the entry itself: a row renders
-                  // as several different shapes depending on who sent what to
-                  // whom, and one of them is several rows.
-                  <div
-                    key={row.key}
-                    data-message={stands.join(" ")}
-                    data-found={focused && stands.includes(focused) ? "true" : undefined}
-                  >
-                    {row.kind === "peers" ? (
-                      <PeerBurstRow peers={row.peers} onOpen={setReading} />
-                    ) : row.kind === "refused" ? (
-                      <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
-                    ) : row.kind === "when" ? (
-                      <WhenRow at={row.at} />
-                    ) : (
-                      // Two participants, one of them named at the top of the
-                      // pane and the other reading this. Nothing here needs
-                      // telling whose words it is looking at.
-                      <MessageItem
-                        message={row.message}
-                        lookups={lookups}
-                        continued={row.continued}
-                        named={false}
-                      />
-                    )}
-                  </div>
-                );
-              })
-            )}
+        <Answering.Provider value={answering}>
+          {messages === undefined ? (
+            <p className="hint" style={{ padding: "1rem 1.15rem" }}>
+              Loading…
+            </p>
+          ) : messages.length === 0 ? (
+            <div className="empty">
+              <p className="empty__body">No messages with {agent?.name ?? "this agent"} yet.</p>
+            </div>
+          ) : (
+            rows.map((row) => {
+              const stands = rowStandsFor(row);
+              return (
+                // Wrapped rather than marked on the entry itself: a row renders
+                // as several different shapes depending on who sent what to
+                // whom, and one of them is several rows.
+                <div
+                  key={row.key}
+                  data-message={stands.join(" ")}
+                  data-found={focused && stands.includes(focused) ? "true" : undefined}
+                >
+                  {row.kind === "peers" ? (
+                    <PeerBurstRow peers={row.peers} onOpen={setReading} />
+                  ) : row.kind === "refused" ? (
+                    <RefusedRow peer={row.peer} at={row.at} body={row.body} reason={row.reason} />
+                  ) : row.kind === "when" ? (
+                    <WhenRow at={row.at} />
+                  ) : (
+                    // Two participants, one of them named at the top of the
+                    // pane and the other reading this. Nothing here needs
+                    // telling whose words it is looking at.
+                    <MessageItem
+                      message={row.message}
+                      lookups={lookups}
+                      continued={row.continued}
+                      named={false}
+                    />
+                  )}
+                </div>
+              );
+            })
+          )}
 
-            <LiveStreams channel={channel} lookups={lookups} follow={follow} />
-          </Answering.Provider>
-        </div>
-      )}
+          <LiveStreams channel={channel} lookups={lookups} follow={follow} />
+        </Answering.Provider>
+      </div>
 
-      {isActivity ? null : (
-        <>
-          {/* Outside the log on purpose. Inside it the sentence is a second
+      {/* Outside the log on purpose. Inside it the sentence is a second
               copy of the newest message for anybody reading the transcript
               itself, which is the cost of announcing it to everybody else. */}
-          <Arrivals channel={channel} messages={messages} lookups={lookups} />
-          {/* Above the line about the turn, because a coding job outlives the
+      <Arrivals channel={channel} messages={messages} lookups={lookups} />
+      {/* Above the line about the turn, because a coding job outlives the
               turn that started it: the turn footer is empty and the agent is
               idle while this is running. Keyed by agent so switching channels
               does not carry one job's tail into another's panel. */}
-          {agent && <CodingPanel key={`coding-${agent.id}`} agent={agent.id} />}
-          {/* Keyed by agent, so the disclosure below does not arrive already
+      {agent && <CodingPanel key={`coding-${agent.id}`} agent={agent.id} />}
+      {/* Keyed by agent, so the disclosure below does not arrive already
               open on a channel the operator has just switched to. */}
-          {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
-          <Composer
-            placeholder={`Message ${agent?.name ?? "agent"}`}
-            group={agent?.groupId ?? null}
-            disabled={!agent || agent.lifecycle === "terminated"}
-            disabledReason="This agent has been deleted."
-            onSend={async (text, files) => {
-              if (!agent) return;
-              // Typing into the box is a decision to be at the end of the
-              // transcript, so this is the one thing besides opening a channel
-              // that overrides where the operator was reading. Their own
-              // message landing off screen, with nothing following it, is the
-              // same bug in the other direction.
-              pin();
-              try {
-                await api.sendMessage(agent.id, text, files);
-              } catch (error) {
-                setBanner({ tone: "error", text: errorMessage(error) });
-                throw error;
-              }
-            }}
-          />
-        </>
-      )}
+      {agent && <TurnFooter key={agent.id} agent={agent} state={activity[agent.id]} />}
+      <Composer
+        placeholder={`Message ${agent?.name ?? "agent"}`}
+        group={agent?.groupId ?? null}
+        disabled={!agent || agent.lifecycle === "terminated"}
+        disabledReason="This agent has been deleted."
+        onSend={async (text, files) => {
+          if (!agent) return;
+          // Typing into the box is a decision to be at the end of the
+          // transcript, so this is the one thing besides opening a channel
+          // that overrides where the operator was reading. Their own
+          // message landing off screen, with nothing following it, is the
+          // same bug in the other direction.
+          pin();
+          try {
+            await api.sendMessage(agent.id, text, files);
+          } catch (error) {
+            setBanner({ tone: "error", text: errorMessage(error) });
+            throw error;
+          }
+        }}
+      />
     </section>
   );
 }

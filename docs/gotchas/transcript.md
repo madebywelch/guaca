@@ -54,7 +54,7 @@ the operator. `docs/WORKSPACE.md`, then `src/lib/reasoning.ts`,
   it wrote and checks the box is still there before writing again, which is why
   one pixel is enough and no threshold is. Its listener is bound by a ref
   callback for the same reason: the node is replaced whenever the pane shows a
-  pair thread or the activity board, and an effect cannot re-bind on that. The
+  pair thread or nothing at all, and an effect cannot re-bind on that. The
   size observer beside it is bound there for that reason too, and it is not
   decoration: everything under a transcript takes height from it without
   anything arriving or scrolling, so a composer growing a line or the working

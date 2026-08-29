@@ -3084,21 +3084,35 @@ impl Store {
         Ok(out)
     }
 
-    /// The conversation as a whole, oldest last, for the flow board.
+    /// One crew's conversation, oldest last, for the flow board.
     ///
     /// Includes the operator's messages and the replies back to them, not just
     /// peer traffic: a flow that starts partway through, at the first agent to
     /// agent message, hides who set it off. An agent's private activity records
     /// are excluded, since they are bookkeeping rather than a message passing
     /// between two participants.
-    pub fn conversation_flow(&self, limit: u32) -> Result<Vec<Envelope>, StoreError> {
+    ///
+    /// Scoped to a group in SQL rather than filtered after the read, and the
+    /// limit is why. The board is the newest `limit` messages, so a workspace
+    /// where one busy crew fills that window would hand a quiet crew a board
+    /// with nothing on it and no way to tell that apart from a crew that has
+    /// not spoken. The channel is the scope because agents in different groups
+    /// cannot message each other: every message in a run is filed under an
+    /// agent, and that agent's group is the run's.
+    pub fn conversation_flow(
+        &self,
+        group: GroupId,
+        limit: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
         let conn = self.conn()?;
         let mut stmt = conn.prepare(
             "SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
-               FROM messages WHERE to_kind <> 'system'
-              ORDER BY created_at DESC, id DESC LIMIT ?1",
+               FROM messages
+              WHERE to_kind <> 'system'
+                AND channel_id IN (SELECT id FROM agents WHERE group_id=?1)
+              ORDER BY created_at DESC, id DESC LIMIT ?2",
         )?;
-        let rows = stmt.query_map(params![limit], row_to_envelope)?;
+        let rows = stmt.query_map(params![group.to_string(), limit], row_to_envelope)?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row??);
@@ -5820,9 +5834,44 @@ mod tests {
         // An agent's own activity record is not a message between participants.
         send(agent(a.id), Participant::System, "tool trail");
 
-        let flow: Vec<String> =
-            f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
+        let flow: Vec<String> = f
+            .store
+            .conversation_flow(a.group_id, 50)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .collect();
         assert_eq!(flow, vec!["you asked", "peer msg", "answer"]);
+        assert!(b.group_id == a.group_id, "both land in the default group");
+    }
+
+    /// The board is drawn in one crew's settings, so it must hold one crew's
+    /// traffic. Scoped after the read instead, a busy crew filling the newest
+    /// four hundred messages would hand the quiet crew beside it an empty
+    /// board, which reads as a crew that has never spoken.
+    #[test]
+    fn the_flow_is_one_crew_and_not_the_workspace() {
+        let f = fixture();
+        let other = f.store.create_group(&group_named("Ops")).unwrap();
+        let mine = f.store.create_agent(&draft("A")).unwrap();
+        let theirs = f.store.create_agent(&draft_in("B", other.id)).unwrap();
+        let run = RunId::new();
+
+        let mut at = 1_000;
+        let mut send = |to, text: &str| {
+            let mut e = envelope(Participant::Human, to, text, run);
+            e.created_at = at;
+            at += 1;
+            f.store.append(&e).unwrap();
+        };
+        send(Participant::Agent { id: mine.id }, "mine");
+        send(Participant::Agent { id: theirs.id }, "theirs");
+
+        let read = |group| -> Vec<String> {
+            f.store.conversation_flow(group, 50).unwrap().iter().map(Envelope::plain_text).collect()
+        };
+        assert_eq!(read(mine.group_id), vec!["mine"]);
+        assert_eq!(read(other.id), vec!["theirs"]);
     }
 
     #[test]
@@ -5840,8 +5889,13 @@ mod tests {
             e.created_at = 1_000 + i as i64;
             f.store.append(&e).unwrap();
         }
-        let flow: Vec<String> =
-            f.store.conversation_flow(50).unwrap().iter().map(Envelope::plain_text).collect();
+        let flow: Vec<String> = f
+            .store
+            .conversation_flow(a.group_id, 50)
+            .unwrap()
+            .iter()
+            .map(Envelope::plain_text)
+            .collect();
         assert_eq!(flow, vec!["m0", "m1", "m2", "m3", "m4"]);
     }
 

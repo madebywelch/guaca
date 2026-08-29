@@ -15,6 +15,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/presence.ts     A crew, in the two marks its circle can carry.
   lib/orb.ts          How a crew stands inside its circle, and when it counts.
+  lib/reach.ts        How close the pointer comes before the crews slide out.
   lib/search.ts       One ranking over hits from SQLite and from the store.
   lib/trail.ts        A turn's own tool calls: what folds into one chip.
   lib/callout.ts      The one part of a reply that is for you, in a box.
@@ -137,6 +138,8 @@ repo: the frontend renders state and forwards intent.
 | Anything an agent stops to ask a person: the desk, the queue, the two kinds of request, `ask_operator` | `docs/ATTENTION.md`, then `domain/approval.rs` and `Runtime::park` |
 | An agent that cannot go on at all, what reaches the operator without parking a turn, `escalate` | *Three things an agent can do about a person* and *What an escalation is* in `docs/ATTENTION.md`, then `domain/escalation.rs` and `Store::raise_escalation` |
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
+| When the crews' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
+| Who spoke to whom, what a run cost, where that board lives | *The flow board is analysis, so it is in a crew's settings* in `docs/WORKSPACE.md`, then `src/components/GroupActivity.tsx` and `Store::conversation_flow` |
 | What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
@@ -169,6 +172,7 @@ repo: the frontend renders state and forwards intent.
 | Which of the two stores something belongs in, what `note_progress` is for, why one is a file and the other a table | *An agent's memory is what it knows, and its working notes are what it is doing* in `docs/WORKSPACE.md`, then `src-tauri/src/domain/worknote.rs`, whose header is the argument |
 | An `@` that names an agent: what resolves, and what it draws in either place | *A mention is one thing, in the box and in the message* in `docs/WORKSPACE.md`, then `src/lib/mentions.ts` and the layer under `Composer`'s textarea |
 | A size, a space, a radius, a duration or a shadow, anywhere in the app | *Every length is named* below, then the token block at the top of `src/styles.css`, and the closed-set suite in `styles.test.ts`, which is the gate |
+| What color a column is, a surface a panel is drawn on, anything about light or dark | *The page is the only white thing, and both edges are the same off-white* in `docs/WORKSPACE.md`, then the two token blocks in `src/styles.css` and the columns suite in `styles.test.ts` |
 | Anything announced to a screen reader, or a live region | *A transcript is a log, and says one thing out loud* in `docs/WORKSPACE.md` |
 | Scrolling a transcript, following the newest line, when the view may move | *A transcript follows the end for whoever is at the end, and nobody else* in `docs/WORKSPACE.md`, then `src/lib/follow.ts` |
 | The menu bar: the glyph, the count, what the menu offers, closing the window | *The menu bar is Guaca with the window shut* in `docs/WORKSPACE.md`, then `src-tauri/src/menubar.rs` |
@@ -176,7 +180,7 @@ repo: the frontend renders state and forwards intent.
 | Deleting an agent, putting one back, what the thirty days hold | *Deleting an agent is a thirty-day hold* in `docs/WORKSPACE.md`, then `Runtime::discard_agent` and `Runtime::purge_agent`, which are the two halves of what used to be one act |
 | Deleting a group, and why a disband does not use the compost | *Deleting a group deletes the crew, and the machines they were renting* in `docs/WORKSPACE.md`, then `disband_group` in `src-tauri/src/commands.rs` |
 | Preset agents, hiring a crew | *The cafeteria is a copy machine* in `docs/WORKSPACE.md`, then `src/lib/cafeteria.ts` |
-| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The reading column has two surfaces* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
+| Settings, the surface, the scale, what may interrupt the operator | *Settings is nine places*, *The page is the only white thing, and both edges are the same off-white* and *An interruption has to earn it* in `docs/WORKSPACE.md` |
 | What About says this build is, and where that string comes from | *About says which commit it is* in `docs/WORKSPACE.md`, then `src/lib/build.ts` and the `define` in `vite.config.ts` |
 | The group editor: what a crew overrides and what it inherits | *A group's settings are the app's, with the crew's answer on top* in `docs/WORKSPACE.md`, then `src/components/GroupEditor.tsx` |
 | What model an agent is offered, and how its job is guessed at | *The model field suggests three, and is still a text box* in `docs/WORKSPACE.md`, then `src/lib/roles.ts` and `llm/catalog.rs`, whose twelve use cases have to agree |

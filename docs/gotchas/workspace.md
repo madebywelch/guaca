@@ -25,6 +25,28 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   the name was freed the moment it was thrown out and the crew may have hired
   into it, so `copy_name` steps around the clash rather than letting the unique
   index refuse a button whose job is to succeed.
+- **The flow board is not a channel, and `ACTIVITY_CHANNEL` is gone.** Who
+  spoke to whom is analysis: somebody arrives at it having decided to look into
+  something, and it sat at the top of the rail under the wordmark, which is a
+  claim about how often anybody wants it that every other row in the rail paid
+  for. It is a pane in the group editor now. Deleting the key is most of the
+  value: a board addressed as a channel meant seven functions took a channel
+  that was not an agent and carried a branch for it, including which crew the
+  rail follows, what `loadChannel` reads, and what `messageAppended` maintains
+  against a board nobody had necessarily opened. It is one crew's traffic,
+  scoped in SQL, because the board is the newest four hundred messages and a
+  busy crew filling that window would hand a quiet one an empty board.
+  `docs/WORKSPACE.md`.
+- **The crews' column slides out; it does not stand open.** Two thresholds, not
+  one, or a hand resting at the boundary flickers it. Both distances are read
+  off a box CSS sizes rather than written in the component, so they are lengths
+  in the one stylesheet at the operator's own scale. The zone starts below the
+  top of the window because macOS floats the close button over that corner, and
+  it is decided from the pointer rather than from `:hover` on a strip: a strip
+  wide enough to aim at is a strip laid over the left edge of every agent row
+  behind it. Proximity, a drag in progress and focus inside it each hold it out;
+  the drag one is load-bearing, since a column that slid away mid-gesture would
+  take the drop target with it. `src/lib/reach.ts`.
 - **`select` follows an agent into its crew; `focusGroup` lets a channel go.**
   One invariant from two ends — the rail draws the row of whatever the pane is
   showing — and the asymmetry is deliberate. `select` is the operator naming an
@@ -32,3 +54,7 @@ of `Runtime::discard_agent` and `Runtime::purge_agent`.
   them naming a crew, and following the channel back out of it would undo the
   click. Before the crews had a column of their own, `select` dropped out to the
   overview instead, because that was the only view where every row was drawable.
+  What `focusGroup` falls back to is nothing, rather than the first row of the
+  crew being entered: opening a channel is the operator naming somebody, and a
+  crew that picked one for them would put an agent's history on screen as a side
+  effect of a click that was about the crew.
