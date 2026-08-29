@@ -137,6 +137,25 @@ describe("IPC contract", () => {
     expect([...variants].sort()).toEqual([...known].sort());
   });
 
+  it("agrees on where the menu bar can send the window", () => {
+    // The strip points at two things and the window answers them with two
+    // different calls. A variant added in Rust and never written down here is a
+    // click that arrives and does nothing: the payload lands, no branch matches
+    // it, and nothing else in the build has an opinion about that.
+    const block = read("src-tauri/src/tray.rs").match(/pub enum Reveal \{([\s\S]*?)\n\}/);
+    if (!block) throw new Error("could not find enum Reveal in tray.rs");
+    const variants = [...block[1]!.matchAll(/^\s{4}([A-Z][A-Za-z]*)/gm)].map(
+      (found) => found[1]![0]!.toLowerCase() + found[1]!.slice(1),
+    );
+    expect(variants.length).toBeGreaterThan(1);
+
+    const union = read("src/lib/types.ts").match(/export type Reveal =([\s\S]*?);\n/);
+    if (!union) throw new Error("could not find the Reveal union in types.ts");
+    const known = [...union[1]!.matchAll(/kind: "([a-zA-Z]+)"/g)].map((found) => found[1]!);
+
+    expect([...variants].sort()).toEqual([...known].sort());
+  });
+
   it("draws the same floor under a price on both sides", () => {
     // The rail's meters and the menu bar are two readings of one number, and
     // each decides on its own whether a cost is worth the width it takes. A

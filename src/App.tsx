@@ -30,6 +30,7 @@ export default function App() {
   const applyEvent = useStore((s) => s.applyEvent);
   const refreshAgents = useStore((s) => s.refreshAgents);
   const select = useStore((s) => s.select);
+  const focusGroup = useStore((s) => s.focusGroup);
   const loadChannel = useStore((s) => s.loadChannel);
   const groups = useStore((s) => s.groups);
   const dropAgent = useStore((s) => s.dropAgent);
@@ -153,8 +154,12 @@ export default function App() {
     let canceled = false;
 
     void (async () => {
-      const stop = await onRevealRequest((agent) => {
-        void select(agent);
+      const stop = await onRevealRequest((target) => {
+        // Two destinations, and the crew is not a channel: `focusGroup` opens
+        // the crew and picks nobody in it, because a click that was about the
+        // crew must not put somebody's history on screen as a side effect.
+        if (target.kind === "crew") void focusGroup(target.id);
+        else void select(target.id);
       });
       if (canceled) {
         stop();
@@ -167,7 +172,7 @@ export default function App() {
       canceled = true;
       unlisten?.();
     };
-  }, [select]);
+  }, [focusGroup, select]);
 
   /**
    * Runs something on one agent and re-reads the roster.

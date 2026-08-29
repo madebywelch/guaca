@@ -932,6 +932,16 @@ export interface DeviceCode {
   intervalSecs: number;
 }
 
+/**
+ * Where the menu bar is asking the window to go.
+ *
+ * One gesture, two destinations, and neither is the other's fallback: an agent
+ * is `select`, which follows it into whatever crew it is in, and a crew is
+ * `focusGroup`, which opens the crew and chooses nobody in it. Kept in step
+ * with `Reveal` in `tray.rs`, which `ipc.contract.test.ts` checks.
+ */
+export type Reveal = { kind: "agent"; id: AgentId } | { kind: "crew"; id: GroupId };
+
 export type UiEvent =
   | { type: "agentsChanged" }
   | { type: "messageAppended"; message: Envelope }
