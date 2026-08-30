@@ -37,6 +37,8 @@
 //! runs this same function against the live vendors instead of rebuilding the
 //! URLs beside it.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use reqwest::RequestBuilder;
@@ -226,6 +228,7 @@ pub async fn authorize(
     resource: &str,
     challenge_header: Option<&str>,
     gate: &Gate<'_>,
+    landing: &Landing,
     open: impl FnOnce(&str) -> Result<(), String>,
     now_ms: impl Fn() -> i64,
 ) -> Result<Grant, OauthError> {
@@ -238,20 +241,20 @@ pub async fn authorize(
         return Err(OauthError::NoRegistration { issuer });
     };
 
-    // Bound before the client is registered, and that ordering is the whole
-    // reason a loopback redirect is acceptable here: the port in the redirect
-    // URI is one the operating system has already given us, so it cannot be
-    // taken by something else between choosing it and listening on it.
-    let listener =
-        TcpListener::bind("127.0.0.1:0").await.map_err(|source| OauthError::NoPort { source })?;
-    let port = listener.local_addr().map_err(|source| OauthError::NoPort { source })?.port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
-
-    let client = register(&http, &registration_endpoint, &redirect_uri, gate).await?;
-
     let verifier = secret();
     let challenge = pkce_challenge(&verifier);
     let state = secret();
+
+    // Opened before the client is registered, and that ordering is the whole
+    // reason a loopback redirect is acceptable here: the port in the redirect
+    // URI is one the operating system has already given us, so it cannot be
+    // taken by something else between choosing it and listening on it. A
+    // served landing has no port to race for; it is opened first anyway, so
+    // the two orders are one order.
+    let opened = landing.open(&state).await?;
+    let redirect_uri = opened.redirect_uri.clone();
+
+    let client = register(&http, &registration_endpoint, &redirect_uri, gate).await?;
 
     let mut url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&state={}\
@@ -277,9 +280,216 @@ pub async fn authorize(
     // names a different issuer is a mix-up attack, where an authorization server
     // the operator does not use hands back a code this client would then present
     // to the one they do.
-    let code = wait_for_redirect(listener, &state, &issuer).await?;
+    let code = opened.wait(&state, &issuer).await?;
     exchange(&http, &server, &client, &code, &verifier, &redirect_uri, resource, gate, &now_ms)
         .await
+}
+
+// ---- where the browser lands ---------------------------------------------
+
+/// The query a browser came back with, and a way to tell it what happened.
+///
+/// What the served route hands to the flow that is waiting. The page is the
+/// flow's to choose, because only the flow knows whether the state matched and
+/// the issuer was the one it sent the operator to; a route that answered
+/// "Connected" on its own would say so to a mix-up.
+pub struct Answer {
+    pub fields: Vec<(String, String)>,
+    pub reply: tokio::sync::oneshot::Sender<(u16, &'static str)>,
+}
+
+/// Every sign-in a served host is waiting on, by the `state` it sent.
+///
+/// One map for the whole daemon, held on the host and handed to every flow.
+/// A callback naming a state nobody is waiting for is answered 404 and
+/// forgotten: it is a stale tab, or somebody guessing.
+pub type Callbacks = Arc<Mutex<HashMap<String, tokio::sync::mpsc::UnboundedSender<Answer>>>>;
+
+/// Where a browser is sent back to after it authorizes, and how its answer
+/// reaches the flow that is waiting for it.
+///
+/// Two, because the two hosts differ in exactly this. A desktop binds a
+/// loopback port before naming the redirect, and the browser on the same
+/// machine lands on it. A server has no browser on the machine and no port a
+/// remote browser could reach, so the redirect is a route on the origin the
+/// operator reached the workspace at, and the daemon forwards what arrives to
+/// the flow by its state. Everything after the landing (PKCE, the state, the
+/// issuer check, the exchange) is one path.
+#[derive(Clone)]
+pub enum Landing {
+    Loopback,
+    Served {
+        /// Scheme and host the operator's browser reached the workspace at,
+        /// with no trailing slash. The redirect URI is this plus the route.
+        origin: String,
+        callbacks: Callbacks,
+    },
+}
+
+/// The route a served landing answers on. One string, read by the daemon's
+/// router and by the redirect URI it registers, so they cannot disagree.
+pub const CALLBACK_ROUTE: &str = "/v1/oauth/callback";
+
+impl Landing {
+    /// Opens the landing for one sign-in and names the redirect.
+    ///
+    /// Takes the state because a served landing is filed under it: that is
+    /// how the daemon's route finds the flow a browser came back for.
+    pub async fn open(&self, state: &str) -> Result<Opened, OauthError> {
+        match self {
+            Landing::Loopback => {
+                let listener = TcpListener::bind("127.0.0.1:0")
+                    .await
+                    .map_err(|source| OauthError::NoPort { source })?;
+                let port =
+                    listener.local_addr().map_err(|source| OauthError::NoPort { source })?.port();
+                Ok(Opened {
+                    redirect_uri: format!("http://127.0.0.1:{port}/callback"),
+                    waiter: Waiter::Loopback(listener),
+                })
+            }
+            Landing::Served { origin, callbacks } => {
+                let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+                callbacks
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(state.to_string(), sender);
+                Ok(Opened {
+                    redirect_uri: format!("{}{CALLBACK_ROUTE}", origin.trim_end_matches('/')),
+                    waiter: Waiter::Served {
+                        receiver,
+                        filed: Filed { state: state.to_string(), in_: callbacks.clone() },
+                    },
+                })
+            }
+        }
+    }
+
+    /// Hands a browser's answer to the flow waiting for it, and returns the
+    /// page to show the browser. None when nobody is waiting on that state.
+    ///
+    /// Called by the daemon's route. The flow decides the page (see
+    /// [`Answer`]) and this waits for it, so the browser is told what actually
+    /// happened rather than what a route could guess.
+    pub async fn deliver(&self, fields: Vec<(String, String)>) -> Option<(u16, &'static str)> {
+        let Landing::Served { callbacks, .. } = self else { return None };
+        let state = fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.clone())?;
+        let sender =
+            callbacks.lock().unwrap_or_else(PoisonError::into_inner).get(&state).cloned()?;
+        let (reply, page) = tokio::sync::oneshot::channel();
+        sender.send(Answer { fields, reply }).ok()?;
+        page.await.ok()
+    }
+}
+
+/// One sign-in's landing, opened. Holds the port or the registration until
+/// the answer arrives or the operator has taken too long.
+pub struct Opened {
+    pub redirect_uri: String,
+    waiter: Waiter,
+}
+
+enum Waiter {
+    Loopback(TcpListener),
+    Served { receiver: tokio::sync::mpsc::UnboundedReceiver<Answer>, filed: Filed },
+}
+
+/// Takes the state back out of the map when the flow ends, however it ends.
+struct Filed {
+    state: String,
+    in_: Callbacks,
+}
+
+impl Drop for Filed {
+    fn drop(&mut self) {
+        self.in_.lock().unwrap_or_else(PoisonError::into_inner).remove(&self.state);
+    }
+}
+
+impl Opened {
+    /// Waits for the browser to come back, and returns the code it carried.
+    pub async fn wait(self, state: &str, issuer: &str) -> Result<String, OauthError> {
+        match self.waiter {
+            Waiter::Loopback(listener) => wait_for_redirect(listener, state, issuer).await,
+            Waiter::Served { mut receiver, filed: _filed } => {
+                let deadline = tokio::time::sleep(WAIT_FOR_OPERATOR);
+                tokio::pin!(deadline);
+                loop {
+                    let answer = tokio::select! {
+                        _ = &mut deadline => return Err(OauthError::TimedOut),
+                        answer = receiver.recv() => answer,
+                    };
+                    let Some(Answer { fields, reply }) = answer else {
+                        return Err(OauthError::TimedOut);
+                    };
+                    match read_answer(&fields, state, issuer) {
+                        Some(read) => {
+                            let _ = reply.send(page_for(&read));
+                            return read;
+                        }
+                        None => {
+                            let _ = reply.send((404, NOT_THE_SIGNIN));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+const NOT_THE_SIGNIN: &str = "Not the sign-in.";
+
+/// What a browser is told, for what its answer turned out to be.
+fn page_for(read: &Result<String, OauthError>) -> (u16, &'static str) {
+    match read {
+        Ok(_) => (200, "Connected. You can close this tab and go back to Guaca."),
+        Err(OauthError::Refused { .. }) => (200, "Sign-in refused. You can close this tab."),
+        Err(_) => (400, "That did not match. Nothing was connected."),
+    }
+}
+
+/// Reads one redirect's query against the state and issuer that were sent.
+///
+/// `None` is a request that is not the sign-in at all: no code and no error,
+/// which is a browser asking for `/favicon.ico` while it shows the page. The
+/// loopback listener keeps waiting on those and the served waiter does too.
+fn read_answer(
+    fields: &[(String, String)],
+    state: &str,
+    issuer: &str,
+) -> Option<Result<String, OauthError>> {
+    // Before anything in the answer is read, error included. RFC 9207 is
+    // explicit that a mismatched `iss` means the client must not act on or
+    // display `error`, `error_description` or `error_uri` either: those are
+    // attacker-controlled text on a mix-up, and showing them is how an
+    // operator is talked into the next step. Compared byte for byte, with
+    // no normalization: the spec forbids case folding, default-port elision
+    // and trailing-slash tidying, because each one makes two different
+    // issuers compare equal.
+    let named = fields.iter().find(|(k, _)| k == "iss").map(|(_, v)| v.as_str());
+    if let Some(named) = named {
+        if named != issuer {
+            return Some(Err(OauthError::IssuerMismatch {
+                expected: issuer.to_string(),
+                named: named.to_string(),
+            }));
+        }
+    }
+
+    if let Some(error) = fields.iter().find(|(k, _)| k == "error").map(|(_, v)| v.clone()) {
+        let description =
+            fields.iter().find(|(k, _)| k == "error_description").map(|(_, v)| v.clone());
+        return Some(Err(OauthError::Refused { error, description }));
+    }
+
+    let code = fields.iter().find(|(k, _)| k == "code").map(|(_, v)| v.clone())?;
+
+    // Checked before the page is written, so a mismatched redirect is never
+    // told it succeeded.
+    if fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.as_str()) != Some(state) {
+        return Some(Err(OauthError::StateMismatch));
+    }
+    Some(Ok(code))
 }
 
 /// Trades a refresh token for a fresh grant.
@@ -707,53 +917,21 @@ pub(crate) async fn wait_for_redirect(
         };
 
         let Some(query) = target.split_once('?').map(|(_, q)| q) else {
-            let _ = reply(&mut socket, 404, "Not the sign-in.").await;
+            let _ = reply(&mut socket, 404, NOT_THE_SIGNIN).await;
             continue;
         };
 
-        let fields = parse_query(query);
-
-        // Before anything in the answer is read, error included. RFC 9207 is
-        // explicit that a mismatched `iss` means the client must not act on or
-        // display `error`, `error_description` or `error_uri` either: those are
-        // attacker-controlled text on a mix-up, and showing them is how an
-        // operator is talked into the next step. Compared byte for byte, with
-        // no normalization: the spec forbids case folding, default-port elision
-        // and trailing-slash tidying, because each one makes two different
-        // issuers compare equal.
-        let named = fields.iter().find(|(k, _)| k == "iss").map(|(_, v)| v.as_str());
-        if let Some(named) = named {
-            if named != issuer {
-                let _ = reply(&mut socket, 400, "That did not match. Nothing was connected.").await;
-                return Err(OauthError::IssuerMismatch {
-                    expected: issuer.to_string(),
-                    named: named.to_string(),
-                });
+        match read_answer(&parse_query(query), state, issuer) {
+            Some(read) => {
+                let (status, page) = page_for(&read);
+                let _ = reply(&mut socket, status, page).await;
+                return read;
+            }
+            None => {
+                let _ = reply(&mut socket, 404, NOT_THE_SIGNIN).await;
+                continue;
             }
         }
-
-        if let Some(error) = fields.iter().find(|(k, _)| k == "error").map(|(_, v)| v.clone()) {
-            let description =
-                fields.iter().find(|(k, _)| k == "error_description").map(|(_, v)| v.clone());
-            let _ = reply(&mut socket, 200, "Sign-in refused. You can close this tab.").await;
-            return Err(OauthError::Refused { error, description });
-        }
-
-        let Some(code) = fields.iter().find(|(k, _)| k == "code").map(|(_, v)| v.clone()) else {
-            let _ = reply(&mut socket, 404, "Not the sign-in.").await;
-            continue;
-        };
-
-        // Checked before the page is written, so a mismatched redirect is
-        // never told it succeeded.
-        if fields.iter().find(|(k, _)| k == "state").map(|(_, v)| v.as_str()) != Some(state) {
-            let _ = reply(&mut socket, 400, "That did not match. Nothing was connected.").await;
-            return Err(OauthError::StateMismatch);
-        }
-
-        let _ = reply(&mut socket, 200, "Connected. You can close this tab and go back to Guaca.")
-            .await;
-        return Ok(code);
     }
 }
 
@@ -777,7 +955,7 @@ async fn reply(
     socket.shutdown().await
 }
 
-fn parse_query(query: &str) -> Vec<(String, String)> {
+pub fn parse_query(query: &str) -> Vec<(String, String)> {
     query
         .split('&')
         .filter_map(|pair| pair.split_once('='))
@@ -967,6 +1145,95 @@ fn decode(raw: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+#[cfg(test)]
+mod landing_tests {
+    use super::*;
+
+    fn served() -> Landing {
+        Landing::Served { origin: "https://box.example".into(), callbacks: Default::default() }
+    }
+
+    #[tokio::test]
+    async fn a_served_landing_names_the_route_on_the_origin_it_was_reached_at() {
+        let opened = served().open("s1").await.unwrap();
+        assert_eq!(opened.redirect_uri, "https://box.example/v1/oauth/callback");
+        // A trailing slash on the origin is not two slashes on the redirect.
+        let landing = Landing::Served {
+            origin: "https://box.example/".into(),
+            callbacks: Default::default(),
+        };
+        let opened = landing.open("s2").await.unwrap();
+        assert_eq!(opened.redirect_uri, "https://box.example/v1/oauth/callback");
+    }
+
+    #[tokio::test]
+    async fn a_browser_delivered_to_a_served_landing_reaches_the_flow_waiting_on_its_state() {
+        let landing = served();
+        let opened = landing.open("expected").await.unwrap();
+        let deliver = {
+            let landing = landing.clone();
+            tokio::spawn(async move {
+                landing
+                    .deliver(vec![
+                        ("state".into(), "expected".into()),
+                        ("code".into(), "the-code".into()),
+                    ])
+                    .await
+            })
+        };
+        let code = opened.wait("expected", "https://issuer.example").await.unwrap();
+        assert_eq!(code, "the-code");
+        // And the browser was told what happened, by the flow rather than the route.
+        let page = deliver.await.unwrap().expect("somebody was waiting");
+        assert_eq!(page.0, 200);
+        assert!(page.1.contains("Connected"), "{}", page.1);
+    }
+
+    #[tokio::test]
+    async fn a_callback_nobody_is_waiting_for_reaches_nobody() {
+        let landing = served();
+        let page = landing
+            .deliver(vec![("state".into(), "stale".into()), ("code".into(), "x".into())])
+            .await;
+        assert!(page.is_none());
+        // Without a state at all it cannot even be filed.
+        assert!(landing.deliver(vec![("code".into(), "x".into())]).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_served_flow_that_ends_takes_its_state_out_of_the_map() {
+        let landing = served();
+        let Landing::Served { callbacks, .. } = &landing else { unreachable!() };
+        {
+            let _opened = landing.open("brief").await.unwrap();
+            assert_eq!(callbacks.lock().unwrap().len(), 1);
+        }
+        assert!(callbacks.lock().unwrap().is_empty(), "the flow was dropped without answering");
+    }
+
+    #[tokio::test]
+    async fn a_mix_up_on_a_served_landing_is_refused_and_the_browser_is_told_nothing_connected() {
+        let landing = served();
+        let opened = landing.open("expected").await.unwrap();
+        let deliver = {
+            let landing = landing.clone();
+            tokio::spawn(async move {
+                landing
+                    .deliver(vec![
+                        ("state".into(), "expected".into()),
+                        ("iss".into(), "https://someone-else.example".into()),
+                        ("code".into(), "the-code".into()),
+                    ])
+                    .await
+            })
+        };
+        let err = opened.wait("expected", "https://issuer.example").await.unwrap_err();
+        assert!(matches!(err, OauthError::IssuerMismatch { .. }), "{err}");
+        let page = deliver.await.unwrap().unwrap();
+        assert_eq!(page.0, 400);
+    }
 }
 
 #[cfg(test)]

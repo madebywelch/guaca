@@ -38,7 +38,10 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/plugins.ts      A plugin's mark and color. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
   lib/transport.ts    How a call travels: Tauri's bridge in a window, HTTP and
-                      a socket in a browser. Which one is read at runtime.
+                      a socket in a browser or in a window pointed at a box.
+                      Which one is read at runtime.
+  lib/menubar.ts      The strip's view of the store, for a window showing a
+                      box. One projection, and the test beside it is the gate.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale and surface, as one write to the root element.
   lib/follow.ts       Whether a transcript may move under the operator.
@@ -198,6 +201,9 @@ repo: the frontend renders state and forwards intent.
 | What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Five capabilities, and none of them is a feature nobody finished* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
 | A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |
 | An invitation, a token that stopped working, the screen a browser sees before the app | *A browser is admitted by a token, and the token arrives by fragment* in `docs/HOSTING.md`, then `src/components/TokenEntry.tsx` and `adoptInvitation` |
+| A file dropped or picked in a browser, or dropped on a window that is showing a box | *A browser hands a document over as bytes* in `docs/HOSTING.md`, then `onFileDrop` in `src/lib/ipc.ts`, the upload route in `server/mod.rs` and `forward_files` |
+| A plugin or account sign-in from a box: where the redirect lands, the origin it names, the page the browser is shown | *A sign-in comes back through the origin the browser used* in `docs/HOSTING.md`, then `oauth::Landing`, `commands::Reach` and the callback route in `server/mod.rs` |
+| The desktop app showing a box, the Workspace pane, and what the menu bar draws while it does | *The desktop app can show a box, and the menu bar follows* in `docs/HOSTING.md`, then `attached` in `src/lib/transport.ts`, `src/lib/menubar.ts` and `Tray::feed` |
 | Which transport a server is spoken to over, and who gets the older one | *It speaks the transport that was replaced* in `docs/PLUGINS.md`, then `mcp::probe` and `sse_exchange` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |

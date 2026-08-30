@@ -76,6 +76,35 @@ The daemon, a browser as a client, and the boot both hosts share.
   `/health` says `""`, which is two hosts that cannot be told apart.
   `GUACA_COMMIT` is the argument, `scripts/image.sh` supplies it and asserts
   the container answers with it.
+- **A drop hands the composer a promise now, not a list of paths.** Three
+  doors (Tauri's paths, DOM files, a path forwarded to a box) end in one
+  `Staged`, and `onFileDrop` is where the door is chosen. A caller that reads
+  paths off the drop is back to one host.
+- **The served landing files a flow by its state and the guard drops it.**
+  `Filed` takes the entry out of the map when the flow ends however it ends,
+  including a timeout; without it every abandoned sign-in leaves a sender in
+  the map and a stale tab can wake a flow that no longer exists.
+- **The callback route waits for the flow to name the page.** A route that
+  answered "Connected" on its own would say it to a mix-up. The flow runs
+  `read_answer`, which is the same function the loopback listener runs, and
+  sends the page back over the `Answer`'s reply channel.
+- **The origin a sign-in comes back to is the last one seen, unless told.**
+  Read off `X-Forwarded-Host` and `X-Forwarded-Proto` before `Host`, because
+  a tunnel rewrites both and the browser saw the tunnel's name. A box called
+  by two names gets `GUACA_ORIGIN`.
+- **`hosted` is true in a window pointed at a box, and `attached()` is how
+  the two hosted cases are told apart.** The reveal channel, the drop and the
+  menu bar feed are the three places a window still has something a browser
+  does not, and each checks `attached()` rather than `hosted`. A fourth that
+  checks `hosted` alone is a desktop feature that vanishes when the window
+  shows a box.
+- **The tray keeps what it was fed across page loads.** The process outlives
+  the page. A window that comes back showing this machine sends
+  `report_presence(null)` once at boot; without it the strip keeps drawing a
+  box nobody is looking at.
+- **The contract test counts `invokeLocal` as a caller.** The two desktop-only
+  commands are reached through it, and a test that only recognizes `invoke`
+  reports them as surface nobody uses.
 - **`OnDisk::under` is the one place the three directories are arranged.**
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by

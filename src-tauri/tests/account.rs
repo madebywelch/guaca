@@ -29,6 +29,7 @@ use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 
 use guac_lib::account::{Account, AccountError, CLIENT_ID};
+use guac_lib::oauth::Landing;
 
 /// What the browser did with the authorization request, as the stub saw it.
 #[derive(Debug, Clone, Default)]
@@ -408,7 +409,8 @@ async fn a_sign_in_completes_and_reports_the_account_it_reached() {
     let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    let status = account.sign_in(browse).await.expect("the sign-in should complete");
+    let status =
+        account.sign_in(browse, &Landing::Loopback).await.expect("the sign-in should complete");
 
     assert!(status.signed_in);
     assert_eq!(status.email, "robert@example.com", "read from the service, not guessed");
@@ -430,7 +432,7 @@ async fn a_sign_in_completes_and_reports_the_account_it_reached() {
 async fn the_sign_in_survives_a_restart() {
     let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
     let path = scratch();
-    Account::open_at(path.clone(), &stub.origin).sign_in(browse).await.unwrap();
+    Account::open_at(path.clone(), &stub.origin).sign_in(browse, &Landing::Loopback).await.unwrap();
 
     // A second `Account` over the same file is what a relaunch is.
     let reopened = Account::open_at(path, &stub.origin);
@@ -443,7 +445,7 @@ async fn the_sign_in_survives_a_restart() {
 async fn what_the_account_holds_is_asked_of_the_service() {
     let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
 
     let held = account.connectors().await.unwrap();
     let google = held.providers.iter().find(|p| p.id == "google").expect("google");
@@ -460,7 +462,7 @@ async fn a_refusal_in_the_browser_is_reported_rather_than_waited_out() {
     let stub = serve(Script { deny: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    match account.sign_in(browse).await {
+    match account.sign_in(browse, &Landing::Loopback).await {
         Err(AccountError::Refused { error, .. }) => assert_eq!(error, "access_denied"),
         other => panic!("expected a refusal, got {other:?}"),
     }
@@ -474,7 +476,10 @@ async fn an_answer_that_does_not_match_the_request_is_treated_as_an_attack() {
     let stub = serve(Script { wrong_state: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    assert!(matches!(account.sign_in(browse).await, Err(AccountError::StateMismatch)));
+    assert!(matches!(
+        account.sign_in(browse, &Landing::Loopback).await,
+        Err(AccountError::StateMismatch)
+    ));
     assert!(!account.is_signed_in());
 }
 
@@ -488,7 +493,8 @@ async fn the_answer_is_checked_against_the_issuer_the_service_published() {
     let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    let status = account.sign_in(browse).await.expect("the sign-in should complete");
+    let status =
+        account.sign_in(browse, &Landing::Loopback).await.expect("the sign-in should complete");
     assert!(status.signed_in);
 
     // And the endpoints it used really were the ones under the path, rather
@@ -506,7 +512,7 @@ async fn an_answer_naming_another_issuer_is_refused() {
     let stub = serve(Script { wrong_iss: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    match account.sign_in(browse).await {
+    match account.sign_in(browse, &Landing::Loopback).await {
         Err(AccountError::IssuerMismatch { expected, named }) => {
             assert_eq!(expected, format!("{}/api/auth", stub.origin));
             assert_eq!(named, "https://not-the-service.example");
@@ -527,7 +533,13 @@ async fn a_service_that_publishes_no_issuer_is_checked_against_its_origin() {
     let stub = serve(Script { root_mounted: true, omit_issuer: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    assert!(account.sign_in(browse).await.expect("the sign-in should complete").signed_in);
+    assert!(
+        account
+            .sign_in(browse, &Landing::Loopback)
+            .await
+            .expect("the sign-in should complete")
+            .signed_in
+    );
 }
 
 #[tokio::test]
@@ -537,7 +549,7 @@ async fn a_service_that_publishes_endpoints_somewhere_else_is_refused() {
     let stub = serve(Script { foreign_endpoints: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    match account.sign_in(browse).await {
+    match account.sign_in(browse, &Landing::Loopback).await {
         Err(AccountError::ForeignEndpoint { endpoint, .. }) => {
             assert!(endpoint.starts_with("http://127.0.0.1:9"), "{endpoint}");
         }
@@ -555,7 +567,7 @@ async fn a_service_that_names_someone_else_as_its_issuer_is_refused() {
     let stub = serve(Script { foreign_issuer: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    match account.sign_in(browse).await {
+    match account.sign_in(browse, &Landing::Loopback).await {
         Err(AccountError::ForeignEndpoint { endpoint, .. }) => {
             assert_eq!(endpoint, "https://elsewhere.example");
         }
@@ -571,7 +583,10 @@ async fn a_token_the_service_will_not_take_is_not_stored_as_a_sign_in() {
     let stub = serve(Script { reject_token: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
 
-    assert!(matches!(account.sign_in(browse).await, Err(AccountError::Expired { .. })));
+    assert!(matches!(
+        account.sign_in(browse, &Landing::Loopback).await,
+        Err(AccountError::Expired { .. })
+    ));
     assert!(!account.is_signed_in());
 }
 
@@ -581,7 +596,7 @@ async fn an_expiring_token_is_refreshed_before_it_is_used() {
     // has to renew rather than hand back something a call would be refused for.
     let stub = serve(Script { expires_in: Some(1), ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
 
     account.connectors().await.unwrap();
 
@@ -659,7 +674,7 @@ async fn a_token_with_no_stated_expiry_is_used_rather_than_renewed_every_call() 
     // A server that does not say is not a server saying "expired".
     let stub = serve(Script { expires_in: None, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
 
     account.connectors().await.unwrap();
     assert_eq!(stub.exchanges.lock().len(), 1, "no refresh was asked for");
@@ -670,7 +685,7 @@ async fn signing_out_leaves_nothing_a_later_call_could_present() {
     let stub = serve(Script { expires_in: Some(3600), ..Script::default() }).await;
     let path = scratch();
     let account = Account::open_at(path.clone(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &Landing::Loopback).await.unwrap();
 
     account.sign_out().unwrap();
     assert!(!account.is_signed_in());

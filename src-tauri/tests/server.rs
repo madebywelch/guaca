@@ -35,6 +35,7 @@ async fn workspace() -> (SocketAddr, tempfile::TempDir) {
         bind: "127.0.0.1:0".parse().expect("a loopback address"),
         token: TOKEN.to_string(),
         web: None,
+        origin: None,
     })
     .await
     .expect("the workspace opens");
@@ -229,6 +230,88 @@ async fn a_client_on_a_different_build_is_told_which_of_them_is_wrong() {
         body["err"]["message"].as_str().unwrap_or_default().contains("agent_memory"),
         "it does not name the command: {body}"
     );
+}
+
+#[tokio::test]
+async fn a_browser_hands_a_document_over_as_bytes_and_reads_it_back_by_digest() {
+    let (addr, _dir) = workspace().await;
+    let token = TOKEN;
+    let client = reqwest::Client::new();
+
+    // No token, no store.
+    let refused = client
+        .post(format!("http://{addr}/v1/upload?name=brief.txt"))
+        .body("hello")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 401);
+
+    let stored: serde_json::Value = client
+        .post(format!("http://{addr}/v1/upload?name=brief.txt"))
+        .bearer_auth(token)
+        .body("hello, box")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let file = &stored["ok"];
+    assert_eq!(file["name"], "brief.txt", "{stored}");
+    assert_eq!(file["bytes"], 10, "{stored}");
+    let digest = file["digest"].as_str().expect("a digest");
+
+    // The same bytes, on the route every preview reads from.
+    let back = client
+        .get(format!("http://{addr}/v1/file/{digest}/brief.txt?token={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(back.status(), 200);
+    assert_eq!(back.text().await.unwrap(), "hello, box");
+
+    // Too big is the store's own sentence, not a bare 413.
+    let big = vec![b'x'; 25 * 1024 * 1024 + 1];
+    let refused = client
+        .post(format!("http://{addr}/v1/upload?name=huge.bin"))
+        .bearer_auth(token)
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 422, "{}", refused.text().await.unwrap_or_default());
+}
+
+#[tokio::test]
+async fn a_box_does_not_forward_files_from_its_own_disk() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(
+        addr,
+        "forward_files",
+        json!({ "origin": "http://elsewhere", "token": "t", "paths": ["/etc/hosts"] }),
+    )
+    .await;
+    // A desktop forwards a dropped path to the box it is showing; a box has no
+    // operator's disk to read from, and says which capability that is.
+    assert_eq!(body["err"]["kind"], "notHere", "{status} {body}");
+    let said = body["err"]["message"].as_str().unwrap_or_default();
+    assert!(said.contains("server"), "{said}");
+}
+
+#[tokio::test]
+async fn a_sign_in_nobody_is_waiting_for_is_told_so_at_the_door() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+    // No token on this route: the browser arrives from the vendor. What bounds
+    // it is that only a flow waiting on that exact state reads it.
+    let page = client
+        .get(format!("http://{addr}/v1/oauth/callback?state=stale&code=x"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), 404);
+    assert!(page.text().await.unwrap().contains("Not a sign-in"));
 }
 
 #[tokio::test]

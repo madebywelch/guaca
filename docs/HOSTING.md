@@ -185,6 +185,104 @@ correct failure on the other end: `SocketSink` drops what no client is
 attached to read, because a runtime that blocked on a slow socket would turn
 one bad connection into a crew that stops thinking.
 
+## A browser hands a document over as bytes
+
+The desktop's `stage_files` takes a path, because Tauri hands the window the
+path of a dropped file and the Rust side reads it: a document never enters
+the renderer. A browser is the renderer, and it has bytes rather than a path,
+so `POST /v1/upload?name=…` takes one file per request and puts it in the
+same store by the same digest. `stageUploads` on the frontend loops and
+collects refusals exactly as `stage_files` does, one line per file in the
+store's own words, so the composer sees one answer shape from either door.
+The drop is DOM events when hosted and Tauri's when not, and `onFileDrop`
+hides which; a browser also gets an attach button, because a drop is not the
+only way a person has a file.
+
+The body limit on the route is four times the store's, on purpose. Under it a
+file the store refuses is refused with the store's sentence, which names the
+file, its size and the limit; over it is the framework's bare 413, which
+nobody reaches by dropping the wrong thing.
+
+The desktop app pointed at a box is the third case. The drop is still a path
+on this disk, and the box has never seen this disk, so `forward_files` reads
+the path in this process and posts the bytes to the box's route. Same answer
+shape, same sentences.
+
+## A sign-in comes back through the origin the browser used
+
+Every OAuth flow in the app lands its redirect on a loopback port bound
+before the redirect is named, which is the argument `oauth.rs` opens with. A
+box has no browser at the machine and no port a remote browser could reach,
+so on a server the redirect is a route, `/v1/oauth/callback`, on the origin
+the operator's browser reached the workspace at.
+
+`Landing` is the seam. `Loopback` binds the port; `Served` files the flow
+under its `state` in a map the daemon holds, and names the route on the
+origin. Everything after the landing (PKCE, the state, the issuer check, the
+exchange) is one path, because `read_answer` is one function and both
+waiters call it. The route hands what arrives to the flow waiting on that
+state and waits for the flow to say which page to show, so a browser is told
+"Connected" by the code that checked the state and the issuer, never by a
+route that could only guess. A callback nobody is waiting for is a stale tab
+or a guess, and gets a 404.
+
+The origin is the one thing the daemon cannot know at boot: a box is behind
+a tunnel whose name is the operator's. `Reach` remembers the origin of the
+last call that arrived, read off `X-Forwarded-*` first and `Host` second,
+because a proxy terminates TLS and the browser saw the proxy's name.
+`GUACA_ORIGIN` overrides it for a box that is called by more than one name.
+A sign-in started before either is known is refused with the sentence that
+says which to do.
+
+The browser is asked to open the page. `open_url` on a server used to refuse,
+which was honest and useless; now it emits `OpenUrl` on the event socket, the
+page opens a tab, and draws the same URL as a link in a banner, because a
+window opened from an event rather than a click is one a browser may refuse
+and a sign-in that opened nothing looks exactly like one that hung. The banner
+goes when the flow behind it ends, either way.
+
+Two things this does not settle. A vendor that only accepts loopback or
+`https` redirect URIs for a self-registered client refuses a box reached over
+plain `http`; behind a tunnel the redirect is `https` and this does not
+arise. And the guaca.bot account registered its client with a loopback
+redirect: the served redirect has to be registered there too before an
+account sign-in from a box completes. `tests/account.rs` drives the flow
+against a scripted server that accepts it; the live service is a change on
+the other side of that wire.
+
+## The desktop app can show a box, and the menu bar follows
+
+The desktop app is a window over exactly one workspace at a time. Pointed at
+a box from Settings, Workspace, it becomes a client of it over the same HTTP
+a browser uses: `transport.ts` reads the box's address and token from
+storage once, at load, and every call and the event socket go there. Which
+host the page is in was decided at import time on purpose, so a change is a
+reload rather than a state, and nothing can be half-switched. The address is
+probed before it is stored: `/health` for whether it is a Guaca workspace and
+which build, `capabilities` for whether the token opens it.
+
+This machine's runtime keeps running underneath, and its crew keeps working,
+exactly as it does with the window closed. The pane says so. It is not a
+footgun to be designed away: a laptop's crew working while the operator
+looks at a box's is the same arrangement as a laptop's crew working while the
+operator looks at their email.
+
+The strip follows the window. `tray.rs` reads this machine's runtime, which
+is the wrong runtime while the window shows a box, so the window hands the
+tray the box's presence instead: `presenceOf` projects the store into the
+same `Presence` Rust reads locally, coalesced and only when it would draw
+differently, and `report_presence` puts it on the tray. A click on a row
+drawn that way belongs to the box, and the window is what holds a connection
+to it, so the tray sends the click back down `guac://menubar` and the window
+does what the row said. A window showing this machine again tells the tray
+so once at boot, because the process outlives the page and the last page may
+have left it fed.
+
+The webview's content policy allows `https:` and `wss:` for calls and files,
+and loopback `http:` for a container on this machine. Scripts are still
+`'self'` only; what this widens is where the page may fetch from, which is
+what a client of a box is.
+
 ## One image, and the build it says it is
 
 `Dockerfile` builds the daemon without Tauri and the page with the same
@@ -232,14 +330,14 @@ runtime, every command, the transcript, the desk, the flow board, the
 schedule, the compost and the plugins that were signed in before the move.
 What it does not have yet:
 
-- **Attachments by upload.** The read side exists (`fileUrl` fetches by
-  digest over the route) and the write side does not: a browser has bytes to
-  hand over rather than a path, which is a different command.
 - **Repositories on a box.** A clone from a remote with a credential, and only
   `pi` to write in it. A different feature, argued above.
-- **Plugin sign-in from a box.** OAuth redirects to loopback today; on a
-  server the redirect has to come back through the served origin.
-- **The desktop app as a client of a remote box.** A browser is already one.
+- **The account sign-in from a box.** The flow is built and tested against a
+  scripted server; guaca.bot has to register the served redirect before the
+  live one completes.
+- **Pages an agent wrote, and the computer's live screen, on a hosted page.**
+  Both are served from loopback ports on the runtime's machine, which in a
+  browser is the wrong machine. Each needs a route on the daemon.
 - **The page that says how to put a tunnel in front of a box.** The image
   and the unit file exist; what to put in front of them on a rented machine
   is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a

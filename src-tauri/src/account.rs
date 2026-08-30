@@ -59,7 +59,6 @@ use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
 
 use crate::oauth::{self, OauthError};
 
@@ -411,23 +410,24 @@ impl Account {
     pub async fn sign_in(
         &self,
         open: impl FnOnce(&str) -> Result<(), String>,
+        landing: &oauth::Landing,
     ) -> Result<Status, AccountError> {
         let server = self.discover().await?;
-
-        // Bound before the redirect URI is built, which is the whole reason a
-        // loopback redirect is safe: the port is one the operating system has
-        // already given out, so nothing can take it between choosing it and
-        // listening on it. The service registered this redirect with no port at
-        // all, because RFC 8252 section 7.3 has it compare everything but.
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .map_err(|source| AccountError::NoPort { source })?;
-        let port = listener.local_addr().map_err(|source| AccountError::NoPort { source })?.port();
-        let redirect_uri = format!("http://127.0.0.1:{port}/callback");
 
         let verifier = oauth::secret();
         let challenge = oauth::pkce_challenge(&verifier);
         let state = oauth::secret();
+
+        // Opened before the redirect URI is built, which is the whole reason a
+        // loopback redirect is safe: the port is one the operating system has
+        // already given out, so nothing can take it between choosing it and
+        // listening on it. The service registered the loopback redirect with
+        // no port at all, because RFC 8252 section 7.3 has it compare
+        // everything but. A served landing is a different redirect, on the
+        // origin the operator reached the workspace at, and the service has
+        // to have registered that one too: `docs/HOSTING.md`.
+        let opened = landing.open(&state).await?;
+        let redirect_uri = opened.redirect_uri.clone();
 
         let url = format!(
             "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}\
@@ -448,7 +448,7 @@ impl Account {
         // document before the browser opens rather than out of the answer,
         // because the check is only worth anything against a value recorded in
         // advance.
-        let code = oauth::wait_for_redirect(listener, &state, &server.issuer).await?;
+        let code = opened.wait(&state, &server.issuer).await?;
 
         let issued = oauth::post_token(
             &oauth::http()?,

@@ -40,7 +40,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -49,7 +49,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
 
-use crate::commands::AppState;
+use crate::commands::{AppState, Reach};
+use crate::domain::attachment::MAX_FILE_BYTES;
 use crate::domain::deployment::Deployment;
 use crate::runtime::events::{EventSink, UiEvent};
 
@@ -76,6 +77,12 @@ pub struct Settings {
     /// this box is a client, and so is a `curl`. Serving the bundle is what
     /// makes a browser one too.
     pub web: Option<PathBuf>,
+    /// The origin a browser reaches this box at, when the operator knows it.
+    ///
+    /// Only a sign-in needs it, for the redirect. Absent, the daemon uses the
+    /// origin of the last call that arrived, which is right whenever the
+    /// operator is signing in from the page they are reading.
+    pub origin: Option<String>,
 }
 
 /// Fans runtime events out to whoever is watching.
@@ -145,17 +152,27 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
 
     let state = Arc::new(AppState {
         runtime: booted.runtime,
+        // A box has no corner of a screen. A window showing this workspace
+        // feeds its own machine's strip, and that call never reaches here.
+        menubar: Arc::new(|_presence| {}),
         deployment: Deployment::Server,
-        open_url: Arc::new(|_url: &str| {
-            // Nobody is sitting at this machine. Opening a browser here would
-            // open one nobody can see, and reporting success for that is worse
-            // than refusing: the operator waits at a consent screen that was
-            // never drawn.
-            Err("this workspace runs on a server, so there is no browser here to open. Sign in \
-                 from the app or the browser you are reading this in, and the workspace is \
-                 handed the result"
-                .to_string())
-        }),
+        open_url: {
+            // Nobody is sitting at this machine. The only browser there is
+            // belongs to whoever is reading the page, so the page is asked.
+            // An `Err` from the send is no client attached, which is a sign-in
+            // nobody could finish anyway: the flow times out on its own.
+            let events = events.clone();
+            Arc::new(move |url: &str| {
+                if events.send(UiEvent::OpenUrl { url: url.to_string() }).is_err() {
+                    return Err("nobody has this workspace open in a browser, so there is \
+                                nowhere to show the sign-in page. Open the workspace and try \
+                                again"
+                        .to_string());
+                }
+                Ok(())
+            })
+        },
+        reach: Reach::served(settings.origin.clone()),
         config_path: booted.config_path,
         // Never reached: `save_file` refuses before it looks, because a server
         // has no downloads folder anybody could open. Named honestly rather
@@ -180,6 +197,20 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         // registers a route nothing can match, and every preview draws nothing.
         // `a_stored_file_is_reachable_by_its_digest` is what catches it.
         .route("/v1/file/:digest/:name", get(file))
+        // A document a browser hands over. The bytes are the body and the name
+        // is on the query, which is the smallest possible shape: one file per
+        // request, and `stage_files` on the desktop already answers one path
+        // at a time inside its loop. The body limit is well above the store's
+        // own, so a file a person plausibly drops is refused with the store's
+        // sentence, which names the file and the limit, rather than with the
+        // framework's bare 413. Past four times the limit nobody dropped it by
+        // mistake, and the 413 is what a body that size deserves.
+        .route("/v1/upload", post(upload))
+        .layer(DefaultBodyLimit::max(4 * MAX_FILE_BYTES as usize))
+        // Where a sign-in's browser comes back to. No token: the browser
+        // arrives from the vendor with the vendor's answer, and what bounds
+        // it is that only a flow that is waiting on that exact state reads it.
+        .route(crate::oauth::CALLBACK_ROUTE, get(oauth_callback))
         .with_state(serving);
 
     if let Some(web) = settings.web.as_ref() {
@@ -296,6 +327,13 @@ async fn call(
     if let Err(refused) = authorized(&serving, &headers, None) {
         return *refused;
     }
+    // Where this call came in, remembered for the redirect a sign-in will
+    // name. Read off the headers a proxy rewrites rather than the socket,
+    // because the socket sees the tunnel and the browser saw the tunnel's
+    // public name.
+    if let Some(origin) = reached_at(&headers) {
+        serving.state.reach.note(origin);
+    }
     match crate::ipc::dispatch(&serving.state, &body.name, body.args).await {
         Ok(value) => (StatusCode::OK, Json(json!({ "ok": value }))).into_response(),
         Err(refused) => {
@@ -304,6 +342,87 @@ async fn call(
             (status, Json(json!({ "err": refused.body() }))).into_response()
         }
     }
+}
+
+/// The scheme and host a request was addressed to, as the browser spelled it.
+///
+/// `X-Forwarded-*` first, because a tunnel or a reverse proxy terminates TLS
+/// and rewrites the host, and the browser's own address is the forwarded one.
+/// Then `Host`, which is what a browser sends straight to the box.
+fn reached_at(headers: &HeaderMap) -> Option<String> {
+    let text = |name: &str| headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim);
+    let host = text("x-forwarded-host")
+        .or_else(|| text("host"))
+        .and_then(|h| h.split(',').next())
+        .map(str::trim)
+        .filter(|h| !h.is_empty())?;
+    let scheme = text("x-forwarded-proto")
+        .and_then(|p| p.split(',').next())
+        .map(str::trim)
+        .filter(|p| *p == "https" || *p == "http")
+        .unwrap_or("http");
+    Some(format!("{scheme}://{host}"))
+}
+
+#[derive(Deserialize)]
+struct Upload {
+    name: String,
+}
+
+/// One document, arriving as bytes because a browser has no path to give.
+///
+/// The desktop's `stage_files` reads a path this side of IPC so a document
+/// never enters the renderer; a browser is the renderer, and its bytes have to
+/// cross once. They land in the same store by the same digest, and what comes
+/// back is what a message carries.
+async fn upload(
+    State(serving): State<Serving>,
+    headers: HeaderMap,
+    Query(Upload { name }): Query<Upload>,
+    body: axum::body::Bytes,
+) -> Response {
+    if let Err(refused) = authorized(&serving, &headers, None) {
+        return *refused;
+    }
+    match serving.state.runtime.files().put(&name, &body) {
+        Ok(attachment) => (StatusCode::OK, Json(json!({ "ok": attachment }))).into_response(),
+        Err(err) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({ "err": { "kind": "file", "message": err.to_string() } })),
+        )
+            .into_response(),
+    }
+}
+
+/// A sign-in's browser, back from the vendor.
+///
+/// Handed to the flow waiting on its state, which decides the page: only the
+/// flow knows whether the state matched and the issuer was the one it sent
+/// the operator to. Nobody waiting is a stale tab or a guess, and is told so.
+async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuery) -> Response {
+    let fields = crate::oauth::parse_query(query.as_deref().unwrap_or_default());
+    let landing = match serving.state.reach.callbacks() {
+        Some(callbacks) => crate::oauth::Landing::Served { origin: String::new(), callbacks },
+        None => return page(404, "Not the sign-in."),
+    };
+    match landing.deliver(fields).await {
+        Some((status, message)) => page(status, message),
+        None => page(404, "Not a sign-in this workspace is waiting for."),
+    }
+}
+
+/// The page a browser is left on, spelled as `oauth::reply` spells it.
+fn page(status: u16, message: &str) -> Response {
+    let body = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>Guaca</title>\
+         <body style=\"font:16px system-ui;padding:3rem;color:#1c1c1c\">{message}</body>"
+    );
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        body,
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
@@ -486,6 +605,25 @@ mod tests {
         assert_eq!(invitation(every, "abc123"), "http://localhost:8787/#token=abc123");
         let every6: SocketAddr = "[::]:8787".parse().unwrap();
         assert_eq!(invitation(every6, "abc123"), "http://localhost:8787/#token=abc123");
+    }
+
+    #[test]
+    fn the_origin_a_call_arrived_at_is_read_as_the_browser_spelled_it() {
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "127.0.0.1:8787".parse().unwrap());
+        assert_eq!(reached_at(&headers).as_deref(), Some("http://127.0.0.1:8787"));
+
+        // Behind a tunnel the socket sees the tunnel and the browser saw the
+        // tunnel's public name, which is what a redirect has to be sent to.
+        headers.insert("x-forwarded-host", "guaca.example.com".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+        assert_eq!(reached_at(&headers).as_deref(), Some("https://guaca.example.com"));
+
+        // A proto nobody would send a browser back over is not one.
+        headers.insert("x-forwarded-proto", "gopher".parse().unwrap());
+        assert_eq!(reached_at(&headers).as_deref(), Some("http://guaca.example.com"));
+
+        assert_eq!(reached_at(&HeaderMap::new()), None);
     }
 
     #[test]

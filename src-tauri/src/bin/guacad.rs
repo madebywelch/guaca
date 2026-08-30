@@ -13,6 +13,9 @@
 //!                  when it is absent, so a first run needs nothing prepared.
 //!   GUACA_WEB      the frontend bundle to serve at `/`. Absent serves no page,
 //!                  which is right for a box the desktop app connects to.
+//!   GUACA_ORIGIN   the address a browser reaches this box at, e.g. the
+//!                  tunnel's https URL. Only a sign-in needs it, for the
+//!                  redirect; absent, the origin of the last call is used.
 //!   GUAC_LOG       the tracing filter, spelled as the desktop app spells it.
 
 use std::path::PathBuf;
@@ -52,6 +55,10 @@ fn main() {
         bind,
         token,
         web: std::env::var_os("GUACA_WEB").map(PathBuf::from),
+        origin: std::env::var("GUACA_ORIGIN")
+            .ok()
+            .map(|o| o.trim().to_string())
+            .filter(|o| !o.is_empty()),
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

@@ -59,8 +59,89 @@ use crate::subscription::{DeviceCode, SigninError, Status, Subscription};
 /// this module is the boundary that keeps the runtime host-agnostic.
 pub type OpenUrl = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
+/// Where a sign-in's browser is sent back to, which is the other half of how
+/// this host reaches a person.
+///
+/// A desktop lands the redirect on a loopback port it bound itself. A server
+/// lands it on a route, at the origin the operator's browser reached the
+/// workspace through, which nothing at boot can know: a box is behind a tunnel
+/// whose name is the operator's. So it is either told (`GUACA_ORIGIN`) or
+/// remembered from the last call that arrived, and a sign-in started before
+/// either is refused with the sentence that says which to do.
+pub enum Reach {
+    Desktop,
+    Served {
+        /// `GUACA_ORIGIN`, when the operator set it. Wins over what was seen.
+        fixed: Option<String>,
+        /// Scheme and host of the last call, as the browser spelled them.
+        seen: std::sync::Mutex<Option<String>>,
+        callbacks: crate::oauth::Callbacks,
+    },
+}
+
+impl Reach {
+    pub fn served(fixed: Option<String>) -> Self {
+        Reach::Served {
+            fixed: fixed
+                .map(|origin| origin.trim_end_matches('/').to_string())
+                .filter(|o| !o.is_empty()),
+            seen: std::sync::Mutex::new(None),
+            callbacks: Default::default(),
+        }
+    }
+
+    /// Remembers the origin a call arrived at. A desktop has nothing to note.
+    pub fn note(&self, origin: String) {
+        if let Reach::Served { seen, .. } = self {
+            *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(origin);
+        }
+    }
+
+    /// The origin a browser would be sent back to, when there is one.
+    pub fn origin(&self) -> Option<String> {
+        match self {
+            Reach::Desktop => None,
+            Reach::Served { fixed, seen, .. } => fixed
+                .clone()
+                .or_else(|| seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()),
+        }
+    }
+
+    /// The callback map a served route delivers into. None on a desktop.
+    pub fn callbacks(&self) -> Option<crate::oauth::Callbacks> {
+        match self {
+            Reach::Desktop => None,
+            Reach::Served { callbacks, .. } => Some(callbacks.clone()),
+        }
+    }
+
+    /// The landing for one sign-in, or the sentence for why there is none yet.
+    pub fn landing(&self) -> Result<crate::oauth::Landing, CommandError> {
+        match self {
+            Reach::Desktop => Ok(crate::oauth::Landing::Loopback),
+            Reach::Served { callbacks, .. } => match self.origin() {
+                Some(origin) => {
+                    Ok(crate::oauth::Landing::Served { origin, callbacks: callbacks.clone() })
+                }
+                None => Err(CommandError::new(
+                    "config",
+                    "this workspace does not know the address a browser reaches it at, so it \
+                     cannot name where a sign-in should come back to. Open it in a browser \
+                     first, or set GUACA_ORIGIN on the box",
+                )),
+            },
+        }
+    }
+}
+
+/// Hands the menu bar a presence read somewhere other than this runtime, or
+/// `None` to put it back on this runtime. A desktop wires this to its tray;
+/// a server has no strip and ignores it.
+pub type MenubarFeed = Arc<dyn Fn(Option<crate::menubar::Presence>) + Send + Sync>;
+
 pub struct AppState {
     pub runtime: Runtime,
+    pub menubar: MenubarFeed,
     /// Where this runtime is, which decides what the panels may offer.
     ///
     /// Read by the commands that would otherwise reach the operator's machine,
@@ -69,6 +150,8 @@ pub struct AppState {
     pub deployment: Deployment,
     /// Opens a URL in the operator's browser, or says why it cannot.
     pub open_url: OpenUrl,
+    /// Where that browser comes back to.
+    pub reach: Reach,
     pub config_path: PathBuf,
     /// Where a saved copy of an attachment lands. Resolved once at startup:
     /// the operating system's own downloads folder is the one place a person
@@ -1002,6 +1085,9 @@ async fn sign_in(
     credential: crate::plugins::Credential<'_>,
     headers: &Headers,
 ) -> Reply<Plugin> {
+    // Asked before the flow starts, so a box that cannot name its own address
+    // refuses here rather than after a browser has been opened.
+    let landing = state.reach.landing()?;
     let plugin = crate::plugins::connect(
         state.runtime.store(),
         group_id,
@@ -1009,12 +1095,13 @@ async fn sign_in(
         endpoint,
         credential,
         headers,
+        &landing,
         {
             // The flow takes a callback so `oauth.rs` does not have to know how
             // a browser is opened, and the host is what decides. On a desktop
             // this is the operator's own browser and the loopback redirect
-            // lands back in this process. On a server there is nobody at the
-            // machine, and the refusal says where the sign-in has to happen.
+            // lands back in this process. On a server the page is asked to
+            // open it, and the redirect comes back through the served origin.
             let open = state.open_url.clone();
             move |url: &str| open(url)
         },
@@ -1934,6 +2021,88 @@ pub async fn stage_files(state: &AppState, paths: Vec<String>) -> Reply<Staged> 
     Ok(staged)
 }
 
+/// Sends files from this machine's disk to a workspace somewhere else.
+///
+/// The desktop app can show a box's workspace, and a file dropped on that
+/// window is still a path on this disk that the box has never seen. So the
+/// same read `stage_files` does happens here, and the bytes go to the box's
+/// upload route instead of into this machine's store. One file at a time,
+/// with the box's own sentence for each one it refuses.
+pub async fn forward_files(
+    state: &AppState,
+    origin: String,
+    token: String,
+    paths: Vec<String>,
+) -> Reply<Staged> {
+    state.deployment.capabilities().require(Absent::LocalFiles)?;
+
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|err| CommandError::new("file", err.to_string()))?;
+    let origin = origin.trim_end_matches('/');
+    let mut staged = Staged::default();
+    for path in &paths {
+        let path = std::path::Path::new(path);
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                staged.refused.push(format!("{}: {err}", path.display()));
+                continue;
+            }
+        };
+        let sent = http
+            .post(format!("{origin}/v1/upload?name={}", crate::oauth::encode(&name)))
+            .bearer_auth(&token)
+            .body(bytes)
+            .send()
+            .await;
+        let answered: serde_json::Value = match sent {
+            Ok(response) => response.json().await.unwrap_or_default(),
+            Err(err) => {
+                staged.refused.push(format!("{name}: could not reach the workspace ({err})"));
+                continue;
+            }
+        };
+        if let Some(refused) = answered.get("err").and_then(|e| e.get("message")) {
+            staged.refused.push(format!("{name}: {}", refused.as_str().unwrap_or("refused")));
+            continue;
+        }
+        match serde_json::from_value::<Attachment>(answered["ok"].clone()) {
+            Ok(file) => staged.attached.push(file),
+            Err(_) => staged
+                .refused
+                .push(format!("{name}: the workspace answered nothing this app could read")),
+        }
+    }
+    Ok(staged)
+}
+
+/// Hands the menu bar what the window is looking at, when that is not here.
+///
+/// The strip follows the window. A window showing a box's workspace already
+/// holds that workspace's roster, activity, requests and spend, and this is
+/// the one way those numbers reach the corner of the screen; `None` puts the
+/// strip back on this machine's own runtime, and is what a window sends the
+/// moment it is showing that again.
+pub async fn report_presence(
+    state: &AppState,
+    presence: Option<crate::menubar::Presence>,
+) -> Reply<()> {
+    (state.menubar)(presence);
+    Ok(())
+}
+
+/// Stops every conversation in this workspace. Says how many were running.
+///
+/// The menu bar's own row does this against the local runtime directly; this
+/// is the same act for a window that is showing a box, which has to ask the
+/// box.
+pub async fn stop_everything(state: &AppState) -> Reply<usize> {
+    Ok(state.runtime.stop_everything())
+}
+
 /// A file the operator has already dropped, as the webview refers to it.
 ///
 /// Two fields and no more: which bytes, and what to call them. Everything else
@@ -2369,7 +2538,8 @@ pub async fn sign_in_account(state: &AppState) -> Reply<crate::account::Status> 
     // this app has no business holding, and the whole argument for a loopback
     // redirect is that the browser is the operator's own.
     let open = state.open_url.clone();
-    Ok(account.sign_in(|url| open(url)).await?)
+    let landing = state.reach.landing()?;
+    Ok(account.sign_in(|url| open(url), &landing).await?)
 }
 
 /// What the account holds, asked of the service rather than remembered.

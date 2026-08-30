@@ -439,6 +439,14 @@ pub fn run() {
 
             app.manage(AppState {
                 runtime,
+                menubar: {
+                    let menubar = menubar.clone();
+                    std::sync::Arc::new(move |presence| {
+                        if let Some(tray) = menubar.get() {
+                            tray.feed(presence);
+                        }
+                    })
+                },
                 // The desktop app is the only host that can say this. A server
                 // build constructs the same struct with the other answer, and
                 // nothing below `commands` can tell which it got.
@@ -454,6 +462,7 @@ pub fn run() {
                             .map_err(|err| err.to_string())
                     })
                 },
+                reach: crate::commands::Reach::Desktop,
                 config_path,
                 downloads,
                 subscription,
@@ -569,6 +578,9 @@ pub fn run() {
             crate::ipc::desktop::sign_out_account,
             crate::ipc::desktop::set_plugin_connection,
             crate::ipc::desktop::subscription_status,
+            crate::ipc::desktop::forward_files,
+            crate::ipc::desktop::report_presence,
+            crate::ipc::desktop::stop_everything,
             crate::ipc::desktop::begin_subscription_signin,
             crate::ipc::desktop::complete_subscription_signin,
             crate::ipc::desktop::sign_out_subscription,

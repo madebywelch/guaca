@@ -1,11 +1,11 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { fileUrl, previewKind, readableSize } from "../lib/files";
 import { api, onFileDrop } from "../lib/ipc";
 import { applyMention, matchMentions, mentionAt, splitMentions } from "../lib/mentions";
-import { useLiveAgents } from "../lib/store";
-import { type Attachment, errorMessage, type GroupId } from "../lib/types";
+import { useLiveAgents, useStore } from "../lib/store";
+import { type Attachment, errorMessage, type GroupId, type Staged } from "../lib/types";
 
 interface Props {
   placeholder: string;
@@ -37,6 +37,28 @@ export function Composer({ placeholder, group, disabled, disabledReason, onSend 
   const [dragging, setDragging] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
+  const picker = useRef<HTMLInputElement>(null);
+  // A browser cannot be handed a path, so it is offered a button as well as
+  // the drop. On a desktop the drop is the whole of it: the window takes a
+  // path and the runtime reads the file, and a second door would be a picker
+  // that hands over bytes the runtime then has to be told about.
+  const localFiles = useStore((s) => s.capabilities.localFiles);
+
+  /** What a drop or a pick became, folded into what is already attached. */
+  const take = useCallback((staging: Promise<Staged>) => {
+    void staging
+      .then((staged) => {
+        // The same file twice is one attachment, by content rather than by
+        // path: a second drop is a person making sure, and one document
+        // saved in two places is still one document.
+        setFiles((held) => [
+          ...held,
+          ...staged.attached.filter((file) => !held.some((have) => have.digest === file.digest)),
+        ]);
+        setRefused(staged.refused);
+      })
+      .catch((error) => setRefused([errorMessage(error)]));
+  }, []);
 
   // Dropping anywhere on the window attaches to whatever channel is open,
   // because the alternative is a small target the operator has to aim at while
@@ -47,30 +69,11 @@ export function Composer({ placeholder, group, disabled, disabledReason, onSend 
   // picture can be shown back to them before it goes.
   useEffect(() => {
     if (disabled) return;
-    const stopping = onFileDrop({
-      over: setDragging,
-      dropped: (paths) => {
-        void api
-          .stageFiles(paths)
-          .then((staged) => {
-            // The same file twice is one attachment, by content rather than by
-            // path: a second drop is a person making sure, and one document
-            // saved in two places is still one document.
-            setFiles((held) => [
-              ...held,
-              ...staged.attached.filter(
-                (file) => !held.some((have) => have.digest === file.digest),
-              ),
-            ]);
-            setRefused(staged.refused);
-          })
-          .catch((error) => setRefused([errorMessage(error)]));
-      },
-    });
+    const stopping = onFileDrop({ over: setDragging, dropped: take });
     return () => {
       void stopping.then((stop) => stop());
     };
-  }, [disabled]);
+  }, [disabled, take]);
 
   const live = useLiveAgents();
   const crew = useMemo(
@@ -305,6 +308,31 @@ export function Composer({ placeholder, group, disabled, disabledReason, onSend 
             aria-autocomplete="list"
           />
         </div>
+        {!localFiles && (
+          <>
+            <input
+              ref={picker}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                const chosen = Array.from(event.target.files ?? []);
+                event.target.value = "";
+                if (chosen.length > 0) take(api.stageUploads(chosen));
+              }}
+            />
+            <button
+              type="button"
+              className="composer__attach"
+              aria-label="Attach a file"
+              title="Attach a file"
+              disabled={disabled || sending}
+              onClick={() => picker.current?.click()}
+            >
+              <span aria-hidden="true">+</span>
+            </button>
+          </>
+        )}
         <button
           type="button"
           className="composer__send"

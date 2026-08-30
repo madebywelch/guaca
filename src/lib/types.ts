@@ -1009,6 +1009,7 @@ export type Reveal = { kind: "agent"; id: AgentId } | { kind: "crew"; id: GroupI
 
 export type UiEvent =
   | { type: "agentsChanged" }
+  | { type: "openUrl"; url: string }
   | { type: "messageAppended"; message: Envelope }
   | {
       type: "streamStarted";
@@ -1367,6 +1368,30 @@ export interface LinkHit {
   channelId: AgentId;
   createdAt: number;
 }
+
+/**
+ * What the menu bar draws, as the window hands it over.
+ *
+ * Mirrors `menubar::Presence` in Rust. The strip reads this machine's runtime
+ * when the window shows this machine's workspace, and reads this when the
+ * window shows a box: the window is the one thing holding the box's state.
+ */
+export interface Presence {
+  roster: Record<AgentId, { name: string; crew: GroupId }>;
+  crews: { id: GroupId; name: string }[];
+  activity: Record<AgentId, Activity>;
+  waiting: Approval[];
+  stuck: Escalation[];
+  /** Spent since this window opened. */
+  session: Tokens;
+  allTime: Tokens;
+  running: number;
+}
+
+/** A click on a menu bar row drawn from a box, handed back to the window. */
+export type MenubarAsk =
+  | { kind: "stopAll" }
+  | { kind: "decide"; approval: ApprovalId; decision: Decision };
 
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {

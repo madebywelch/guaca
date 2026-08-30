@@ -13,9 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
  */
 
 delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
-const { adoptInvitation, invoke, setToken, token, UNAUTHORIZED_EVENT } = await import(
-  "./transport"
-);
+const { adoptInvitation, invoke, probe, setToken, token, UNAUTHORIZED_EVENT, upload } =
+  await import("./transport");
 
 const fetched = vi.fn<typeof fetch>();
 
@@ -53,6 +52,130 @@ describe("an invitation", () => {
     expect(adoptInvitation()).toBe(false);
     expect(token()).toBe("");
     expect(window.location.hash).toBe("#settings");
+  });
+});
+
+describe("a window pointed at a box", () => {
+  // The module reads the arrangement once, on import, so this is a second
+  // import with the bridge present and a box on record: the third host.
+  it("sends its calls to the box, with the box's token, and files from the box", async () => {
+    vi.resetModules();
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    window.localStorage.setItem(
+      "guaca.workspace.remote",
+      JSON.stringify({ origin: "http://box.example:8787/", token: "box-token" }),
+    );
+    try {
+      const boxed = await import("./transport");
+      expect(boxed.hosted).toBe(true);
+      expect(boxed.attached()).toEqual({ origin: "http://box.example:8787", token: "box-token" });
+      expect(boxed.token()).toBe("box-token");
+      expect(boxed.workspaceOrigin()).toBe("http://box.example:8787");
+
+      fetched.mockResolvedValue(new Response(JSON.stringify({ ok: 1 })));
+      await boxed.invoke("capabilities");
+      const [url, init] = fetched.mock.calls[0]!;
+      expect(String(url)).toBe("http://box.example:8787/v1/call");
+      expect((init!.headers as Record<string, string>).authorization).toBe("Bearer box-token");
+
+      // A rotated token stays with the box's record rather than the page's.
+      boxed.setToken("rotated");
+      expect(JSON.parse(window.localStorage.getItem("guaca.workspace.remote")!)).toEqual({
+        origin: "http://box.example:8787",
+        token: "rotated",
+      });
+    } finally {
+      delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      window.localStorage.removeItem("guaca.workspace.remote");
+      vi.resetModules();
+    }
+  });
+
+  it("is not pointed anywhere when the record is malformed", async () => {
+    vi.resetModules();
+    (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
+    window.localStorage.setItem("guaca.workspace.remote", "{not json");
+    try {
+      const boxed = await import("./transport");
+      expect(boxed.attached()).toBeNull();
+      expect(boxed.hosted).toBe(false);
+    } finally {
+      delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+      window.localStorage.removeItem("guaca.workspace.remote");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("probing a box", () => {
+  it("accepts a box that answers as guacad and takes the token", async () => {
+    fetched
+      .mockResolvedValueOnce(new Response(JSON.stringify({ service: "guacad", build: "abc1234" })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ ok: { localFiles: false } })));
+    const found = await probe({ origin: "http://box.example/", token: "t" });
+    expect(found.build).toBe("abc1234");
+    expect(found.capabilities).toEqual({ localFiles: false });
+    expect(String(fetched.mock.calls[0]![0])).toBe("http://box.example/health");
+  });
+
+  it("refuses something that answers but is not a workspace", async () => {
+    fetched
+      .mockResolvedValueOnce(new Response("<html>hello</html>"))
+      .mockResolvedValueOnce(new Response("<html>hello</html>"));
+    await expect(probe({ origin: "http://box.example", token: "t" })).rejects.toMatchObject({
+      message: expect.stringContaining("not a Guaca workspace"),
+    });
+  });
+
+  it("hands back the box's own refusal of a wrong token", async () => {
+    fetched
+      .mockResolvedValueOnce(new Response(JSON.stringify({ service: "guacad", build: "" })))
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ err: { kind: "unauthorized", message: "needs the token" } }),
+          {
+            status: 401,
+          },
+        ),
+      );
+    await expect(probe({ origin: "http://box.example", token: "wrong" })).rejects.toEqual({
+      kind: "unauthorized",
+      message: "needs the token",
+    });
+  });
+});
+
+describe("an upload", () => {
+  it("posts the bytes under the file's name with the token, and unwraps what was stored", async () => {
+    setToken("abc123");
+    fetched.mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: { digest: "d", name: "brief.txt", mime: "text/plain", bytes: 5 } }),
+      ),
+    );
+    const file = new File(["hello"], "brief.txt", { type: "text/plain" });
+    await expect(upload(file)).resolves.toMatchObject({ digest: "d", name: "brief.txt" });
+    const [url, init] = fetched.mock.calls[0]!;
+    expect(String(url)).toBe(`${window.location.origin}/v1/upload?name=brief.txt`);
+    expect((init!.headers as Record<string, string>).authorization).toBe("Bearer abc123");
+    expect(init!.body).toBe(file);
+  });
+
+  it("hands back the store's own sentence for a file it refused", async () => {
+    fetched.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          err: { kind: "file", message: "huge.bin is 30 bytes, and the limit is 25" },
+        }),
+        {
+          status: 422,
+        },
+      ),
+    );
+    await expect(upload(new File(["x"], "huge.bin"))).rejects.toMatchObject({
+      kind: "file",
+      message: expect.stringContaining("the limit is"),
+    });
   });
 });
 

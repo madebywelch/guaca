@@ -15,10 +15,12 @@ import { type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
 import { announcementFor } from "./lib/announce";
 import { applyAppearance, watchSystemSurface } from "./lib/appearance";
-import { api, notifyOperator, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
+import { api, notifyOperator, onMenubarAsk, onRevealRequest, onRuntimeEvent } from "./lib/ipc";
 import { bindingFor } from "./lib/keybinds";
+import { FEED_COALESCE_MS, presenceOf, samePresence } from "./lib/menubar";
 import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { useLiveAgents, useStore } from "./lib/store";
+import { attached, hosted } from "./lib/transport";
 import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
 
 export default function App() {
@@ -27,6 +29,8 @@ export default function App() {
   const settings = useStore((s) => s.settings);
   const banner = useStore((s) => s.banner);
   const setBanner = useStore((s) => s.setBanner);
+  const handoff = useStore((s) => s.handoff);
+  const setHandoff = useStore((s) => s.setHandoff);
   const bootstrap = useStore((s) => s.bootstrap);
   const applyEvent = useStore((s) => s.applyEvent);
   const refreshAgents = useStore((s) => s.refreshAgents);
@@ -147,6 +151,63 @@ export default function App() {
     };
   }, [announce, applyEvent, bootstrap, setBanner]);
 
+  // The menu bar follows the window. While this window shows a box, the strip
+  // on this machine is handed the box's presence, coalesced, and only when it
+  // would draw differently; while it shows this machine, the strip reads the
+  // runtime itself and is told once to do so, because the process outlives
+  // the page and the last page may have left it fed.
+  useEffect(() => {
+    if (!hosted) {
+      void api.reportPresence(null).catch(() => {});
+      return;
+    }
+    if (!attached()) return;
+
+    let last = presenceOf(useStore.getState());
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const report = () => {
+      timer = null;
+      const next = presenceOf(useStore.getState());
+      if (samePresence(next, last)) return;
+      last = next;
+      void api.reportPresence(next).catch(() => {});
+    };
+    void api.reportPresence(last).catch(() => {});
+    const unsubscribe = useStore.subscribe(() => {
+      if (timer === null) timer = setTimeout(report, FEED_COALESCE_MS);
+    });
+    return () => {
+      unsubscribe();
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, []);
+
+  // A click on a strip row that was drawn from a box. The act belongs to the
+  // box and this window holds the connection, so it does what the row said.
+  useEffect(() => {
+    if (!attached()) return;
+    let unlisten: (() => void) | undefined;
+    let canceled = false;
+    void (async () => {
+      const stop = await onMenubarAsk((ask) => {
+        const act =
+          ask.kind === "stopAll"
+            ? api.stopEverything()
+            : api.decideApproval(ask.approval, ask.decision);
+        void act.catch((error) => setBanner({ tone: "error", text: errorMessage(error) }));
+      });
+      if (canceled) {
+        stop();
+        return;
+      }
+      unlisten = stop;
+    })();
+    return () => {
+      canceled = true;
+      unlisten?.();
+    };
+  }, [setBanner]);
+
   // A row in the menu bar, clicked. The window is already up by the time this
   // lands; the only thing left is which channel it lands in, and the newest
   // window of it is the right one: a request the strip offered is the last
@@ -224,6 +285,21 @@ export default function App() {
                 with the key two sections away. */}
             <button type="button" className="btn" onClick={() => setShowSettings("provider")}>
               Open settings
+            </button>
+          </div>
+        )}
+
+        {handoff && (
+          <div className="banner" role="status">
+            <span>
+              A sign-in is waiting in the tab that just opened. If none did,{" "}
+              <a href={handoff} target="_blank" rel="noopener noreferrer">
+                open it here
+              </a>
+              .
+            </span>
+            <button type="button" className="btn" onClick={() => setHandoff(null)}>
+              Dismiss
             </button>
           </div>
         )}
