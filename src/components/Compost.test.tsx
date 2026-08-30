@@ -45,6 +45,7 @@ function agent(name: string, discardedAt: number | null): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     name,
     avatar: "avocado",

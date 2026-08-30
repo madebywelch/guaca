@@ -185,10 +185,40 @@ replaced independently. Without that, asking the computer what it holds would
 erase everything the browser reported, and an agent's accounts would flicker
 between two halves of the truth depending on which scan ran last.
 
+## Whether the gate fires at all is a decision about the agent
+
+`Consent` sits on the card next to `has_browser`, and it is `open`. An agent
+with an open browser is never stopped: what the browser is signed in to is what
+the operator handed over when they gave it the browser, and the agent spending
+it is the arrangement rather than a surprise.
+
+`askBeforeActing` is the other answer, taken per agent, from the switch under
+the browser pane. It is per agent because per site is a question with no useful
+answer. The interesting instruction an operator holds is about accounts and
+intent, not domains: *post on the company LinkedIn, never on my own* is one
+site, two accounts and a rule the gate cannot see. The model can hold that,
+told plainly. What the operator decides here is which agents they trust to
+follow it, which is the same decision they took when they handed one a browser.
+
+The default is open for a reason with a measurement behind it. An agent doing
+research presses something on a search engine every few seconds, leaves the
+domain to read a result, and comes back: the grant below is taken back on every
+cycle, so the gate asked again on every cycle. A question in that shape is not a
+stricter gate. It is a gate the operator has learned to click through, which
+costs the one thing the whole mechanism buys.
+
+That also fixes what the second detection layer in `signin::detect` costs here.
+A domain the browser has visited, holding a durable `httpOnly` cookie whose name
+looks like an identity, is reported as a sign-in: that is the right hedge for a
+roster, and it means an ordinary search engine can be a "session" the gate
+fires on. With the gate off by default, a hedged guess no longer buys the
+operator a dialog.
+
 ## The consent gate reads the browser's sessions, not the agent's
 
-`needs_consent` fires on a `click` or `type` in the browser, after this turn has
-taken in a page or a screen, on a site the agent holds a session for. The
+Once an operator has asked to be asked, `needs_consent` fires on a `click` or
+`type` in the browser, after this turn has taken in a page or a screen, on a
+site the agent holds a session for. The
 sessions consulted are the *browser's*, not the union of both surfaces. The URL
 the rule is decided from came from the browser, so a session the computer holds
 is not the thing that action could spend: gating on it would stop and ask about

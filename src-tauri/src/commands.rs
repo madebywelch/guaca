@@ -15,7 +15,7 @@ use tauri::State;
 use crate::account::{Account, AccountError, Connectors};
 use crate::artifact::Artifacts;
 use crate::config::{self, AppConfig, RedactedConfig};
-use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Lifecycle};
+use crate::domain::agent::{copy_name, hire_names, AgentCard, AgentDraft, Consent, Lifecycle};
 use crate::domain::approval::{Approval, ApprovalState, Decision, ProtectedAction};
 use crate::domain::attachment::Attachment;
 use crate::domain::connector::{Connector, ConnectorDraft};
@@ -442,6 +442,23 @@ pub async fn agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<Opt
 #[tauri::command]
 pub fn give_agent_browser(state: State<'_, AppState>, id: AgentId) -> Reply<()> {
     state.runtime.store().set_has_browser(id, true)?;
+    state.runtime.emit(UiEvent::AgentsChanged);
+    Ok(())
+}
+
+/// Whether that browser stops and asks before it acts in the operator's name.
+///
+/// Separate from giving and taking the browser back, because it answers a
+/// different question and outlives every browser made under it. See
+/// [`crate::domain::agent::Consent`], which is where the argument for deciding
+/// this per agent lives.
+#[tauri::command]
+pub fn set_agent_browser_consent(
+    state: State<'_, AppState>,
+    id: AgentId,
+    consent: Consent,
+) -> Reply<()> {
+    state.runtime.store().set_browser_consent(id, consent)?;
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
 }

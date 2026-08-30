@@ -153,7 +153,7 @@ repo: the frontend renders state and forwards intent.
 | The crews' column, its badges, how a crew names itself, which crew the rail is inside | *A group is a place you can be inside* in `docs/WORKSPACE.md`, then `src/lib/presence.ts`, `src/components/GroupRail.tsx` and `src/components/OrbTag.tsx` |
 | When the crews' column comes out, how close is close enough, what holds it out | *The column does not stand open* in `docs/WORKSPACE.md`, then `src/lib/reach.ts` and the three boxes in `.grail` |
 | Who spoke to whom, what a run cost, where that board lives | *The flow board is analysis, so it is in a crew's settings* in `docs/WORKSPACE.md`, then `src/components/GroupActivity.tsx` and `Store::conversation_flow` |
-| What an agent may do with a page it has just read | *A page that was read this turn cannot quietly press a button* |
+| What an agent may do with a page it has just read, and whether it is asked about it at all | *A page that was read this turn cannot quietly press a button*, then `Consent` in `domain/agent.rs` and `needs_consent` |
 | Screenshots, coordinates, what a screen action answers with | *A computer is looked at, never asked* in `docs/MACHINES.md` |
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |

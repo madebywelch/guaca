@@ -7,8 +7,15 @@ Chrome that is asked rather than looked at. `docs/MACHINES.md` and
 
 - **The sign-in tests carry real cookie names.** A cookie's presence is not a
   login. Do not loosen them without a fresh capture from a live machine.
-- **All three conditions in `needs_consent` are load-bearing.** Each one alone
+- **All four conditions in `needs_consent` are load-bearing.** Each one alone
   refuses honest work. Read the doc comment before narrowing or widening any.
+  The first is the operator's and is off by default: `Consent` on the card, set
+  per agent under the browser pane. It is not caution about a migration and not
+  a switch waiting to be flipped on for everybody. A gate that fires on every
+  search press is answered without being read, and an agent doing research
+  leaves the granted site and returns on every cycle, so it fired on every
+  cycle. Per site is not the missing granularity either: which account on a
+  site an agent may act as is an instruction only the model can hold.
   The fourth clause is not one of them: a yes is remembered against that site
   for the rest of the turn, because asking per press produced four dialogs in a
   row for one account and a question in that shape is one an operator clicks

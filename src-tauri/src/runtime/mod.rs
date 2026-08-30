@@ -87,9 +87,14 @@ impl Reading {
 ///
 /// Pure, and separate from the asking, because this is the whole security rule
 /// and a rule nobody can read in isolation is a rule nobody can check. All
-/// three conditions must hold, and each one alone would refuse work that
+/// four conditions must hold, and each one alone would refuse work that
 /// nobody should have to approve:
 ///
+/// - **The operator asked to be asked.** [`Consent`] is a decision they take
+///   per agent, when they give it the browser, and it is [`Consent::Open`]
+///   unless they say otherwise. An agent doing research presses something on a
+///   search engine every few seconds, and a gate that fires there is a gate
+///   answered without reading.
 /// - **The action changes something.** `open`, `read`, `scroll` and `back` are
 ///   how a page is read at all, and gating them would mean approving a click
 ///   to get to the thing being approved.
@@ -106,8 +111,13 @@ impl Reading {
 /// site, so a crew working through an inbox is asked once rather than once per
 /// press. It is scoped to a `Reading` that is built fresh for every turn, so
 /// nothing here outlives the work the operator was watching.
-fn needs_consent<'a>(action: &str, reading: &Reading, held: &'a [Signin]) -> Option<&'a Signin> {
-    if !matches!(action, "click" | "type") || !reading.ingested {
+fn needs_consent<'a>(
+    consent: Consent,
+    action: &str,
+    reading: &Reading,
+    held: &'a [Signin],
+) -> Option<&'a Signin> {
+    if !consent.asks() || !matches!(action, "click" | "type") || !reading.ingested {
         return None;
     }
     let session = signin::session_for(held, reading.url.as_deref()?)?;
@@ -340,7 +350,7 @@ enum Permission {
 use crate::coding::bridge::Reach;
 use crate::db::{Store, StoreError};
 use crate::domain::agent::{
-    copy_name, AgentCard, CleanDraft, DirectoryEntry, Lifecycle, COMPOST_MS,
+    copy_name, AgentCard, CleanDraft, Consent, DirectoryEntry, Lifecycle, COMPOST_MS,
 };
 use crate::domain::approval::{
     Approval, ApprovalState, Decision, DetailField, ProtectedAction, Request,
@@ -5102,9 +5112,13 @@ impl Runtime {
     /// rather than an instruction; an injection is written precisely to talk a
     /// model out of that. What it cannot talk its way past is a person.
     ///
-    /// Three conditions, and all three have to hold, because any one of them
+    /// Four conditions, and all four have to hold, because any one of them
     /// alone would refuse work nobody should have to approve:
     ///
+    /// - the operator asked to be asked about this agent. `Consent` is theirs,
+    ///   it sits on the card beside `has_browser`, and it is `Open` until they
+    ///   say otherwise: handing an agent a browser is what said the accounts
+    ///   in it are its to spend. See the type, which carries the argument.
     /// - the action changes something rather than reading it. Navigating,
     ///   scrolling and going back are how a page gets read at all.
     /// - this turn has already taken in a page or a screen. An agent told to go
@@ -5124,7 +5138,9 @@ impl Runtime {
     ///
     /// Deliberately still not "always allow": `ActOnBehalf` has no standing yes,
     /// nothing here reaches the `grants` table, and a page that could earn one
-    /// once would earn it for every page after.
+    /// once would earn it for every page after. An operator who does not want
+    /// to be asked says so about the agent, in advance, where nothing a page
+    /// wrote is in the room.
     async fn may_act_on(
         &self,
         card: &AgentCard,
@@ -5146,7 +5162,7 @@ impl Runtime {
             .filter(|signin| signin.surface == Surface::Browser)
             .collect();
         let (url, domain, service) = {
-            let session = needs_consent(action, reading, &held)?;
+            let session = needs_consent(card.browser_consent, action, reading, &held)?;
             (reading.url.clone().unwrap_or_default(), session.domain.clone(), session.label())
         };
 
@@ -5184,7 +5200,9 @@ impl Runtime {
                     DetailField {
                         label: "What allowing covers".to_string(),
                         value: format!(
-                            "Every press and typed line on {service} for the rest of this turn.                              It is not remembered afterward, and it ends early if {} reads a                              page somewhere else.",
+                            "Every press and typed line on {service} for the rest of this turn. \
+                             It is not remembered afterward, and it ends early if {} reads a page \
+                             somewhere else.",
                             card.name
                         ),
                     },
@@ -7149,6 +7167,7 @@ mod tests {
             sandbox_traffic_token: None,
             has_computer: true,
             has_browser: false,
+            browser_consent: Consent::default(),
             repository_id: None,
             browser_id: None,
             lifecycle,
@@ -7199,6 +7218,42 @@ mod tests {
         Reading { ingested: true, url: Some(url.into()), allowed: None }
     }
 
+    /// A browser the operator has asked to be consulted about. Everything below
+    /// is what the gate does once they have said so; `Consent::Open` is the
+    /// default and has its own test.
+    const ASKING: Consent = Consent::AskBeforeActing;
+
+    #[test]
+    fn a_browser_the_operator_did_not_hold_back_never_stops_to_ask() {
+        // The default, and the whole of what they decided when they handed this
+        // agent the browser. Every other condition holds: signed in, a page read
+        // this turn, a press about to happen on that site.
+        let held = [session("gmail.com")];
+        let after = having_read("https://mail.gmail.com/u/0/#inbox");
+        assert!(needs_consent(Consent::Open, "click", &after, &held).is_none());
+        assert!(needs_consent(Consent::Open, "type", &after, &held).is_none());
+    }
+
+    #[test]
+    fn research_on_a_held_back_browser_is_asked_once_per_site_it_returns_to() {
+        // Why the decision is per agent rather than per press. A search engine
+        // the operator is signed in to is left and returned to every cycle, and
+        // each return re-arms the gate, so this is the shape of work that made
+        // the dialog constant. It still asks, because that is what being held
+        // back means; what an operator can do about it is `Consent::Open`.
+        let held = [session("bing.com")];
+        let mut reading = having_read("https://www.bing.com/search?q=senior+centers");
+        assert!(needs_consent(ASKING, "click", &reading, &held).is_some());
+        reading.allowed = Some("bing.com".into());
+
+        reading.took_in(Some("https://example.org/staff".into()));
+        reading.took_in(Some("https://www.bing.com/search?q=next".into()));
+        assert!(
+            needs_consent(ASKING, "click", &reading, &held).is_some(),
+            "a result read off the site takes the grant back, so the next search asks again"
+        );
+    }
+
     #[test]
     fn a_page_that_talks_an_agent_into_pressing_something_stops_at_a_person() {
         // The threat `WEB_LABEL` cannot hold on its own. The label and the
@@ -7208,8 +7263,8 @@ mod tests {
         // read this turn, and the next click is theirs to allow.
         let held = [session("gmail.com")];
         let after = having_read("https://mail.gmail.com/u/0/#inbox");
-        assert!(needs_consent("click", &after, &held).is_some());
-        assert!(needs_consent("type", &after, &held).is_some());
+        assert!(needs_consent(ASKING, "click", &after, &held).is_some());
+        assert!(needs_consent(ASKING, "type", &after, &held).is_some());
     }
 
     #[test]
@@ -7221,7 +7276,7 @@ mod tests {
         let after = having_read("https://mail.gmail.com/u/0/#inbox");
         for action in ["open", "read", "scroll", "back"] {
             assert!(
-                needs_consent(action, &after, &held).is_none(),
+                needs_consent(ASKING, action, &after, &held).is_none(),
                 "{action} only reads, and gating it would gate reporting the attack"
             );
         }
@@ -7235,7 +7290,7 @@ mod tests {
         let held = [session("gmail.com")];
         let untainted =
             Reading { ingested: false, url: Some("https://gmail.com/".into()), allowed: None };
-        assert!(needs_consent("click", &untainted, &held).is_none());
+        assert!(needs_consent(ASKING, "click", &untainted, &held).is_none());
     }
 
     #[test]
@@ -7243,8 +7298,11 @@ mod tests {
         // The action spends the agent's time rather than the operator's name.
         // Gating it would make every form on the open web a question.
         let held = [session("gmail.com")];
-        assert!(needs_consent("click", &having_read("https://example.com/form"), &held).is_none());
-        assert!(needs_consent("click", &having_read("https://example.com/form"), &[]).is_none());
+        assert!(needs_consent(ASKING, "click", &having_read("https://example.com/form"), &held)
+            .is_none());
+        assert!(
+            needs_consent(ASKING, "click", &having_read("https://example.com/form"), &[]).is_none()
+        );
     }
 
     #[test]
@@ -7256,10 +7314,16 @@ mod tests {
         // asked, which is worse than not having the gate: it would look like
         // the gate had considered it.
         let held = [session("gmail.com")];
-        assert!(needs_consent("click", &having_read("https://notgmail.com/x"), &held).is_none());
         assert!(
-            needs_consent("click", &having_read("https://gmail.com@evil.com/x"), &held).is_none()
+            needs_consent(ASKING, "click", &having_read("https://notgmail.com/x"), &held).is_none()
         );
+        assert!(needs_consent(
+            ASKING,
+            "click",
+            &having_read("https://gmail.com@evil.com/x"),
+            &held
+        )
+        .is_none());
     }
 
     #[test]
@@ -7270,17 +7334,17 @@ mod tests {
         // to avoid rather than one it may cause.
         let held = [session("facebook.com")];
         let mut reading = having_read("https://www.facebook.com/");
-        assert!(needs_consent("click", &reading, &held).is_some(), "the first press asks");
+        assert!(needs_consent(ASKING, "click", &reading, &held).is_some(), "the first press asks");
 
         reading.allowed = Some("facebook.com".into());
-        assert!(needs_consent("click", &reading, &held).is_none());
-        assert!(needs_consent("type", &reading, &held).is_none());
+        assert!(needs_consent(ASKING, "click", &reading, &held).is_none());
+        assert!(needs_consent(ASKING, "type", &reading, &held).is_none());
 
         // Including the rest of the site. A crew answering a page's messages
         // walks from `www` to `business` without leaving the account the
         // operator was asked about.
         reading.took_in(Some("https://business.facebook.com/latest/inbox/all".into()));
-        assert!(needs_consent("click", &reading, &held).is_none());
+        assert!(needs_consent(ASKING, "click", &reading, &held).is_none());
     }
 
     #[test]
@@ -7292,7 +7356,7 @@ mod tests {
         reading.allowed = Some("facebook.com".into());
         reading.took_in(Some("https://mail.gmail.com/u/0/#inbox".into()));
         assert!(
-            needs_consent("click", &reading, &held).is_some(),
+            needs_consent(ASKING, "click", &reading, &held).is_some(),
             "a grant for one account cannot be spent on another"
         );
     }
@@ -7312,7 +7376,7 @@ mod tests {
         // And back on the site, the browser has moved but the yes has not
         // followed it. Nothing restores a grant except the operator.
         reading.took_in(Some("https://www.facebook.com/".into()));
-        assert!(needs_consent("click", &reading, &held).is_some());
+        assert!(needs_consent(ASKING, "click", &reading, &held).is_some());
 
         // A screenshot cannot show that the turn stayed put, so it counts as
         // somewhere else. It is untrusted content read through another tool.
@@ -7344,7 +7408,10 @@ mod tests {
         // account cannot answer for a press on a page merely named after it.
         reading.url = Some("https://notfacebook.com/x".into());
         reading.allowed = Some("facebook.com".into());
-        assert!(needs_consent("click", &reading, &held).is_none(), "nobody is signed in there");
+        assert!(
+            needs_consent(ASKING, "click", &reading, &held).is_none(),
+            "nobody is signed in there"
+        );
     }
 
     #[test]
@@ -7405,13 +7472,13 @@ mod tests {
         let held = [session("gmail.com")];
         let looked =
             Reading { ingested: true, url: Some("https://mail.gmail.com/".into()), allowed: None };
-        assert!(needs_consent("click", &looked, &held).is_some());
+        assert!(needs_consent(ASKING, "click", &looked, &held).is_some());
 
         // With nowhere known to be, there is nothing to judge and nothing is
         // claimed. The turn is still marked, so the first `browse` that lands
         // somewhere signed in re-arms it.
         let blind = Reading { ingested: true, url: None, allowed: None };
-        assert!(needs_consent("click", &blind, &held).is_none());
+        assert!(needs_consent(ASKING, "click", &blind, &held).is_none());
     }
 
     #[test]

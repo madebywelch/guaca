@@ -1291,6 +1291,32 @@ CREATE INDEX escalations_open ON escalations (raised_at) WHERE cleared_at IS NUL
 ALTER TABLE repositories ADD COLUMN bench TEXT NOT NULL DEFAULT 'shared';
 "#,
     ),
+    (
+        45,
+        r#"
+-- Whether an agent's browser stops and asks before it acts in the operator's
+-- name.
+--
+-- The gate this switches off fires on a press or a typed line, on a site the
+-- browser holds a session for, in a turn that has already read a page. It was
+-- written for an agent working one inbox, where the grant it collects lasts the
+-- rest of the turn and the agent never leaves the domain. An agent doing
+-- research leaves it on every cycle: search, read a result off-domain, come
+-- back, ask again. The live report was a dialog every few seconds, which is a
+-- dialog answered without reading.
+--
+-- `'open'` for every row, new and old, because giving an agent a browser was
+-- already the decision about what that browser is signed in to. The SQL default
+-- and `Consent::default` agree here, unlike `bench` above: this is not an
+-- upgrade taking a decision, it is an upgrade recording the one the operator
+-- took when they handed over the browser.
+--
+-- `'askBeforeActing'` is per agent rather than per site because per site is the
+-- question nobody can answer. Which account may be posted to under which
+-- instruction is a thing the model is told; a column of domains cannot hold it.
+ALTER TABLE agents ADD COLUMN browser_consent TEXT NOT NULL DEFAULT 'open';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
@@ -2337,6 +2363,35 @@ mod tests {
             .query_row("SELECT bench FROM repositories WHERE id='r1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(bench, "shared", "an upgrade must not move where a directory's jobs run");
+    }
+
+    #[test]
+    fn an_agent_given_a_browser_before_this_column_existed_is_not_held_back_by_it() {
+        // The one direction this upgrade must not go. An operator who had
+        // agents on the web yesterday gets the same browser today: the column
+        // records the decision they already took, it does not take a new one.
+        let mut conn = memory();
+        let tx = conn.transaction().unwrap();
+        for (version, sql) in MIGRATIONS.iter().take_while(|(v, _)| *v < 45) {
+            tx.execute_batch(sql).unwrap();
+            tx.pragma_update(None, "user_version", *version).unwrap();
+        }
+        tx.commit().unwrap();
+
+        conn.execute(
+            "INSERT INTO agents (id,name,avatar,color,model,system_prompt,skills,lifecycle,
+                                 version,created_at,updated_at,group_id,has_browser)
+             VALUES ('a1','Researcher','orb','#7fb069','m','','[]','active',1,1,1,?1,1)",
+            rusqlite::params![DEFAULT_GROUP_ID],
+        )
+        .unwrap();
+
+        run(&mut conn).unwrap();
+
+        let consent: String = conn
+            .query_row("SELECT browser_consent FROM agents WHERE id='a1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(consent, "open", "an upgrade must not start asking about work already running");
     }
 
     #[test]

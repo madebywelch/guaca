@@ -10,6 +10,15 @@ export type MessageId = string;
 export type RunId = string;
 
 export type Lifecycle = "active" | "paused" | "terminated";
+/**
+ * Whether an agent's browser asks before it acts in the operator's name.
+ *
+ * Per agent, and `open` by default: what the browser is signed in to is what
+ * the operator handed over when they gave the agent the browser. The rule this
+ * turns on cannot tell one account on a site from another, so it is a decision
+ * about which agents are trusted rather than about which pages are safe.
+ */
+export type BrowserConsent = "open" | "askBeforeActing";
 export type Trust = "operator" | "peer" | "system";
 export type NoticeKind = "guardStop" | "upstreamError" | "lifecycle";
 
@@ -719,6 +728,15 @@ export interface AgentCard {
   hasComputer: boolean;
   /** The same decision about the browser, and separately. */
   hasBrowser: boolean;
+  /**
+   * Whether that browser stops and asks before it acts in the operator's name.
+   *
+   * `open` unless the operator held this agent back, because giving it the
+   * browser was already the decision about what the browser is signed in to.
+   * Held back, a press or a typed line on a site the browser holds a session
+   * for, in a turn that has read a page, parks the turn and asks.
+   */
+  browserConsent: BrowserConsent;
   /** The one repository this agent works in, if it has been put in one. */
   repositoryId: RepositoryId | null;
   name: string;
