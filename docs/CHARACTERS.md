@@ -32,7 +32,7 @@ So it is two decisions now: which of five shapes, and then the lump on top.
 | `src/avatars/eyes.ts` | The eye primitive, the blink, and the gaze. |
 | `src/avatars/catalog.ts` | The cast, the accents, and the alias table that keeps every key an older build wrote still meaning something. |
 | `src/avatars/moods.ts` | The ten expressions, the marks drawn beside a head, and `moodFor`, which is the only place a runtime signal becomes a face. |
-| `src/avatars/clock.ts` | One frame loop for every creature on screen. |
+| `src/avatars/clock.ts` | The clock every creature shares, and the one each of them keeps. |
 | `src/avatars/AgentAvatar.tsx` | What is true right now, written to three attributes a frame. |
 | `scripts/make-crew.ts` | The strip on the README's front page, drawn from the files above rather than redrawn. |
 
@@ -217,6 +217,40 @@ The loop only makes it move.
 
 The next frame is scheduled before the painting, so one painter throwing cannot
 stop every other face in the app for the rest of the session.
+
+## No two of them keep time together
+
+One clock for every creature is also the thing that makes a rail read as one
+animal. A mood is a table of rates every agent in it shares, so eight idle
+agents handed the same seconds breathe at 0.22Hz together, blink on the same
+4.6-second slots and glance at the same moment. Nothing about that is wrong per
+frame, and all of it is wrong per rail: a row of creatures on one beat is
+choreography, and choreography is the one thing a creature must not look like.
+
+**A phase offset does not fix it, because a phase offset never changes.** An
+offset moves where a creature is in its cycle and leaves its tempo alone, so two
+of them hold whatever gap they started with for the life of the session. That
+gap is what an operator actually sees: eight blobs pulsing at one rate in fixed
+formation reads as one animation played eight times, which is what it is.
+
+So a seed buys two numbers. `gaitOf` in `clock.ts` turns an agent id into a
+phase and a tempo, the tempo is the one that does the work, and the spread is
+±22%: a pair drifts half a breath apart inside about fifteen seconds of idling
+and keeps drifting, so the formation never re-forms. Wider and the same mood
+starts reading as two different amounts of urgency, which `moods.ts` is supposed
+to be the only source of.
+
+**Only cycles are on that clock.** A mood becoming another, a message landing, a
+turn finishing: every age is measured on the shared seconds, or how fast a face
+reacts to being spoken to would be a property of its id. `AgentAvatar` keeps the
+two apart on purpose, and the transient moods are decided against `Date.now()`
+regardless.
+
+The marks beside a head loop in CSS rather than in the frame loop, and CSS has
+only the document's clock, which is the same for everybody. Every avatar on
+screen is written in one frame and a crew told one thing starts thinking in one
+frame, so the marks come out in lockstep unless something says otherwise: the
+phase is handed down as `--gait` and each loop is pulled back by it.
 
 ## Identity
 

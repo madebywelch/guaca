@@ -4,7 +4,7 @@ import { prefersReducedMotion } from "../lib/motion";
 import type { LiveCall } from "../lib/trail";
 import type { Activity, Lifecycle } from "../lib/types";
 import { lookupCharacter } from "./catalog";
-import { join, type Painter } from "./clock";
+import { gaitOf, join, type Painter } from "./clock";
 import { blendEyes, type Drawn, eyePath, eyesAt, gazeAt, SETTLE } from "./eyes";
 import { blend, bodyPoints, FORM, outline, type Point } from "./form";
 import { MOODS, type Mood, markFor, moodFor } from "./moods";
@@ -30,7 +30,7 @@ interface Props {
   finishedAt?: number;
   /** Overrides everything above. For a preview, where there is no agent to read. */
   mood?: Mood;
-  /** Desynchronizes idle motion. Pass the agent id so a crew never moves in unison. */
+  /** Where its own clock starts and how fast it runs. Pass the agent id. */
   seed?: string;
   look?: Look;
   gesture?: Gesture;
@@ -56,7 +56,11 @@ const KNOCK = {
 interface Cell {
   mood: Mood;
   from: Mood;
-  /** When the change to `mood` began, on the shared clock. */
+  /**
+   * When the change to `mood` began, and when a gesture did, both on the shared
+   * clock rather than the creature's own: how quickly a face reacts is not
+   * allowed to be a property of its id.
+   */
   at: number;
   /** Where the mass has got to, and how fast, in body radii. */
   gaze: Point;
@@ -66,13 +70,6 @@ interface Cell {
   gestureAt: number;
   /** Which mood's mark the group is currently holding. */
   marked: Mood | null;
-}
-
-/** Deterministic 0..1 from a string. Only ever used for animation phase. */
-function phaseOf(seed: string): number {
-  let hash = 0;
-  for (let i = 0; i < seed.length; i++) hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
-  return (hash % 1000) / 1000;
 }
 
 /**
@@ -134,7 +131,9 @@ export function AgentAvatar({
     character,
   });
 
-  const phase = phaseOf(seed ?? avatar) * 9;
+  /* Its own clock, so a crew of idle agents is not one animal breathing. Only
+     the cycles below are on it; every age is measured on the shared seconds. */
+  const gait = gaitOf(seed ?? avatar);
 
   const paint = useRef<Painter>(() => {});
   paint.current = (seconds, live) => {
@@ -145,16 +144,16 @@ export function AgentAvatar({
     if (!body || !face) return;
 
     const state = cell.current;
-    const t = seconds + phase;
+    const t = seconds * gait.rate + gait.phase;
 
     /* A catch is what makes an agent look surprised, and it is the only
        transient the component raises for itself. */
     if (now.gesture !== state.gesture) {
       state.gesture = now.gesture;
-      state.gestureAt = t;
+      state.gestureAt = seconds;
     }
     const struckAt =
-      state.gesture === "receive" ? Date.now() - (t - state.gestureAt) * 1000 : undefined;
+      state.gesture === "receive" ? Date.now() - (seconds - state.gestureAt) * 1000 : undefined;
 
     const want =
       now.mood ??
@@ -172,7 +171,7 @@ export function AgentAvatar({
     if (want !== state.mood) {
       state.from = state.mood;
       state.mood = want;
-      state.at = t;
+      state.at = seconds;
     }
     /* Both of these are structure rather than geometry, so they are written on
        a change of mood and not on every frame. */
@@ -184,7 +183,7 @@ export function AgentAvatar({
 
     const to = MOODS[state.mood];
     const from = MOODS[state.from];
-    const raw = live ? Math.min(1, (t - state.at) / MORPH) : 1;
+    const raw = live ? Math.min(1, (seconds - state.at) / MORPH) : 1;
     const u = raw * raw * (3 - 2 * raw);
 
     /* Where it is looking. An aimed look at a peer outranks whatever the mood
@@ -218,7 +217,7 @@ export function AgentAvatar({
        pulled away and comes back, and its outline is what shows it. */
     if (state.gesture) {
       const knock = KNOCK[state.gesture];
-      const age = t - state.gestureAt;
+      const age = seconds - state.gestureAt;
       if (age > knock.life) {
         state.gesture = null;
       } else if (live) {
@@ -267,7 +266,10 @@ export function AgentAvatar({
     paint.current(cell.current.last, !prefersReducedMotion());
   });
 
-  const style = { "--accent": color } as CSSProperties;
+  /* The phase is handed to CSS as well, because the marks beside a head loop
+     there and would otherwise run on the document's clock, which every creature
+     shares. `styles.css` explains what that looks like. */
+  const style = { "--accent": color, "--gait": `${gait.phase.toFixed(2)}s` } as CSSProperties;
 
   return (
     <span
