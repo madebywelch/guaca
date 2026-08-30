@@ -15,7 +15,7 @@
 
 import { convertFileSrc } from "@tauri-apps/api/core";
 
-import { hosted, token } from "./transport";
+import { hosted, token, workspaceOrigin } from "./transport";
 import type { Attachment } from "./types";
 
 /** The scheme `app.rs` registers. */
@@ -96,7 +96,7 @@ export function kindLabel(mime: string): string {
 export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
   if (hosted) {
     const target = `${encodeURIComponent(file.digest)}/${encodeURIComponent(file.name)}`;
-    return `${window.location.origin}/v1/file/${target}?token=${encodeURIComponent(token())}`;
+    return `${workspaceOrigin()}/v1/file/${target}?token=${encodeURIComponent(token())}`;
   }
   // Asked for rather than built: Tauri spells its own scheme differently per
   // platform (`guacfile:` on macOS, `http://guacfile.localhost` on Windows,

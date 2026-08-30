@@ -5,7 +5,7 @@ import type { AgentCard, Attachment, Staged } from "../lib/types";
 import { Composer } from "./Composer";
 
 /** The drop handlers the component registered, so a test can fire one. */
-let dropped: ((paths: string[]) => void) | null = null;
+let dropped: ((staged: Promise<Staged>) => void) | null = null;
 let over: ((inside: boolean) => void) | null = null;
 
 /** What the runtime says came of a drop. Set per test where it matters. */
@@ -27,10 +27,15 @@ function stored(path: string): Attachment {
   };
 }
 
+const uploads = vi.fn<(files: File[]) => Promise<Staged>>();
+
 vi.mock("../lib/ipc", () => ({
-  api: { stageFiles: (paths: string[]) => staging(paths) },
+  api: {
+    stageFiles: (paths: string[]) => staging(paths),
+    stageUploads: (files: File[]) => uploads(files),
+  },
   onFileDrop: async (handlers: {
-    dropped: (paths: string[]) => void;
+    dropped: (staged: Promise<Staged>) => void;
     over: (inside: boolean) => void;
   }) => {
     dropped = handlers.dropped;
@@ -42,7 +47,21 @@ vi.mock("../lib/ipc", () => ({
 /** Every live agent in the workspace, which is more than one crew. */
 let roster: AgentCard[] = [];
 
-vi.mock("../lib/store", () => ({ useLiveAgents: () => roster }));
+/** What the composer reads off the store: the roster, and whether there is a disk. */
+const state = {
+  capabilities: {
+    localDirectories: true,
+    loopbackEndpoints: true,
+    claudeProvider: true,
+    claudeCodeHarness: true,
+    localFiles: true,
+  },
+};
+
+vi.mock("../lib/store", () => ({
+  useLiveAgents: () => roster,
+  useStore: (select: (s: typeof state) => unknown) => select(state),
+}));
 
 /** The crew whose channel is open in these tests. */
 const CREW = "00000000-0000-4000-8000-000000000001";
@@ -201,6 +220,38 @@ describe("Composer", () => {
     expect(thumbnail?.getAttribute("src")).toContain("digest-of-shot.png");
   });
 
+  it("offers a file button where there are no paths to drop, and takes what it picks", async () => {
+    // A browser has bytes rather than paths, so the drop is joined by a
+    // picker. On a desktop the button is not there: the window takes a path
+    // and the runtime reads the file.
+    state.capabilities = { ...state.capabilities, localFiles: false };
+    uploads.mockResolvedValue({ attached: [stored("brief.pdf")], refused: [] });
+    try {
+      const onSend = await draw();
+      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(picker).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Attach a file" })).toBeTruthy();
+
+      const chosen = new File(["%PDF"], "brief.pdf", { type: "application/pdf" });
+      await act(async () => {
+        Object.defineProperty(picker, "files", { value: [chosen], configurable: true });
+        fireEvent.change(picker);
+      });
+
+      expect(uploads).toHaveBeenCalledWith([chosen]);
+      await waitFor(() => expect(screen.getByText("brief.pdf")).toBeTruthy());
+      await click("Send");
+      expect(onSend).toHaveBeenCalledWith("", [stored("brief.pdf")]);
+    } finally {
+      state.capabilities = { ...state.capabilities, localFiles: true };
+    }
+  });
+
+  it("has no file button on a desktop", async () => {
+    await draw();
+    expect(screen.queryByRole("button", { name: "Attach a file" })).toBeNull();
+  });
+
   it("says where a dragged file will land while it is over the window", async () => {
     await draw();
     await act(async () => {
@@ -317,10 +368,11 @@ describe("a mention in the box", () => {
   });
 });
 
-/** A drop arrives from the runtime, not from the DOM, so it is fired by hand. */
+/** A drop arrives from the runtime, not from the DOM, so it is fired by hand.
+ *  What the composer is handed is the store's answer, already under way. */
 async function drop(paths: string[]) {
   await act(async () => {
-    dropped?.(paths);
+    dropped?.(staging(paths));
   });
 }
 

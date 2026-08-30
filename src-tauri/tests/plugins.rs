@@ -38,6 +38,7 @@ use guac_lib::domain::ids::{AgentId, GroupId};
 use guac_lib::domain::plugin::{HeaderPair, Headers, PluginAccess, PluginKind, SigninNeed};
 use guac_lib::llm::tools::{self, ToolInvocation};
 use guac_lib::mcp::PROTOCOL_VERSION;
+use guac_lib::oauth::Landing;
 use guac_lib::plugins;
 
 /// A tool narrowed to nobody: switched off for the whole crew.
@@ -660,6 +661,7 @@ async fn a_server_that_asks_for_nothing_connects_without_sending_anybody_to_a_br
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         |_| panic!("a public server must not open a browser"),
     )
     .await
@@ -687,6 +689,7 @@ async fn a_protected_server_signs_in_and_the_grant_stays_in_the_store() {
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -719,6 +722,7 @@ async fn a_redirect_that_does_not_match_is_refused() {
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::WrongState),
     )
     .await
@@ -740,6 +744,7 @@ async fn a_refusal_in_the_browser_is_reported_as_one() {
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Refused),
     )
     .await
@@ -767,6 +772,7 @@ async fn a_server_with_no_registration_says_so_rather_than_failing_obscurely() {
         &format!("{}/mcp", server.base()),
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -788,6 +794,7 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -850,6 +857,7 @@ mod account_backed {
             &format!("{}/mcp", server.base()),
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("an account-backed plugin must not send anyone to a browser"),
         )
         .await
@@ -892,6 +900,7 @@ mod account_backed {
                 connection: "work",
             }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -913,6 +922,7 @@ mod account_backed {
                 connection: "personal",
             }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -947,6 +957,7 @@ mod account_backed {
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -975,6 +986,7 @@ mod account_backed {
             &format!("{}/mcp", server.base()),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -999,6 +1011,7 @@ mod account_backed {
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1038,6 +1051,7 @@ mod account_backed {
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1077,6 +1091,7 @@ mod account_backed {
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1150,6 +1165,7 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
         &endpoint,
         plugins::Credential::Account(plugins::AccountUse { token: &token, connection: "" }),
         &Headers::none(),
+        &Landing::Loopback,
         |_| panic!("an account-backed plugin must not open a browser"),
     )
     .await
@@ -1221,6 +1237,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             browser(Outcome::Allowed),
         )
         .await
@@ -1297,6 +1314,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             browser(Outcome::Allowed),
         )
         .await
@@ -1336,6 +1354,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             browser(Outcome::Allowed),
         )
         .await
@@ -1393,6 +1412,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Key("hand-minted"),
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("a pasted key must not send anybody to a browser"),
         )
         .await
@@ -1435,6 +1455,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Key("hand-minted"),
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1474,6 +1495,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             browser(Outcome::Allowed),
         )
         .await
@@ -1539,6 +1561,7 @@ mod added {
                 kind.endpoint(),
                 plugins::Credential::Discover,
                 &Headers::none(),
+                &Landing::Loopback,
                 |_| Ok(()),
             )
             .await
@@ -1597,6 +1620,7 @@ mod added {
             kind.endpoint(),
             plugins::Credential::Discover,
             &headers,
+            &Landing::Loopback,
             browser(Outcome::Allowed),
         )
         .await
@@ -1646,6 +1670,7 @@ mod eras {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("this server authorizes everybody"),
         )
         .await
@@ -1703,6 +1728,7 @@ mod eras {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1743,6 +1769,7 @@ mod eras {
                 kind.endpoint(),
                 plugins::Credential::Discover,
                 &Headers::none(),
+                &Landing::Loopback,
                 browser(Outcome::Allowed),
             )
             .await
@@ -1773,6 +1800,7 @@ mod eras {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1801,6 +1829,7 @@ mod eras {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| Ok(()),
         )
         .await
@@ -1873,6 +1902,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -1921,6 +1951,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -1969,6 +2000,7 @@ async fn disconnecting_forgets_the_plugin_and_its_grant() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -1998,6 +2030,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2009,6 +2042,7 @@ async fn connecting_twice_replaces_the_grant_rather_than_refusing() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2043,6 +2077,7 @@ async fn what_the_crew_connected_is_what_the_model_is_offered() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2113,6 +2148,7 @@ async fn a_crew_with_a_plugin_calls_it_through_a_real_turn() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2218,6 +2254,7 @@ async fn an_agent_the_plugin_was_narrowed_away_from_is_neither_told_nor_allowed(
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2291,6 +2328,7 @@ async fn a_tool_the_operator_switched_off_is_named_in_the_prompt_and_refused_on_
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2353,6 +2391,7 @@ async fn a_narrowed_plugin_shows_up_as_a_peer_who_can_do_it() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2410,6 +2449,7 @@ async fn two_agents_on_one_plugin_are_offered_different_tools_and_told_whose_is_
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2492,6 +2532,7 @@ async fn a_tool_that_is_a_peer_s_is_refused_here_and_not_at_the_vendor() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2545,6 +2586,7 @@ async fn a_plugin_with_everything_switched_off_is_not_a_peer_worth_asking() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2579,6 +2621,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
         &endpoint,
         plugins::Credential::Discover,
         &Headers::none(),
+        &Landing::Loopback,
         browser(Outcome::Allowed),
     )
     .await
@@ -2850,6 +2893,7 @@ mod deployments {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("a server that asks for nothing must not open a browser"),
         )
         .await
@@ -2889,6 +2933,7 @@ mod deployments {
             &server.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("nothing here signs in"),
         )
         .await;
@@ -2923,6 +2968,7 @@ mod deployments {
             kind.endpoint(),
             plugins::Credential::Discover,
             &headers,
+            &Landing::Loopback,
             |_| panic!("a gate is not a sign-in"),
         )
         .await
@@ -2973,6 +3019,7 @@ mod deployments {
             kind.endpoint(),
             plugins::Credential::Discover,
             &headers,
+            &Landing::Loopback,
             |_| panic!("nothing here has an authorization server"),
         )
         .await
@@ -3003,6 +3050,7 @@ mod deployments {
             kind.endpoint(),
             plugins::Credential::Discover,
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("nothing signs in"),
         )
         .await
@@ -3087,6 +3135,7 @@ mod deployments {
             kind.endpoint(),
             plugins::Credential::Key("hand-minted"),
             &Headers::none(),
+            &Landing::Loopback,
             |_| panic!("a pasted key skips discovery"),
         )
         .await

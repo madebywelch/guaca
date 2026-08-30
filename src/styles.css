@@ -4707,6 +4707,35 @@ button {
   transition: background var(--tempo-tap) var(--ease), opacity var(--tempo-tap) var(--ease);
 }
 
+/* The other door into the same list, for a browser that has bytes rather
+   than paths. The send button's size and shape, the ground's colors: an
+   attach is a quiet act and a send is the loud one. */
+.composer__attach {
+  flex: none;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin-bottom: var(--space-1);
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--edge);
+  border-radius: 50%;
+  background: var(--ground);
+  color: var(--muted);
+  font-size: var(--type-ui);
+  line-height: var(--lead-flush);
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.composer__attach:hover:not(:disabled) {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.composer__attach:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
 .composer__send:hover:not(:disabled) {
   background: color-mix(in oklab, var(--flesh) 86%, var(--text));
 }

@@ -59,6 +59,7 @@ use crate::domain::worknote::WorkingNote;
 use crate::e2b::Computer;
 use crate::kernel::Browser;
 use crate::llm::catalog::RankedModel;
+use crate::menubar::Presence;
 use crate::runtime::events::Activity;
 use crate::subscription::{DeviceCode, Status};
 
@@ -300,6 +301,9 @@ surface! {
     usage_summary() -> Vec<GroupUsage>,
     clear_group(group_id: GroupId) -> GroupReset,
     capabilities() -> Capabilities,
+    forward_files(origin: String, token: String, paths: Vec<String>) -> Staged,
+    report_presence(presence: Option<Presence>) -> (),
+    stop_everything() -> usize,
     get_settings() -> RedactedConfig,
     account_status() -> crate::account::Status,
     sign_in_account() -> crate::account::Status,

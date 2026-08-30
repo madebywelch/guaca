@@ -173,6 +173,7 @@ vi.mock("../lib/ipc", () => ({
 
 const { SettingsDialog } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
+const transport = await import("../lib/transport");
 const { DEFAULT_PREFS, NOTIFY_KINDS } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
@@ -854,6 +855,61 @@ describe("the provider presets", () => {
     }
     // And a local one still says what is true of the server itself.
     expect(preset("Ollama").textContent).toContain("On this machine");
+  });
+});
+
+/**
+ * The Workspace pane: pointing this window at a box.
+ *
+ * Runs as the desktop showing its own workspace, which is the only state the
+ * pane offers a choice in. What matters is the order: nothing is stored until
+ * the box has answered to the token, and the page reloads only after it is.
+ */
+describe("the Workspace pane", () => {
+  beforeEach(() => {
+    window.localStorage.removeItem("guaca.workspace.remote");
+    vi.restoreAllMocks();
+  });
+
+  it("stores the box only once it has answered, and then reloads", async () => {
+    const probed = vi
+      .spyOn(transport, "probe")
+      .mockResolvedValue({ build: "abc1234", capabilities: {} });
+    const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
+    open();
+    pane("Workspace");
+
+    const button = screen.getByRole("button", { name: "Show that box" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(field(/^Address of a box/), { target: { value: "http://box.example:8787/" } });
+    fireEvent.change(field(/^Workspace token/), { target: { value: " t0k3n " } });
+    expect(button.disabled).toBe(false);
+    expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(restarted).toHaveBeenCalled());
+    expect(probed).toHaveBeenCalledWith({ origin: "http://box.example:8787", token: "t0k3n" });
+    expect(JSON.parse(window.localStorage.getItem("guaca.workspace.remote")!)).toEqual({
+      origin: "http://box.example:8787",
+      token: "t0k3n",
+    });
+  });
+
+  it("stores nothing when the box refuses, and says why", async () => {
+    vi.spyOn(transport, "probe").mockRejectedValue({
+      kind: "unauthorized",
+      message: "this workspace needs the token it printed",
+    });
+    const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
+    open();
+    pane("Workspace");
+    fireEvent.change(field(/^Address of a box/), { target: { value: "http://box.example" } });
+    fireEvent.change(field(/^Workspace token/), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Show that box" }));
+
+    await screen.findByText(/needs the token it printed/);
+    expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();
+    expect(restarted).not.toHaveBeenCalled();
   });
 });
 

@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
+import { openExternal } from "./transport";
 
 /**
  * How much of a running coding job's work is kept on screen.
@@ -99,7 +100,7 @@ export interface Placement {
   pinned?: boolean;
 }
 
-interface State {
+export interface State {
   agents: AgentCard[];
   groups: Group[];
   /**
@@ -310,6 +311,24 @@ interface State {
 
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
+  /**
+   * A sign-in page the runtime asked this browser to open, while the flow
+   * behind it is still waiting.
+   *
+   * Only a hosted workspace sets it: a desktop opens its own browser. Drawn as
+   * a link as well as opened, because a window opened from an event rather
+   * than a click is one a browser may refuse, and a sign-in that opened
+   * nothing looks exactly like one that hung.
+   */
+  handoff: string | null;
+  /**
+   * Model calls since this window opened, summed.
+   *
+   * The one number with nowhere else to be read from, and the menu bar's
+   * "this session" row when the window is showing a box: the box's runtime
+   * cannot know when this window opened.
+   */
+  sessionSpend: Tokens;
 
   bootstrap: () => Promise<void>;
   refreshAgents: () => Promise<void>;
@@ -385,6 +404,7 @@ interface State {
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
+  setHandoff: (url: string | null) => void;
   setSettings: (settings: Settings) => void;
   /**
    * Merges a change into the local preferences and writes them back.
@@ -498,6 +518,8 @@ export const useStore = create<State>((set, get) => ({
   memoryVersion: {},
   workingNotesVersion: {},
   banner: null,
+  handoff: null,
+  sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
 
   async bootstrap() {
     const [
@@ -802,6 +824,12 @@ export const useStore = create<State>((set, get) => ({
         break;
       }
 
+      case "openUrl": {
+        set({ handoff: event.url });
+        void openExternal(event.url);
+        break;
+      }
+
       case "messageAppended": {
         const message = event.message;
         set((state) => {
@@ -1034,7 +1062,17 @@ export const useStore = create<State>((set, get) => ({
           };
           const cutoff = Date.now() - PULSE_WINDOW_MS;
           const recent = (state.pulse[event.groupId] ?? []).filter((p) => p.at >= cutoff);
+          const session = state.sessionSpend;
           return {
+            sessionSpend: {
+              prompt: session.prompt + event.prompt,
+              completion: session.completion + event.completion,
+              cost:
+                event.cost === null && session.cost === null
+                  ? null
+                  : (session.cost ?? 0) + (event.cost ?? 0),
+              calls: session.calls + 1,
+            },
             usage: {
               ...state.usage,
               [event.groupId]: {
@@ -1194,6 +1232,10 @@ export const useStore = create<State>((set, get) => ({
 
   setBanner(banner) {
     set({ banner });
+  },
+
+  setHandoff(handoff) {
+    set({ handoff });
   },
 
   setSettings(settings) {

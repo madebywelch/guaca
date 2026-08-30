@@ -59,6 +59,7 @@ vi.mock("./lib/ipc", () => ({
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
+    reportPresence: async () => {},
     capabilities: async () => ({
       localDirectories: true,
       loopbackEndpoints: true,
@@ -81,6 +82,7 @@ vi.mock("./lib/ipc", () => ({
   },
   onRuntimeEvent: async () => () => {},
   onRevealRequest: async () => () => {},
+  onMenubarAsk: async () => () => {},
   onFileDrop: async () => () => {},
 }));
 

@@ -55,6 +55,21 @@ pub const TRAY_ID: &str = "guac.menubar";
 /// event handling for something the runtime never emits.
 pub const REVEAL: &str = "guac://reveal";
 
+/// The channel a click goes down when the strip is showing a box.
+///
+/// The row was drawn from a presence the window handed over, so the act it
+/// stands for belongs to the box too, and the window is what holds a
+/// connection to the box. Local rows never come through here.
+pub const MENUBAR: &str = "guac://menubar";
+
+/// What a click on a fed strip asks the window to do.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Ask {
+    StopAll,
+    Decide { approval: crate::domain::ids::ApprovalId, decision: crate::domain::approval::Decision },
+}
+
 /// Where the strip is asking the window to go.
 ///
 /// One channel and two destinations, because it is one gesture: the operator
@@ -110,6 +125,11 @@ pub struct Tray {
     session: Mutex<Tokens>,
     drawn: Mutex<Drawn>,
     wake: Arc<Notify>,
+    /// A presence the window handed over, while it is showing a workspace
+    /// that is not this machine's. The strip follows the window: while this
+    /// is set the local runtime is not read, and every click on a row that
+    /// came from it is sent back to the window to act on.
+    fed: Mutex<Option<Presence>>,
 }
 
 impl Tray {
@@ -148,6 +168,7 @@ impl Tray {
             session: Mutex::new(Tokens::default()),
             drawn: Mutex::new(Drawn { rows, look, items: painted.items }),
             wake: Arc::new(Notify::new()),
+            fed: Mutex::new(None),
         });
 
         {
@@ -199,9 +220,24 @@ impl Tray {
         }
     }
 
+    /// Takes a presence from the window, or gives the strip back to this
+    /// machine's runtime. Redraws either way.
+    pub fn feed(&self, presence: Option<Presence>) {
+        *self.fed.lock() = presence;
+        self.wake.notify_one();
+    }
+
+    /// Whether the strip is currently drawn from what the window handed over.
+    fn is_fed(&self) -> bool {
+        self.fed.lock().is_some()
+    }
+
     /// Reads the world and makes the strip agree with it.
     fn redraw(&self) {
-        let presence = read(&self.runtime, *self.session.lock());
+        let presence = match self.fed.lock().clone() {
+            Some(fed) => fed,
+            None => read(&self.runtime, *self.session.lock()),
+        };
         let look = presence.look();
         let rows = presence.rows();
 
@@ -306,6 +342,13 @@ impl Tray {
             // Both of these touch SQLite, and this runs on the main thread
             // inside the event loop. Off it: the operator's click should not be
             // the frame the window drops.
+            // A row drawn from a box's presence belongs to the box, and the
+            // window is what can reach it. Local rows act on the local runtime
+            // as they always did.
+            Command::StopAll if self.is_fed() => self.ask(Ask::StopAll),
+            Command::Decide(approval, decision) if self.is_fed() => {
+                self.ask(Ask::Decide { approval, decision })
+            }
             Command::StopAll => {
                 let runtime = self.runtime.clone();
                 tauri::async_runtime::spawn(async move {
@@ -333,6 +376,14 @@ impl Tray {
                     }
                 });
             }
+        }
+    }
+
+    /// Sends a click on a fed row to the window, which holds the connection
+    /// the act has to go over.
+    fn ask(&self, ask: Ask) {
+        if let Err(err) = self.app.emit(MENUBAR, ask) {
+            tracing::debug!(%err, "could not hand a menu bar click to the window");
         }
     }
 

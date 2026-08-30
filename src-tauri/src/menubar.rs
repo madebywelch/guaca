@@ -27,6 +27,8 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::domain::approval::{Approval, Decision, ProtectedAction};
 use crate::domain::escalation::Escalation;
 use crate::domain::ids::{AgentId, ApprovalId, GroupId};
@@ -237,14 +239,16 @@ fn decision_token(decision: Decision) -> &'static str {
 /// Its crew is a field rather than a second map keyed by the same id: the two
 /// are read from one row of the roster, and two maps that could disagree is an
 /// agent drawn under another crew's heading.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Member {
     pub name: String,
     pub crew: GroupId,
 }
 
 /// A crew, as much of one as the strip needs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Crew {
     pub id: GroupId,
     pub name: String,
@@ -270,7 +274,13 @@ struct Busy {
 /// Read fresh on purpose. A presence assembled from events drifts the moment
 /// one is missed, and the thing that would drift is the number the operator is
 /// using to decide whether to go and look.
-#[derive(Debug, Clone, Default)]
+///
+/// Serializable because it has a second source. Read off the local runtime
+/// when the window shows this machine's workspace, and handed over by the
+/// window when it shows a box's: the strip follows the window, and the window
+/// is the one thing that already holds a remote workspace's state.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Presence {
     pub roster: HashMap<AgentId, Member>,
     /// Every crew, in the order the crews' column draws them.
@@ -844,6 +854,37 @@ pub fn escape_mnemonic(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::domain::approval::{ApprovalState, DetailField, Request};
+
+    /// The window hands a presence over in the same shape this file reads
+    /// locally. A field that serializes under one name and deserializes under
+    /// another is a strip that draws a box's crew as nobody.
+    #[test]
+    fn a_presence_handed_over_by_the_window_reads_back_whole() {
+        let agent = AgentId::new();
+        let crew = GroupId::new();
+        let mut roster = HashMap::new();
+        roster.insert(agent, Member { name: "Chef".into(), crew });
+        let presence = Presence {
+            roster,
+            crews: vec![Crew { id: crew, name: "Kitchen".into() }],
+            activity: HashMap::from([(agent, Activity::Queued { depth: 2 })]),
+            waiting: Vec::new(),
+            stuck: Vec::new(),
+            session: Tokens { prompt: 3, completion: 2, cost: None, calls: 1 },
+            all_time: Tokens { prompt: 30, completion: 20, cost: Some(0.5), calls: 9 },
+            running: 1,
+        };
+        let json = serde_json::to_value(&presence).unwrap();
+        // The frontend spells it the way every other type crossing IPC does.
+        assert!(json.get("allTime").is_some(), "{json}");
+        assert_eq!(json["activity"][agent.to_string()]["state"], "queued");
+        let back: Presence = serde_json::from_value(json).unwrap();
+        assert_eq!(back.roster[&agent].name, "Chef");
+        assert_eq!(back.crews[0].name, "Kitchen");
+        assert_eq!(back.activity[&agent], Activity::Queued { depth: 2 });
+        assert_eq!(back.all_time.cost, Some(0.5));
+        assert_eq!(back.running, 1);
+    }
     use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
     use crate::domain::ids::{MessageId, RunId};
 

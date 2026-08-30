@@ -18,7 +18,10 @@ function calledCommands(): Set<string> {
   const source = read("src/lib/ipc.ts");
   // Matches up to the opening paren rather than the first `>`, so a nested
   // generic like `Record<AgentId, Activity>` does not cut the match short.
-  return new Set([...source.matchAll(/invoke<[^(]*\(\s*"([a-z_]+)"/g)].map((m) => m[1]!));
+  // Two doors, one surface: `invoke` reaches whichever host the page is in,
+  // and `invokeLocal` reaches the runtime in this process for the handful of
+  // things that are about this machine rather than the workspace.
+  return new Set([...source.matchAll(/invoke(?:Local)?<[^(]*\(\s*"([a-z_]+)"/g)].map((m) => m[1]!));
 }
 
 /**

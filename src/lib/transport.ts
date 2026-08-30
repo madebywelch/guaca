@@ -34,8 +34,68 @@ import type { UiEvent } from "./types";
 /** Tauri v2 puts this on `window` before any of our code runs. */
 const IN_A_WINDOW = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/**
+ * A box the desktop app is showing instead of its own workspace.
+ *
+ * The third arrangement, and it is the second one wearing a window: the calls
+ * go over HTTP to the box exactly as a browser's would, and only the drop and
+ * the menu bar know the difference, because those two are things the window
+ * has that a browser does not. Read once at load, like the host itself: the
+ * whole page reloads when the operator points it somewhere else, so nothing
+ * has to notice a change under it.
+ */
+export interface Remote {
+  origin: string;
+  token: string;
+}
+
+const REMOTE_KEY = "guaca.workspace.remote";
+
+function readRemote(): Remote | null {
+  try {
+    const raw = window.localStorage.getItem(REMOTE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<Remote>;
+    if (typeof parsed.origin !== "string" || typeof parsed.token !== "string") return null;
+    if (!parsed.origin) return null;
+    return { origin: parsed.origin.replace(/\/+$/, ""), token: parsed.token };
+  } catch {
+    return null;
+  }
+}
+
+const ATTACHED: Remote | null = IN_A_WINDOW ? readRemote() : null;
+
+/** The box this window is showing, or null for this machine's own workspace. */
+export function attached(): Remote | null {
+  return ATTACHED;
+}
+
+/**
+ * Points the desktop app at a box, or back at itself. Takes effect on the
+ * next load, and the caller is what reloads: everything about which host this
+ * is was decided at import time, on purpose, so there is nothing to update in
+ * place and nothing that can be half-updated.
+ */
+export function setRemote(remote: Remote | null): void {
+  try {
+    if (remote) window.localStorage.setItem(REMOTE_KEY, JSON.stringify(remote));
+    else window.localStorage.removeItem(REMOTE_KEY);
+  } catch {
+    /* storage disabled; the next load reads nothing and shows this machine */
+  }
+}
+
+/** Reloads the page, which is how a change of workspace takes effect. */
+export function restart(): void {
+  window.location.reload();
+}
+
 /** Whether the runtime is somewhere other than this process. */
-export const hosted = !IN_A_WINDOW;
+export const hosted = !IN_A_WINDOW || ATTACHED !== null;
+
+/** Whether calls go over Tauri's own bridge, to the runtime in this process. */
+const OVER_THE_BRIDGE = IN_A_WINDOW && ATTACHED === null;
 
 const TOKEN_KEY = "guaca.workspace.token";
 
@@ -68,6 +128,7 @@ export interface Refusal {
  */
 export function token(): string {
   if (!hosted) return "";
+  if (ATTACHED) return ATTACHED.token;
   try {
     return window.localStorage.getItem(TOKEN_KEY) ?? "";
   } catch {
@@ -78,6 +139,13 @@ export function token(): string {
 }
 
 export function setToken(value: string): void {
+  if (ATTACHED) {
+    // A rotated token on a box the window is showing is kept with the box's
+    // address, and in memory for the rest of this load.
+    ATTACHED.token = value;
+    setRemote(value ? ATTACHED : null);
+    return;
+  }
   try {
     if (value) window.localStorage.setItem(TOKEN_KEY, value);
     else window.localStorage.removeItem(TOKEN_KEY);
@@ -105,9 +173,124 @@ export function adoptInvitation(): boolean {
   return true;
 }
 
-/** Where the daemon is, which is wherever this page came from. */
+/** Where the daemon is: the box this window was pointed at, else wherever
+ *  this page came from. */
 function origin(): string {
-  return window.location.origin;
+  return ATTACHED?.origin ?? window.location.origin;
+}
+
+/**
+ * Asks a box whether a token opens it, before anything is stored.
+ *
+ * Two reads, both the cheapest there are: `/health` for which build the box
+ * is, which is what tells a laptop and a box apart when something differs
+ * between them, and `capabilities` for whether the token is accepted. Rejects
+ * with the box's own refusal, or `unreachable` when nothing answered.
+ */
+export async function probe(candidate: Remote): Promise<{ build: string; capabilities: unknown }> {
+  const base = candidate.origin.replace(/\/+$/, "");
+  let health: Response;
+  let answer: Response;
+  try {
+    health = await fetch(`${base}/health`);
+    answer = await fetch(`${base}/v1/call`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${candidate.token}`,
+      },
+      body: JSON.stringify({ name: "capabilities", args: {} }),
+    });
+  } catch (cause) {
+    throw {
+      kind: "unreachable",
+      message: `nothing answered at ${base} (${cause instanceof Error ? cause.message : cause}). Check the address, and that the box is up and reachable from here`,
+    } satisfies Refusal;
+  }
+  const said = await health.json().catch(() => null);
+  if (said?.service !== "guacad") {
+    throw {
+      kind: "unreachable",
+      message: `${base} answered, but it is not a Guaca workspace`,
+    } satisfies Refusal;
+  }
+  const body = await answer.json().catch(() => null);
+  if (body && typeof body === "object" && "err" in body) throw (body as { err: Refusal }).err;
+  if (!answer.ok) {
+    throw {
+      kind: "storage",
+      message: `${base} answered ${answer.status} and nothing this app could read`,
+    } satisfies Refusal;
+  }
+  return { build: String(said.build ?? ""), capabilities: (body as { ok: unknown }).ok };
+}
+
+/**
+ * Calls a command on the runtime in this process, whatever the window shows.
+ *
+ * For the handful of things that are about this machine rather than the
+ * workspace: forwarding a dropped file's bytes, feeding the menu bar. On a
+ * page that is not a window there is no such runtime, and saying so is
+ * better than a fetch to nowhere.
+ */
+export async function invokeLocal<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  if (!IN_A_WINDOW) {
+    throw {
+      kind: "config",
+      message: `${name} is a desktop command, and this page is not the desktop app`,
+    } satisfies Refusal;
+  }
+  const core = await import("@tauri-apps/api/core");
+  return core.invoke<T>(name, args);
+}
+
+/**
+ * The origin every file and socket address is spelled against.
+ *
+ * Exported for `files.ts`, which addresses a stored file by digest on this
+ * origin when hosted and never needs to know how the origin was chosen.
+ */
+export function workspaceOrigin(): string {
+  return origin();
+}
+
+/**
+ * Hands one document to a hosted workspace and gets back what a message
+ * carries.
+ *
+ * Bytes rather than a path, because a browser has no path to give. The
+ * desktop's `stage_files` reads the path this side of IPC so a document never
+ * enters the renderer; here the renderer is where the document already is,
+ * and it crosses once. Refusals come back in the store's own words: the
+ * file, its size, and the limit.
+ */
+export async function upload<T>(file: File): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${origin()}/v1/upload?name=${encodeURIComponent(file.name)}`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token()}` },
+      body: file,
+    });
+  } catch (cause) {
+    throw {
+      kind: "unreachable",
+      message: `could not reach this workspace to send ${file.name} (${cause instanceof Error ? cause.message : cause})`,
+    } satisfies Refusal;
+  }
+  const body = await response.json().catch(() => null);
+  if (body && typeof body === "object" && "err" in body) {
+    const refused = (body as { err: Refusal }).err;
+    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw refused;
+  }
+  if (!response.ok) {
+    throw {
+      kind: "file",
+      message: `${file.name} was not taken: this workspace answered ${response.status}`,
+    } satisfies Refusal;
+  }
+  return (body as { ok: T }).ok;
 }
 
 /**
@@ -118,7 +301,7 @@ function origin(): string {
  * duplicate name differently from a disk failure.
  */
 export async function invoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
-  if (IN_A_WINDOW) {
+  if (OVER_THE_BRIDGE) {
     const core = await import("@tauri-apps/api/core");
     return core.invoke<T>(name, args);
   }
@@ -178,7 +361,7 @@ export function subscribe(
   handler: (payload: UiEvent) => void,
   onReconnect?: () => void,
 ): Promise<Unlisten> {
-  if (IN_A_WINDOW) {
+  if (OVER_THE_BRIDGE) {
     return import("@tauri-apps/api/event").then((events) =>
       events.listen<UiEvent>(channel, (message) => handler(message.payload)),
     );
@@ -201,8 +384,7 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
 
   const connect = () => {
     if (closed) return;
-    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-    const url = `${scheme}://${window.location.host}/v1/events?token=${encodeURIComponent(token())}`;
+    const url = `${origin().replace(/^http/, "ws")}/v1/events?token=${encodeURIComponent(token())}`;
     socket = new WebSocket(url);
 
     socket.onopen = () => {
