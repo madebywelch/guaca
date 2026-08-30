@@ -141,6 +141,15 @@ pub type MenubarFeed = Arc<dyn Fn(Option<crate::menubar::Presence>) + Send + Syn
 pub struct AppState {
     pub runtime: Runtime,
     pub menubar: MenubarFeed,
+    /// Where this workspace's own clones live: the repositories it was given
+    /// by remote rather than by directory. Under the data directory on both
+    /// hosts; the desktop simply never offers the form.
+    pub repos: PathBuf,
+    /// Whether the environment this workspace runs in can pay for a Claude
+    /// Code job with an API key. What un-withholds the harness on a server:
+    /// the plan argument is about a credential on the operator's machine, and
+    /// `ANTHROPIC_API_KEY` in the daemon's environment is neither.
+    pub claude_key: bool,
     /// The workspace token, on a host that has one. What a screen ticket is
     /// derived from: a computer's live screen is reached through the daemon
     /// at an address noVNC has to be able to resolve its own files against,
@@ -712,18 +721,50 @@ pub async fn list_repositories(state: &AppState) -> Reply<Vec<Repository>> {
 /// Nobody is given it here. Adding and handing out are two decisions, and the
 /// second one is `set_repository_access`.
 pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Reply<Repository> {
-    // Before the path is even cleaned. On a server there is no directory
-    // for the operator to have picked, and verifying one would answer with
-    // git's complaint about a path rather than with the reason.
-    state.deployment.capabilities().require(Absent::LocalDirectories)?;
-
     let mut clean = draft.clean()?;
-    clean.path = crate::repo::verify(&clean.path).await?;
-    // Taken from the canonical path rather than the typed one, for the case
-    // where they differ: a directory reached through a symlink would otherwise
-    // be named for the link and drawn beside a path that says something else.
-    if draft.name.trim().is_empty() {
-        clean.name = clean.path.rsplit('/').next().unwrap_or(&clean.path).to_string();
+
+    if let Some(remote) = clean.remote.clone() {
+        // A clone of the workspace's own, into a directory named by nothing
+        // but a fresh id: the name on the row is the operator's, and a
+        // directory named after it would pin a rename to a move.
+        let stamp = crate::domain::ids::RepositoryId::new().to_string();
+        let into = state.repos.join(&stamp);
+        let credential =
+            draft.credential.as_deref().map(str::trim).filter(|token| !token.is_empty());
+        let credential_file = match credential {
+            Some(token) => {
+                let file = credentials_dir(state).join(&stamp);
+                crate::repo::keep_credential(&file, &remote, token).await?;
+                Some(file)
+            }
+            None => None,
+        };
+        clean.path =
+            match crate::repo::clone_remote(&remote, &into, credential_file.as_deref()).await {
+                Ok(path) => path,
+                Err(err) => {
+                    // A credential written for a clone that never happened is a
+                    // credential on disk for nothing.
+                    if let Some(file) = credential_file {
+                        let _ = tokio::fs::remove_file(file).await;
+                    }
+                    return Err(err.into());
+                }
+            };
+    } else {
+        // Before the path is even cleaned. On a server there is no directory
+        // for the operator to have picked, and verifying one would answer with
+        // git's complaint about a path rather than with the reason.
+        state.deployment.capabilities().require(Absent::LocalDirectories)?;
+
+        clean.path = crate::repo::verify(&clean.path).await?;
+        // Taken from the canonical path rather than the typed one, for the case
+        // where they differ: a directory reached through a symlink would
+        // otherwise be named for the link and drawn beside a path that says
+        // something else.
+        if draft.name.trim().is_empty() {
+            clean.name = clean.path.rsplit('/').next().unwrap_or(&clean.path).to_string();
+        }
     }
 
     let repository = state.runtime.store().create_repository(&clean)?;
@@ -829,7 +870,10 @@ pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> 
     let here = state.deployment.capabilities();
     let asked = Harness::ALL.map(|harness| async move {
         let withheld = match harness {
-            Harness::Claude => here.require(Absent::ClaudeCodeHarness).err(),
+            // The plan argument is about a credential on the operator's own
+            // machine. A key in this workspace's environment is neither, and
+            // Claude Code spends it instead, so the row is offered.
+            Harness::Claude if !state.claude_key => here.require(Absent::ClaudeCodeHarness).err(),
             _ => None,
         };
         // Not probed when it is withheld. The probe is a process spawn whose
@@ -887,9 +931,43 @@ pub async fn stop_coding_job(state: &AppState, agent_id: AgentId) -> Reply<()> {
 /// registration in that checkout and one left behind is an entry in their
 /// `git worktree list` pointing into an app that has forgotten the directory.
 pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> {
+    // Read before the row goes: afterwards there is nothing saying whether a
+    // clone and a credential were this workspace's to remove.
+    let repository = state.runtime.store().get_repository(id)?;
     state.runtime.unlink_repository(id).await?;
+
+    // A clone the workspace made is the workspace's to remove, and the
+    // credential file goes with it. A linked directory is the operator's and
+    // is never touched; the check is the clone living under `repos`, not the
+    // remote column, so a row that lied about one cannot aim this at a
+    // directory somebody picked.
+    if let Some(repository) = repository {
+        // Canonicalized before the comparison: the stored path is canonical
+        // (git agreed to it) and the configured repos directory may be spelled
+        // through a symlink, which on macOS every temporary directory is.
+        let repos =
+            tokio::fs::canonicalize(&state.repos).await.unwrap_or_else(|_| state.repos.clone());
+        if repository.remote.is_some() && std::path::Path::new(&repository.path).starts_with(&repos)
+        {
+            let _ = tokio::fs::remove_dir_all(&repository.path).await;
+            if let Some(stamp) = std::path::Path::new(&repository.path).file_name() {
+                let _ = tokio::fs::remove_file(credentials_dir(state).join(stamp)).await;
+            }
+        }
+    }
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
+}
+
+/// Where a clone's token lives: beside the settings, named for the clone's
+/// directory, in a file only this user can read. Never inside the clone, which
+/// is a directory a job is pointed at.
+fn credentials_dir(state: &AppState) -> PathBuf {
+    state
+        .config_path
+        .parent()
+        .map(|dir| dir.join("repo-credentials"))
+        .unwrap_or_else(|| PathBuf::from("repo-credentials"))
 }
 
 /// Puts one agent in a repository, or takes it out.

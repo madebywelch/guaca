@@ -377,6 +377,9 @@ export interface Repository {
   gate: Gate;
   /** Where a job here runs: a worktree of the agent's own, or this directory. */
   bench: Bench;
+  /** Where this was cloned from, for a repository the workspace cloned for
+   *  itself. Null is a directory the operator picked. */
+  remote: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -472,11 +475,17 @@ export interface RepoStatus {
 export interface RepositoryDraft {
   groupId: GroupId;
   name: string;
+  /** Blank when `remote` is given: a clone's directory is the workspace's. */
   path: string;
   note: string;
   harness: Harness;
   gate: Gate;
   bench: Bench;
+  /** A remote to clone instead of a directory to link: how a box gets one. */
+  remote?: string;
+  /** A token for a private https remote. Kept beside the settings, never in
+   *  the clone, and never read back out. */
+  credential?: string;
 }
 
 export type PluginId = string;

@@ -35,6 +35,7 @@ async fn workspace() -> (SocketAddr, tempfile::TempDir) {
         bind: "127.0.0.1:0".parse().expect("a loopback address"),
         token: TOKEN.to_string(),
         web: None,
+        claude_key: false,
         origin: None,
     })
     .await
@@ -132,10 +133,97 @@ async fn a_harness_that_spends_a_plan_on_a_laptop_is_withheld_rather_than_hidden
     let claude = harnesses.iter().find(|h| h["harness"] == "claude").expect("Claude Code's row");
     let said = claude["withheld"].as_str().expect("a reason it is withheld");
     assert!(said.contains("plan"), "the reason does not name the plan: {said}");
-    assert!(said.contains("local workspace"), "the reason offers no way out: {said}");
+    // A refusal that only says no gets retried; this one has two ways out.
+    assert!(said.contains("ANTHROPIC_API_KEY"), "the reason offers the key: {said}");
+    assert!(said.contains("other harness"), "the reason offers the other door: {said}");
 
     let pi = harnesses.iter().find(|h| h["harness"] == "pi").expect("pi's row");
     assert!(pi["withheld"].is_null(), "pi is not withheld anywhere: {pi}");
+}
+
+#[tokio::test]
+async fn a_key_in_the_environment_un_withholds_the_claude_harness() {
+    // The plan argument is about a credential on the operator's machine. A box
+    // given ANTHROPIC_API_KEY spends the key, so the row is offered.
+    let dir = tempfile::tempdir().expect("a temporary workspace");
+    let bound = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().expect("a loopback address"),
+        token: TOKEN.to_string(),
+        web: None,
+        claude_key: true,
+        origin: None,
+    })
+    .await
+    .expect("the workspace opens");
+    let addr = bound.addr;
+    tokio::spawn(bound.serve());
+
+    let (_, body) = call(addr, "coding_harnesses", json!({})).await;
+    let claude = body["ok"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|h| h["harness"] == "claude"))
+        .expect("Claude Code's row")
+        .clone();
+    assert!(claude["withheld"].is_null(), "{claude}");
+}
+
+#[tokio::test]
+async fn a_repository_arrives_on_a_box_as_a_clone_of_a_remote() {
+    let (addr, dir) = workspace().await;
+
+    // A bare repository standing in for the forge, so nothing leaves this
+    // machine. What matters is the shape: clone, row, and the clone's removal.
+    let bare = dir.path().join("origin.git");
+    let seed = dir.path().join("seed");
+    for args in [
+        vec!["init", "--bare", bare.to_str().unwrap()],
+        vec!["init", "-b", "main", seed.to_str().unwrap()],
+    ] {
+        let done = std::process::Command::new("git").args(&args).output().expect("git runs");
+        assert!(done.status.success(), "{args:?}: {done:?}");
+    }
+    std::fs::write(seed.join("a.txt"), "one").unwrap();
+    for args in [
+        vec!["add", "."],
+        vec!["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "one"],
+        vec!["push", bare.to_str().unwrap(), "main"],
+    ] {
+        let done = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&seed)
+            .args(&args)
+            .output()
+            .expect("git runs");
+        assert!(done.status.success(), "{args:?}: {done:?}");
+    }
+
+    let remote = format!("file://{}", bare.display());
+    let (status, body) = call(
+        addr,
+        "create_repository",
+        json!({ "draft": {
+            "groupId": "00000000-0000-4000-8000-000000000001",
+            "remote": remote,
+        }}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let row = &body["ok"];
+    assert_eq!(row["remote"], remote.as_str(), "{row}");
+    assert_eq!(row["name"], "origin", "named for the repository itself: {row}");
+    let path = row["path"].as_str().expect("the clone's path").to_string();
+    assert!(
+        path.contains("/data/repos/"),
+        "the clone lives in the workspace's own directory: {path}"
+    );
+    assert!(std::path::Path::new(&path).join("a.txt").exists(), "the clone has the history");
+
+    // Unlinking a clone removes it: it was the workspace's, not the operator's.
+    let id = row["id"].as_str().unwrap();
+    let (status, body) = call(addr, "delete_repository", json!({ "id": id })).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(!std::path::Path::new(&path).exists(), "the clone is gone");
 }
 
 #[tokio::test]

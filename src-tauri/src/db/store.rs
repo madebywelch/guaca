@@ -1656,8 +1656,8 @@ impl Store {
 
         conn.execute(
             "INSERT INTO repositories \
-             (id,group_id,name,path,note,harness,gate,bench,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+             (id,group_id,name,path,note,harness,gate,bench,remote,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
             params![
                 id.to_string(),
                 clean.group_id.to_string(),
@@ -1670,6 +1670,7 @@ impl Store {
                 // which is `shared` and exists only to backfill rows migration
                 // 44 found already there.
                 clean.bench.as_str(),
+                clean.remote,
                 now,
             ],
         )
@@ -3877,7 +3878,7 @@ pub enum PluginReach {
 }
 
 const REPOSITORY_COLUMNS: &str =
-    "SELECT id,group_id,name,path,note,harness,gate,bench,created_at,updated_at FROM \
+    "SELECT id,group_id,name,path,note,harness,gate,bench,remote,created_at,updated_at FROM \
      repositories";
 
 /// A unique-index failure here is one directory linked twice, and the operator
@@ -3909,8 +3910,9 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             harness: Harness::parse(&row.get::<_, String>(5)?),
             gate: Gate::parse(&row.get::<_, String>(6)?),
             bench: Bench::parse(&row.get::<_, String>(7)?),
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
+            remote: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })())
 }
@@ -4269,6 +4271,7 @@ mod tests {
             note: String::new(),
             harness: Harness::default(),
             bench: Bench::default(),
+            remote: None,
         }
     }
 

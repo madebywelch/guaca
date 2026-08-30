@@ -372,6 +372,7 @@ async fn an_agent_is_told_what_the_harness_it_was_given_said() {
             // in, and a worktree would put that directory somewhere the
             // stand-in's recording is not. What the default does instead is
             // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -433,6 +434,7 @@ async fn a_started_job_is_not_an_unbacked_promise() {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -490,6 +492,7 @@ async fn a_job_is_told_which_branch_it_is_standing_on() {
             note: "run ./scripts/ci.sh before you finish".into(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -541,6 +544,7 @@ fn put_in_a_repository(h: &Harness, agent: &str, repo: &Path, gate: Gate) {
             // directory only because the bench is pinned to it. The pair that
             // proves the two doors agree in a worktree is
             // `both_doors_into_a_repository_open_on_the_same_work_tree`.
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -886,6 +890,7 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
             // in, and a worktree would put that directory somewhere the
             // stand-in's recording is not. What the default does instead is
             // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -936,6 +941,7 @@ async fn stopping_a_job_that_is_already_over_says_so_rather_than_failing() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -977,6 +983,7 @@ async fn a_harness_with_no_second_interface_says_so_instead_of_swallowing_it() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -1208,6 +1215,7 @@ fn put_in_a_bench(h: &Harness, agents: &[&str], repo: &Path) {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Own,
         })
         .unwrap();

@@ -283,6 +283,38 @@ and loopback `http:` for a container on this machine. Scripts are still
 `'self'` only; what this widens is where the page may fetch from, which is
 what a client of a box is.
 
+## A repository arrives on a box as a clone of a remote
+
+A desktop repository is a directory the operator picked: their own checkout,
+their branch, their uncommitted change, which `docs/CODING.md` says is the
+point of the local version. A box has no directory anybody could pick, so a
+repository is linked by its remote instead, and the workspace clones it into
+a directory of its own under `data/repos/`. Everything downstream is the
+code that already existed: the same worktrees, the same `shell` and `code`
+doors, the same push gate, against a clone whose work comes back as branches
+and pushes rather than as a tree the operator is sitting in.
+
+The clone carries three local config lines, each for a failure that would
+otherwise be silent. A `credential.helper` pointing at a file beside the
+settings, so a fetch or a push from any process standing in the tree (a
+job's harness included) finds the token without the token ever entering
+`.git/config` or a URL; the file is git's own credential-store format, mode
+0600, named for the clone's directory, and it goes when the repository does.
+And an identity, `guaca <guaca@localhost>`, because a box has no
+operator-level git config and a harness that cannot commit reports a broken
+repository rather than a missing name.
+
+A token goes with an https remote and is refused for an ssh one, which is
+reached with a key the box holds. Unlinking a clone removes it, clone and
+credential both: they were the workspace's, not the operator's, and the
+check is the clone living under `repos/` rather than the row's say-so.
+
+The harness on a box is `pi`, or Claude Code spending `ANTHROPIC_API_KEY`.
+The plan argument (`docs/PROTOCOL.md`) is about a consumer credential on the
+operator's own machine, and a key in the daemon's environment is neither, so
+`coding_harnesses` withholds Claude Code only while the key is absent, and
+the refusal says exactly that. The image ships `git`, `gh` and `claude`.
+
 ## Two loopback origins reach a browser through the daemon
 
 The desktop serves two things from loopback ports of their own: a page an
@@ -362,8 +394,6 @@ runtime, every command, the transcript, the desk, the flow board, the
 schedule, the compost and the plugins that were signed in before the move.
 What it does not have yet:
 
-- **Repositories on a box.** A clone from a remote with a credential, and only
-  `pi` to write in it. A different feature, argued above.
 - **The account sign-in from a box.** The flow is built and tested against a
   scripted server; guaca.bot has to register the served redirect before the
   live one completes.

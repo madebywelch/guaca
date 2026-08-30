@@ -51,12 +51,28 @@ RUN cargo build --release --no-default-features --features server --bin guacad
 
 # ---- what runs --------------------------------------------------------------
 FROM debian:bookworm-slim
-# `curl` is the health check and nothing else. TLS roots are for the model
-# endpoints, the sandboxes and the plugins the daemon calls out to.
+# `curl` is the health check. TLS roots are for the model endpoints, the
+# sandboxes and the plugins the daemon calls out to. `git` and `gh` are what a
+# remote-linked repository is cloned, fetched and pushed with, and `claude` is
+# the coding harness, which spends ANTHROPIC_API_KEY when the operator sets it
+# (a plan cannot be signed in to here, and is not offered).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl \
+ && apt-get install -y --no-install-recommends ca-certificates curl git \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 1000 --home-dir /var/lib/guaca --create-home guaca
+# Claude Code's own installer, then the binary moved where every user finds it.
+# The updater is off: a container's version is its image's version, and a
+# binary that replaced itself would vanish on the next start anyway.
+RUN curl -fsSL https://claude.ai/install.sh | bash \
+ && install -m 755 /root/.local/bin/claude /usr/local/bin/claude \
+ && rm -rf /root/.local
+ENV DISABLE_AUTOUPDATER=1
 COPY --from=daemon /app/src-tauri/target/release/guacad /usr/local/bin/guacad
 COPY --from=web /app/dist /usr/share/guaca/web
 

@@ -372,6 +372,25 @@ export function RepositoryList({ groupId, crew }: Props) {
       api.createRepository({ groupId, ...draft } satisfies RepositoryDraft),
     ).then((ok) => ok && reset());
 
+  /** The clone form's own two fields; everything else is shared with `draft`. */
+  const [cloning, setCloning] = useState({ remote: "", credential: "" });
+
+  const addClone = () =>
+    void run("add", () =>
+      api.createRepository({
+        groupId,
+        ...draft,
+        path: "",
+        remote: cloning.remote.trim(),
+        credential: cloning.credential.trim() || undefined,
+      } satisfies RepositoryDraft),
+    ).then((ok) => {
+      if (ok) {
+        reset();
+        setCloning({ remote: "", credential: "" });
+      }
+    });
+
   if (repositories === null) return <p className="field__hint">Loading repositories…</p>;
 
   return (
@@ -380,7 +399,7 @@ export function RepositoryList({ groupId, crew }: Props) {
         <div className="access__item" key={repository.id}>
           <div className="access__row">
             <strong className="access__name">{repository.name}</strong>
-            <span className="access__where">{repository.path}</span>
+            <span className="access__where">{repository.remote ?? repository.path}</span>
             <button
               type="button"
               className="btn btn--small btn--ghost"
@@ -532,22 +551,42 @@ export function RepositoryList({ groupId, crew }: Props) {
 
       {adding ? (
         <div className="access__item">
+          {/* A directory where there is one to pick; a remote where there is
+              not. The clone lands in a directory of the workspace's own, so
+              the operator names nothing about where. */}
           <div className="access__row">
-            <input
-              className="input input--mono"
-              placeholder="/Users/you/dev/your-project"
-              ref={pathRef}
-              value={draft.path}
-              onChange={(event) => setDraft({ ...draft, path: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && draft.path.trim()) add();
-              }}
-            />
+            {capabilities.localDirectories ? (
+              <input
+                className="input input--mono"
+                placeholder="/Users/you/dev/your-project"
+                ref={pathRef}
+                value={draft.path}
+                onChange={(event) => setDraft({ ...draft, path: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && draft.path.trim()) add();
+                }}
+              />
+            ) : (
+              <input
+                className="input input--mono"
+                placeholder="https://github.com/you/your-project.git"
+                aria-label="Remote to clone"
+                ref={pathRef}
+                value={cloning.remote}
+                onChange={(event) => setCloning({ ...cloning, remote: event.target.value })}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && cloning.remote.trim()) addClone();
+                }}
+              />
+            )}
             <button
               type="button"
               className="btn btn--small btn--primary"
-              disabled={busy !== null || !draft.path.trim()}
-              onClick={add}
+              disabled={
+                busy !== null ||
+                (capabilities.localDirectories ? !draft.path.trim() : !cloning.remote.trim())
+              }
+              onClick={capabilities.localDirectories ? add : addClone}
             >
               Link
             </button>
@@ -585,24 +624,30 @@ export function RepositoryList({ groupId, crew }: Props) {
             disabled={busy !== null}
             onChoose={(gate) => setDraft({ ...draft, gate })}
           />
+          {!capabilities.localDirectories && (
+            <div className="access__row">
+              <input
+                className="input input--slim"
+                type="password"
+                autoComplete="off"
+                spellCheck={false}
+                placeholder="access token, for a private https remote (optional)"
+                aria-label="Access token"
+                value={cloning.credential}
+                onChange={(event) => setCloning({ ...cloning, credential: event.target.value })}
+              />
+            </div>
+          )}
           <p className="field__hint">
-            The full path to the directory, which has to be the root of a git repository. Git is the
-            undo: it is the reason an agent can be turned loose in there at all. The note is read by
-            every agent that has it, on every turn.
+            {capabilities.localDirectories
+              ? "The full path to the directory, which has to be the root of a git repository. Git is the undo: it is the reason an agent can be turned loose in there at all. The note is read by every agent that has it, on every turn."
+              : "The workspace clones it into a directory of its own and works there; the work comes back as branches and pushes. A token is kept beside the settings, never in the clone. The note is read by every agent that has it, on every turn."}
           </p>
         </div>
-      ) : capabilities.localDirectories ? (
+      ) : (
         <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
           Link a repository
         </button>
-      ) : (
-        // Said in place of the button rather than after the path is typed: a
-        // repository is a directory on the machine the workspace runs on, and
-        // on a server that machine is not the operator's.
-        <p className="field__hint">
-          This workspace runs on a server, so it cannot open a directory on your own machine, and a
-          repository is a directory. Give this crew a repository from a local workspace.
-        </p>
       )}
 
       {error && (

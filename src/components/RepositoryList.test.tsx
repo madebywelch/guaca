@@ -76,6 +76,7 @@ function repository(over: Partial<Repository> = {}): Repository {
     harness: "pi",
     gate: "open",
     bench: "own",
+    remote: null,
     createdAt: 0,
     updatedAt: 0,
     ...over,
@@ -431,7 +432,7 @@ describe("RepositoryList", () => {
     expect(screen.queryByText("npm install -g @anthropic-ai/claude-code")).toBeNull();
   });
 
-  it("offers no directory to link on a server, and says where one comes from", async () => {
+  it("links by remote on a server, with the token going along and never shown", async () => {
     useStore.setState({
       capabilities: {
         localDirectories: false,
@@ -443,10 +444,36 @@ describe("RepositoryList", () => {
     });
     try {
       groupRepositories.mockResolvedValue([]);
+      createRepository.mockResolvedValue(
+        repository({ remote: "https://github.com/you/thing.git", path: "/data/repos/x" }),
+      );
       render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
-      await screen.findByText(/cannot open a directory on your own machine/);
-      expect(screen.queryByRole("button", { name: "Link a repository" })).toBeNull();
+      fireEvent.click(await screen.findByRole("button", { name: "Link a repository" }));
+      // No path box on a box: there is no directory anybody could pick.
+      expect(screen.queryByPlaceholderText(/\/Users\/you/)).toBeNull();
+
+      fireEvent.change(screen.getByLabelText("Remote to clone"), {
+        target: { value: " https://github.com/you/thing.git " },
+      });
+      const token = screen.getByLabelText("Access token") as HTMLInputElement;
+      expect(token.type).toBe("password");
+      fireEvent.change(token, { target: { value: "ghp_secret" } });
+      fireEvent.click(screen.getByText("Link"));
+
+      await waitFor(() =>
+        expect(createRepository).toHaveBeenCalledWith({
+          groupId: GROUP,
+          name: "",
+          path: "",
+          note: "",
+          harness: "pi",
+          gate: "open",
+          bench: "own",
+          remote: "https://github.com/you/thing.git",
+          credential: "ghp_secret",
+        }),
+      );
     } finally {
       useStore.setState({
         capabilities: {

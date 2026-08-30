@@ -29,6 +29,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
         harness: "pi",
         gate: "open",
         bench: "own",
+        remote: null,
         createdAt: 0,
         updatedAt: 0,
       },

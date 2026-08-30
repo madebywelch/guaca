@@ -137,8 +137,8 @@ impl Absent {
         match self {
             Absent::LocalDirectories => {
                 "this workspace runs on a server, so it cannot open a directory on your own \
-                 machine, and a repository is a directory. Give this crew a repository from a \
-                 local workspace instead"
+                 machine. Link the repository by its remote instead, and the workspace clones \
+                 it into a directory of its own"
             }
             Absent::LoopbackEndpoints => {
                 "this workspace runs on a server, so it cannot reach a model running on your own \
@@ -151,9 +151,9 @@ impl Absent {
                  or a ChatGPT subscription here, or run this crew in a local workspace"
             }
             Absent::ClaudeCodeHarness => {
-                "Claude Code spends the plan you signed in to on your own machine, so it is not \
-                 offered on a server. Pick the other harness, or run this repository from a \
-                 local workspace"
+                "Claude Code spends the plan you signed in to on your own machine, so a plan is \
+                 not offered on a server. Set ANTHROPIC_API_KEY where this workspace runs and \
+                 Claude Code spends that key instead, or pick the other harness"
             }
             Absent::LocalFiles => {
                 "this workspace runs on a server, so it cannot read a path on your own machine. \
