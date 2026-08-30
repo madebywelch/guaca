@@ -168,7 +168,42 @@ it reads as being pulled rather than as two things being animated at once.
 
 A throw and a catch go through the same channel: a decaying displacement added
 to the body's gaze, so a message landing deforms the creature rather than
-translating it.
+translating it. It is added *away* from whoever the creature is looking at, so
+a parcel thrown from above presses its recipient down and a throw recoils
+against itself, which means the direction of a hit is read off the look and not
+off the gesture. That is why the look outlasts the landing rather than being
+released by it: `roleOf` used to drop it the moment the parcel arrived, which is
+the one frame anybody is certainly watching, and a message thrown downward
+knocked its recipient upward.
+
+## An aimed look
+
+A creature aimed at a peer is the only gaze that does not come out of `gazeAt`,
+and it is the furthest any of them goes. It is two things at once, and it needs
+to be.
+
+`AIM` is spent as a gaze, so everything above applies: the mass leans and swells
+after it on the same spring. On its own that is two marks sliding a few units
+down a face, which nobody reads as looking down, because nothing about the eye
+changed. So `aimedEye` moulds the stroke on top of whatever the mood made it --
+toward a line and thinner as the look drops, back toward the dot it was cut from
+as it lifts -- and adds an offset in eye radii, which is travel the outline does
+not pay for. It is added rather than substituted, so a frustrated creature
+aiming downward is still frustrated, and it goes through `blendEyes` and
+`geometry` like everything else, so nothing is ever swapped for anything.
+
+**The two directions are not the same size, and the numbers are measured.**
+Every one of these bodies hangs its mass below its eyes, so there is depth under
+them and very little over them. The down look has getting on for three units of
+outline to spare; the up look has a third of one, at the character the suite
+binds on, which is `bean` wearing the widest eyes on the table. That is why the
+up look rounds the stroke rather than fattening it, and takes no offset of its
+own: weight and travel are the two terms that eat what room is left above an
+eye. `form.test.ts` measures the ink against the outline itself rather than
+against a radius at an angle, because these bodies are not star-shaped and a
+cloud's outer corner sits over a dip between two lobes, where a radial bound is
+wrong in both directions at once. It is the gate: move either number and it says
+which creature loses its eyes.
 
 ## Moods
 

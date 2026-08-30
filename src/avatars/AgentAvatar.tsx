@@ -5,7 +5,7 @@ import type { LiveCall } from "../lib/trail";
 import type { Activity, Lifecycle } from "../lib/types";
 import { lookupCharacter } from "./catalog";
 import { gaitOf, join, type Painter } from "./clock";
-import { blendEyes, type Drawn, eyePath, eyesAt, gazeAt, SETTLE } from "./eyes";
+import { AIM, aimedEye, blendEyes, type Drawn, eyePath, eyesAt, gazeAt, SETTLE } from "./eyes";
 import { blend, bodyPoints, FORM, outline, type Point } from "./form";
 import { MOODS, type Mood, markFor, moodFor } from "./moods";
 
@@ -41,8 +41,6 @@ interface Props {
 
 /** How long one mood takes to become another. */
 const MORPH = 0.6;
-/** How far the eyes go when they are aimed at a particular peer, in body radii. */
-const AIM = 0.3;
 /** Stiffness of the follow, from the time the clay is allowed to take. */
 const SPRING = 2.2 / SETTLE;
 
@@ -190,7 +188,7 @@ export function AgentAvatar({
        would have done, because the point of that look is who it is for. */
     let eyeGaze: Point;
     if (now.look) {
-      eyeGaze = [0, now.look === "up" ? -AIM : AIM];
+      eyeGaze = [0, now.look === "up" ? -AIM.up : AIM.down];
     } else if (!live) {
       eyeGaze = [0, 0];
     } else {
@@ -225,7 +223,12 @@ export function AgentAvatar({
           state.gesture === "send"
             ? Math.sin(age * knock.hz * Math.PI * 2)
             : Math.cos(age * knock.hz * Math.PI * 2);
-        const away = -(now.look === "up" ? -1 : 1);
+        /* Away from the peer, which is the one direction both gestures need:
+           a parcel thrown from above presses the creature down and a throw
+           recoils against itself. The look is what says where the peer is, so
+           an exchange whose other end is not drawn in the rail falls back to
+           down, which is the way an unexplained shove reads best. */
+        const away = now.look === "down" ? -1 : 1;
         const push = away * knock.amp * wave * Math.exp(-age / knock.decay);
         bodyGaze[1] += push;
         eyeGaze[1] += push * 0.35;
@@ -237,7 +240,12 @@ export function AgentAvatar({
       u >= 1 ? shape.pts : blend(bodyPoints(lump, from.shape, t, bodyGaze).pts, shape.pts, u);
     body.setAttribute("d", outline(pts));
 
-    const eye = u >= 1 ? to.eye : blendEyes(from.eye, to.eye, u);
+    const blended = u >= 1 ? to.eye : blendEyes(from.eye, to.eye, u);
+    /* An aimed look is moulded in on top of the mood rather than replacing it,
+       so a creature that is thinking still looks like it is thinking while it
+       watches a message go. `eyes.ts` has the argument for why the offset alone
+       was not enough to read as looking anywhere. */
+    const eye = now.look ? aimedEye(blended, now.look) : blended;
     const watch = u > 0.5 ? to.watch : from.watch;
     write(face, eyesAt(lump, eye, watch, t, live, eyeGaze));
   };

@@ -28,10 +28,12 @@ describe("roleOf", () => {
     expect(sender.facing).toBe("b");
   });
 
-  it("keeps both characters facing each other through the flight", () => {
+  it("keeps both characters facing each other for the whole exchange", () => {
     // This is what makes it read as an exchange rather than two unrelated
-    // animations that happen to overlap.
-    for (const phase of ["aim", "flight"] as const) {
+    // animations that happen to overlap. The catch is in here deliberately: it
+    // is the one beat an operator is certainly looking at, and it is the beat
+    // the recipient's own reaction is drawn on.
+    for (const phase of ["aim", "flight", "catch"] as const) {
       expect(roleOf(staged(phase), "a").facing).toBe("b");
       expect(roleOf(staged(phase), "b").facing).toBe("a");
     }
@@ -42,9 +44,18 @@ describe("roleOf", () => {
     expect(roleOf(staged("catch"), "b").gesture).toBe("receive");
   });
 
+  // Where the peer is, is the only thing that says which way a landing shoves
+  // the creature it lands on. Dropping the look at the catch left the knock
+  // with nothing to read, and a message thrown downward pushed its recipient up.
+  it("still says where the parcel came from at the moment it lands", () => {
+    const hit = roleOf(staged("catch"), "b");
+    expect(hit.gesture).toBe("receive");
+    expect(hit.facing).toBe("a");
+  });
+
   it("releases the look once the exchange is over", () => {
-    expect(roleOf(staged("catch"), "a").facing).toBeNull();
-    expect(roleOf(staged("catch"), "b").facing).toBeNull();
+    expect(roleOf([], "a").facing).toBeNull();
+    expect(roleOf([], "b").facing).toBeNull();
   });
 
   it("leaves uninvolved agents alone", () => {
