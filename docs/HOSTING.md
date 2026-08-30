@@ -185,6 +185,46 @@ correct failure on the other end: `SocketSink` drops what no client is
 attached to read, because a runtime that blocked on a slow socket would turn
 one bad connection into a crew that stops thinking.
 
+## One image, and the build it says it is
+
+`Dockerfile` builds the daemon without Tauri and the page with the same
+`pnpm build` CI runs, and puts both in a `debian:bookworm-slim` with TLS roots
+and `curl` for the health check, running as an unprivileged user with
+`/var/lib/guaca` as the one volume. `docker-compose.yml` publishes it to
+`127.0.0.1` only, and `deploy/guacad.service` is the same daemon under systemd
+for a box without a container runtime, with `DynamicUser` and one
+`StateDirectory`. The desktop app is not in the image and cannot be, for the
+reason `docs/ARCHITECTURE.md` gives under *Why there is no Docker image for the
+app*; the daemon is a service, and this is its container.
+
+The image binds every interface *inside the container*, because that is the
+only way a published port reaches it, and the container's network namespace
+is the boundary the loopback default draws on bare metal. The invitation the
+daemon prints knows this: an unspecified bind is printed as `localhost`,
+which is right for the operator who published the port to their own machine,
+and the line beside it says to substitute a tunnel's address for a box.
+
+The build context has no `.git` in it, on purpose, so the commit is an
+argument. `GUACA_COMMIT` reaches `vite.config.ts` for the page's About and
+`option_env!` in `server/mod.rs` for `/health`, and `scripts/image.sh` asserts
+the container reports the build it was asked for. That string is the
+answer to the first question about any bug that reproduces on one machine
+and not another: a box and a laptop that disagree about it are running
+different code. The desktop reads its commit from the repository it was built
+in, so the two hosts answer the same question the same way.
+
+`scripts/image.sh` is the gate. It builds the image, starts it on a random
+port, waits for `/health`, and checks the four things a box fails silently:
+the build string, a 401 without the token, the server's capabilities with it,
+and the page at `/`. Then it stops the container and checks that it stopped.
+It needs Docker and nothing else, spends nothing, and is not in `ci.sh`
+because `ci.sh` runs inside a container that has no daemon to hand.
+
+```sh
+./scripts/image.sh              # build, run, check, remove
+KEEP=1 ./scripts/image.sh       # and leave it on http://127.0.0.1:8787
+```
+
 ## What is not built
 
 Said here rather than discovered. A hosted workspace today is the whole
@@ -200,7 +240,8 @@ What it does not have yet:
 - **Plugin sign-in from a box.** OAuth redirects to loopback today; on a
   server the redirect has to come back through the served origin.
 - **The desktop app as a client of a remote box.** A browser is already one.
-- **Packaging.** A container image and a unit file for `guacad`, and the page
-  that says how to put a tunnel in front of it. `GUACA_BIND` defaults to
-  loopback on purpose: a default that binds every interface is one operator's
-  firewall away from a public workspace.
+- **The page that says how to put a tunnel in front of a box.** The image
+  and the unit file exist; what to put in front of them on a rented machine
+  is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a
+  default that binds every interface is one operator's firewall away from a
+  public workspace.

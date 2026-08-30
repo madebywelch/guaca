@@ -1,0 +1,27 @@
+# The daemon on this machine, or on a box: the same file either way.
+#
+#   GUACA_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d
+#   docker compose logs guacad | grep 'open this'
+#
+# Published to 127.0.0.1 only. A box is reached through a tunnel, and a default
+# that exposed every interface would be one firewall away from a public
+# workspace holding somebody's keys and transcripts.
+services:
+  guacad:
+    build:
+      context: .
+      args:
+        GUACA_COMMIT: ${GUACA_COMMIT:-}
+    image: guacad
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - guaca:/var/lib/guaca
+    environment:
+      # Absent, the daemon generates one on first run and prints it.
+      GUACA_TOKEN: ${GUACA_TOKEN:-}
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  guaca:
