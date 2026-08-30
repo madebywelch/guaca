@@ -439,6 +439,8 @@ pub fn run() {
 
             app.manage(AppState {
                 runtime,
+                repos: data_dir.join("repos"),
+                claude_key: false,
                 secret: None,
                 menubar: {
                     let menubar = menubar.clone();

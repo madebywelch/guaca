@@ -51,6 +51,134 @@ pub enum RepoError {
     NotTheRoot { linked: String, root: String },
     #[error("`{path}` could not be read ({reason})")]
     Unreadable { path: String, reason: String },
+    #[error(
+        "could not clone `{remote}`: {detail}. Check the address, that this machine can reach \
+         it, and that the token (if the repository is private) is right"
+    )]
+    CloneFailed { remote: String, detail: String },
+    #[error(
+        "a token goes with an https remote. `{0}` is reached with a key, so give this machine \
+         the key instead and leave the token out"
+    )]
+    CredentialNeedsHttps(String),
+}
+
+/// Writes the credential a clone will present, and says where it landed.
+///
+/// git's own `credential-store` format, in a file only this user can read,
+/// beside the settings rather than inside the clone: an agent works in that
+/// tree and its `.git/config` names the file, but the file is not in any
+/// directory a job is pointed at. The username is a placeholder because every
+/// forge this app has met reads only the password when it is a token.
+pub async fn keep_credential(
+    file: &std::path::Path,
+    remote: &str,
+    token: &str,
+) -> Result<(), RepoError> {
+    let host = remote
+        .strip_prefix("https://")
+        .or_else(|| remote.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .filter(|host| !host.is_empty())
+        .ok_or_else(|| RepoError::CredentialNeedsHttps(remote.to_string()))?;
+    let scheme = if remote.starts_with("http://") { "http" } else { "https" };
+
+    if let Some(parent) = file.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|err| RepoError::Unreadable {
+            path: display(parent),
+            reason: err.to_string(),
+        })?;
+    }
+    let line = format!("{scheme}://git:{}@{host}\n", urlencode(token.trim()));
+    // Mode set before the bytes exist, not after: a credential readable for a
+    // moment on a shared box is readable.
+    #[cfg(unix)]
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut open = tokio::fs::OpenOptions::new();
+        open.write(true).create(true).truncate(true).mode(0o600);
+        let mut out = open.open(file).await.map_err(|err| RepoError::Unreadable {
+            path: display(file),
+            reason: err.to_string(),
+        })?;
+        out.write_all(line.as_bytes()).await.map_err(|err| RepoError::Unreadable {
+            path: display(file),
+            reason: err.to_string(),
+        })?;
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::fs::write(file, line).await.map_err(|err| RepoError::Unreadable {
+            path: display(file),
+            reason: err.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+/// The characters a token cannot carry into a URL.
+fn urlencode(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Clones a remote into a directory of the workspace's own.
+///
+/// The clone carries three local config lines and the reasons matter. The
+/// credential helper points at the file `keep_credential` wrote, so a fetch or
+/// a push from any process standing in this tree (a job's harness included)
+/// finds the token without the token ever entering `.git/config` or a URL. The
+/// identity is set because a box has no operator-level git config, and a
+/// harness that cannot commit reports a broken repository rather than a
+/// missing name.
+pub async fn clone_remote(
+    remote: &str,
+    into: &std::path::Path,
+    credential_file: Option<&std::path::Path>,
+) -> Result<String, RepoError> {
+    if let Some(parent) = into.parent() {
+        tokio::fs::create_dir_all(parent).await.map_err(|err| RepoError::Unreadable {
+            path: display(parent),
+            reason: err.to_string(),
+        })?;
+    }
+
+    let mut command = tokio::process::Command::new("git");
+    command.arg("clone");
+    if let Some(file) = credential_file {
+        command.arg("--config").arg(format!("credential.helper=store --file={}", file.display()));
+    }
+    command
+        .arg("--config")
+        .arg("user.name=guaca")
+        .arg("--config")
+        .arg("user.email=guaca@localhost")
+        .arg("--")
+        .arg(remote)
+        .arg(into);
+
+    let done = command.output().await.map_err(|err| match err.kind() {
+        std::io::ErrorKind::NotFound => RepoError::GitMissing,
+        _ => RepoError::Unreadable { path: display(into), reason: err.to_string() },
+    })?;
+    if !done.status.success() {
+        // The clone's own words, last line first: git puts the reason there
+        // and the progress above it.
+        let said = String::from_utf8_lossy(&done.stderr);
+        let detail = said.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").to_string();
+        let _ = tokio::fs::remove_dir_all(into).await;
+        return Err(RepoError::CloneFailed { remote: remote.to_string(), detail });
+    }
+
+    verify(&display(into)).await
 }
 
 /// The canonical path of the work tree this directory is the root of.
@@ -1214,6 +1342,74 @@ mod tests {
             .await
             .expect("git has to be installed to run this suite");
         assert!(done.status.success(), "git {args:?} failed: {done:?}");
+    }
+
+    #[tokio::test]
+    async fn a_clone_keeps_its_credential_out_of_the_tree() {
+        let seed = a_repository_with_history("clone-seed", "main").await;
+        let scratch = std::env::temp_dir().join(format!("guac-clone-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
+        let credential = scratch.join("credentials").join("one");
+        keep_credential(&credential, "https://forge.example/x/y.git", "tok/1 2")
+            .await
+            .expect("the credential is written");
+
+        // Only this user reads it, and the token is URL-safe inside it.
+        let written = tokio::fs::read_to_string(&credential).await.unwrap();
+        assert_eq!(written, "https://git:tok%2F1%202@forge.example\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = tokio::fs::metadata(&credential).await.unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{mode:o}");
+        }
+
+        // A file:// clone stands in for the forge; what matters is the config
+        // the clone carries and what it does not.
+        let into = scratch.join("clone");
+        let path = clone_remote(&format!("file://{}", seed.display()), &into, Some(&credential))
+            .await
+            .expect("the clone lands");
+        assert!(std::path::Path::new(&path).join("a.txt").exists());
+
+        let config = tokio::fs::read_to_string(std::path::Path::new(&path).join(".git/config"))
+            .await
+            .unwrap();
+        assert!(config.contains("credential"), "the helper is set for every later push: {config}");
+        assert!(config.contains(&credential.display().to_string()), "{config}");
+        assert!(!config.contains("tok%2F"), "the token itself never enters the tree: {config}");
+        assert!(config.contains("name = guaca"), "a box has no operator git identity: {config}");
+
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
+    }
+
+    #[tokio::test]
+    async fn a_clone_that_fails_says_so_and_leaves_nothing() {
+        let scratch = std::env::temp_dir().join(format!("guac-noclone-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
+        let into = scratch.join("clone");
+        let err = clone_remote("file:///nowhere/at/all.git", &into, None)
+            .await
+            .expect_err("nothing to clone");
+        let said = err.to_string();
+        assert!(said.contains("could not clone"), "{said}");
+        assert!(said.contains("token"), "the way forward is named: {said}");
+        assert!(!into.exists(), "a failed clone is cleaned up");
+        let _ = tokio::fs::remove_dir_all(&scratch).await;
+    }
+
+    #[test]
+    fn a_token_with_nothing_to_carry_it_is_refused() {
+        // An ssh remote is reached with a key; a token written for it would
+        // sit on disk doing nothing while the operator wonders why pushes ask.
+        let err = futures_util::future::FutureExt::now_or_never(keep_credential(
+            std::path::Path::new("/tmp/never-written"),
+            "git@github.com:x/y.git",
+            "tok",
+        ))
+        .expect("refused before any I/O")
+        .expect_err("an ssh remote takes no token");
+        assert!(err.to_string().contains("https"), "{err}");
     }
 
     /// A repository with a commit in it, because a merge test needs history and

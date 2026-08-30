@@ -1392,6 +1392,21 @@ CREATE INDEX messages_author_time
     WHERE from_kind = 'agent';
 "#,
     ),
+    (
+        48,
+        r#"
+-- Where a repository was cloned from, for the rows that were cloned at all.
+--
+-- NULL is a directory the operator picked on their own machine, which is what
+-- every row before this column was and what every desktop row still is. A
+-- value is a remote the workspace cloned for itself, into a directory of its
+-- own, which is how a box gets a repository: there is no directory anybody
+-- could have picked there. The credential that clone may hold is deliberately
+-- not in this table; it lives in a file beside the settings, named for the
+-- clone's directory, because this table is read into a type that crosses IPC.
+ALTER TABLE repositories ADD COLUMN remote TEXT;
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

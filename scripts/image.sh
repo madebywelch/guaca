@@ -65,6 +65,12 @@ esac
 
 curl -fsS "${BASE}/" | grep -q '<div id="root">' || fail "the page is not served at /"
 
+# What a remote-linked repository runs on. Asked inside the container, because
+# an image that lost one of these fails only when somebody links a repository.
+docker exec "${NAME}" git --version >/dev/null || fail "git is not in the image"
+docker exec "${NAME}" gh --version >/dev/null || fail "gh is not in the image"
+docker exec "${NAME}" claude --version >/dev/null || fail "claude is not in the image"
+
 step "Stopping"
 docker stop "${NAME}" >/dev/null
 # `--rm` took the container; the trap's remove is then a no-op.

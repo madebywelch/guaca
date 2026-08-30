@@ -16,6 +16,9 @@
 //!   GUACA_ORIGIN   the address a browser reaches this box at, e.g. the
 //!                  tunnel's https URL. Only a sign-in needs it, for the
 //!                  redirect; absent, the origin of the last call is used.
+//!   ANTHROPIC_API_KEY  not Guaca's own setting, but read for one decision:
+//!                  with it set, Claude Code is offered as a coding harness
+//!                  and spends the key.
 //!   GUAC_LOG       the tracing filter, spelled as the desktop app spells it.
 
 use std::path::PathBuf;
@@ -55,6 +58,7 @@ fn main() {
         bind,
         token,
         web: std::env::var_os("GUACA_WEB").map(PathBuf::from),
+        claude_key: std::env::var("ANTHROPIC_API_KEY").is_ok_and(|key| !key.trim().is_empty()),
         origin: std::env::var("GUACA_ORIGIN")
             .ok()
             .map(|o| o.trim().to_string())

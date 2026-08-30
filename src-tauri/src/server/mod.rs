@@ -77,6 +77,11 @@ pub struct Settings {
     /// this box is a client, and so is a `curl`. Serving the bundle is what
     /// makes a browser one too.
     pub web: Option<PathBuf>,
+    /// Whether `ANTHROPIC_API_KEY` is set where this daemon runs, which is
+    /// what lets Claude Code be the harness on a box: the key is spent, not a
+    /// plan. Passed rather than read from the environment here, so a test can
+    /// say either without scrubbing the machine it runs on.
+    pub claude_key: bool,
     /// The origin a browser reaches this box at, when the operator knows it.
     ///
     /// Only a sign-in needs it, for the redirect. Absent, the daemon uses the
@@ -152,6 +157,8 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
 
     let state = Arc::new(AppState {
         runtime: booted.runtime,
+        repos: paths.data.join("repos"),
+        claude_key: settings.claude_key,
         secret: Some(Arc::from(settings.token.as_str())),
         // A box has no corner of a screen. A window showing this workspace
         // feeds its own machine's strip, and that call never reaches here.
