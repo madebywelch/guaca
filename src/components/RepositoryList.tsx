@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import {
   type AgentCard,
   BENCHES,
@@ -52,9 +53,15 @@ function HarnessChoice({
 }) {
   // Null is the check still running, and it must not disable both. The refusal
   // a job gives already names the install command.
-  const has = (harness: Harness) =>
-    machine === null || (machine.find((row) => row.harness === harness)?.installed ?? true);
-  const missing = machine?.filter((row) => !row.installed) ?? [];
+  const has = (harness: Harness) => {
+    const row = machine?.find((known) => known.harness === harness);
+    return row === undefined || (row.installed && !row.withheld);
+  };
+  const missing = machine?.filter((row) => !row.installed && !row.withheld) ?? [];
+  // Withheld by where the workspace runs rather than absent from the machine,
+  // and the row says which: an install command for a program a server will
+  // not run is an instruction that leads nowhere.
+  const withheld = machine?.filter((row) => Boolean(row.withheld)) ?? [];
 
   return (
     <>
@@ -82,6 +89,12 @@ function HarnessChoice({
           <span key={row.harness}>
             {" "}
             {labelOf(row.harness)} is not installed: <code>{row.install}</code>.
+          </span>
+        ))}
+        {withheld.map((row) => (
+          <span key={row.harness}>
+            {" "}
+            {labelOf(row.harness)}: {row.withheld}.
           </span>
         ))}
       </p>
@@ -269,6 +282,7 @@ function worksIn(repository: Repository, crew: AgentCard[]): string {
  * reported to an agent forty minutes later.
  */
 export function RepositoryList({ groupId, crew }: Props) {
+  const capabilities = useStore((s) => s.capabilities);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState<Omit<RepositoryDraft, "groupId">>({
@@ -577,10 +591,18 @@ export function RepositoryList({ groupId, crew }: Props) {
             every agent that has it, on every turn.
           </p>
         </div>
-      ) : (
+      ) : capabilities.localDirectories ? (
         <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>
           Link a repository
         </button>
+      ) : (
+        // Said in place of the button rather than after the path is typed: a
+        // repository is a directory on the machine the workspace runs on, and
+        // on a server that machine is not the operator's.
+        <p className="field__hint">
+          This workspace runs on a server, so it cannot open a directory on your own machine, and a
+          repository is a directory. Give this crew a repository from a local workspace.
+        </p>
       )}
 
       {error && (

@@ -168,7 +168,8 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         artifact_port: booted.artifact_port,
     });
 
-    let serving = Serving { state, token: settings.token.into(), events };
+    let token: Arc<str> = settings.token.into();
+    let serving = Serving { state, token: token.clone(), events };
 
     let mut app = Router::new()
         .route("/health", get(health))
@@ -198,8 +199,28 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .map_err(|err| format!("could not listen on {}: {err}", settings.bind))?;
     let addr = listener.local_addr().map_err(|err| err.to_string())?;
     tracing::info!(%addr, agents = booted.started, "guacad ready");
+    if settings.web.is_some() {
+        // The token is already in this log from the run that generated it.
+        // Printing the whole invitation on every start is what makes the first
+        // visit one click rather than a URL and a string pasted beside it, and
+        // the fragment is the one part of a URL a browser never sends.
+        tracing::info!(
+            url = %invitation(addr, &token),
+            "open this in a browser, or the same path on the address a tunnel gives this box"
+        );
+    }
 
     Ok(Bound { addr, agents: booted.started, listener, app })
+}
+
+/// The one link a browser needs, with the token where a browser keeps it.
+///
+/// A fragment rather than a query string, because the fragment is not sent to
+/// this server, to a proxy in front of it, or to either one's logs. The socket
+/// takes the token in a query string because a handshake cannot carry a
+/// header; a first visit has no such excuse.
+fn invitation(addr: SocketAddr, token: &str) -> String {
+    format!("http://{addr}/#token={token}")
 }
 
 /// Waits for the signal a container is stopped with.
@@ -432,6 +453,16 @@ pub struct Greeting {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_invitation_keeps_the_token_out_of_every_log_but_this_one() {
+        let addr: SocketAddr = "127.0.0.1:8787".parse().unwrap();
+        let url = invitation(addr, "abc123");
+        assert_eq!(url, "http://127.0.0.1:8787/#token=abc123");
+        // A fragment, never a query string: the query string is sent to the
+        // server and to anything in front of it, and the fragment is not.
+        assert!(!url.contains('?'), "{url}");
+    }
 
     #[test]
     fn a_token_matches_only_itself() {

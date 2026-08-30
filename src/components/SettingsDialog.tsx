@@ -115,6 +115,7 @@ const differs = (text: string, stored: number | undefined) =>
 export function SettingsDialog({ onClose, section: opening }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
+  const capabilities = useStore((s) => s.capabilities);
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
 
@@ -642,12 +643,18 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
                     <span className="preset__url">
-                      {claudeInstalled === false
-                        ? "Runs the claude program, which is not installed on this machine"
-                        : "Runs the claude program, and uses whatever it is signed in to and set to"}
+                      {!capabilities.claudeProvider
+                        ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it"
+                        : claudeInstalled === false
+                          ? "Runs the claude program, which is not installed on this machine"
+                          : "Runs the claude program, and uses whatever it is signed in to and set to"}
                     </span>
                   </span>
-                  {claudeInstalled === false ? (
+                  {!capabilities.claudeProvider ? (
+                    <span className="preset__state" data-ready="false">
+                      Not on a server
+                    </span>
+                  ) : claudeInstalled === false ? (
                     <span className="preset__state" data-ready="false">
                       Not installed
                     </span>
@@ -695,6 +702,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   baseUrl={baseUrl}
                   active={provider === "compatible"}
                   keySet={Boolean(settings?.apiKeySet)}
+                  loopback={capabilities.loopbackEndpoints}
                   onChoose={choose}
                 />
 

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
+import { useStore } from "../lib/store";
 import type {
   AgentCard,
   Bench,
@@ -393,6 +393,72 @@ describe("RepositoryList", () => {
     expect(
       screen.getByRole("button", { name: "Coding harness: pi" }).hasAttribute("disabled"),
     ).toBe(false);
+  });
+
+  it("withholds a harness the workspace will not run, with the reason rather than an install command", async () => {
+    // A server reports Claude Code installed and withheld: the program may be
+    // there, and the plan it would spend is signed in to on the operator's own
+    // machine. Telling them to install it leads nowhere.
+    codingHarnesses.mockResolvedValue([
+      {
+        harness: "pi",
+        installed: true,
+        version: "0.9.0",
+        bridged: false,
+        install: "npm install -g pi",
+      },
+      {
+        harness: "claude",
+        installed: true,
+        version: "2.1.247 (Claude Code)",
+        bridged: true,
+        install: "npm install -g @anthropic-ai/claude-code",
+        withheld: "Claude Code spends the plan you signed in to on your own machine",
+      },
+    ]);
+    groupRepositories.mockResolvedValue([repository()]);
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+    fireEvent.click(await screen.findByText("Edit"));
+
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole("button", { name: "Coding harness: Claude Code" })
+          .hasAttribute("disabled"),
+      ).toBe(true),
+    );
+    expect(screen.getByText(/spends the plan you signed in to/)).toBeTruthy();
+    expect(screen.queryByText("npm install -g @anthropic-ai/claude-code")).toBeNull();
+  });
+
+  it("offers no directory to link on a server, and says where one comes from", async () => {
+    useStore.setState({
+      capabilities: {
+        localDirectories: false,
+        loopbackEndpoints: false,
+        claudeProvider: false,
+        claudeCodeHarness: false,
+        localFiles: false,
+      },
+    });
+    try {
+      groupRepositories.mockResolvedValue([]);
+      render(<RepositoryList groupId={GROUP} crew={CREW} />);
+
+      await screen.findByText(/cannot open a directory on your own machine/);
+      expect(screen.queryByRole("button", { name: "Link a repository" })).toBeNull();
+    } finally {
+      useStore.setState({
+        capabilities: {
+          localDirectories: true,
+          loopbackEndpoints: true,
+          claudeProvider: true,
+          claudeCodeHarness: true,
+          localFiles: true,
+        },
+      });
+    }
   });
 
   it("disables neither when the machine could not be asked", async () => {

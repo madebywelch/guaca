@@ -85,11 +85,11 @@ impl Deployment {
 pub struct Capabilities {
     /// Whether a repository may be a directory the operator picked.
     ///
-    /// On a server a repository is a remote and a credential instead. That is
-    /// a different feature rather than this one degraded: `docs/CODING.md` is
-    /// explicit that seeing the branch you are on and the change you have not
-    /// committed is the point of the local version, and it does not survive
-    /// the move.
+    /// On a server a repository would be a remote and a credential instead,
+    /// which is a different feature rather than this one degraded, and one
+    /// that is not built: `docs/CODING.md` is explicit that seeing the branch
+    /// you are on and the change you have not committed is the point of the
+    /// local version, and it does not survive the move.
     pub local_directories: bool,
     /// Whether inference may be pointed at a loopback address.
     ///
@@ -137,8 +137,8 @@ impl Absent {
         match self {
             Absent::LocalDirectories => {
                 "this workspace runs on a server, so it cannot open a directory on your own \
-                 machine. Link the repository by its remote instead, and the work comes back as \
-                 a branch and a pull request"
+                 machine, and a repository is a directory. Give this crew a repository from a \
+                 local workspace instead"
             }
             Absent::LoopbackEndpoints => {
                 "this workspace runs on a server, so it cannot reach a model running on your own \

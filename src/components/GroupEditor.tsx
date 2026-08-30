@@ -70,6 +70,7 @@ const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 export function GroupEditor({ group, onClose }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const settings = useStore((s) => s.settings);
+  const capabilities = useStore((s) => s.capabilities);
   const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
@@ -508,10 +509,16 @@ export function GroupEditor({ group, onClose }: Props) {
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
                     <span className="preset__url">
-                      Runs the claude program, on whatever it is signed in to
+                      {capabilities.claudeProvider
+                        ? "Runs the claude program, on whatever it is signed in to"
+                        : "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it"}
                     </span>
                   </span>
-                  {onClaude ? (
+                  {!capabilities.claudeProvider ? (
+                    <span className="preset__state" data-ready="false">
+                      Not on a server
+                    </span>
+                  ) : onClaude ? (
                     <span className="preset__state" data-ready="true">
                       In use
                     </span>
@@ -547,6 +554,7 @@ export function GroupEditor({ group, onClose }: Props) {
                   baseUrl={baseUrl || (settings?.baseUrl ?? "")}
                   active={onEndpoint}
                   keySet={Boolean(group?.apiKeySet || settings?.apiKeySet)}
+                  loopback={capabilities.loopbackEndpoints}
                   onChoose={choose}
                 />
 

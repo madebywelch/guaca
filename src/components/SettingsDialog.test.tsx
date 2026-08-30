@@ -795,6 +795,44 @@ describe("the provider presets", () => {
     expect(preset("OpenRouter").textContent).toContain("Needs a key");
   });
 
+  it("withholds the rows a server cannot offer, and says why on each", () => {
+    // Withheld rather than hidden. A row that vanishes on a server is a pane
+    // that disagrees with the operator's laptop and explains nothing, and a
+    // control that fails only after the field is filled in is worse.
+    useStore.setState({
+      capabilities: {
+        localDirectories: false,
+        loopbackEndpoints: false,
+        claudeProvider: false,
+        claudeCodeHarness: false,
+        localFiles: false,
+      },
+    });
+    try {
+      open();
+      pane("Provider");
+
+      expect(preset("LM Studio").textContent).toContain("Not from a server");
+      expect((preset("LM Studio") as HTMLButtonElement).disabled).toBe(true);
+      expect(preset("Ollama").textContent).toContain("Not from a server");
+      // The ones a server can reach are untouched.
+      expect((preset("OpenRouter") as HTMLButtonElement).disabled).toBe(false);
+
+      expect(screen.getByText("Not on a server")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Use the Claude subscription" })).toBeNull();
+    } finally {
+      useStore.setState({
+        capabilities: {
+          localDirectories: true,
+          loopbackEndpoints: true,
+          claudeProvider: true,
+          claudeCodeHarness: true,
+          localFiles: true,
+        },
+      });
+    }
+  });
+
   it("says a key is stored once one is", () => {
     open(stored({ apiKeySet: true, apiKeyHint: "…9f2c" }));
     pane("Provider");
