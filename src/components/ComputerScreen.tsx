@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { screenUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
@@ -328,7 +329,7 @@ export function ComputerScreen({ agent }: Props) {
               key={computer.sandboxId}
               ref={frame}
               title={`${agent.name}'s computer`}
-              src={computer.vncUrl ?? ""}
+              src={computer.vncUrl ? screenUrl(computer.vncUrl) : ""}
             />
             {!full && (
               // Swallows clicks aimed at the desktop while it is only meant to

@@ -300,6 +300,65 @@ async fn a_box_does_not_forward_files_from_its_own_disk() {
 }
 
 #[tokio::test]
+async fn a_page_an_agent_wrote_is_served_on_this_origin_under_the_same_policy() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(
+        addr,
+        "frame_artifact",
+        json!({ "html": "<h1>hi</h1><script>guaca.answer(1)</script>" }),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let id = body["ok"]["id"].as_str().expect("an id");
+
+    let client = reqwest::Client::new();
+    let refused = client.get(format!("http://{addr}/v1/artifact/{id}")).send().await.unwrap();
+    assert_eq!(refused.status(), 401);
+
+    let page =
+        client.get(format!("http://{addr}/v1/artifact/{id}?token={TOKEN}")).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    let csp = page.headers().get("content-security-policy").expect("the policy rides along");
+    assert!(csp.to_str().unwrap().contains("sandbox allow-scripts"));
+    let text = page.text().await.unwrap();
+    assert!(text.contains("guaca.answer"), "the bridge is prepended: {text}");
+    assert!(text.contains("<h1>hi</h1>"));
+
+    let gone = client
+        .get(format!("http://{addr}/v1/artifact/{}?token={TOKEN}", "0".repeat(64)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(gone.status(), 404);
+}
+
+#[tokio::test]
+async fn a_screen_is_reached_by_a_ticket_for_that_sandbox_and_relayed_to_the_viewer() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+
+    // A ticket for another sandbox, or a made-up one, opens nothing.
+    let wrong = client
+        .get(format!("http://{addr}/v1/screen/{}/sbx/6080/viewer.html", "f".repeat(64)))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(wrong.status(), 404);
+    assert!(wrong.text().await.unwrap().contains("not a screen"));
+
+    // The right ticket reaches the viewer, which is the one that knows there is
+    // no such machine and says so: the relay carries its answer through whole.
+    let ticket = guac_lib::commands::screen_ticket(TOKEN, "sbx");
+    let relayed = client
+        .get(format!("http://{addr}/v1/screen/{ticket}/sbx/6080/viewer.html?autoconnect=1"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(relayed.status(), 404);
+    assert!(relayed.text().await.unwrap().contains("No computer is registered"));
+}
+
+#[tokio::test]
 async fn a_sign_in_nobody_is_waiting_for_is_told_so_at_the_door() {
     let (addr, _dir) = workspace().await;
     let client = reqwest::Client::new();

@@ -74,6 +74,12 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
 # never polls, which is what `EventSink` has always been.
 axum = { version = "0.7", features = ["ws"], optional = true }
 tower-http = { version = "0.6", features = ["fs", "cors", "trace"], optional = true }
+# The computer's screen reaches a browser through the daemon, and noVNC's
+# transport is a WebSocket the daemon has to hand through untouched. axum
+# answers the handshake; taking the connection over afterward is hyper's
+# `upgrade`, and the adapter is what makes the taken-over socket a tokio one.
+hyper = { version = "1", optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 
 rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
@@ -121,7 +127,7 @@ desktop = [
 ]
 
 # The daemon: the same runtime, reached over HTTP and a socket.
-server = ["dep:axum", "dep:tower-http"]
+server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util"]
 
 [[bin]]
 name = "guac"

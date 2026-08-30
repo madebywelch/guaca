@@ -142,6 +142,13 @@ pub type MenubarFeed = Arc<dyn Fn(Option<crate::menubar::Presence>) + Send + Syn
 pub struct AppState {
     pub runtime: Runtime,
     pub menubar: MenubarFeed,
+    /// The workspace token, on a host that has one. What a screen ticket is
+    /// derived from: a computer's live screen is reached through the daemon
+    /// at an address noVNC has to be able to resolve its own files against,
+    /// so the credential is a path segment, and it is a ticket for that one
+    /// sandbox rather than the token for the whole workspace. `None` on a
+    /// desktop, whose viewer is on loopback and needs nothing.
+    pub secret: Option<Arc<str>>,
     /// Where this runtime is, which decides what the panels may offer.
     ///
     /// Read by the commands that would otherwise reach the operator's machine,
@@ -453,7 +460,7 @@ pub async fn agent_computer(state: &AppState, id: AgentId) -> Reply<Option<Compu
         state.runtime.store().set_agent_sandbox(id, None)?;
         return Ok(None);
     }
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(Some(state.screened(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?)))
 }
 
 /// Gives an agent a computer.
@@ -510,7 +517,7 @@ pub async fn start_agent_computer(state: &AppState, id: AgentId) -> Reply<Comput
     let computer =
         client.describe(&sandbox.id, &sandbox.envd_token, state.runtime.viewer_port()).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(computer)
+    Ok(state.screened(computer))
 }
 
 /// Puts an agent's machine to sleep.
@@ -526,7 +533,7 @@ pub async fn stop_agent_computer(state: &AppState, id: AgentId) -> Reply<Option<
     let client = computers(state)?;
     client.pause(&sandbox).await?;
     state.runtime.emit(UiEvent::AgentsChanged);
-    Ok(Some(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?))
+    Ok(Some(state.screened(client.describe(&sandbox, &envd, state.runtime.viewer_port()).await?)))
 }
 
 /// Destroys the sandbox and everything on its disk.
@@ -2019,6 +2026,40 @@ pub async fn stage_files(state: &AppState, paths: Vec<String>) -> Reply<Staged> 
         }
     }
     Ok(staged)
+}
+
+/// A ticket for one sandbox's screen, or `None` where the screen needs none.
+///
+/// `sha256(secret ":" sandbox)`, so it can be checked without being stored and
+/// leaks nothing but the right to watch that one screen through this daemon.
+/// The same function checks it at the route.
+pub fn screen_ticket(secret: &str, sandbox: &str) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(format!("{secret}:{sandbox}").as_bytes()))
+}
+
+/// The route a hosted page reaches a computer's screen on. One string, read
+/// by the address below and by the daemon's router.
+pub const SCREEN_ROUTE: &str = "/v1/screen";
+
+impl AppState {
+    /// Points a computer's screen at the daemon rather than at loopback, on a
+    /// host that has one.
+    ///
+    /// The viewer stays on loopback and keeps the sandbox tokens; the daemon
+    /// relays to it. The address is relative, because only the page knows
+    /// which origin it reached the daemon at, and the page resolves it.
+    fn screened(&self, mut computer: crate::e2b::Computer) -> crate::e2b::Computer {
+        if let (Some(secret), Some(url)) = (&self.secret, computer.vnc_url.as_deref()) {
+            let viewer =
+                format!("http://{}:{}", crate::e2b::VIEWER_HOST, self.runtime.viewer_port());
+            if let Some(rest) = url.strip_prefix(&viewer) {
+                let ticket = screen_ticket(secret, &computer.sandbox_id);
+                computer.vnc_url = Some(format!("{SCREEN_ROUTE}/{ticket}{rest}"));
+            }
+        }
+        computer
+    }
 }
 
 /// Sends files from this machine's disk to a workspace somewhere else.
