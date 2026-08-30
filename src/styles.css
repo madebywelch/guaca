@@ -1952,18 +1952,27 @@ button {
   opacity: 0.5;
 }
 
-/* --- the marks beside a head --------------------------------------------- */
+/* --- the marks beside a head ---------------------------------------------
+
+   Every one of these loops is pulled back by the creature's own phase, which
+   `avatars/clock.ts` hands down as `--gait`. Without it they run on the
+   document's clock, and the document's clock is the same for everybody: every
+   avatar on screen is written in one frame, and a crew told one thing starts
+   thinking in one frame, so a rail of agents ends up blinking in time. Negative
+   is deliberate; a positive delay would hold the mark back rather than start it
+   somewhere else in its loop. */
 
 .avatar__dots circle {
   animation: think-dot 1.5s var(--ease-loop) infinite;
+  animation-delay: calc(var(--gait, 0s) * -1);
 }
 
 .avatar__dots circle:nth-child(2) {
-  animation-delay: 0.18s;
+  animation-delay: calc(var(--gait, 0s) * -1 + 0.18s);
 }
 
 .avatar__dots circle:nth-child(3) {
-  animation-delay: 0.36s;
+  animation-delay: calc(var(--gait, 0s) * -1 + 0.36s);
 }
 
 @keyframes think-dot {
@@ -1983,6 +1992,7 @@ button {
   transform-box: fill-box;
   transform-origin: center;
   animation: attention 1.9s var(--ease-loop) infinite;
+  animation-delay: calc(var(--gait, 0s) * -1);
 }
 
 @keyframes attention {
@@ -2000,6 +2010,7 @@ button {
 
 .avatar__z {
   animation: snooze 3.4s var(--ease-loop) infinite;
+  animation-delay: calc(var(--gait, 0s) * -1);
 }
 
 @keyframes snooze {

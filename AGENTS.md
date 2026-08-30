@@ -17,7 +17,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
     eyes.ts           One stroke, four numbers, and where it is looking.
     catalog.ts        The cast, and every key an older build wrote.
     moods.ts          Ten expressions, and the one place a signal becomes one.
-    clock.ts          One frame loop for every creature on screen.
+    clock.ts          The clock every creature shares, and the one each keeps.
   lib/transcript.ts   What a channel shows, and what it collapses. Read first.
   lib/rail.ts         What order the rail draws agents in, and where a drop lands.
   lib/presence.ts     A crew, in the two marks its circle can carry.
@@ -178,6 +178,7 @@ repo: the frontend renders state and forwards intent.
 | A sixth shape, a shape that lost its corners, or why the drop is not bigger | *Five shapes, one weight* in `docs/CHARACTERS.md`, then `src/avatars/silhouette.ts` and the suite beside it, which is the gate |
 | A new expression, or what the app reads one from | *Moods* in `docs/CHARACTERS.md`, then `moods.ts`, whose table and `moodFor` are the whole of it |
 | Anything that moves on a creature: a look, a blink, a message landing | *The gaze moves the body* in `docs/CHARACTERS.md`, then `AgentAvatar.tsx`, which is the only place the three meet |
+| A crew that moves as one animal, a tempo, a phase, `--gait` | *No two of them keep time together* in `docs/CHARACTERS.md`, then `gaitOf` in `src/avatars/clock.ts` and the suite beside it |
 | Charts, tables, a page an agent wrote: what a reply can be drawn as | *A reply can be a figure* in `docs/WORKSPACE.md`, then `src/lib/figure.ts` and `src/lib/chart.ts` |
 | A box round the part of a reply that needs the operator, and which marker draws which one | *A reply can mark the one part that needs a person* in `docs/WORKSPACE.md`, then `src/lib/callout.ts` |
 | A chart's colors, or how many series one may carry | *A chart's colors are the output of a check* in `docs/WORKSPACE.md`, then `src/lib/palette.ts` and the test beside it, which is the gate |
