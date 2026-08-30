@@ -220,7 +220,15 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
 /// takes the token in a query string because a handshake cannot carry a
 /// header; a first visit has no such excuse.
 fn invitation(addr: SocketAddr, token: &str) -> String {
-    format!("http://{addr}/#token={token}")
+    // A daemon in a container listens on every interface, and `0.0.0.0` is
+    // not an address a browser can open. `localhost` is right for the
+    // operator who published the port to their own machine, and the log line
+    // beside it already says to substitute a tunnel's address for a box.
+    if addr.ip().is_unspecified() {
+        format!("http://localhost:{}/#token={token}", addr.port())
+    } else {
+        format!("http://{addr}/#token={token}")
+    }
 }
 
 /// Waits for the signal a container is stopped with.
@@ -253,13 +261,23 @@ async fn stopped() {
     }
 }
 
+/// The commit this daemon was built from, told to the build rather than read
+/// from a repository it does not ship with. Empty for a build made without
+/// one, which `/health` says rather than hides: a box and a laptop that
+/// disagree about this string are running different code, and that is the
+/// first thing worth knowing about a bug that reproduces on one of them.
+const BUILD: &str = match option_env!("GUACA_COMMIT") {
+    Some(commit) => commit,
+    None => "",
+};
+
 /// Liveness, and the one route with no token on it.
 ///
 /// It says the process is up and nothing about the workspace. A provider's
 /// health check has no credential, and a check that needed one would be a box
 /// that reports itself unhealthy for the whole time a token is being rotated.
 async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok", "service": "guacad" }))
+    Json(json!({ "status": "ok", "service": "guacad", "build": BUILD }))
 }
 
 #[derive(Deserialize)]
@@ -462,6 +480,12 @@ mod tests {
         // A fragment, never a query string: the query string is sent to the
         // server and to anything in front of it, and the fragment is not.
         assert!(!url.contains('?'), "{url}");
+
+        // A container binds every interface, and nobody can open 0.0.0.0.
+        let every: SocketAddr = "0.0.0.0:8787".parse().unwrap();
+        assert_eq!(invitation(every, "abc123"), "http://localhost:8787/#token=abc123");
+        let every6: SocketAddr = "[::]:8787".parse().unwrap();
+        assert_eq!(invitation(every6, "abc123"), "http://localhost:8787/#token=abc123");
     }
 
     #[test]

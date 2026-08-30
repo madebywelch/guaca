@@ -448,6 +448,7 @@ the source rather than at the end.
 ```sh
 ./scripts/ci.sh          # lint, typecheck, build, every test suite
 ./scripts/ci.sh rust     # Rust only
+./scripts/image.sh       # the daemon's image: build it, run it, prove it answers
 GUAC_LOG=guac=debug pnpm app
 ```
 

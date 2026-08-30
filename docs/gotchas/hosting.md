@@ -61,6 +61,21 @@ The daemon, a browser as a client, and the boot both hosts share.
   draws before `ready`, and a hosted page that read "everything" for one
   frame would offer nothing a desktop does not. Defaulting to "nothing" would
   make every desktop panel flash its refusals on launch.
+- **A container has to bind every interface, and the image says so; the
+  daemon's own default stays loopback.** `GUACA_BIND=127.0.0.1:8787` inside a
+  container is a port nothing outside it can reach, and the symptom is a
+  published port that connects and hangs. The image sets `0.0.0.0:8787` and
+  the compose file publishes to `127.0.0.1` on the host; the unit file leaves
+  the default, because on bare metal loopback is the boundary.
+- **The health check spells the port a second time.** `HEALTHCHECK` probes
+  `127.0.0.1:8787` because it cannot read `GUACA_BIND`; an override that moves
+  the port leaves a container that works and reports unhealthy, or the
+  reverse. Move both.
+- **`.git` is not in the build context, so the commit is passed in.** Left to
+  `builtOn()` alone the page in the image says its version is a dash and
+  `/health` says `""`, which is two hosts that cannot be told apart.
+  `GUACA_COMMIT` is the argument, `scripts/image.sh` supplies it and asserts
+  the container answers with it.
 - **`OnDisk::under` is the one place the three directories are arranged.**
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by
