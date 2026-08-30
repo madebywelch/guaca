@@ -58,6 +58,75 @@ impl Lifecycle {
     }
 }
 
+/// Whether this agent's browser stops and asks before it acts in the operator's
+/// name.
+///
+/// ## Why it is per agent
+///
+/// A browser is given to one agent, and what is in it is the operator's
+/// accounts. Giving an agent the browser is the decision about those accounts:
+/// there is nothing an agent can do with a page it was handed that the operator
+/// did not hand it. So the answer belongs beside `has_browser`, on the agent,
+/// for the reason [`crate::domain::repository::Gate`] belongs on the
+/// repository. It is a fact about how work happens *here*.
+///
+/// ## Why it is not per site
+///
+/// The gate this switches off asks per site, in the turn, and no answer it can
+/// collect is the answer an operator actually holds. "Post on the company
+/// LinkedIn, never on my own" is one account divided by intent, and a rule that
+/// only knows domains cannot express it, so asking harder produces a dialog per
+/// site that is answered without reading and still gets the interesting case
+/// wrong. What can hold that instruction is the model, told plainly. What the
+/// operator gets to decide here is which agents are trusted to follow it.
+///
+/// ## Why the default is open
+///
+/// Because giving the browser already was the decision, and an agent doing
+/// research presses something on a search engine every few seconds. Asking
+/// about each one trains the operator to approve without looking, which is
+/// worse than not asking: the one prompt that mattered arrives in a habit of
+/// clicking through. [`Consent::AskBeforeActing`] is for the agent holding an
+/// account the operator wants a hand on, and it is theirs to switch on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Consent {
+    /// Nothing stops. What the browser is signed in to is this agent's to use,
+    /// which is what giving it the browser said.
+    #[default]
+    Open,
+    /// A press or a typed line, on a site this browser holds a session for,
+    /// after this turn has read a page, asks the operator first.
+    AskBeforeActing,
+}
+
+impl Consent {
+    /// What the column holds, and what crosses IPC. One spelling for both, for
+    /// the reason [`Lifecycle::as_str`] has one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Consent::Open => "open",
+            Consent::AskBeforeActing => "askBeforeActing",
+        }
+    }
+
+    /// What a stored row means. Anything unrecognized is [`Consent::Open`],
+    /// which is the default the column was added with. Reading a string a
+    /// downgrade wrote as the *asking* variant would park turns on a desk over
+    /// a value nobody chose, and a turn parked on nobody expires having spent a
+    /// booking.
+    pub fn parse(raw: &str) -> Consent {
+        match raw {
+            "askBeforeActing" => Consent::AskBeforeActing,
+            _ => Consent::Open,
+        }
+    }
+
+    pub fn asks(self) -> bool {
+        self == Consent::AskBeforeActing
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCard {
@@ -109,6 +178,9 @@ pub struct AgentCard {
     /// two places: a crew where one agent reads the web and nobody else leaves
     /// the workspace is the ordinary shape, not a special case.
     pub has_browser: bool,
+    /// Whether that browser stops and asks before it acts in the operator's
+    /// name. See [`Consent`], which is where the argument is.
+    pub browser_consent: Consent,
     /// The repository this agent works in, if the operator gave it one.
     ///
     /// At most one, always. Two agents on one codebase coordinate in the crew
@@ -504,6 +576,7 @@ mod tests {
             browser_id: None,
             has_computer: false,
             has_browser: false,
+            browser_consent: Consent::default(),
             repository_id: None,
             lifecycle: Lifecycle::Active,
             pinned: false,

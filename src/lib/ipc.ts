@@ -28,6 +28,7 @@ import type {
   Attachment,
   Bench,
   Browser,
+  BrowserConsent,
   CatalogKind,
   Computer,
   Connector,
@@ -121,6 +122,13 @@ export const api = {
    * to is saved to the agent's profile, so giving it back opens it signed in.
    */
   takeAgentBrowser: (id: AgentId) => invoke<void>("take_agent_browser", { id }),
+
+  /**
+   * Whether that browser stops and asks before it acts in the operator's name.
+   * Its own call, because it outlives every browser given and taken back.
+   */
+  setAgentBrowserConsent: (id: AgentId, consent: BrowserConsent) =>
+    invoke<void>("set_agent_browser_consent", { id, consent }),
 
   /** Opens one, or hands back the one it already has. Idempotent. */
   startAgentBrowser: (id: AgentId) => invoke<Browser>("start_agent_browser", { id }),

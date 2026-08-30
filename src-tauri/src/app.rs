@@ -429,6 +429,7 @@ pub fn run() {
             commands::agent_browser,
             commands::give_agent_browser,
             commands::take_agent_browser,
+            commands::set_agent_browser_consent,
             commands::start_agent_browser,
             commands::stop_agent_browser,
             commands::group_connectors,

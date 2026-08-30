@@ -372,6 +372,42 @@ export function BrowserScreen({ agent }: Props) {
           )}
         </p>
       )}
+
+      {/* Under the caption rather than in the offer above it, because the offer
+          is only drawn when there is no live view and this has to be reachable
+          while the agent is working. Not in the full-screen bar: that is a
+          toolbar for the browser in front of you, and this is a decision about
+          the agent that outlives every browser it is given. */}
+      {!full && given && (
+        <label className="field field--row">
+          <input
+            type="checkbox"
+            checked={agent.browserConsent === "askBeforeActing"}
+            disabled={busy}
+            onChange={(event) =>
+              void decide(() =>
+                api.setAgentBrowserConsent(
+                  agent.id,
+                  event.target.checked ? "askBeforeActing" : "open",
+                ),
+              )
+            }
+          />
+          <span>
+            <span className="field__label">Ask me before it acts in my name</span>
+            <span className="field__hint">
+              A press or a typed line on a site this browser is signed in to waits on your desk
+              first, once the turn has read a page. Off, which is the default: giving {agent.name} a
+              browser is what said the accounts in it are its to use. Leave it off for research. An
+              agent that searches presses something every few seconds, and a question asked that
+              often is one you answer without reading. Turn it on for an agent holding an account
+              you want a hand on. It cannot tell one account on a site from another: which of your
+              accounts {agent.name} may act on is something you tell it, and this is only whether
+              you are asked first.
+            </span>
+          </span>
+        </label>
+      )}
     </div>
   );
 }

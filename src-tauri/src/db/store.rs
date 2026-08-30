@@ -12,7 +12,7 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{named_params, params, OptionalExtension, Row, TransactionBehavior};
 
 use crate::db::migrations;
-use crate::domain::agent::{AgentCard, CleanDraft, Lifecycle};
+use crate::domain::agent::{AgentCard, CleanDraft, Consent, Lifecycle};
 use crate::domain::approval::{
     Approval, ApprovalState, DetailField, ProtectedAction, Request, QUESTION,
 };
@@ -169,6 +169,7 @@ fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
         browser_id: None,
         has_computer: false,
         has_browser: false,
+        browser_consent: Consent::default(),
         // Given from the rail, never at creation. A fresh agent belongs to no
         // codebase, which is the same rule every other capability follows.
         repository_id: None,
@@ -692,6 +693,25 @@ impl Store {
     /// The same decision about the browser.
     pub fn set_has_browser(&self, id: AgentId, given: bool) -> Result<(), StoreError> {
         self.set_flag(id, "has_browser", given)
+    }
+
+    /// Whether that browser asks before it acts in the operator's name.
+    ///
+    /// Beside the two above and not folded into `set_has_browser`, because
+    /// taking a browser back and giving it again must not quietly re-answer
+    /// this: an operator who held one agent back said something about that
+    /// agent, not about the browser it happened to be holding at the time.
+    /// Leaves the card version alone, for the reason `set_has_computer` does.
+    pub fn set_browser_consent(&self, id: AgentId, consent: Consent) -> Result<(), StoreError> {
+        let conn = self.conn()?;
+        let changed = conn.execute(
+            "UPDATE agents SET browser_consent=?2 WHERE id=?1",
+            params![id.to_string(), consent.as_str()],
+        )?;
+        if changed == 0 {
+            return Err(StoreError::AgentNotFound(id));
+        }
+        Ok(())
     }
 
     /// One boolean column on one agent. The column name is a literal from the
@@ -3576,7 +3596,7 @@ type RowResult<T> = Result<Result<T, StoreError>, rusqlite::Error>;
 /// one of the five queries that share this mapper and not the others is four
 /// reads that silently take the wrong field, which is what a card carrying
 /// somebody else's sandbox token looks like on the way out.
-const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,repository_id,discarded_at";
+const AGENT_COLUMNS: &str = "id,name,avatar,color,model,system_prompt,skills,lifecycle,version,created_at,updated_at,group_id,sandbox_id,sandbox_envd_token,sandbox_traffic_token,pinned,rail_order,browser_id,has_computer,has_browser,browser_consent,repository_id,discarded_at";
 
 fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
     let id_raw: String = row.get(0)?;
@@ -3615,8 +3635,9 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             browser_id: row.get(17)?,
             has_computer: row.get::<_, i64>(18)? != 0,
             has_browser: row.get::<_, i64>(19)? != 0,
+            browser_consent: Consent::parse(&row.get::<_, String>(20)?),
             repository_id: row
-                .get::<_, Option<String>>(20)?
+                .get::<_, Option<String>>(21)?
                 .filter(|raw| !raw.trim().is_empty())
                 .map(|raw| raw.parse::<RepositoryId>())
                 .transpose()
@@ -3624,7 +3645,7 @@ fn row_to_card(row: &Row<'_>) -> RowResult<AgentCard> {
             version: row.get(8)?,
             created_at: row.get(9)?,
             updated_at: row.get(10)?,
-            discarded_at: row.get(21)?,
+            discarded_at: row.get(22)?,
         })
     })())
 }
@@ -4322,6 +4343,32 @@ mod tests {
     }
 
     #[test]
+    fn a_new_agents_browser_asks_nobody_and_the_operator_can_change_that() {
+        // Open by default, because giving an agent a browser is already the
+        // decision about what that browser is signed in to. Held back is a
+        // second decision, and it survives the browser being taken away and
+        // handed back: the operator said something about the agent.
+        let f = fixture();
+        let card = f.store.create_agent(&draft("Researcher")).unwrap();
+        assert_eq!(card.browser_consent, Consent::Open);
+
+        f.store.set_browser_consent(card.id, Consent::AskBeforeActing).unwrap();
+        let held = f.store.get_agent(card.id).unwrap().unwrap();
+        assert_eq!(held.browser_consent, Consent::AskBeforeActing);
+        assert_eq!(held.version, card.version, "holding an agent back is not an edit to the card");
+
+        f.store.set_has_browser(card.id, true).unwrap();
+        f.store.set_has_browser(card.id, false).unwrap();
+        assert_eq!(
+            f.store.get_agent(card.id).unwrap().unwrap().browser_consent,
+            Consent::AskBeforeActing,
+        );
+
+        f.store.set_browser_consent(card.id, Consent::Open).unwrap();
+        assert_eq!(f.store.get_agent(card.id).unwrap().unwrap().browser_consent, Consent::Open);
+    }
+
+    #[test]
     fn a_grant_cannot_be_written_against_an_agent_that_is_not_there() {
         let f = fixture();
         let gone = AgentId::new();
@@ -4331,6 +4378,10 @@ mod tests {
         ));
         assert!(matches!(
             f.store.set_has_browser(gone, true),
+            Err(StoreError::AgentNotFound(id)) if id == gone
+        ));
+        assert!(matches!(
+            f.store.set_browser_consent(gone, Consent::AskBeforeActing),
             Err(StoreError::AgentNotFound(id)) if id == gone
         ));
     }

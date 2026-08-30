@@ -2,25 +2,27 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../lib/store";
-import type { AgentCard, Browser } from "../lib/types";
+import type { AgentCard, Browser, BrowserConsent } from "../lib/types";
 import { BrowserScreen } from "./BrowserScreen";
 
 const agentBrowser = vi.fn<(id: string) => Promise<Browser | null>>();
 const stopAgentBrowser = vi.fn<(id: string) => Promise<void>>();
 const giveAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
 const takeAgentBrowser = vi.fn<(id: string) => Promise<unknown>>();
+const setAgentBrowserConsent = vi.fn<(id: string, consent: string) => Promise<unknown>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
     agentBrowser: (id: string) => agentBrowser(id),
     giveAgentBrowser: (id: string) => giveAgentBrowser(id),
     takeAgentBrowser: (id: string) => takeAgentBrowser(id),
+    setAgentBrowserConsent: (id: string, consent: string) => setAgentBrowserConsent(id, consent),
     startAgentBrowser: vi.fn(),
     stopAgentBrowser: (id: string) => stopAgentBrowser(id),
   },
 }));
 
-function card(id: string, name: string, given = true): AgentCard {
+function card(id: string, name: string, given = true, consent: BrowserConsent = "open"): AgentCard {
   return {
     id,
     groupId: "00000000-0000-4000-8000-000000000001",
@@ -28,6 +30,7 @@ function card(id: string, name: string, given = true): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: given,
+    browserConsent: consent,
     repositoryId: null,
     name,
     avatar: "plain",
@@ -90,6 +93,8 @@ describe("BrowserScreen", () => {
     giveAgentBrowser.mockResolvedValue(undefined);
     takeAgentBrowser.mockReset();
     takeAgentBrowser.mockResolvedValue(undefined);
+    setAgentBrowserConsent.mockReset();
+    setAgentBrowserConsent.mockResolvedValue(undefined);
     configure(true);
   });
 
@@ -232,6 +237,44 @@ describe("BrowserScreen", () => {
 
     const frame = await screen.findByTitle("Cook's browser");
     expect(frame.getAttribute("allow")).toContain("clipboard-write");
+  });
+
+  it("offers the consent switch while the browser is working, not only when it is closed", async () => {
+    // The reason it is under the caption rather than in the offer above it. An
+    // operator deciding they are being asked too often is an operator watching
+    // an agent work, and the offer is drawn only when there is no live view.
+    agentBrowser.mockResolvedValue(HAS_ONE);
+    render(<BrowserScreen agent={card("a", "Cook")} />);
+
+    const box = await screen.findByLabelText(/Ask me before it acts in my name/);
+    expect((box as HTMLInputElement).checked).toBe(false);
+
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(setAgentBrowserConsent).toHaveBeenCalledWith("a", "askBeforeActing"),
+    );
+  });
+
+  it("switches an agent that is being asked about back to acting on its own", async () => {
+    agentBrowser.mockResolvedValue(null);
+    render(<BrowserScreen agent={card("a", "Cook", true, "askBeforeActing")} />);
+
+    const box = await screen.findByLabelText(/Ask me before it acts in my name/);
+    expect((box as HTMLInputElement).checked).toBe(true);
+
+    fireEvent.click(box);
+    await waitFor(() => expect(setAgentBrowserConsent).toHaveBeenCalledWith("a", "open"));
+  });
+
+  it("says nothing about consent for an agent that has no browser", async () => {
+    // There is nothing to be asked about. The offer on screen is the browser
+    // itself, and a second decision beside it would read as a condition of the
+    // first.
+    agentBrowser.mockResolvedValue(null);
+    render(<BrowserScreen agent={card("a", "Cook", false)} />);
+
+    await screen.findByRole("button", { name: /Give one/ });
+    expect(screen.queryByLabelText(/Ask me before it acts in my name/)).toBeNull();
   });
 
   it("does not close a browser on one click", async () => {

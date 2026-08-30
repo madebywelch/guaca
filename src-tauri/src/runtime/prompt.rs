@@ -1244,6 +1244,7 @@ mod tests {
             browser_id: None,
             has_computer: true,
             has_browser: true,
+            browser_consent: Default::default(),
             repository_id: None,
             id: AgentId::new(),
             name: name.into(),

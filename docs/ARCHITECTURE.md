@@ -819,8 +819,9 @@ because nothing in the runtime stopped a turn that had just read a page from
 acting on what it said.
 
 `needs_consent` is the answer, and its whole design is in what it does *not*
-gate. Three conditions have to hold together:
+gate. Four conditions have to hold together:
 
+- the operator asked to be asked about this agent (`Consent::AskBeforeActing`),
 - the browser action changes something (`click`, `type`) rather than reading it,
 - this turn has already taken in a page or a screenshot,
 - the browser is standing on a domain this agent holds a session for.
@@ -839,6 +840,18 @@ is signed in to means every form on the open web is a question. Together they
 describe one situation, and it is the situation BrowseSafe says is worth the
 attacker's time: the agent already holds the operator's account, so the payload
 does not have to obtain access, only to be read.
+
+**The first condition is the operator's, and it is off.** The other three
+describe a risk; this one asks whose risk it is, and the answer was already
+given when the operator handed this agent a browser. What is in that browser is
+their accounts, and there is nothing an agent can do with them that they did not
+hand over. So `Consent` sits on the card beside `has_browser`, defaults to
+`Open`, and an operator who wants a hand on one agent switches it on for that
+agent. `docs/BROWSERS.md` has the argument at length; the short version is that
+the gate cannot tell one account on a site from another, and the instruction
+that actually matters ("post as the company, never as me") is one only the model
+can hold. Asking about every press does not encode that instruction. It buries
+it under a dialog per search result.
 
 What happens then is the machinery that already existed for `request_permission`:
 the turn parks, the operator gets a card in the channel they are reading, and
