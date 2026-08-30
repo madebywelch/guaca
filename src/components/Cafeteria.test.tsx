@@ -47,6 +47,7 @@ function agent(name: string, groupId = KITCHEN): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     name,
     avatar: "avocado",

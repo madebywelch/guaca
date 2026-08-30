@@ -17,6 +17,7 @@ function anAgent(id: string, over: Partial<AgentCard> = {}): AgentCard {
     railOrder: 0,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     createdAt: 0,
     ...over,

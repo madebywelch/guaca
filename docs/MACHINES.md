@@ -226,8 +226,8 @@ sandbox either, because that disk survives the sleep this app relies on.
 ## What is not gated here
 
 The consent gate in `runtime/mod.rs` fires on a `click` or `type` in the
-*browser*, because that is where an action is addressed to a domain and can be
-matched against a session. A screenshot carries no URL, so `use_screen` is not
+*browser*, for an agent whose card says to ask at all, because that is where an
+action is addressed to a domain and can be matched against a session. A screenshot carries no URL, so `use_screen` is not
 gated: an agent that reads its own screen and then clicks a button on a page the
 operator signed in to on that screen is not stopped. That was true before this
 split and is true after it. Wording is the only thing holding that path, and it

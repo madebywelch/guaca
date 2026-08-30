@@ -13,6 +13,7 @@ function card(over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     name: "Manager",
     avatar: "avocado",

@@ -20,6 +20,7 @@ function member(id: string, name: string, repositoryId: string | null = null): A
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId,
     lifecycle: "active",
     pinned: false,

@@ -33,6 +33,7 @@ function agent(name: string): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     name,
     avatar: "avocado",
