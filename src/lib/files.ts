@@ -109,6 +109,32 @@ export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
   return convertFileSrc(`${file.digest}/${file.name}`, SCHEME);
 }
 
+/**
+ * Where a page an agent wrote is framed from.
+ *
+ * On a desktop the artifact origin is a loopback port of its own. Hosted, the
+ * daemon serves the same document on its own origin, behind the token, and
+ * the frame's `sandbox` is what keeps the page's origin opaque either way.
+ */
+export function artifactUrl(at: { port: number; id: string }): string {
+  if (hosted) {
+    return `${workspaceOrigin()}/v1/artifact/${at.id}?token=${encodeURIComponent(token())}`;
+  }
+  return `http://127.0.0.1:${at.port}/${at.id}`;
+}
+
+/**
+ * Where a computer's screen is framed from.
+ *
+ * The runtime hands back an absolute loopback address on a desktop and a
+ * relative one on a server, because only the page knows which origin it
+ * reached the daemon at. The ticket in that path is for one sandbox's screen
+ * and nothing else.
+ */
+export function screenUrl(vncUrl: string): string {
+  return vncUrl.startsWith("/") ? `${workspaceOrigin()}${vncUrl}` : vncUrl;
+}
+
 /** Sizes the way a person says them, matching what an agent is told. */
 export function readableSize(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;

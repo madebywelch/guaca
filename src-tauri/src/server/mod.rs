@@ -43,7 +43,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -152,6 +152,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
 
     let state = Arc::new(AppState {
         runtime: booted.runtime,
+        secret: Some(Arc::from(settings.token.as_str())),
         // A box has no corner of a screen. A window showing this workspace
         // feeds its own machine's strip, and that call never reaches here.
         menubar: Arc::new(|_presence| {}),
@@ -211,6 +212,17 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         // arrives from the vendor with the vendor's answer, and what bounds
         // it is that only a flow that is waiting on that exact state reads it.
         .route(crate::oauth::CALLBACK_ROUTE, get(oauth_callback))
+        // A page an agent wrote, on this origin instead of a loopback one.
+        // The same document with the same policy; `frame-ancestors 'self'`
+        // now names this origin, which is what frames it.
+        .route("/v1/artifact/:id", get(artifact))
+        // A computer's screen. The viewer on loopback keeps the sandbox
+        // tokens and does the work; this hands bytes through, upgrade and
+        // all, behind a ticket for that one sandbox.
+        .route(
+            &format!("{}/:ticket/:sandbox/:port/*rest", crate::commands::SCREEN_ROUTE),
+            any(screen),
+        )
         .with_state(serving);
 
     if let Some(web) = settings.web.as_ref() {
@@ -409,6 +421,198 @@ async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuer
         Some((status, message)) => page(status, message),
         None => page(404, "Not a sign-in this workspace is waiting for."),
     }
+}
+
+/// A page an agent wrote, by the digest it was framed under.
+///
+/// The desktop serves this from a loopback origin of its own; here it is a
+/// route, and everything `artifact.rs` argues still holds: the policy rides
+/// on every answer, refusals included, and the frame's `sandbox` keeps the
+/// page's origin opaque. Token in the query, because a frame cannot carry a
+/// header, which is the trade the file route already makes.
+async fn artifact(
+    State(serving): State<Serving>,
+    headers: HeaderMap,
+    Query(ticket): Query<Ticket>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref()) {
+        return *refused;
+    }
+    let (status, content_type, body) = crate::artifact::page_for(&serving.state.artifacts, &id);
+    let mut response =
+        (StatusCode::from_u16(status).unwrap_or(StatusCode::OK), body).into_response();
+    let set = response.headers_mut();
+    for (name, value) in crate::artifact::response_headers(content_type) {
+        if let (Ok(name), Ok(value)) = (
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()),
+            axum::http::header::HeaderValue::from_str(value),
+        ) {
+            set.insert(name, value);
+        }
+    }
+    response
+}
+
+/// One request for a computer's screen, handed through to the viewer.
+///
+/// The viewer is a byte-level relay on loopback, and this is the same shape one
+/// hop out: the head is rewritten and everything after it is copied. An
+/// upgrade is taken over from hyper once the handshake has been answered and
+/// spliced with the viewer's socket; an ordinary request is read to the end,
+/// because the viewer closes after one response, and answered whole.
+///
+/// The ticket is a path segment rather than a query, because noVNC resolves
+/// its own scripts and its socket relative to the page it was served from, and
+/// a query string does not survive that. `referer` and `cookie` are dropped on
+/// the way in, so the ticket never reaches the machine on the far side.
+async fn screen(
+    State(serving): State<Serving>,
+    Path((ticket, sandbox, port, rest)): Path<(String, String, String, String)>,
+    mut request: axum::extract::Request,
+) -> Response {
+    let Some(secret) = serving.state.secret.as_deref() else {
+        return page(404, "No screen is reachable here.");
+    };
+    if !same(&ticket, &crate::commands::screen_ticket(secret, &sandbox)) {
+        return page(404, "That is not a screen this workspace is showing.");
+    }
+    let viewer = serving.state.runtime.viewer_port();
+    let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+    let target = format!("/{sandbox}/{port}/{rest}{query}");
+
+    let mut head = format!("{} {target} HTTP/1.1\r\nhost: 127.0.0.1\r\n", request.method());
+    let upgrade = request
+        .headers()
+        .get(axum::http::header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    for (name, value) in request.headers() {
+        let name = name.as_str();
+        // Rewritten, decided here, or something the far side must not see.
+        if matches!(
+            name,
+            "host" | "connection" | "keep-alive" | "referer" | "cookie" | "authorization"
+        ) {
+            continue;
+        }
+        if let Ok(value) = value.to_str() {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+    }
+    head.push_str(if upgrade {
+        "connection: Upgrade\r\n\r\n"
+    } else {
+        "connection: close\r\n\r\n"
+    });
+
+    let mut upstream = match tokio::net::TcpStream::connect(("127.0.0.1", viewer)).await {
+        Ok(upstream) => upstream,
+        Err(err) => return page(502, &format!("The computer viewer is not answering: {err}")),
+    };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    if upstream.write_all(head.as_bytes()).await.is_err() {
+        return page(502, "The computer viewer hung up.");
+    }
+
+    // The viewer's answer, head first. It is a small server that answers with
+    // one head and then bytes, and the head is what decides what happens next.
+    let mut answered = Vec::new();
+    let mut byte = [0u8; 1];
+    while !answered.ends_with(b"\r\n\r\n") && answered.len() < 32 * 1024 {
+        match upstream.read(&mut byte).await {
+            Ok(0) => break,
+            Ok(_) => answered.push(byte[0]),
+            Err(_) => break,
+        }
+    }
+    let Some((status, upstream_headers)) = parse_head(&answered) else {
+        return page(502, "The computer viewer answered nothing this daemon could read.");
+    };
+
+    if status == 101 {
+        // Hand the socket over once hyper has finished the handshake, and then
+        // it is bytes both ways until one side hangs up.
+        let taken = hyper::upgrade::on(&mut request);
+        tokio::spawn(async move {
+            match taken.await {
+                Ok(client) => {
+                    let mut client = hyper_util::rt::TokioIo::new(client);
+                    let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                }
+                Err(err) => tracing::debug!(%err, "a screen socket was not handed over"),
+            }
+        });
+        let mut response = Response::new(axum::body::Body::empty());
+        *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
+        apply_headers(response.headers_mut(), &upstream_headers);
+        return response;
+    }
+
+    // One response, then the viewer closes: what is left is the body.
+    let mut body = Vec::new();
+    let _ = upstream.read_to_end(&mut body).await;
+    let chunked = upstream_headers
+        .iter()
+        .any(|(k, v)| k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked"));
+    let body = if chunked { dechunk(&body) } else { body };
+    let mut response =
+        (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), body).into_response();
+    apply_headers(response.headers_mut(), &upstream_headers);
+    response
+}
+
+/// Status and headers out of a response head, or nothing for a head that is
+/// not one.
+fn parse_head(head: &[u8]) -> Option<(u16, Vec<(String, String)>)> {
+    let text = String::from_utf8_lossy(head);
+    let mut lines = text.split("\r\n");
+    let status: u16 = lines.next()?.split(' ').nth(1)?.parse().ok()?;
+    let headers = lines
+        .filter_map(|line| line.split_once(':'))
+        .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
+        .collect();
+    Some((status, headers))
+}
+
+/// Puts the viewer's headers on the answer, minus the ones that describe a
+/// connection this daemon owns rather than the viewer.
+fn apply_headers(set: &mut HeaderMap, headers: &[(String, String)]) {
+    for (name, value) in headers {
+        if matches!(
+            name.as_str(),
+            "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+        ) {
+            continue;
+        }
+        if let (Ok(name), Ok(value)) = (
+            axum::http::header::HeaderName::from_bytes(name.as_bytes()),
+            axum::http::header::HeaderValue::from_str(value),
+        ) {
+            set.append(name, value);
+        }
+    }
+}
+
+/// A chunked body, joined. What the far side chunked is answered whole here
+/// with a length, so the framing is decided once, by hyper.
+fn dechunk(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(body.len());
+    let mut at = 0;
+    while at < body.len() {
+        let Some(line_end) = body[at..].windows(2).position(|w| w == b"\r\n") else { break };
+        let size_text = String::from_utf8_lossy(&body[at..at + line_end]);
+        let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("0").trim(), 16)
+            .unwrap_or(0);
+        at += line_end + 2;
+        if size == 0 {
+            break;
+        }
+        let end = (at + size).min(body.len());
+        out.extend_from_slice(&body[at..end]);
+        at = end + 2;
+    }
+    out
 }
 
 /// The page a browser is left on, spelled as `oauth::reply` spells it.
@@ -624,6 +828,34 @@ mod tests {
         assert_eq!(reached_at(&headers).as_deref(), Some("http://guaca.example.com"));
 
         assert_eq!(reached_at(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn a_viewer_head_is_read_for_its_status_and_headers() {
+        let (status, headers) = parse_head(
+            b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: abc\r\n\r\n",
+        )
+        .unwrap();
+        assert_eq!(status, 101);
+        assert!(headers.contains(&("upgrade".to_string(), "websocket".to_string())));
+        assert!(headers.contains(&("sec-websocket-accept".to_string(), "abc".to_string())));
+        assert!(parse_head(b"nonsense").is_none());
+    }
+
+    #[test]
+    fn a_chunked_body_is_joined_and_the_framing_dropped() {
+        assert_eq!(dechunk(b"4\r\nnoVN\r\n1\r\nC\r\n0\r\n\r\n"), b"noVNC");
+        // A chunk extension is ignored, and a truncated tail keeps what arrived.
+        assert_eq!(dechunk(b"3;ext=1\r\nabc\r\n5\r\nde"), b"abcde");
+    }
+
+    #[test]
+    fn a_screen_ticket_is_for_one_sandbox() {
+        let a = crate::commands::screen_ticket("secret", "sbx-a");
+        let b = crate::commands::screen_ticket("secret", "sbx-b");
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 64);
+        assert_ne!(a, crate::commands::screen_ticket("other", "sbx-a"));
     }
 
     #[test]

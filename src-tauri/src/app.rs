@@ -409,6 +409,7 @@ pub fn run() {
 
             app.manage(AppState {
                 runtime,
+                secret: None,
                 menubar: {
                     let menubar = menubar.clone();
                     std::sync::Arc::new(move |presence| {

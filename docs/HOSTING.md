@@ -283,6 +283,38 @@ and loopback `http:` for a container on this machine. Scripts are still
 `'self'` only; what this widens is where the page may fetch from, which is
 what a client of a box is.
 
+## Two loopback origins reach a browser through the daemon
+
+The desktop serves two things from loopback ports of their own: a page an
+agent wrote (`artifact.rs`, an origin so the page's script may run under a
+policy of its own) and a computer's live screen (`proxy.rs`, a relay that
+attaches the sandbox token the webview must never hold). In a browser, or in
+a window pointed at a box, `127.0.0.1` is the wrong machine, and both drew
+a blank rectangle that passed every test. Each is now also a route on the
+daemon, in front of the same loopback server.
+
+A page is the simpler one. `/v1/artifact/{id}` answers from `page_for`,
+which the loopback server answers from too, with every header
+`artifact.rs` argues for. The token is in the query, the trade the file
+route makes, because a frame cannot carry a header. `frame-ancestors 'self'`
+now names the daemon's origin, which is what frames it, and the frame's
+`sandbox` keeps the page's origin opaque exactly as before.
+
+The screen is a relay one hop out from the relay. `/v1/screen/{ticket}/
+{sandbox}/{port}/…` rewrites the head and copies everything after it, the
+shape `proxy.rs` has; an upgrade is taken over from hyper once the handshake
+is answered and spliced with the viewer's socket, which is how noVNC's RFB
+transport gets through, and an ordinary request is read to the end and
+answered whole. The credential is a path segment rather than a query,
+because noVNC resolves its own scripts and its socket relative to the page
+it was served from and a query string does not survive that. It is a ticket
+for that one sandbox, `sha256(token ":" sandbox)`, checkable without being
+stored and worth nothing but the right to watch that screen through this
+daemon; `referer` and `cookie` are dropped on the way in so it never reaches
+the machine on the far side. `AppState::screened` rewrites a computer's
+address to the route on a server and leaves it alone on a desktop, and the
+page resolves the relative address against the origin it reached.
+
 ## One image, and the build it says it is
 
 `Dockerfile` builds the daemon without Tauri and the page with the same
@@ -335,9 +367,6 @@ What it does not have yet:
 - **The account sign-in from a box.** The flow is built and tested against a
   scripted server; guaca.bot has to register the served redirect before the
   live one completes.
-- **Pages an agent wrote, and the computer's live screen, on a hosted page.**
-  Both are served from loopback ports on the runtime's machine, which in a
-  browser is the wrong machine. Each needs a route on the daemon.
 - **The page that says how to put a tunnel in front of a box.** The image
   and the unit file exist; what to put in front of them on a rented machine
   is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a

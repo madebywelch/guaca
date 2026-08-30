@@ -1584,6 +1584,8 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "hyper",
+ "hyper-util",
  "parking_lot",
  "r2d2",
  "r2d2_sqlite",

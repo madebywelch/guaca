@@ -105,6 +105,19 @@ The daemon, a browser as a client, and the boot both hosts share.
 - **The contract test counts `invokeLocal` as a caller.** The two desktop-only
   commands are reached through it, and a test that only recognizes `invoke`
   reports them as surface nobody uses.
+- **A screen's credential is in the path, and the artifact's is in the
+  query, and swapping either breaks something.** noVNC resolves `app/ui.js`
+  and its socket relative to the page, so a query string is lost by the
+  second request; a ticket in the path survives. The artifact is one request
+  with no relative loads, and a token in its path would put the workspace
+  token where `frame-ancestors` and the address bar can see it.
+- **The screen relay strips `referer` and `cookie` before the viewer.** The
+  viewer forwards every header it does not rewrite to the machine on the far
+  side, and a referer carrying the ticket would hand it to E2B.
+- **`screened` rewrites only an address that begins with the viewer's own.**
+  A computer with no screen up has no address and is left alone; a desktop
+  has no secret and is left alone. The relative address is the page's to
+  resolve, because only the page knows which origin it reached.
 - **`OnDisk::under` is the one place the three directories are arranged.**
   `boot.rs` used to spell two of them itself and the third arrived on `main`
   as a separate argument; a host that built `Workspace` and `FileStore` by
