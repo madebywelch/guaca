@@ -356,6 +356,23 @@ function Document({ file }: { file: Attachment }) {
  */
 function SaveButton({ file }: { file: Attachment }) {
   const [saving, setSaving] = useState(false);
+  const localFiles = useStore((s) => s.capabilities.localFiles);
+
+  // On a server there is no downloads folder on the box that means anything
+  // to the operator, and the browser has its own. The same bytes, on the route
+  // every preview already reads from, handed to the browser as a download.
+  if (!localFiles) {
+    return (
+      <a
+        className="btn btn--ghost btn--small"
+        href={fileUrl(file)}
+        download={file.name}
+        title={`Download ${file.name}`}
+      >
+        Download
+      </a>
+    );
+  }
 
   return (
     <button

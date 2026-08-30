@@ -5241,6 +5241,21 @@ button {
   padding: var(--space-8) var(--space-6);
 }
 
+/* Where a browser waits for its token: the whole viewport, with the form in
+   the middle of it, because there is nothing else on screen to be beside. */
+.threshold {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.threshold .field,
+.threshold .banner {
+  margin: 0 0 var(--space-5);
+  text-align: left;
+}
+
 .empty__title {
   font-family: var(--font-display);
   font-size: var(--type-lede);

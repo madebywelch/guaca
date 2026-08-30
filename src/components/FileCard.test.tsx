@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { fileUrl } from "../lib/files";
 import type { Attachment } from "../lib/types";
 import { FileCard } from "./FileCard";
 
@@ -11,8 +12,22 @@ vi.mock("../lib/ipc", () => ({
   api: { saveFile: (digest: string, name: string) => saveFile(digest, name) },
 }));
 
+/** What the card reads off the store: one action, and whether there is a disk. */
+const state = {
+  setBanner,
+  capabilities: {
+    localDirectories: true,
+    loopbackEndpoints: true,
+    claudeProvider: true,
+    claudeCodeHarness: true,
+    localFiles: true,
+  },
+};
+
 vi.mock("../lib/store", () => ({
-  useStore: { getState: () => ({ setBanner }) },
+  useStore: Object.assign((select: (s: typeof state) => unknown) => select(state), {
+    getState: () => state,
+  }),
 }));
 
 /**
@@ -198,6 +213,24 @@ describe("FileCard", () => {
       tone: "ok",
       text: "Saved to /Users/robert/Downloads/brief.pdf",
     });
+  });
+
+  it("hands the browser a download where there is no downloads folder", () => {
+    // On a server the box's downloads folder is nobody's. The browser has its
+    // own, and the same bytes are already on the route every preview reads.
+    state.capabilities = { ...state.capabilities, localFiles: false };
+    try {
+      render(<FileCard file={file("brief.pdf", "application/pdf")} />);
+
+      expect(screen.queryByRole("button", { name: "Save a copy" })).toBeNull();
+      const link = screen.getByRole("link", { name: "Download" }) as HTMLAnchorElement;
+      expect(link.getAttribute("download")).toBe("brief.pdf");
+      // The same address every preview reads from, whichever host spelled it.
+      expect(link.getAttribute("href")).toBe(fileUrl(file("brief.pdf", "application/pdf")));
+      expect(saveFile).not.toHaveBeenCalled();
+    } finally {
+      state.capabilities = { ...state.capabilities, localFiles: true };
+    }
   });
 
   it("says why a copy could not be saved", async () => {

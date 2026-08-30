@@ -59,6 +59,13 @@ vi.mock("./lib/ipc", () => ({
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
+    capabilities: async () => ({
+      localDirectories: true,
+      loopbackEndpoints: true,
+      claudeProvider: true,
+      claudeCodeHarness: true,
+      localFiles: true,
+    }),
     channelMessages: async () => [],
     activityFeed: async () => [],
     agentRoutines: () => agentRoutines(),

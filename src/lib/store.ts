@@ -21,6 +21,15 @@ import { type DropTarget, landsBefore, railOrder } from "./rail";
  */
 const CODING_TAIL = 40;
 
+/** A desktop's answer, which is every capability there is. */
+const EVERYTHING: Capabilities = {
+  localDirectories: true,
+  loopbackEndpoints: true,
+  claudeProvider: true,
+  claudeCodeHarness: true,
+  localFiles: true,
+};
+
 import { keepThought } from "./reasoning";
 import type { LiveCall } from "./trail";
 import type {
@@ -30,6 +39,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  Capabilities,
   CodingLine,
   Decision,
   Envelope,
@@ -135,6 +145,16 @@ interface State {
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
+  /**
+   * What this workspace can do, read once when the window opens.
+   *
+   * Everything on a desktop, and the desktop's answer is also what is assumed
+   * until the read lands: a panel drawn before it can offer nothing a desktop
+   * would not, and nothing draws before `ready` anyway. On a server the five
+   * flags are what stand between an operator and a control that fails only
+   * after they have filled it in.
+   */
+  capabilities: Capabilities;
   /** Local preferences. See `lib/prefs`: the runtime never reads these. */
   prefs: Prefs;
   /**
@@ -456,6 +476,7 @@ export const useStore = create<State>((set, get) => ({
   activity: {},
   lastActive: {},
   settings: null,
+  capabilities: EVERYTHING,
   prefs: loadPrefs(),
   activeRun: {},
   usage: {},
@@ -486,6 +507,7 @@ export const useStore = create<State>((set, get) => ({
       activity,
       lastActive,
       settings,
+      capabilities,
       usage,
       approvals,
       pending,
@@ -497,6 +519,7 @@ export const useStore = create<State>((set, get) => ({
       api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
+      api.capabilities(),
       api.usageSummary(),
       api.approvalStates(),
       // A turn parked before the window was opened is still parked. The desk
@@ -515,6 +538,7 @@ export const useStore = create<State>((set, get) => ({
       activity,
       lastActive,
       settings,
+      capabilities,
       usage: byGroup(usage),
       approvals,
       pending,

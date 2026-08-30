@@ -39,6 +39,21 @@ export const hosted = !IN_A_WINDOW;
 
 const TOKEN_KEY = "guaca.workspace.token";
 
+/**
+ * The fragment a daemon prints its invitation with.
+ *
+ * `http://box:8787/#token=…` is one thing to click rather than a URL and a
+ * string to paste beside it. A fragment because it is the one part of a URL
+ * that never leaves the browser: it is not sent to the daemon, not to a proxy
+ * in front of it, and not to whatever logs either of them keeps. The query
+ * string the socket uses has none of those properties, which is why the
+ * invitation does not use it.
+ */
+const FRAGMENT_KEY = "token";
+
+/** The name of the event raised when a call is turned away for its token. */
+export const UNAUTHORIZED_EVENT = "guaca:unauthorized";
+
 /** A structured refusal, which is the shape both hosts already produced. */
 export interface Refusal {
   kind: string;
@@ -69,6 +84,25 @@ export function setToken(value: string): void {
   } catch {
     /* see above */
   }
+}
+
+/**
+ * Takes a token out of the address bar, if one was clicked in.
+ *
+ * Stored and then removed from the URL in one step, so a page reloaded, a tab
+ * duplicated or a link dragged to a friend carries the address and not the
+ * credential. Returns whether one was found, which is what a caller uses to
+ * decide whether to skip asking. Only the fragment is read; nothing else on
+ * the URL means anything to this app.
+ */
+export function adoptInvitation(): boolean {
+  if (!hosted) return false;
+  const hash = window.location.hash.replace(/^#/, "");
+  const found = new URLSearchParams(hash).get(FRAGMENT_KEY)?.trim();
+  if (!found) return false;
+  setToken(found);
+  window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  return true;
 }
 
 /** Where the daemon is, which is wherever this page came from. */
@@ -108,7 +142,12 @@ export async function invoke<T>(name: string, args?: Record<string, unknown>): P
 
   const body = await response.json().catch(() => null);
   if (body && typeof body === "object" && "err" in body) {
-    throw (body as { err: Refusal }).err;
+    const refused = (body as { err: Refusal }).err;
+    // Said once, on the window, rather than handled in every caller. A token
+    // that was rotated on the box turns every call away at once, and the
+    // right answer is one screen asking for the new one, not forty banners.
+    if (refused.kind === "unauthorized") window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    throw refused;
   }
   if (!response.ok) {
     throw {

@@ -22,6 +22,15 @@ interface PresetProps {
   active: boolean;
   /** Whether the key that belongs to the chosen endpoint is set. */
   keySet: boolean;
+  /**
+   * Whether a server on this machine can be reached at all.
+   *
+   * False on a hosted workspace, where "this machine" is a box somewhere else
+   * and `localhost` in the field is the box talking to itself. The row stays
+   * on the list and says so: a preset that vanishes on a server is a pane
+   * that disagrees with the operator's laptop and explains nothing.
+   */
+  loopback: boolean;
   onChoose: (preset: Preset) => void;
 }
 
@@ -31,18 +40,20 @@ interface PresetProps {
  * A starting point, never a restriction: anything else is typed into the field
  * below, and choosing a row only fills it in.
  */
-export function ProviderPresets({ baseUrl, active, keySet, onChoose }: PresetProps) {
+export function ProviderPresets({ baseUrl, active, keySet, loopback, onChoose }: PresetProps) {
   const current = providerFor(baseUrl);
   return (
     <>
       {PROVIDERS.map((preset) => {
         const chosen = active && current?.id === preset.id;
+        const withheld = Boolean(preset.local) && !loopback;
         return (
           <button
             key={preset.id}
             type="button"
             className="preset"
             aria-current={chosen}
+            disabled={withheld}
             onClick={() => onChoose(preset)}
           >
             <span className="preset__text">
@@ -56,7 +67,11 @@ export function ProviderPresets({ baseUrl, active, keySet, onChoose }: PresetPro
                 key, is the same sentence repeated until it means nothing. Local
                 endpoints are the exception: wanting no key is a property of the
                 server, not of this setup. */}
-            {preset.local ? (
+            {withheld ? (
+              <span className="preset__state" data-ready="false">
+                Not from a server
+              </span>
+            ) : preset.local ? (
               <span className="preset__state" data-ready="true">
                 On this machine
               </span>

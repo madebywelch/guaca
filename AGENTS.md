@@ -36,6 +36,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
   lib/plugins.ts      A plugin's mark and color. Everything else is Rust's.
   lib/ipc.ts          Every call into Rust.
+  lib/transport.ts    How a call travels: Tauri's bridge in a window, HTTP and
+                      a socket in a browser. Which one is read at runtime.
   lib/prefs.ts        What the operator sets and the runtime never reads.
   lib/appearance.ts   Scale and surface, as one write to the root element.
   lib/follow.ts       Whether a transcript may move under the operator.
@@ -48,6 +50,8 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
                       you write it at once.
     WorkingNotes.tsx  What it is in the middle of, which is the other store
                       and the one that expires.
+    TokenEntry.tsx    The one screen a browser sees before the workspace, and
+                      only a browser.
 src-tauri/src/
   domain/             AgentCard, Envelope, Routine, Connector, Signin, Approval,
                       Search, ids. No I/O.
@@ -63,6 +67,8 @@ src-tauri/src/
     group.rs          A crew's wall, and the settings its agents run on.
     plugin.rs         The servers a crew can sign in to, what it got, and
                       which of its agents may spend it.
+    deployment.rs     Desktop or server, and the five things that decides.
+                      Nothing about who paid for the box.
   runtime/
     guard.rs          The loop guard. Read this one first.
     mod.rs            Agent actors and the message bus.
@@ -106,7 +112,15 @@ src-tauri/src/
   config.rs           Operator settings, and the API key the webview never sees.
   programs.rs         The PATH the four programs this app runs are found on,
                       which is not the one a double-clicked app is started with.
-  commands.rs         The entire IPC surface.
+  commands.rs         The entire IPC surface. Knows no host.
+  ipc.rs              That surface written once: one macro makes the Tauri
+                      wrappers, the HTTP dispatch and the list the contract
+                      test reads.
+  boot.rs             Opening a workspace, which is the same act in both hosts.
+  server/mod.rs       The second host: the same runtime over HTTP and a
+                      socket, behind one token.
+  bin/guacad.rs       The daemon that starts it, configured from the
+                      environment because systemd starts it, not a person.
   menubar.rs          What the menu bar says. No Tauri, no menu, no drawing.
   tray.rs             Drawing that, and turning a click back into a decision.
   app.rs              Where Tauri is wired up. It and `tray.rs` are the only
@@ -169,6 +183,10 @@ repo: the frontend renders state and forwards intent.
 | Headers an operator gave a server: what is refused, where they go | *Headers, which are how the request arrives* in `docs/PLUGINS.md`, then `domain::plugin::Headers`, the loops in `mcp.rs` that apply them, and `oauth::Gate`, which is why they stop at one origin |
 | Testing an address or a connected plugin without connecting it | *Testing it is the whole path, minus the browser* in `docs/PLUGINS.md`, then `plugins::inspect` and `plugins::check` |
 | Anything about the wire: protocol versions, the handshake, headers | *Two protocol eras* in `docs/PLUGINS.md`, then `mcp.rs`, whose era probe is the one thing no offline test of a single server can check |
+| Running Guaca somewhere other than the operator's machine: the daemon, the token, a browser as the client | `docs/HOSTING.md`, then `server/mod.rs` and `src/lib/transport.ts`, and run `tests/server.rs` under `--no-default-features --features server` |
+| What a hosted workspace refuses, and why each refusal is a fact about a machine rather than a missing feature | *Five capabilities, and none of them is a feature nobody finished* in `docs/HOSTING.md`, then `domain/deployment.rs` and every reader of `capabilities` in `src/` |
+| A command that works at a desk and fails on a box, or a new command at all | *One list, three readers* in `docs/HOSTING.md`, then the `surface!` block in `src-tauri/src/ipc.rs` and `ipc.contract.test.ts` |
+| An invitation, a token that stopped working, the screen a browser sees before the app | *A browser is admitted by a token, and the token arrives by fragment* in `docs/HOSTING.md`, then `src/components/TokenEntry.tsx` and `adoptInvitation` |
 | Which transport a server is spoken to over, and who gets the older one | *It speaks the transport that was replaced* in `docs/PLUGINS.md`, then `mcp::probe` and `sse_exchange` |
 | Which agents in a crew get a plugin | *Signing in is one decision, and handing it out is another* in `docs/PLUGINS.md`, then `domain/plugin.rs` and `Store::plugin_tools`, which has to agree with `Store::plugin_reach` |
 | Which of a plugin's tools which agents may call | *And which of its tools, for which of them, which is a third decision* in `docs/PLUGINS.md`, then `Store::set_plugin_tool` and both readers of `plugin_tool_access` |
@@ -283,6 +301,17 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 its loop over because it is a different unit of work with its own budget. A turn
 cannot: it is the unit the five limits are written in.
 
+**The runtime runs in two hosts, and neither it nor `commands.rs` knows
+which.** A window on the operator's machine and a daemon on a box that stays
+awake are `app.rs` and `server/mod.rs`, over one library. `boot.rs` opens the
+workspace for both, `ipc.rs` writes the command surface once, and
+`domain/deployment.rs` is the only place the two are told apart: five
+capabilities, each something physically on the operator's machine, refused in
+the command before anything is spent and drawn on the row before the field is
+filled in. A managed box and an operator's own box are the same variant, and a
+third would mean something below that line had started caring who paid.
+`docs/HOSTING.md`.
+
 **A creature is a shape, not a drawing.** Every agent is cut from one of five
 silhouettes (circle, octagon, square, water drop, cloud) and recomputed every
 frame from that shape, a character (a row of numbers) and a mood (another row).
@@ -357,6 +386,7 @@ the gotchas file says what it already cost somebody to change it.
 | Model suggestions, and whether a model can be shown a picture | `docs/gotchas/models.md` |
 | Repositories, the two doors, the gate, either harness, the bridge | `docs/gotchas/coding.md` |
 | Plugins, MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
+| The daemon, a browser as a client, the boot both hosts share | `docs/gotchas/hosting.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |
 | Schedules, triggers, firings | `docs/gotchas/routines.md` |
 | Approvals, questions, escalations, the desk | `docs/gotchas/attention.md` |
