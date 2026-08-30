@@ -158,9 +158,16 @@ export function usePulseChoreography(pulses: Pulse[], onDone: (id: number) => vo
 /**
  * What one agent is doing in the current choreography.
  *
- * A sender aims and throws; a recipient watches it come and then takes it.
- * Both look at each other for the whole aim and flight, which is what makes the
- * exchange read as two characters rather than two independent animations.
+ * A sender aims and throws; a recipient watches it come and then takes it. Both
+ * look at each other for the whole exchange, which is what makes it read as two
+ * characters rather than two independent animations that happen to overlap.
+ *
+ * The look outlasts the landing on purpose. It used to be dropped the moment
+ * the parcel arrived, which is the one frame an operator is actually looking
+ * at: the recipient took the hit staring straight ahead, and the direction the
+ * hit came from was gone by the time anything needed it, so a message thrown
+ * downward knocked its recipient upward. A look is released by the exchange
+ * ending, not by it succeeding.
  */
 export function roleOf(
   staged: StagedPulse[],
@@ -170,14 +177,14 @@ export function roleOf(
     if (pulse.from === agent) {
       return {
         gesture: pulse.phase === "aim" ? "send" : null,
-        facing: pulse.phase === "catch" ? null : pulse.to,
+        facing: pulse.to,
         says: pulse.phase === "aim" ? "!" : null,
       };
     }
     if (pulse.to === agent) {
       return {
         gesture: pulse.phase === "catch" ? "receive" : null,
-        facing: pulse.phase === "catch" ? null : pulse.from,
+        facing: pulse.from,
         says: null,
       };
     }

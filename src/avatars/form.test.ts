@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CHARACTERS } from "./catalog";
-import { eyesAt, gazeAt } from "./eyes";
+import { AIM, aimedEye, type Drawn, eyesAt, gazeAt } from "./eyes";
 import { blend, bodyPoints, FORM, outline } from "./form";
 import { MOODS, type Mood } from "./moods";
 
@@ -113,6 +113,48 @@ describe("the body", () => {
   });
 });
 
+/** Whether a point is enclosed by the outline. Ray cast, so concavity counts. */
+function encloses(pts: [number, number][], px: number, py: number): boolean {
+  let hit = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, yi] = pts[i] as [number, number];
+    const [xj, yj] = pts[j] as [number, number];
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+/**
+ * How much body is left around a drawn eye: the nearest edge of the outline to
+ * any corner the stroke's own hull reaches, less half the weight it is drawn
+ * with. Negative is ink outside the creature it belongs to.
+ */
+function clearance(pts: [number, number][], eye: Drawn): number {
+  const dx = Math.cos(eye.ang) * eye.w;
+  const dy = Math.sin(eye.ang) * eye.w;
+  const bx = -Math.sin(eye.ang) * eye.c * 2;
+  const by = Math.cos(eye.ang) * eye.c * 2;
+  let worst = Infinity;
+  for (const [px, py] of [
+    [eye.x - dx, eye.y - dy],
+    [eye.x + dx, eye.y + dy],
+    [eye.x + bx, eye.y + by],
+  ] as [number, number][]) {
+    let near = Infinity;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      const [xi, yi] = pts[i] as [number, number];
+      const [xj, yj] = pts[j] as [number, number];
+      const ex = xj - xi;
+      const ey = yj - yi;
+      const len = ex * ex + ey * ey;
+      const u = len === 0 ? 0 : Math.max(0, Math.min(1, ((px - xi) * ex + (py - yi) * ey) / len));
+      near = Math.min(near, Math.hypot(px - (xi + ex * u), py - (yi + ey * u)));
+    }
+    worst = Math.min(worst, (encloses(pts, px, py) ? near : -near) - eye.h / 2);
+  }
+  return worst;
+}
+
 /** How far the outline is from the center in one direction. */
 function edgeAt(pts: [number, number][], angle: number): number {
   const at = ((angle / (Math.PI * 2)) * pts.length + pts.length) % pts.length;
@@ -136,6 +178,66 @@ describe("the eyes", () => {
         expect(away, `${lump.key} ${key} at ${t.toFixed(2)}s`).toBeLessThan(edge);
       }
     }
+  });
+
+  // An aimed look is the one gaze that does not come out of `gazeAt`, it is the
+  // furthest any of them goes, and the mood it lands on at the moment a message
+  // arrives is `surprised`, which has the widest eyes on the table. So it is the
+  // case that decides how far a look may carry, and `everyFrame` cannot see it.
+  //
+  // Measured against the outline itself rather than against a radius at an
+  // angle: these bodies are not star-shaped, and a cloud's outer corner sits
+  // over a dip between two lobes, where a radial bound is wrong in both
+  // directions at once.
+  it("keeps both inside the body while it is aimed at a peer", () => {
+    for (const lump of CHARACTERS) {
+      for (const key of MOOD_KEYS) {
+        const mood = MOODS[key];
+        for (const at of ["up", "down"] as const) {
+          const gaze: [number, number] = [0, at === "up" ? -AIM.up : AIM.down];
+          for (let step = 0; step < 24; step++) {
+            const t = step * 0.37;
+            const { pts } = bodyPoints(lump, mood.shape, t, gaze);
+            for (const eye of eyesAt(lump, aimedEye(mood.eye, at), mood.watch, t, true, gaze)) {
+              const room = clearance(pts, eye);
+              expect(room, `${lump.key} ${key} looking ${at} at ${t.toFixed(2)}s`).toBeGreaterThan(
+                0,
+              );
+            }
+          }
+        }
+      }
+    }
+  });
+
+  // The whole reason an aimed look is a moulding rather than a second table of
+  // faces: whatever the mood did to the eye has to survive it, or every agent
+  // wears the same expression for the two seconds it is talking to somebody.
+  it("moulds an aimed look into the mood rather than over it", () => {
+    const angry = MOODS.frustrated.eye;
+    for (const at of ["up", "down"] as const) {
+      expect(aimedEye(angry, at).a).toBe(angry.a);
+    }
+  });
+
+  it("drops the lid as it looks down and rounds the eye as it looks up", () => {
+    // Down: lower, longer, thinner. That is a lid coming with the eyes, which
+    // is the part an offset on its own cannot say.
+    const dot = MOODS.idle.eye;
+    const down = aimedEye(dot, "down");
+    expect(down.dy as number).toBeGreaterThan(0);
+    expect(down.w).toBeGreaterThan(dot.w);
+    expect(down.h).toBeLessThan(dot.h);
+
+    // Up is the starved direction, so it spends nothing: the stroke goes back
+    // toward the dot it was cut from rather than fattening, and it takes no
+    // offset of its own. Weight and travel are the two terms that would eat
+    // what little outline sits above these eyes.
+    const dash = MOODS.working.eye;
+    const up = aimedEye(dash, "up");
+    expect(up.w).toBeLessThan(dash.w);
+    expect(up.h).toBe(dash.h);
+    expect(up.dy).toBe(dash.dy);
   });
 
   it("draws one eye for a one-eyed character and two for everyone else", () => {

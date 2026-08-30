@@ -75,6 +75,51 @@ export interface Gaze {
  */
 export const SETTLE = 0.44;
 
+/**
+ * Where an aimed look points, in body radii, and what it does to the stroke.
+ *
+ * The two halves are both needed. `AIM` is spent as a gaze, so the mass leans
+ * and swells after it exactly as it does for a mood's own wandering; but two
+ * marks sliding a few units down a face do not read as looking down, because
+ * nothing about the eye itself changed. What reads is the lid coming with
+ * them. So an aimed look also moulds the stroke, toward a line and thinner as
+ * the look drops, back toward a dot as it lifts, and carries the pair a little
+ * further through `dy`, which is in eye radii and costs the outline nothing.
+ * All of it is added to whatever the mood made the eye, so a frustrated
+ * creature aiming downward is still frustrated.
+ *
+ * The asymmetry is measured, not chosen. Every one of these bodies hangs its
+ * mass below its eyes, so there is depth under them and very little over them:
+ * the down look has almost three units of the outline to spare and the up look
+ * has a third of one, at the character the suite in `form.test.ts` binds on.
+ * That is also why the up look rounds the stroke rather than fattening it --
+ * weight is the term that eats what is left of the room -- and why the widest
+ * eyes on the table, `surprised`, still fit while looking up at whoever just
+ * threw something at them.
+ */
+export const AIM = { down: 0.3, up: 0.22 } as const;
+
+const AIMED = {
+  down: { lid: 0.34, bow: 0.2, sep: -0.08, dy: 0.45 },
+  up: { lid: -0.4, bow: -0.06, sep: -0.06, dy: 0 },
+} as const;
+
+/** One mood's eye, with an aimed look moulded into it. */
+export function aimedEye(eye: Eye, at: "up" | "down"): Eye {
+  const { lid, bow, sep, dy } = AIMED[at];
+  return {
+    ...eye,
+    /* Eased toward a line rather than swapped for one, as a blink is, so an eye
+       that is already a dash does not grow a second length of its own; and back
+       toward the dot it was cut from when the look lifts instead. */
+    w: lid > 0 ? eye.w + (1.3 - eye.w) * lid : eye.w * (1 + lid),
+    h: eye.h * (1 - 0.62 * Math.max(lid, 0)),
+    c: (eye.c ?? 0) + bow,
+    sep: (eye.sep ?? 0) + sep,
+    dy: (eye.dy ?? 0) + dy,
+  };
+}
+
 /** Deterministic noise. The same creature blinks the same way every reload. */
 function rnd(i: number): number {
   const x = Math.sin(i * 127.1 + 197.3) * 43758.5453;
