@@ -1859,6 +1859,93 @@ async fn a_peer_that_answered_through_the_tool_does_not_then_write_to_the_operat
 }
 
 #[tokio::test]
+async fn the_agent_the_operator_wrote_to_still_reports_after_it_answers_its_crew() {
+    // The other half of the rule above, and what it shipped as. The same turn
+    // shape means the opposite thing for the one agent the operator actually
+    // wrote to: it answers its crew with `send_message` and closes the turn
+    // addressing the operator, because delegating and then saying where the
+    // work got to is the whole of its job.
+    //
+    // Every turn it runs after the first is woken by a peer, so `ToPeer` is the
+    // only mode it is ever in again and this is the only path its report has:
+    // `send_message` reaches agents, and there is no name for the operator.
+    // Filed as commentary, ten reports in one real run reached nobody while the
+    // operator asked why nothing was happening and four agents worked.
+    let stub = serve(|body| {
+        if speaker(body) == "Chef" {
+            if anyone_said(body, "Now cost the fish") {
+                Script::Say("Fish is costed.".into())
+            } else if has_tool_result(body) {
+                // The worker half, in the same run: Chef has already answered
+                // and the operator was never in this exchange.
+                Script::Say("Told Manager about the soup.".into())
+            } else {
+                // An answer declared as work, which is what comes back up a
+                // delegation and what puts the manager in `ToPeer` for the
+                // rest of the run.
+                Script::Instruct {
+                    recipients: vec!["Manager".into()],
+                    text: "Soup is costed.".into(),
+                }
+            }
+        } else if anyone_said(body, "Fish is costed") {
+            Script::Say("Both costed.".into())
+        } else if anyone_said(body, "Soup is costed") {
+            if has_tool_result(body) {
+                Script::Say("Robert, the soup is costed and the fish is under way.".into())
+            } else {
+                Script::Instruct {
+                    recipients: vec!["Chef".into()],
+                    text: "Now cost the fish.".into(),
+                }
+            }
+        } else if has_tool_result(body) {
+            Script::Say("Chef is on it.".into())
+        } else {
+            Script::Instruct { recipients: vec!["Chef".into()], text: "Cost the soup.".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Cost the menu.").unwrap();
+    h.settle(run).await;
+
+    let reported: Vec<String> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Manager"), 200)
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            e.from == Participant::Agent { id: h.id("Manager") } && e.to == Participant::Human
+        })
+        .map(guac_lib::domain::envelope::Envelope::plain_text)
+        .collect();
+    assert!(
+        reported.iter().any(|t| t.contains("the soup is costed")),
+        "the report the operator was waiting for reached nobody:\n{}",
+        h.transcript()
+    );
+
+    // And the rule it is carved out of still holds inside the same run: Chef
+    // answered Manager and the operator was never in that exchange.
+    let from_chef: Vec<String> = h
+        .runtime
+        .store()
+        .channel_messages(h.id("Chef"), 200)
+        .unwrap()
+        .iter()
+        .filter(|e| e.from.is_agent() && e.to == Participant::Human)
+        .map(guac_lib::domain::envelope::Envelope::plain_text)
+        .collect();
+    assert!(
+        from_chef.is_empty(),
+        "a worker the operator never wrote to still reported to them: {from_chef:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_document_attached_after_the_answer_still_reaches_the_peer_that_asked() {
     // The carve-out in the rule above, and the reason it is not "drop whatever
     // a turn trails". Text written after the answer went is a restatement of

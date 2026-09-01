@@ -4134,31 +4134,57 @@ impl Runtime {
         // turn, and sending it on as well is how one turn put two near-identical
         // messages in the peer's channel.
         //
-        // It does not go to the operator either, which is what it used to do.
-        // Nobody in this turn is the operator: they messaged one agent, that
-        // agent asked seven others for something, and each of the seven then
-        // wrote to the operator to say it had answered. An agent the operator
-        // has never spoken to reporting on a conversation they were not in is
-        // not readable-in-passing, it is the flow board filling with mail
-        // addressed to somebody else. So the commentary is filed on this turn's
-        // record, in this agent's own channel, delivered to no one.
+        // Who it does belong to is the operator's own presence in the run, and
+        // nothing else. They messaged one agent; that agent asked seven others
+        // for something, and each of the seven then wrote to the operator to
+        // say it had answered. An agent the operator has never spoken to
+        // reporting on a conversation they were not in is not
+        // readable-in-passing, it is the flow board filling with mail addressed
+        // to somebody else. So for those seven the commentary is filed on this
+        // turn's record, in the agent's own channel, delivered to no one.
         //
-        // A file is the exception, and the reason is that it is not a
-        // restatement of anything. `send_message` carries its own files, so one
-        // attached afterward is the only part of the turn that has reached
-        // nobody, and the peer that asked is who it is for.
+        // For the one they did write to it is the report, and dropping it is
+        // how an agent stops reporting back. That agent answers its crew with
+        // `send_message` and closes the turn addressing the operator by name,
+        // because delegating and then saying where the work got to is the whole
+        // of its job, and every turn it runs after the first is woken by a peer
+        // rather than by the operator: `ToPeer` is the only mode it is ever in
+        // again, so this is the only path it has. Measured on a real crew, ten
+        // reports in one run, none delivered, and an operator asking why
+        // nobody was working while four agents worked.
+        //
+        // A file follows the same answer, and is the reason this is not "drop
+        // whatever a turn trails". It is not a restatement of anything:
+        // `send_message` carries its own files, so one attached afterward is
+        // the only part of the turn that has reached nobody at all.
         let already_answered = matches!(
             reply_target,
             Some(Participant::Agent { id }) if addressed.contains(&id)
         );
-        let commentary = mode == ReplyMode::ToPeer && already_answered && files.is_empty();
+        let facing = match self.inner.store.operator_addressed(run_id, card.id) {
+            Ok(facing) => facing,
+            // Falling back on what this was before the distinction existed,
+            // which loses a report rather than inventing a recipient for one.
+            Err(err) => {
+                tracing::error!(%err, "failed to read whether this run is the operator's");
+                false
+            }
+        };
+        let report = mode == ReplyMode::ToPeer && already_answered && facing;
+        let commentary =
+            mode == ReplyMode::ToPeer && already_answered && !facing && files.is_empty();
 
         // An empty reply is delivering nothing, so it is not put to the guard:
         // evaluated anyway it would spend a pair-budget slot and clear the
         // asker's expectation for an answer that never goes out.
         let delivers = !(text.is_empty() && files.is_empty());
 
-        if mode == ReplyMode::ToPeer && !commentary && delivers {
+        // Neither of the two above, so it is the answer to the peer that asked.
+        // A report keeps the `Participant::Human` this started on and does not
+        // reach the guard, exactly as an answer to the operator does not: it
+        // adds no hop, spends no pair budget, and is addressed to the one
+        // participant that cannot reply into a cascade.
+        if mode == ReplyMode::ToPeer && !commentary && !report && delivers {
             if let Some(Participant::Agent { id: peer }) = reply_target {
                 // An automatic reply still travels a hop and still counts
                 // against the pair budget, otherwise two agents could bounce

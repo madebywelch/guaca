@@ -3061,6 +3061,27 @@ impl Store {
         }
     }
 
+    /// Whether the operator wrote to this agent themselves on this run.
+    ///
+    /// Which is the whole of what tells a report from commentary. Being
+    /// addressable is not being the audience, and the difference is per run:
+    /// the operator is in the conversation they started, and not in the seven
+    /// the agent they wrote to then started on their behalf.
+    ///
+    /// Read off the messages rather than tracked beside the run's other
+    /// bookkeeping, because it is already written down and a copy would have to
+    /// be inserted under the same lock the run is counted in to survive a
+    /// concurrent settle. Bounded by the run's own step budget, and the
+    /// `messages_run` index is on `run_id`.
+    pub fn operator_addressed(&self, run: RunId, agent: AgentId) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM messages
+              WHERE run_id=?1 AND from_kind='human' AND to_agent=?2 LIMIT 1",
+        )?;
+        Ok(stmt.exists(params![run.to_string(), agent.to_string()])?)
+    }
+
     pub fn channel_messages(
         &self,
         channel: AgentId,
@@ -5832,6 +5853,35 @@ mod tests {
         assert_eq!(chef_channel.len(), 1);
         assert_eq!(chef_channel[0].from, agent(card.id));
         assert_eq!(chef_channel[0].plain_text(), "agent to agent");
+    }
+
+    #[test]
+    fn only_the_agent_the_operator_wrote_to_counts_as_addressed_on_that_run() {
+        // What tells a manager's report from a worker's commentary, and it is
+        // per run in both directions: the agent the operator wrote to is the
+        // one they are waiting on, and the crew it then delegates to is not,
+        // however much traffic passes through them.
+        let f = fixture();
+        let manager = f.store.create_agent(&draft("Manager")).unwrap();
+        let chef = f.store.create_agent(&draft("Chef")).unwrap();
+        let agent = |id| Participant::Agent { id };
+
+        let run = RunId::new();
+        f.store.append(&envelope(Participant::Human, agent(manager.id), "cost it", run)).unwrap();
+        f.store.append(&envelope(agent(manager.id), agent(chef.id), "cost the soup", run)).unwrap();
+
+        assert!(f.store.operator_addressed(run, manager.id).unwrap());
+        assert!(
+            !f.store.operator_addressed(run, chef.id).unwrap(),
+            "the operator never wrote to Chef; Manager did, on their behalf"
+        );
+
+        // And it does not carry: the operator's next message is a new run, and
+        // a manager that is only a peer's peer there is not owed a report.
+        let later = RunId::new();
+        f.store.append(&envelope(Participant::Human, agent(chef.id), "directly", later)).unwrap();
+        assert!(f.store.operator_addressed(later, chef.id).unwrap());
+        assert!(!f.store.operator_addressed(later, manager.id).unwrap());
     }
 
     #[test]
