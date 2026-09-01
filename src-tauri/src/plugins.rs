@@ -27,6 +27,7 @@
 //! environment. This is the same boundary a pasted credential has, and it is
 //! stronger, because with a plugin there is no variable for the agent to echo.
 
+use crate::account::AccountError;
 use crate::db::store::{PluginReach, Store, StoreError};
 use crate::domain::ids::{AgentId, GroupId, PluginId};
 use crate::domain::now_ms;
@@ -53,6 +54,14 @@ pub enum PluginError {
          nothing you can do from here will do it."
     )]
     NoAccount { label: String },
+    #[error(
+        "{label} comes from your Guaca account, which is signed in and could not produce a \
+         credential just now: {detail}. This is the service refusing, not a sign-in to redo, so \
+         do not tell the operator to sign in again. Carry on with work that does not need \
+         {label} and try it again later in this turn or in a later one; if it is still refusing \
+         then, tell the operator exactly what this said."
+    )]
+    AccountRefused { label: String, detail: String },
     #[error(
         "{label} is connected for this group, but not for you: the operator chose which agents \
          may use it. Ask a peer who has it to do that part, or ask the operator to add you in \
@@ -304,12 +313,11 @@ pub async fn check(
     id: PluginId,
     dialed: crate::db::store::Dialed,
     endpoint: &str,
-    account: Option<AccountUse<'_>>,
+    account: Held<'_>,
 ) -> Result<ServerReport, PluginError> {
     let crate::db::store::Dialed { kind, grant, headers, .. } = dialed;
     if kind.account_backed() {
-        let used =
-            account.ok_or_else(|| PluginError::NoAccount { label: kind.label().to_string() })?;
+        let used = account.spend(&kind)?;
         return inspect(kind.is_custom(), endpoint, Some(used.token), &headers).await;
     }
     let grant = match grant {
@@ -390,6 +398,56 @@ pub struct AccountUse<'a> {
     pub connection: &'a str,
 }
 
+/// What the machine's account had for this call.
+///
+/// Three states rather than an `Option`, because two of them send an operator
+/// to different places and only one of them is a sign-in. An `Option` folded
+/// them together, and what came out the other end was an agent telling its
+/// operator to sign in to an account that was signed in, refreshing normally,
+/// and serving every call ten seconds later. The refusal is carried rather
+/// than re-derived here: `account.rs` is where the status the service answered
+/// with is, and by the time a plugin sees this that answer is gone.
+#[derive(Debug, Clone)]
+pub enum Held<'a> {
+    /// Nothing is signed in on this machine.
+    Absent,
+    /// A token, read fresh for this call.
+    Token(AccountUse<'a>),
+    /// Signed in, and the account could not produce a token, in its own words.
+    Refused(String),
+}
+
+impl<'a> Held<'a> {
+    /// What one read of the account came to.
+    ///
+    /// The only place an [`AccountError`] is sorted into these three, so the
+    /// turn, the connect and the check cannot classify the same failure
+    /// differently. Takes the read by reference because the token is borrowed
+    /// for the length of the call rather than copied into it.
+    pub fn read(read: &'a Result<String, AccountError>, connection: &'a str) -> Self {
+        match read {
+            Ok(token) => Held::Token(AccountUse { token, connection }),
+            Err(AccountError::NotSignedIn) => Held::Absent,
+            Err(err) => Held::Refused(err.to_string()),
+        }
+    }
+
+    /// The credential, or the refusal that says which of the two happened.
+    ///
+    /// One function because the connect path, the check path and the call path
+    /// all have to answer this, and the answer an agent reads and the answer an
+    /// operator reads must not be able to disagree.
+    pub fn spend(self, kind: &PluginKind) -> Result<AccountUse<'a>, PluginError> {
+        match self {
+            Held::Token(used) => Ok(used),
+            Held::Absent => Err(PluginError::NoAccount { label: kind.label().to_string() }),
+            Held::Refused(detail) => {
+                Err(PluginError::AccountRefused { label: kind.label().to_string(), detail })
+            }
+        }
+    }
+}
+
 impl AccountUse<'_> {
     /// Where this connection's server is, given the account's own origin.
     ///
@@ -419,7 +477,7 @@ pub struct Target<'a> {
     /// See `connect`: production passes `Runtime::plugin_endpoint`.
     pub endpoint: &'a str,
     /// See `connect`: the machine's account, for an account-backed kind.
-    pub account: Option<AccountUse<'a>>,
+    pub account: Held<'a>,
 }
 
 /// Runs one of a plugin's tools on behalf of an agent.
@@ -468,7 +526,7 @@ pub async fn call(
     // account that has been signed out reads as no token at all, which says so
     // rather than failing on the wire.
     if kind.account_backed() {
-        let used = account.ok_or_else(|| PluginError::NoAccount { label: label() })?;
+        let used = account.spend(kind)?;
         let session =
             mcp::open(dial(kind.is_custom(), endpoint, &headers).with_token(Some(used.token)))
                 .await?;
@@ -610,5 +668,50 @@ mod tests {
         let refusal = PluginError::SigninExpired { label: "Cloudflare".into() }.to_string();
         assert!(refusal.contains("Cloudflare"));
         assert!(refusal.contains("connect it again"));
+    }
+
+    #[test]
+    fn a_read_of_the_account_sorts_into_the_three_states_one_way() {
+        // The classification every caller shares. Two of these used to be one
+        // `None`, and the sentence it produced sent an operator to sign in to
+        // an account that was signed in.
+        let nothing: Result<String, AccountError> = Err(AccountError::NotSignedIn);
+        assert!(matches!(Held::read(&nothing, ""), Held::Absent));
+
+        let refused: Result<String, AccountError> = Err(AccountError::Upstream {
+            origin: "https://guaca.bot".into(),
+            status: 400,
+            message: "invalid_grant".into(),
+        });
+        assert!(matches!(Held::read(&refused, ""), Held::Refused(_)));
+
+        let held: Result<String, AccountError> = Ok("token".into());
+        match Held::read(&held, "acct_1") {
+            Held::Token(used) => {
+                assert_eq!(used.token, "token");
+                // The identity travels with the token or a crew reaches the
+                // wrong mailbox.
+                assert_eq!(used.connection, "acct_1");
+            }
+            other => panic!("a token is a token: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_two_ways_to_have_no_credential_do_not_share_a_sentence() {
+        let absent = Held::Absent.spend(&PluginKind::Google).unwrap_err().to_string();
+        let refused = Held::Refused("https://guaca.bot answered HTTP 500: nope".into())
+            .spend(&PluginKind::Google)
+            .unwrap_err()
+            .to_string();
+
+        // One is a thing to do and the other is a thing to wait out, so the
+        // only wrong answer is the pair reading alike.
+        assert!(absent.contains("not signed in to one"), "{absent}");
+        assert!(absent.contains("Settings"), "{absent}");
+        assert!(refused.contains("HTTP 500"), "what the service said: {refused}");
+        assert!(refused.contains("try it again later"), "the way forward: {refused}");
+        assert!(!refused.contains("Settings"), "nothing in Settings fixes this: {refused}");
+        assert!(!refused.contains("not signed in to one"), "{refused}");
     }
 }

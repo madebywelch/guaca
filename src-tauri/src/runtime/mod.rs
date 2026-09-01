@@ -907,14 +907,19 @@ impl Runtime {
             .unwrap_or(crate::account::DEFAULT_ORIGIN)
     }
 
-    /// A token for the machine's account, or nothing.
+    /// A token for the machine's account, or why there is not one.
     ///
-    /// Nothing means either no account was handed over or the operator is not
-    /// signed in, and those are the same thing to a caller: there is no
-    /// credential, so the plugin that wanted one refuses and says why.
-    pub async fn account_token(&self) -> Option<String> {
-        let account = self.inner.account.get()?;
-        account.access().await.ok()
+    /// The error is passed on rather than swallowed, because two of the things
+    /// it can be are not the same news. No account handed over and nobody
+    /// signed in are both `NotSignedIn`, and both are answered by signing in. A
+    /// service that refused to renew a sign-in that exists is answered by
+    /// waiting, and an agent told to go and sign in about one loses its turn to
+    /// a wall the operator cannot find.
+    pub async fn account_token(&self) -> Result<String, crate::account::AccountError> {
+        let Some(account) = self.inner.account.get() else {
+            return Err(crate::account::AccountError::NotSignedIn);
+        };
+        account.access().await
     }
 
     /// Where one plugin's server is for this runtime.
@@ -5077,7 +5082,8 @@ impl Runtime {
                 // Read per call rather than held: the account refreshes its own
                 // token, and a copy taken when the turn started is one that can
                 // be stale by the time the tool is reached.
-                let account = if kind.account_backed() { self.account_token().await } else { None };
+                let account =
+                    if kind.account_backed() { Some(self.account_token().await) } else { None };
                 // Which identity this crew chose, and therefore which address.
                 // Read off the stored row rather than remembered, because the
                 // operator can move a group between accounts between turns.
@@ -5105,9 +5111,11 @@ impl Runtime {
                         agent: card.id,
                         kind: &kind,
                         endpoint: &endpoint,
-                        account: account
-                            .as_deref()
-                            .map(|token| plugins::AccountUse { token, connection: &connection }),
+                        account: match &account {
+                            Some(read) => plugins::Held::read(read, &connection),
+                            // Not an account-backed kind, so nothing reads it.
+                            None => plugins::Held::Absent,
+                        },
                     },
                     &tool,
                     &sent,

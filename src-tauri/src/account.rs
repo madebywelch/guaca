@@ -238,6 +238,18 @@ struct Stored {
     origin: String,
 }
 
+impl Stored {
+    /// Close enough to expiry that the next call should not be given it.
+    ///
+    /// A method rather than a line at the top of `access`, because `access`
+    /// asks it twice: once before queueing for a refresh and once after, and
+    /// two copies of this that drifted apart would be a refresh nobody waits
+    /// for.
+    fn expiring(&self) -> bool {
+        self.expires_at.is_some_and(|at| at - REFRESH_SKEW_MS <= now_ms())
+    }
+}
+
 /// What the webview is allowed to know about an account.
 ///
 /// No token, and no field one could arrive in. The origin is here because in
@@ -312,6 +324,19 @@ pub struct Account {
     origin: String,
     http: reqwest::Client,
     tokens: Mutex<Option<Stored>>,
+    /// Held across a refresh, so a crew that all reach for the account at once
+    /// spends one.
+    ///
+    /// The same lock `Subscription` holds, for the same reason and against the
+    /// same service behavior: the refresh token rotates and the presented one
+    /// is revoked, so two callers renewing together race to retire each other's.
+    /// The loser presents a token the service has just thrown away, and gets an
+    /// `invalid_grant` that reads nothing like what happened. Whoever gets in
+    /// first refreshes; everyone behind them finds the new token already stored
+    /// and takes it. Async rather than `parking_lot` because it is held across
+    /// an await, which is the one thing the other lock here is careful never to
+    /// be.
+    renewing: tokio::sync::Mutex<()>,
 }
 
 impl Account {
@@ -356,6 +381,7 @@ impl Account {
             origin,
             http: reqwest::Client::builder().timeout(HTTP_TIMEOUT).build().unwrap_or_default(),
             tokens: Mutex::new(tokens),
+            renewing: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -483,12 +509,26 @@ impl Account {
     /// every caller is spared deciding. A refresh the network refused leaves the
     /// stored token in place: it may still have minutes left, and a call that
     /// could have worked is worth more than a tidy cache. A refusal is different
-    /// and surfaces, because the operator has to sign in again.
+    /// and surfaces, and it surfaces as itself: this is signed in and could not
+    /// renew, which is not the same fact as having no account and must not
+    /// reach an operator or an agent wearing that one's words.
     pub async fn access(&self) -> Result<String, AccountError> {
         let stored = self.tokens.lock().clone().ok_or(AccountError::NotSignedIn)?;
+        if !stored.expiring() {
+            return Ok(stored.access_token);
+        }
 
-        let expiring = stored.expires_at.is_some_and(|at| at - REFRESH_SKEW_MS <= now_ms());
-        if !expiring {
+        // Everything past here is one at a time, and the fast path above is
+        // deliberately not: a token with an hour left on it must never queue
+        // behind somebody else's refresh.
+        let _gate = self.renewing.lock().await;
+
+        // Read again, because the wait is the whole point. Whoever held the
+        // gate has already stored a fresh token, and taking theirs is what
+        // makes this a shared refresh rather than a second one presenting a
+        // refresh token they have just retired.
+        let stored = self.tokens.lock().clone().ok_or(AccountError::NotSignedIn)?;
+        if !stored.expiring() {
             return Ok(stored.access_token);
         }
 
@@ -500,11 +540,22 @@ impl Account {
 
         match self.refresh(&stored, &refresh_token).await {
             Ok(fresh) => Ok(fresh),
-            Err(AccountError::Transport { .. }) => {
-                tracing::warn!("using the stored account token: its refresh could not be reached");
+            Err(err @ AccountError::Transport { .. }) => {
+                tracing::warn!(
+                    %err,
+                    "using the stored account token: its refresh could not be reached"
+                );
                 Ok(stored.access_token)
             }
-            Err(err) => Err(err),
+            // Said out loud here because this is the only place that has it.
+            // What the service answered is the difference between a sign-in to
+            // redo and a bad ten seconds at the token endpoint, and every
+            // caller used to drop it: the operator got "not signed in" about an
+            // account that was, and nothing anywhere recorded the status.
+            Err(err) => {
+                tracing::warn!(%err, origin = %self.origin, "the account refused to renew");
+                Err(err)
+            }
         }
     }
 
