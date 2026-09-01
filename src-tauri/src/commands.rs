@@ -819,13 +819,15 @@ pub async fn connect_plugin(
     // Read here rather than inside the flow, so a machine that is not signed in
     // is told so before a browser opens. An account-backed plugin has no
     // sign-in of its own: see `PluginKind::account_backed`.
-    let token = if kind.account_backed() { state.account.access().await.ok() } else { None };
+    let read = if kind.account_backed() { Some(state.account.access().await) } else { None };
     let connection = connection.unwrap_or_default();
-    let credential = match token.as_deref() {
-        Some(token) => crate::plugins::Credential::Account(crate::plugins::AccountUse {
-            token,
-            connection: &connection,
-        }),
+    // An account that refused says so here rather than falling through to
+    // `Discover`, which would open a browser at a vendor for a plugin whose
+    // sign-in is the account's and report whatever came back as the problem.
+    let credential = match &read {
+        Some(read) => crate::plugins::Credential::Account(
+            crate::plugins::Held::read(read, &connection).spend(&kind)?,
+        ),
         None => crate::plugins::Credential::Discover,
     };
 
@@ -1131,7 +1133,7 @@ pub async fn check_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<Ser
     // The same two-line resolution `connect_plugin` does, and for the same
     // reason: an account-backed plugin's server is the operator's own account
     // and which identity it means is part of the address.
-    let token = if dialed.kind.account_backed() { state.account.access().await.ok() } else { None };
+    let read = if dialed.kind.account_backed() { Some(state.account.access().await) } else { None };
     let endpoint = if dialed.kind.account_backed() {
         crate::plugins::AccountUse::endpoint(state.account.origin(), &dialed.connection)
     } else {
@@ -1140,8 +1142,11 @@ pub async fn check_plugin(state: State<'_, AppState>, id: PluginId) -> Reply<Ser
     // Copied off the row before it is handed over, because the check takes the
     // row and the identity travels with the token rather than with it.
     let connection = dialed.connection.clone();
-    let account =
-        token.as_deref().map(|token| crate::plugins::AccountUse { token, connection: &connection });
+    let account = match &read {
+        Some(read) => crate::plugins::Held::read(read, &connection),
+        // Not an account-backed kind, so nothing reads it.
+        None => crate::plugins::Held::Absent,
+    };
 
     Ok(crate::plugins::check(state.runtime.store(), id, dialed, &endpoint, account).await?)
 }

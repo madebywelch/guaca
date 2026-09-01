@@ -84,6 +84,14 @@ struct Script {
     foreign_issuer: bool,
     /// Name somebody else as the issuer in the redirect. RFC 9207's mix-up.
     wrong_iss: bool,
+    /// Answer a refresh with a status rather than a token, the way a service
+    /// does when the presented refresh token has just been rotated out from
+    /// under the caller.
+    refuse_refresh: bool,
+    /// Take long enough over a refresh that everybody who wants a token during
+    /// it is inside the same window. What makes a race a test rather than a
+    /// coin toss.
+    slow_refresh: bool,
 }
 
 fn base64url(raw: &[u8]) -> String {
@@ -234,6 +242,7 @@ async fn serve(script: Script) -> Stub {
                                 .unwrap_or_default()
                         };
 
+                        let refreshing = get("grant_type") == "refresh_token";
                         if get("grant_type") == "authorization_code" {
                             // The whole point of PKCE, checked rather than
                             // assumed: the verifier presented here has to hash
@@ -254,15 +263,38 @@ async fn serve(script: Script) -> Stub {
                         }
 
                         exchanges.lock().push(fields);
+
+                        if refreshing && script.slow_refresh {
+                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        }
+                        if refreshing && script.refuse_refresh {
+                            return (
+                                axum::http::StatusCode::BAD_REQUEST,
+                                Json(serde_json::json!({
+                                    "error": "invalid_grant",
+                                    "error_description": "invalid refresh token",
+                                })),
+                            )
+                                .into_response();
+                        }
+
+                        // A renewal rotates both, which is what the real
+                        // service does and the whole reason two callers must
+                        // not present the same refresh token at once.
                         let mut answer = serde_json::json!({
-                            "access_token": "at-1",
-                            "refresh_token": "rt-1",
+                            "access_token": if refreshing { "at-2" } else { "at-1" },
+                            "refresh_token": if refreshing { "rt-2" } else { "rt-1" },
                             "token_type": "Bearer",
                         });
                         if let Some(secs) = script.expires_in {
-                            answer["expires_in"] = secs.into();
+                            // The scripted expiry is what the *stored* token
+                            // gets. A renewal answers with a full hour, because
+                            // a test that handed back another expiring token
+                            // would have every caller renewing forever and
+                            // could never tell one refresh from two.
+                            answer["expires_in"] = if refreshing { 3600 } else { secs }.into();
                         }
-                        Json(answer)
+                        Json(answer).into_response()
                     }
                 }
             }),
@@ -566,6 +598,60 @@ async fn an_expiring_token_is_refreshed_before_it_is_used() {
         })
         .collect();
     assert_eq!(grants, ["authorization_code", "refresh_token"]);
+}
+
+#[tokio::test]
+async fn a_refused_refresh_is_reported_as_itself_rather_than_as_a_missing_sign_in() {
+    // The failure this exists for. The service answered a renewal with a
+    // status, the app read the absence of a token as "no account", and an agent
+    // spent its turn telling the operator to sign in to an account that was
+    // signed in and renewing normally ten seconds later. What the service said
+    // has to survive the trip, because it is the whole difference between a
+    // sign-in to redo and a bad few seconds at the token endpoint.
+    let stub =
+        serve(Script { expires_in: Some(1), refuse_refresh: true, ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+    account.sign_in(browse).await.unwrap();
+
+    let failed = account.connectors().await.expect_err("the renewal was refused");
+
+    match failed {
+        AccountError::Upstream { status, message, .. } => {
+            assert_eq!(status, 400);
+            assert!(message.contains("invalid_grant"), "what the service said: {message}");
+        }
+        other => panic!("a refused renewal is not a sign-out: {other:?}"),
+    }
+    // And the sign-in is still here, which is what makes "sign in again" the
+    // wrong thing to tell anybody about this.
+    assert!(account.is_signed_in());
+}
+
+#[tokio::test]
+async fn one_renewal_serves_everybody_who_wanted_a_token_at_once() {
+    // A crew all reaching for Google in the same second is the ordinary case,
+    // and the service rotates the refresh token and revokes the one presented.
+    // Two renewals at once is therefore one caller holding a token that has
+    // just been thrown away, which comes back as `invalid_grant` and reads like
+    // an account nobody is signed in to.
+    let stub = serve(Script { expires_in: Some(1), slow_refresh: true, ..Script::default() }).await;
+    let account = Account::open_at(scratch(), &stub.origin);
+    account.sign_in(browse).await.unwrap();
+
+    let (first, second) = tokio::join!(account.access(), account.access());
+
+    assert_eq!(first.unwrap(), "at-2");
+    assert_eq!(second.unwrap(), "at-2", "the second caller took the first one's answer");
+    assert_eq!(refreshes(&stub), 1, "one renewal went out, not one per caller");
+}
+
+/// How many of the posts to the token endpoint were renewals.
+fn refreshes(stub: &Stub) -> usize {
+    stub.exchanges
+        .lock()
+        .iter()
+        .filter(|fields| fields.iter().any(|(k, v)| k == "grant_type" && v == "refresh_token"))
+        .count()
 }
 
 #[tokio::test]
