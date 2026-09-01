@@ -27,7 +27,22 @@
 //! is a socket that is dead in a way nothing notices until an action hangs on
 //! it. What has to persist across actions is the element numbering, and that
 //! lives on the page rather than here.
+//!
+//! ## A dialog is answered on the socket that raised it
+//!
+//! `alert`, `confirm`, `prompt` and the *Leave site?* box block the renderer:
+//! nothing on that page runs, so every later call on it waits out
+//! [`CALL_TIMEOUT`] and fails. Because there is a connection per action there
+//! is no client sitting there to answer one, so an unanswered dialog is not a
+//! slow action, it is a browser that has stopped: the box outlives the socket
+//! and every action after it fails the same way until the session times out.
+//!
+//! So the Page domain is enabled on attach and [`Page::call`] answers dialogs
+//! out of its own read loop, which is the only place that sees the socket while
+//! a call is in flight. It has to be there rather than after the action:
+//! the call that raised the dialog is exactly the call that will not return.
 
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::domain::signin::CookieMark;
@@ -80,12 +95,34 @@ pub enum CdpError {
 type Socket =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
+/// A dialog the page put up, and what this client answered it.
+///
+/// Kept because answering one is a decision taken on the agent's behalf,
+/// between the action it asked for and the page it gets back, and nothing else
+/// in that answer records it happened. `confirm` in particular is the page
+/// asking whether an action the agent already chose should go through, so the
+/// yes belongs in the transcript the operator reads.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Dialog {
+    /// `alert`, `confirm`, `prompt` or `beforeunload`, as Chrome names them.
+    pub kind: String,
+    /// What the box said, bounded: it is page-controlled text on its way to a
+    /// model, and a page can put a context window in one.
+    pub message: String,
+    pub accepted: bool,
+}
+
+/// How long a dialog's message may be by the time a model reads it.
+const DIALOG_MESSAGE_CHARS: usize = 200;
+
 /// One attached page, for the length of one action.
 pub struct Page {
     socket: Socket,
     next_id: u64,
     /// The attached target. Every method that touches the page carries it.
     session: String,
+    /// Dialogs answered while this socket was open, oldest first.
+    answered: Vec<Dialog>,
 }
 
 impl Page {
@@ -103,7 +140,7 @@ impl Page {
                 .map_err(|_| CdpError::TimedOut)?
                 .map_err(|e| CdpError::Transport(e.to_string()))?;
 
-        let mut page = Self { socket, next_id: 0, session: String::new() };
+        let mut page = Self { socket, next_id: 0, session: String::new(), answered: Vec::new() };
 
         let targets = page.browser_call("Target.getTargets", json!({})).await?;
         let target = targets["targetInfos"]
@@ -134,7 +171,18 @@ impl Page {
             .ok_or_else(|| CdpError::Protocol("attaching to the page returned no session".into()))?
             .to_string();
 
+        // What makes `javascriptDialogOpening` arrive at all. Without it Chrome
+        // hands a dialog to its own manager instead, which on a headful browser
+        // means the native box: nothing on the page runs again, and this client
+        // never hears that it happened.
+        page.page_call("Page.enable", json!({})).await?;
+
         Ok(page)
+    }
+
+    /// The dialogs this socket answered, oldest first.
+    pub fn answered(&self) -> &[Dialog] {
+        &self.answered
     }
 
     /// A method against the browser itself.
@@ -154,27 +202,20 @@ impl Page {
     /// protocol is bidirectional, so events for domains nobody enabled and
     /// replies for other sessions arrive in the same stream. Matching on the id
     /// is the only thing that identifies an answer.
+    ///
+    /// One event is not skipped, because skipping it means this call never
+    /// answers: a dialog blocks the renderer, so the call that raised one waits
+    /// out [`CALL_TIMEOUT`] and so does everything after it.
     async fn call(
         &mut self,
         method: &str,
         params: Value,
         session: Option<&str>,
     ) -> Result<Value, CdpError> {
-        use futures_util::{SinkExt, StreamExt};
+        use futures_util::StreamExt;
         use tokio_tungstenite::tungstenite::Message;
 
-        self.next_id += 1;
-        let want = self.next_id;
-
-        let mut request = json!({ "id": want, "method": method, "params": params });
-        if let Some(session) = session {
-            request["sessionId"] = json!(session);
-        }
-
-        self.socket
-            .send(Message::text(request.to_string()))
-            .await
-            .map_err(|e| CdpError::Transport(e.to_string()))?;
+        let want = self.send(method, params, session).await?;
 
         let deadline = tokio::time::Instant::now() + CALL_TIMEOUT;
         loop {
@@ -192,6 +233,10 @@ impl Page {
             let Ok(message) = serde_json::from_str::<Value>(&text) else {
                 continue;
             };
+            if message["method"] == "Page.javascriptDialogOpening" {
+                self.answer_dialog(&message).await?;
+                continue;
+            }
             if message["id"].as_u64() != Some(want) {
                 continue;
             }
@@ -200,6 +245,70 @@ impl Page {
             }
             return Ok(message["result"].clone());
         }
+    }
+
+    /// Writes one call to the socket and hands back the id its answer will
+    /// carry.
+    ///
+    /// Split out because a dialog has to be answered from inside the read loop
+    /// of the call it interrupted, and that answer is a call whose own reply is
+    /// of no interest: it arrives with an id nothing is waiting for and is
+    /// skipped like any other traffic.
+    async fn send(
+        &mut self,
+        method: &str,
+        params: Value,
+        session: Option<&str>,
+    ) -> Result<u64, CdpError> {
+        use futures_util::SinkExt;
+        use tokio_tungstenite::tungstenite::Message;
+
+        self.next_id += 1;
+        let id = self.next_id;
+
+        let mut request = json!({ "id": id, "method": method, "params": params });
+        if let Some(session) = session {
+            request["sessionId"] = json!(session);
+        }
+
+        self.socket
+            .send(Message::text(request.to_string()))
+            .await
+            .map_err(|e| CdpError::Transport(e.to_string()))?;
+        Ok(id)
+    }
+
+    /// Answers a dialog the page just put up, so the call it blocked can finish.
+    ///
+    /// Answered rather than reported, because there is nobody to report it to:
+    /// the agent is inside a tool call and the operator is not necessarily at
+    /// the machine, and until somebody answers, that page is stopped for good.
+    ///
+    /// [`accept`] decides yes or no, and what is answered is kept so it can
+    /// travel back with the page.
+    ///
+    /// The session is echoed from the event rather than assumed to be this
+    /// page's, because a `handleJavaScriptDialog` sent to the wrong scope
+    /// leaves the dialog exactly where it was.
+    async fn answer_dialog(&mut self, event: &Value) -> Result<(), CdpError> {
+        let kind = event["params"]["type"].as_str().unwrap_or_default().to_string();
+        let accepted = accept(&kind);
+        let session = event["sessionId"].as_str().map(str::to_string);
+
+        self.send("Page.handleJavaScriptDialog", json!({ "accept": accepted }), session.as_deref())
+            .await?;
+
+        self.answered.push(Dialog {
+            kind,
+            message: event["params"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .chars()
+                .take(DIALOG_MESSAGE_CHARS)
+                .collect(),
+            accepted,
+        });
+        Ok(())
     }
 
     /// Runs an expression in the page and hands back its value.
@@ -347,6 +456,22 @@ impl Page {
     }
 }
 
+/// Whether a dialog of this kind is answered yes.
+///
+/// Yes for three of the four, because each of them is the page asking about
+/// something the agent has already decided. `beforeunload` asks whether the
+/// navigation the agent just requested was meant; `confirm` asks whether the
+/// button it just pressed was meant, and that press has already been through
+/// the consent gate in `needs_consent`; `alert` has no other answer. No for
+/// `prompt`, which is the one that wants a value rather than a decision: yes
+/// submits the empty string, which is a thing the agent never typed, where no
+/// is the answer a page is written to expect from somebody with nothing to say.
+///
+/// Neither answer is silent. Both travel back with the page in [`Dialog`].
+fn accept(kind: &str) -> bool {
+    kind != "prompt"
+}
+
 /// What an error reply from the protocol means.
 ///
 /// One distinction, and it is the difference between "the web did something"
@@ -415,6 +540,17 @@ mod tests {
             // word for word, or the tool gets abandoned for a screenshot.
             assert!(err.to_string().contains("Read the page again"), "{err}");
         }
+    }
+
+    #[test]
+    fn a_dialog_that_asks_a_question_is_answered_and_one_that_wants_a_value_is_not() {
+        // Each of these blocks the renderer until somebody answers, so the
+        // question is never whether to answer but with what.
+        assert!(accept("beforeunload"), "the agent asked for the navigation");
+        assert!(accept("confirm"), "the press that raised it was already gated");
+        assert!(accept("alert"), "there is no other answer");
+        // Yes here submits the empty string as though the agent had typed it.
+        assert!(!accept("prompt"));
     }
 
     #[test]

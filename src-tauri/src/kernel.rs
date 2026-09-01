@@ -48,7 +48,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cdp::{CdpError, Page};
+use crate::cdp::{CdpError, Dialog, Page};
 use crate::domain::signin::BrowserState;
 
 const API_BASE: &str = "https://api.onkernel.com";
@@ -558,17 +558,25 @@ impl KernelClient {
         //
         // Read again, never act again. The action has already happened, and a
         // click sent a second time is the one mistake this must not make.
-        let collected = match settle_and_collect(&mut page, settle_ms).await {
+        //
+        // Both sockets are asked what they answered, because a dialog is most
+        // of the reason a page goes missing under an action: the *Leave site?*
+        // box is answered on the first connection and the navigation it
+        // released is what replaced the target the second one had to attach to.
+        let (collected, answered) = match settle_and_collect(&mut page, settle_ms).await {
             Err(CdpError::TargetGone) => {
                 let mut replacement = Page::attach(&session.cdp_ws_url).await?;
-                settle_and_collect(&mut replacement, settle_ms).await?
+                let collected = settle_and_collect(&mut replacement, settle_ms).await?;
+                let mut answered = page.answered().to_vec();
+                answered.extend_from_slice(replacement.answered());
+                (collected, answered)
             }
-            other => other?,
+            other => (other?, page.answered().to_vec()),
         };
-        collected
+        let described = collected
             .as_str()
-            .map(str::to_string)
-            .ok_or_else(|| KernelError::Protocol("the page did not describe itself".into()))
+            .ok_or_else(|| KernelError::Protocol("the page did not describe itself".into()))?;
+        Ok(note_dialogs(described, &answered))
     }
 
     /// Asks a browser what it is signed in to.
@@ -595,6 +603,29 @@ async fn settle_and_collect(page: &mut Page, settle_ms: u32) -> Result<Value, Cd
         page.settle(settle_ms).await?;
     }
     page.evaluate(COLLECT).await
+}
+
+/// Puts the dialogs an action answered into the page it hands back.
+///
+/// A dialog is answered on the agent's behalf between the action it asked for
+/// and the page it reads afterward, and the page alone does not say one
+/// happened: an agent that meant to leave a form sees the page it wanted, and
+/// an agent whose `prompt` was declined sees a page where nothing changed and
+/// no reason why. `render_page` is what turns this into the sentence a model
+/// reads, under the same label as the rest of the page.
+///
+/// A description that will not parse is handed back untouched. That is not a
+/// failure worth reporting: `render_page` already treats an unparseable answer
+/// as page text, and losing the page to keep the note would be the wrong trade.
+fn note_dialogs(described: &str, answered: &[Dialog]) -> String {
+    if answered.is_empty() {
+        return described.to_string();
+    }
+    let Ok(mut page) = serde_json::from_str::<Value>(described) else {
+        return described.to_string();
+    };
+    page["dialogs"] = json!(answered);
+    page.to_string()
 }
 
 /// The element a `click` or `type` names, refused clearly when it is missing.
@@ -942,6 +973,9 @@ mod tests {
         url: String,
         evaluated: Arc<Mutex<Vec<String>>>,
         connections: Arc<AtomicUsize>,
+        /// Every `Page.handleJavaScriptDialog` it received, as the `accept` it
+        /// carried.
+        answers: Arc<Mutex<Vec<bool>>>,
     }
 
     impl FakeBrowser {
@@ -949,20 +983,39 @@ mod tests {
         /// target as gone, which is what Chrome does when a navigation replaces
         /// the target underneath an attached session.
         async fn start_losing(lose_first: usize) -> Self {
+            Self::start(lose_first, None).await
+        }
+
+        /// A browser whose current page raises a dialog of `kind` when it is
+        /// navigated away from, and which then behaves as Chrome does: the
+        /// renderer is blocked, so the navigation does not answer until the
+        /// dialog has been handled.
+        async fn start_asking(kind: &'static str) -> Self {
+            Self::start(0, Some(kind)).await
+        }
+
+        async fn start(lose_first: usize, asks: Option<&'static str>) -> Self {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("a port");
             let address = listener.local_addr().expect("an address");
             let evaluated: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
             let connections = Arc::new(AtomicUsize::new(0));
+            let answers: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
 
-            let (recorded, counted) = (evaluated.clone(), connections.clone());
+            let (recorded, counted, collected) =
+                (evaluated.clone(), connections.clone(), answers.clone());
             tokio::spawn(async move {
                 loop {
                     let Ok((stream, _)) = listener.accept().await else { return };
                     let lost = counted.fetch_add(1, Ordering::SeqCst) < lose_first;
                     let recorded = recorded.clone();
+                    let collected = collected.clone();
                     tokio::spawn(async move {
                         let mut socket =
                             tokio_tungstenite::accept_async(stream).await.expect("a handshake");
+                        // The navigation the dialog is holding up, if there is
+                        // one. Nothing else on this page answers until it does.
+                        let mut held: Option<Value> = None;
+                        let mut enabled = false;
                         while let Some(Ok(frame)) = socket.next().await {
                             let Message::Text(text) = frame else { continue };
                             let call: Value = serde_json::from_str(&text).expect("a call");
@@ -975,7 +1028,52 @@ mod tests {
                                 "Target.attachToTarget" => {
                                     json!({"id": id, "result": {"sessionId": "S"}})
                                 }
-                                "Page.navigate" => json!({"id": id, "result": {}}),
+                                // Only an enabled Page domain is told about a
+                                // dialog, which is why the fake refuses to
+                                // raise one otherwise: a client that skipped
+                                // this would wait for an event Chrome is never
+                                // going to send it.
+                                "Page.enable" => {
+                                    enabled = true;
+                                    json!({"id": id, "result": {}})
+                                }
+                                "Page.navigate" => match asks.filter(|_| enabled) {
+                                    Some(kind) => {
+                                        let opening = json!({
+                                            "method": "Page.javascriptDialogOpening",
+                                            "sessionId": "S",
+                                            "params": {
+                                                "type": kind,
+                                                "message": "Changes you made may not be saved.",
+                                                "url": "https://example.com/before",
+                                            },
+                                        });
+                                        socket
+                                            .send(Message::text(opening.to_string()))
+                                            .await
+                                            .expect("the event");
+                                        held = Some(id);
+                                        continue;
+                                    }
+                                    None => json!({"id": id, "result": {}}),
+                                },
+                                "Page.handleJavaScriptDialog" => {
+                                    collected
+                                        .lock()
+                                        .push(call["params"]["accept"].as_bool().expect("accept"));
+                                    socket
+                                        .send(Message::text(
+                                            json!({"id": id, "result": {}}).to_string(),
+                                        ))
+                                        .await
+                                        .expect("a reply");
+                                    // Answered, so the page runs again and the
+                                    // navigation it was blocking completes.
+                                    match held.take() {
+                                        Some(waiting) => json!({"id": waiting, "result": {}}),
+                                        None => continue,
+                                    }
+                                }
                                 "Runtime.evaluate" => {
                                     recorded.lock().push(expression.to_string());
                                     // The settle and the description of the
@@ -1003,7 +1101,7 @@ mod tests {
                 }
             });
 
-            FakeBrowser { url: format!("ws://{address}"), evaluated, connections }
+            FakeBrowser { url: format!("ws://{address}"), evaluated, connections, answers }
         }
 
         fn session(&self) -> Session {
@@ -1063,6 +1161,64 @@ mod tests {
         client.browse(&browser.session(), "read", &json!({})).await.expect("read the page");
 
         assert_eq!(browser.connections(), 1, "a working page must not pay for a reconnection");
+    }
+
+    #[tokio::test]
+    async fn a_leave_site_box_is_answered_so_the_action_it_stopped_can_finish() {
+        // What this exists for. A form the agent typed into puts up "Are you
+        // sure you want to leave?" on the way out, the renderer stops until
+        // somebody answers, and there is nobody: the turn is inside a tool call
+        // and the operator is not necessarily at the machine. Unanswered, the
+        // navigation waits out the call timeout and so does every action after
+        // it, because the box outlives this socket.
+        let browser = FakeBrowser::start_asking("beforeunload").await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        let page = client
+            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
+            .await
+            .expect("the navigation was released, so the page arrived");
+
+        assert_eq!(*browser.answers.lock(), vec![true], "the agent asked to leave");
+        assert!(page.contains("https://example.com/after"), "{page}");
+        // And it says so, because answering is a decision taken on the agent's
+        // behalf that the page it gets back does not otherwise record.
+        assert!(page.contains("beforeunload"), "{page}");
+        assert!(page.contains("Changes you made may not be saved."), "{page}");
+    }
+
+    #[tokio::test]
+    async fn a_prompt_is_declined_rather_than_answered_with_nothing() {
+        // The one dialog that wants a value instead of a decision. Accepting it
+        // submits the empty string as though the agent had typed it; declining
+        // is the answer a page is written to expect from somebody with nothing
+        // to say. Either way the page is released and the answer is reported.
+        let browser = FakeBrowser::start_asking("prompt").await;
+        let client = KernelClient::new("sk-test").expect("a client");
+
+        let page = client
+            .browse(&browser.session(), "open", &json!({ "url": "https://example.com" }))
+            .await
+            .expect("the page still arrives");
+
+        assert_eq!(*browser.answers.lock(), vec![false]);
+        assert!(page.contains("prompt"), "{page}");
+    }
+
+    #[test]
+    fn a_page_with_no_dialog_is_handed_back_exactly_as_the_browser_described_it() {
+        // The ordinary case, which is nearly every case: no key appears and the
+        // string is not so much as reparsed.
+        assert_eq!(note_dialogs(FAKE_PAGE, &[]), FAKE_PAGE);
+    }
+
+    #[test]
+    fn a_description_that_will_not_parse_keeps_the_page_and_loses_the_note() {
+        // `render_page` treats an unparseable answer as page text, so this is
+        // still read by the model. Dropping it to keep the note would be the
+        // wrong trade.
+        let answered = [Dialog { kind: "alert".into(), message: "hi".into(), accepted: true }];
+        assert_eq!(note_dialogs("<html>garbage", &answered), "<html>garbage");
     }
 
     #[tokio::test]

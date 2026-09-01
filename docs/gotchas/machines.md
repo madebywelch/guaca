@@ -62,6 +62,16 @@ Chrome that is asked rather than looked at. `docs/MACHINES.md` and
 - **Every `use_screen` action answers with a picture, and only the newest one
   stays.** The first is what stops a model acting on a screen two actions old;
   the second is what keeps that affordable. Removing either breaks the other.
+- **A dialog is answered inside `Page::call`'s read loop, not after the
+  action.** `alert`, `confirm`, `prompt` and *Leave site?* block the renderer,
+  so the call that raises one is the call that never returns: there is no
+  "after" to handle it in. And because there is a connection per action, an
+  unanswered box outlives the socket and fails every action after it too, which
+  is a browser that has stopped rather than an action that was slow. It needs
+  `Page.enable` on attach as well: without it Chrome hands the dialog to its own
+  manager and this client is never told. Only `prompt` is declined, and that is
+  not caution about the others: yes to a prompt submits the empty string as
+  though the agent had typed it. `docs/BROWSERS.md`.
 - **A machine's Chrome opens no debugging port.** Two ways to use the web on one
   screen disagreed about which window was in front, and each fix moved the
   disagreement. `docs/BROWSERS.md` has the history before you add one back.

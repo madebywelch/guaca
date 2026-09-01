@@ -189,6 +189,23 @@ fn render_page(raw: &str) -> String {
         out.push_str(&format!("\nscrolled {scrolled} of {height} pixels"));
     }
 
+    // Before the controls, because it is the one thing here the model did not
+    // ask for: a dialog stops the page until somebody answers it, so `cdp.rs`
+    // answers it, and this is where that decision is reported back. Bounded
+    // there rather than here, along with the rest of what the page controls.
+    if let Some(dialogs) = page["dialogs"].as_array().filter(|held| !held.is_empty()) {
+        out.push_str("\n\nThe page put up a dialog and it was answered for you:\n");
+        for dialog in dialogs {
+            let answer =
+                if dialog["accepted"].as_bool() == Some(true) { "accepted" } else { "dismissed" };
+            out.push_str(&format!(
+                "  {} \"{}\" was {answer}\n",
+                dialog["kind"].as_str().unwrap_or("dialog"),
+                dialog["message"].as_str().unwrap_or_default()
+            ));
+        }
+    }
+
     if let Some(elements) = page["elements"].as_array() {
         out.push_str("\n\nYou can use these, by number:\n");
         for element in elements.iter().take(60) {
@@ -7226,6 +7243,35 @@ mod tests {
 
         // A reply that is not the driver's JSON at all is still page content.
         assert!(render_page("<html>garbage").starts_with(WEB_LABEL));
+    }
+
+    #[test]
+    fn a_dialog_answered_for_the_agent_is_reported_to_it() {
+        // `cdp.rs` answers these because an unanswered one stops the page for
+        // good, but the answer is a decision taken on the agent's behalf and
+        // the page alone does not record it: a declined `prompt` reads as a
+        // page where nothing happened and no reason why.
+        let described = serde_json::json!({
+            "title": "Draft",
+            "url": "https://example.com/next",
+            "elements": [],
+            "dialogs": [
+                { "kind": "beforeunload", "message": "Leave site?", "accepted": true },
+                { "kind": "prompt", "message": "Name this file", "accepted": false },
+            ],
+        })
+        .to_string();
+
+        let rendered = render_page(&described);
+        assert!(rendered.contains("beforeunload \"Leave site?\" was accepted"), "{rendered}");
+        assert!(rendered.contains("prompt \"Name this file\" was dismissed"), "{rendered}");
+        // It is still the page's own words, so it arrives under the same label
+        // as the rest of them.
+        assert!(rendered.starts_with(WEB_LABEL));
+
+        // And the ordinary page says nothing about dialogs at all.
+        let quiet = serde_json::json!({ "title": "Draft", "url": "u", "elements": [] }).to_string();
+        assert!(!render_page(&quiet).contains("dialog"), "{}", render_page(&quiet));
     }
 
     fn session(domain: &str) -> Signin {

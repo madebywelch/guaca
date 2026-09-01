@@ -148,6 +148,43 @@ between, and a socket held across that is dead in a way nothing notices until an
 action hangs on it. The only thing that has to persist across actions is the
 element numbering, and that is on the page.
 
+## A dialog is answered, because nobody else is there to answer it
+
+`alert`, `confirm`, `prompt` and the *Leave site?* box block the renderer.
+Nothing on that page runs while one is up, so the call that raised it waits out
+the 30-second call timeout and fails, and so does every action after it: the box
+outlives the socket that caused it, and the connection-per-action design means
+there is no client sitting there to notice. An unanswered dialog is not a slow
+action. It is a browser that has stopped until the session times out, and what
+reached the agent was `the browser took too long to answer` on every page it
+tried afterward.
+
+So `Page.enable` is called on attach, and `Page::call` answers
+`Page.javascriptDialogOpening` out of its own read loop. It has to be there
+rather than after the action, because the call that raised the dialog is exactly
+the call that will not return.
+
+Three of the four are answered yes. `beforeunload` asks whether the navigation
+the agent just requested was meant; `confirm` asks whether the button it just
+pressed was meant, and that press has already been through the consent gate;
+`alert` has no other answer. `prompt` is declined, because it is the one that
+wants a value rather than a decision: yes submits the empty string as though the
+agent had typed it, where no is the answer a page is written to expect from
+somebody with nothing to say.
+
+Neither answer is silent. A dialog is a decision taken on the agent's behalf
+between the action it asked for and the page it reads afterward, and the page
+alone does not record that one happened: an agent that meant to leave a form
+sees the page it wanted, and an agent whose `prompt` was declined sees a page
+where nothing changed and no reason why. `note_dialogs` puts what was answered
+into the description, and `render_page` prints it under the same untrusted label
+as the rest of the page, because the wording is the site's.
+
+What this does not reach is a dialog raised while nothing is driving the
+browser: a `setTimeout` that fires between turns is handed to Chrome's own
+manager before this client attaches, and there is no event left to answer. That
+still arrives as a timeout.
+
 ## An action is done once, and the page it produced is read until it answers
 
 A navigation can replace the target a session is attached to, and Chrome then
