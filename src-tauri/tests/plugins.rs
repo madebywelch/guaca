@@ -800,7 +800,7 @@ async fn a_tool_call_carries_the_grant_and_the_answer_comes_back() {
             agent,
             kind: &PluginKind::Neon,
             endpoint: &endpoint,
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({ "sql": "select 1" }),
@@ -1011,7 +1011,10 @@ mod account_backed {
                 agent,
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+                account: plugins::Held::Token(plugins::AccountUse {
+                    token: ACCOUNT,
+                    connection: "",
+                }),
             },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
@@ -1050,7 +1053,7 @@ mod account_backed {
                 agent,
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
-                account: None,
+                account: plugins::Held::Absent,
             },
             "run_sql",
             &serde_json::json!({}),
@@ -1059,6 +1062,57 @@ mod account_backed {
         .expect_err("there is no account token any more");
 
         assert!(failed.to_string().contains("Guaca account"), "{failed}");
+    }
+
+    #[tokio::test]
+    async fn an_account_that_could_not_renew_is_not_reported_as_no_account() {
+        // The two are one sentence apart and a whole day apart in what they
+        // cost. A machine that is signed in, whose service answered one renewal
+        // with a status, used to be described to the agent as a machine nobody
+        // had signed in on: it escalated, told the operator to go and sign in,
+        // and sent none of the day's work. The refusal has to say which of the
+        // two happened, and it has to say it in words that do not send anybody
+        // to Settings.
+        let server = account_server().await;
+        let (_dir, store, group, agent) = workspace();
+        let endpoint = format!("{}/mcp", server.base());
+
+        plugins::connect(
+            &store,
+            group,
+            &PluginKind::Google,
+            &endpoint,
+            plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+            &Headers::none(),
+            |_| Ok(()),
+        )
+        .await
+        .unwrap();
+
+        let failed = plugins::call(
+            &store,
+            plugins::Target {
+                group,
+                agent,
+                kind: &PluginKind::Google,
+                endpoint: &endpoint,
+                account: plugins::Held::Refused(
+                    "https://guaca.bot answered HTTP 400: invalid_grant".to_string(),
+                ),
+            },
+            "run_sql",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("the account had nothing to spend");
+
+        let said = failed.to_string();
+        // What the service actually said, which is the only thing here that
+        // tells an operator whether to wait or to do something.
+        assert!(said.contains("HTTP 400"), "{said}");
+        assert!(said.contains("signed in"), "{said}");
+        assert!(!said.contains("not signed in"), "the machine is signed in: {said}");
+        assert!(!said.contains("Settings"), "there is nothing to do in Settings: {said}");
     }
 
     #[tokio::test]
@@ -1097,7 +1151,10 @@ mod account_backed {
                 agent,
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(plugins::AccountUse { token: ACCOUNT, connection: "" }),
+                account: plugins::Held::Token(plugins::AccountUse {
+                    token: ACCOUNT,
+                    connection: "",
+                }),
             },
             "run_sql",
             &serde_json::json!({}),
@@ -1170,7 +1227,10 @@ async fn the_real_account_server_still_speaks_what_this_client_sends() {
                 agent,
                 kind: &PluginKind::Google,
                 endpoint: &endpoint,
-                account: Some(plugins::AccountUse { token: &token, connection: "" }),
+                account: plugins::Held::Token(plugins::AccountUse {
+                    token: &token,
+                    connection: "",
+                }),
             },
             tool,
             &serde_json::json!({}),
@@ -1250,7 +1310,13 @@ mod added {
 
         let answer = plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
         )
@@ -1363,7 +1429,7 @@ mod added {
                 agent: left_out,
                 kind: &kind,
                 endpoint: kind.endpoint(),
-                account: None,
+                account: plugins::Held::Absent,
             },
             "run_sql",
             &serde_json::json!({}),
@@ -1408,7 +1474,13 @@ mod added {
         // And spent the same way.
         plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "run_sql",
             &serde_json::json!({}),
         )
@@ -1443,7 +1515,13 @@ mod added {
         server.revoked.lock().push("hand-minted".to_string());
         let refused = plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "run_sql",
             &serde_json::json!({}),
         )
@@ -1502,7 +1580,7 @@ mod added {
                 agent: triage,
                 kind: &kind,
                 endpoint: kind.endpoint(),
-                account: None,
+                account: plugins::Held::Absent,
             },
             "run_sql",
             &serde_json::json!({}),
@@ -1558,7 +1636,7 @@ mod added {
                 agent,
                 kind: &notes,
                 endpoint: notes.endpoint(),
-                account: None,
+                account: plugins::Held::Absent,
             },
             "run_sql",
             &serde_json::json!({}),
@@ -1610,7 +1688,13 @@ mod added {
         // header is a 403 long after everything looked fine.
         let answer = plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
         )
@@ -1659,7 +1743,13 @@ mod eras {
 
         plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "run_sql",
             &serde_json::json!({ "sql": "select 1" }),
         )
@@ -1815,7 +1905,13 @@ mod eras {
 
         let answer = plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "deploy",
             &serde_json::json!({ "region": "us-west1", "what": "the worker" }),
         )
@@ -1843,7 +1939,7 @@ async fn a_call_on_an_unconnected_plugin_says_who_can_connect_it() {
             agent,
             kind: &PluginKind::Neon,
             endpoint: "http://127.0.0.1:1/mcp",
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({}),
@@ -1890,7 +1986,7 @@ async fn a_stale_grant_is_renewed_before_it_is_spent() {
             agent,
             kind: &PluginKind::Neon,
             endpoint: &endpoint,
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({}),
@@ -1935,7 +2031,7 @@ async fn a_grant_revoked_at_the_vendor_is_renewed_once_and_the_call_retried() {
             agent,
             kind: &PluginKind::Neon,
             endpoint: &endpoint,
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({}),
@@ -2597,7 +2693,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
             agent: outsider,
             kind: &PluginKind::Neon,
             endpoint: &endpoint,
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({}),
@@ -2614,7 +2710,7 @@ async fn a_plugin_call_from_an_agent_outside_the_crew_is_refused() {
             agent,
             kind: &PluginKind::Neon,
             endpoint: &endpoint,
-            account: None,
+            account: plugins::Held::Absent,
         },
         "run_sql",
         &serde_json::json!({}),
@@ -2864,7 +2960,13 @@ mod deployments {
 
         let answer = plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "turn_on",
             &serde_json::json!({ "what": "the kettle" }),
         )
@@ -2934,7 +3036,13 @@ mod deployments {
 
         plugins::call(
             &store,
-            plugins::Target { group, agent, kind: &kind, endpoint: kind.endpoint(), account: None },
+            plugins::Target {
+                group,
+                agent,
+                kind: &kind,
+                endpoint: kind.endpoint(),
+                account: plugins::Held::Absent,
+            },
             "turn_on",
             &serde_json::json!({ "what": "the kettle" }),
         )
@@ -3093,9 +3201,10 @@ mod deployments {
         .expect("connected with a key");
 
         let dialed = store.plugin_dial(plugin.id).unwrap().expect("the row it was written as");
-        let report = plugins::check(&store, plugin.id, dialed, kind.endpoint(), None)
-            .await
-            .expect("and the key is still accepted");
+        let report =
+            plugins::check(&store, plugin.id, dialed, kind.endpoint(), plugins::Held::Absent)
+                .await
+                .expect("and the key is still accepted");
         assert_eq!(report.signin, SigninNeed::Accepted);
         assert_eq!(report.tools, vec!["turn_on".to_string()]);
     }

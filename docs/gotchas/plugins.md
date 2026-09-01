@@ -69,6 +69,29 @@ and `account.rs`.
   `NotChosen` is said before `ToolNotChosen`. Two of the four send an agent to a
   peer and two do not, and an agent told to ask around about a tool nobody has
   spends a turn proving it, as does the peer.
+- **A machine with no account and an account that could not renew are two
+  refusals.** `Runtime::account_token` folded them into one `None`, so an agent
+  whose one Gmail call caught a refused renewal was handed the sentence about
+  signing in: it escalated, told its operator to reconnect Google at guaca.bot,
+  and sent none of that day's outreach, on a machine that was signed in and
+  serving Google calls seven minutes later. `Held` is the three states, and
+  `Held::read` is the only place an `AccountError` is sorted into them, because
+  the answer an agent reads and the answer an operator reads must not be able to
+  disagree. `AccountRefused` carries what the service said and says to wait; it
+  is the one plugin refusal that must never mention Settings.
+- **What the service answered is only in `account.rs`, so that is where it is
+  logged.** Every caller of `access` dropped it with `.ok()`, which is why the
+  status behind that day was not recoverable afterwards from anything: no
+  transcript, no log, nothing on the desk. Only the transport branch had a line.
+  Both branches have one now, and neither is the caller's to write.
+- **Two callers renewing at once is one of them holding a revoked token.** The
+  account's refresh token rotates and the presented one is revoked, so a crew
+  that all reach for Google in the same second race to retire each other's, and
+  the loser gets an `invalid_grant` that reads like an account nobody signed in
+  to. `Subscription` has had the gate for this since the ChatGPT sign-in
+  landed; `Account` did not, and the same failure arrived by the same route.
+  `Account::renewing`, and the fast path above it stays outside the lock so a
+  token with an hour left never queues behind somebody's refresh.
 - **The tool half of that rule is Rust and the agent half is SQL, and that is
   not an oversight.** `PLUGIN_REACHED_BY_AGENT` is one fragment pasted into two
   queries; the tools cannot be, because the tool list is a JSON column and
