@@ -62,6 +62,21 @@ code.
   would be read and never answered. A peer's message waits for the same reason
   from the other end: it is a hop with a reply owed, and answering it as a
   footnote to somebody else's turn is not an answer. `Runtime::take_in`.
+- **Text a `ToPeer` turn trails after answering its peer belongs to the operator
+  or to nobody, and which one is `Store::operator_addressed`.** Dropping all of
+  it was right for the case it was written for and wrong for the manager. Seven
+  workers each writing "I replied to the Chief of Staff" is mail from a
+  conversation the operator was never in; the same turn shape on the one agent
+  they *did* write to is the report, and that agent has no other way to send
+  one. Its first turn is `ToOperator` and every turn after it is woken by a
+  peer, so `ToPeer` is the only mode it is ever in again, `send_message`
+  resolves agent names only, and a file attached afterward routes to the peer
+  too. Measured on a real crew of four: twenty-seven minutes, 499 model calls,
+  ten reports written and addressed to the operator by name, none delivered, and
+  the operator's own message in the middle of it asking why nobody was working.
+  The rule is per run in both directions, so a manager is not owed a report on a
+  run the operator started somewhere else. `emit_reply`, and the pair of
+  cascade tests either side of the carve-out.
 - **A turn remembers what its own prompt already says, and intake renders
   against that.** `deliver` writes to the store before the inbox, so a message
   queued behind the one being answered is in the history the turn just read and
