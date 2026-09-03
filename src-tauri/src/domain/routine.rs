@@ -16,12 +16,12 @@
 //! on the clock or need a sentinel, and a sentinel is a date the operator would
 //! eventually be shown.
 
-use chrono::{
-    DateTime, Datelike, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, TimeZone, Weekday,
-};
+use chrono::{Datelike, Duration, NaiveDate, Weekday};
 use serde::{Deserialize, Serialize};
 
 use super::ids::{AgentId, RoutineId, RunId};
+// Shared with the calendar, which crosses the same line for a different reason.
+use super::{instant, local};
 
 /// What makes a routine fire.
 ///
@@ -364,28 +364,6 @@ fn months_after(anchor: NaiveDate, n: i64) -> Option<NaiveDate> {
 fn days_in_month(year: i32, month: u32) -> Option<u32> {
     let (next_year, next_month) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
     NaiveDate::from_ymd_opt(next_year, next_month, 1)?.pred_opt().map(|last| last.day())
-}
-
-/// The local wall-clock moment a timestamp lands on.
-fn local(ms: i64) -> Option<DateTime<Local>> {
-    DateTime::from_timestamp_millis(ms).map(|utc| utc.with_timezone(&Local))
-}
-
-/// The instant a local wall-clock time happens at.
-///
-/// Both DST edges are handled here rather than left to the caller. Springing
-/// forward deletes an hour, so a routine anchored inside it has no time to fire
-/// at that day and takes the next hour; falling back doubles one, and the first
-/// pass is the one that was meant.
-fn instant(naive: NaiveDateTime) -> Option<i64> {
-    match Local.from_local_datetime(&naive) {
-        LocalResult::Single(at) => Some(at.timestamp_millis()),
-        LocalResult::Ambiguous(first, _) => Some(first.timestamp_millis()),
-        LocalResult::None => {
-            let shifted = naive.checked_add_signed(Duration::hours(1))?;
-            Local.from_local_datetime(&shifted).earliest().map(|at| at.timestamp_millis())
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

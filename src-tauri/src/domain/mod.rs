@@ -6,6 +6,7 @@ pub mod envelope;
 pub mod escalation;
 pub mod group;
 pub mod ids;
+pub mod occasion;
 pub mod plugin;
 pub mod promise;
 pub mod repository;
@@ -17,6 +18,8 @@ pub mod worknote;
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use chrono::{DateTime, Duration, Local, LocalResult, NaiveDateTime, TimeZone};
 
 /// Milliseconds since the Unix epoch.
 ///
@@ -34,6 +37,33 @@ pub fn now_ms() -> i64 {
     LAST.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |prev| Some(wall.max(prev + 1)))
         .map(|prev| wall.max(prev + 1))
         .unwrap_or(wall)
+}
+
+/// The local wall-clock moment a timestamp lands on.
+///
+/// Here rather than in one of the two modules that need it, beside `now_ms`,
+/// because it is the same kind of fact: this app stores instants and shows
+/// people wall clocks, and the conversion between the two has one answer. A
+/// schedule and a calendar both cross that line and neither owns it.
+pub fn local(ms: i64) -> Option<DateTime<Local>> {
+    DateTime::from_timestamp_millis(ms).map(|utc| utc.with_timezone(&Local))
+}
+
+/// The instant a local wall-clock time happens at.
+///
+/// Both DST edges are handled here rather than left to the caller. Springing
+/// forward deletes an hour, so a moment anchored inside it does not exist that
+/// day and takes the next hour; falling back doubles one, and the first pass is
+/// the one that was meant.
+pub fn instant(naive: NaiveDateTime) -> Option<i64> {
+    match Local.from_local_datetime(&naive) {
+        LocalResult::Single(at) => Some(at.timestamp_millis()),
+        LocalResult::Ambiguous(first, _) => Some(first.timestamp_millis()),
+        LocalResult::None => {
+            let shifted = naive.checked_add_signed(Duration::hours(1))?;
+            Local.from_local_datetime(&shifted).earliest().map(|at| at.timestamp_millis())
+        }
+    }
 }
 
 /// Trims a string and cuts it to `max` characters, on a word where it can.

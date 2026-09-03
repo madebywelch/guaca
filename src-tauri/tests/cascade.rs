@@ -1652,6 +1652,150 @@ async fn agents_run_concurrently_rather_than_one_after_another() {
     );
 }
 
+// ---- the calendar --------------------------------------------------------
+
+#[tokio::test]
+async fn an_agent_writes_its_crews_calendar_and_is_told_back_the_date_it_stored() {
+    // The answer restating the local wall clock is the whole safety mechanism
+    // on a date. It is the one argument a model gets wrong silently, and told
+    // back what was stored it reads its own mistake in the same turn instead of
+    // the operator finding it a week later.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("On the calendar.".into())
+        } else {
+            Script::Note { title: "Board call".into(), starts_at: "2099-09-14 15:00".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Board call on the 14th at 3.").unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Board call"), "got {results:?}");
+    assert!(results.contains("3:00 PM"), "the stored wall clock has to come back: {results:?}");
+    assert!(results.contains("Mon 14 Sep 2099"), "with the day on it: {results:?}");
+
+    let stored = h.runtime.store().occasions(0, i64::MAX, None, 50).unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].title, "Board call");
+    assert_eq!(stored[0].agent_id, Some(h.id("Manager")), "who wrote it is kept");
+}
+
+#[tokio::test]
+async fn a_date_a_model_invented_is_refused_with_the_two_shapes_that_work() {
+    // A refusal that only says no gets reworded and retried. This one has to
+    // carry the formats, because the model has no other way to learn them
+    // inside the turn.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Fixing that.".into())
+        } else {
+            Script::Note { title: "Board call".into(), starts_at: "next tuesday".into() }
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let run = h.runtime.send_from_human(h.id("Manager"), "Put the call on next Tuesday.").unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(results.contains("Refused"), "got {results:?}");
+    assert!(results.contains("2026-09-14 15:00"), "with a working time: {results:?}");
+    assert!(
+        h.runtime.store().occasions(0, i64::MAX, None, 50).unwrap().is_empty(),
+        "nothing was written"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_cannot_move_another_crews_meeting() {
+    // The wall, end to end. The id is real, the occasion exists, and the only
+    // thing stopping the move is that it belongs to a crew this agent is not
+    // in. An id is a thing a model can invent, which is why the group is taken
+    // from the card and never from the call.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("Understood.".into())
+        } else {
+            // The id is substituted into the prompt the operator sends, so the
+            // script reads it back out of the conversation it is answering.
+            let asked = body["messages"]
+                .as_array()
+                .and_then(|turns| turns.last())
+                .and_then(|turn| turn["content"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let id = asked.rsplit(' ').next().unwrap_or("").trim_end_matches('.').to_string();
+            Script::Move { action: "update".into(), id, starts_at: "2099-12-25 09:00".into() }
+        }
+    })
+    .await;
+
+    let h = harness_in_groups(
+        &stub,
+        &[("Manager", Some("Front")), ("Chef", Some("Back"))],
+        GuardLimits::default(),
+    );
+
+    // Chef's crew has a deposition. Manager is in the other crew.
+    let theirs = h.runtime.store().get_agent(h.id("Chef")).unwrap().unwrap().group_id;
+    let when = guac_lib::domain::occasion::parse_when("2099-11-02 10:00").unwrap();
+    let clean =
+        guac_lib::domain::occasion::Clean::new(theirs, None, "Deposition", "", "", when, Some(60))
+            .unwrap();
+    let hidden = h.runtime.store().create_occasion(&clean).unwrap();
+
+    let run = h
+        .runtime
+        .send_from_human(h.id("Manager"), &format!("Move the deposition, id {}", hidden.id))
+        .unwrap();
+    h.settle(run).await;
+
+    let results = tool_results(&stub).join("\n");
+    assert!(
+        results.contains("no occasion with the id"),
+        "an occasion in another crew must be indistinguishable from one that never existed, \
+         otherwise the refusal itself says whose it is, got {results:?}"
+    );
+
+    let untouched = h.runtime.store().any_occasion(hidden.id).unwrap().unwrap();
+    assert_eq!(untouched.starts_at, hidden.starts_at, "and it must not have moved");
+}
+
+#[tokio::test]
+async fn an_agent_reads_what_its_own_crew_already_has() {
+    // The control for the test above: the wall must not be a blanket ban. The
+    // fortnight in front of the crew is in the prompt, which is what an agent
+    // asked about Thursday answers from.
+    let stub = serve(|_| Script::Say("Nothing else that week.".into())).await;
+
+    let h = harness(&stub, &["Manager"], GuardLimits::default());
+    let mine = h.runtime.store().get_agent(h.id("Manager")).unwrap().unwrap().group_id;
+    let soon = now_ms() + 2 * 86_400_000;
+    let clean = guac_lib::domain::occasion::Clean::new(
+        mine,
+        None,
+        "Board call",
+        "",
+        "",
+        guac_lib::domain::occasion::When { starts_at: soon, all_day: false },
+        Some(60),
+    )
+    .unwrap();
+    h.runtime.store().create_occasion(&clean).unwrap();
+
+    let run = h.runtime.send_from_human(h.id("Manager"), "What is on this week?").unwrap();
+    h.settle(run).await;
+
+    let prompt = prompts_by_agent(&stub).remove("Manager").unwrap_or_default();
+    assert!(prompt.contains("Board call"), "got {prompt}");
+    assert!(prompt.contains("in 2 days"), "with how far off it is: {prompt}");
+}
+
 // ---- group isolation -----------------------------------------------------
 
 #[tokio::test]

@@ -18,6 +18,8 @@ interface Props {
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
   onOpenCompost: () => void;
+  /** The workspace calendar: every crew's dates, in one place. */
+  onOpenCalendar: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
   /** The plus beside the wordmark. App-level, not any one row's. */
@@ -58,6 +60,7 @@ export function Sidebar({
   onEditGroup,
   onOpenCafeteria,
   onOpenCompost,
+  onOpenCalendar,
   onOpenSettings,
   onOpenSearch,
   onNewAgent,
@@ -670,6 +673,16 @@ export function Sidebar({
               ☰
             </span>
             Cafeteria
+          </button>
+          {/* Always drawn, unlike the compost above it, because an empty
+              calendar is the state it is most worth reaching: the compost is
+              discovered the moment it has something in it, and this is
+              discovered before anybody has put anything on it. */}
+          <button type="button" className="btn btn--rail" onClick={onOpenCalendar}>
+            <span aria-hidden="true" className="rail__hash">
+              ▤
+            </span>
+            Calendar
           </button>
           {/* Drawn only while there is something in it, which is what keeps the
               footer two rows for an operator who has never deleted anybody. It

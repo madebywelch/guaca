@@ -295,6 +295,20 @@ pub enum UiEvent {
         agent_id: AgentId,
     },
 
+    /// Something moved on one crew's calendar.
+    ///
+    /// The crew rather than the agent, because the calendar is the crew's: an
+    /// agent's write is read by every other agent in it and drawn on a surface
+    /// that is showing every crew at once. Same argument `RoutinesChanged`
+    /// makes about a panel drawn before the routine existed, one scope up.
+    ///
+    /// The operator's own edits do not come through here. Those are a command
+    /// that hands the row straight back, and the view that made the call is the
+    /// view that already has it.
+    CalendarChanged {
+        group_id: GroupId,
+    },
+
     /// One agent's memory was rewritten by the agent itself.
     ///
     /// Same argument as `RoutinesChanged`, one panel over: the operator reads

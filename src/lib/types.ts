@@ -1060,6 +1060,13 @@ export type UiEvent =
    * agent works in its repository for twenty minutes, and the crew reads as
    * stopped at exactly the moment it is building.
    */
+  /**
+   * Something moved on one crew's calendar.
+   *
+   * The crew rather than the agent, because the calendar is the crew's and the
+   * panel drawing it is usually showing every crew at once.
+   */
+  | { type: "calendarChanged"; groupId: GroupId }
   | { type: "codingJobStarted"; agentId: AgentId; repositoryId: RepositoryId; repository: string }
   | { type: "codingJobFinished"; agentId: AgentId; repositoryId: RepositoryId }
   /**
@@ -1112,6 +1119,68 @@ export interface GroupReset {
   /** Working notes dropped, which is the other store and a row count. */
   workingNotes: number;
   calls: number;
+}
+
+export type OccasionId = string;
+
+/**
+ * One thing on a crew's calendar.
+ *
+ * Guaca's own, not a view of Google's. What is on it is what an agent or the
+ * operator wrote down as coming: meetings, deadlines, filings, renewals. It
+ * fires nothing and wakes nobody, which is the whole of what separates it from
+ * a {@link Routine}.
+ */
+export interface Occasion {
+  id: OccasionId;
+  /**
+   * The crew whose calendar this is on, and the wall. An agent can only reach
+   * occasions in its own crew; the operator's view is the one read that crosses
+   * every crew at once.
+   */
+  groupId: GroupId;
+  /**
+   * The agent that put it there. `null` is the operator's own, and stays `null`
+   * once written: an occasion is the crew's rather than the agent's.
+   */
+  agentId: AgentId | null;
+  title: string;
+  /** What is worth knowing to walk into it prepared. Often empty. */
+  detail: string;
+  /** A room, a city, a link. Often empty. */
+  place: string;
+  /** When it starts. Local midnight of the day when {@link Occasion.allDay}. */
+  startsAt: number;
+  /**
+   * How long it runs. `null` is a moment with no stated end, which most
+   * deadlines are, and is always `null` on an all-day occasion.
+   */
+  minutes: number | null;
+  /**
+   * A day with no time on it: a deadline, a filing, a birthday. Distinct from
+   * midnight, which is a time somebody chose, and the reason nothing may draw
+   * `startsAt` as a clock without checking this first.
+   */
+  allDay: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What the operator can set on one.
+ *
+ * `startsAt` is the string that was typed, parsed in Rust, which is what lets
+ * one field mean both `2026-09-14` for a whole day and `2026-09-14 15:00` for a
+ * time. A second field saying which it was would be a field the two writers
+ * could disagree on.
+ */
+export interface OccasionDraft {
+  groupId: GroupId;
+  title: string;
+  detail: string;
+  place: string;
+  startsAt: string;
+  minutes: number | null;
 }
 
 export type RoutineId = string;

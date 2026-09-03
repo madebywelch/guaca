@@ -1317,6 +1317,70 @@ ALTER TABLE repositories ADD COLUMN bench TEXT NOT NULL DEFAULT 'shared';
 ALTER TABLE agents ADD COLUMN browser_consent TEXT NOT NULL DEFAULT 'open';
 "#,
     ),
+    (
+        46,
+        r#"
+-- The crew's own calendar: dates it is answerable for.
+--
+-- Not the operator's real calendar, which is the Google plugin's job and is
+-- read rather than kept. This is the half nothing in the app held. An agent
+-- that learned a filing was due on the 15th, that a customer had moved a call,
+-- or that a contract lapsed at month end had three stores to choose from and
+-- all three were wrong: memory is what an agent knows and outlives the date, a
+-- working note expires on its own and carries no moment, and a routine is work
+-- the agent will do rather than a thing that is happening. What none of them
+-- can be read as is "what is coming", which is the one question a calendar
+-- answers.
+--
+-- Nothing here fires. A row is a fact, not a timer, and that is deliberate
+-- rather than unfinished: `routines` is the table that wakes an agent up, and
+-- folding the two together would turn every note about a customer's schedule
+-- into an agent running at 3am.
+--
+-- `group_id` is the wall and is why this table is not keyed on the agent. A
+-- crew shares one calendar, every agent in it reads the same list, and no agent
+-- can reach another crew's. It is `REFERENCES groups(id)` without a cascade,
+-- matching every other group-scoped table here: `Store::delete_group` takes the
+-- rows out itself, in order, because these foreign keys are enforced.
+--
+-- `agent_id` is nullable, and NULL is the operator's own writes rather than a
+-- deleted agent's: deleting an agent marks the row terminated and never removes
+-- it, so this cascade is the same standing belt every other agent-scoped table
+-- here wears. What is different is what a deletion does *not* do. A deleted
+-- agent's memory, schedule and working notes go with it because they are the
+-- agent's own; its occasions stay, because a board meeting does not stop
+-- happening when the agent that heard about it is let go, and the calendar it
+-- is on belongs to the crew.
+--
+-- `starts_at` is an instant for both kinds of row, and an all-day one holds
+-- local midnight of its day with `all_day` set. That is what lets one column,
+-- one index and one ORDER BY serve a deadline and a three o'clock call at once.
+-- Midnight alone could not: it is a real time somebody might have chosen, and a
+-- filing drawn as "12:00 AM" is a filing nobody reads as a deadline.
+--
+-- `minutes` is null for a moment with no stated end, which is most of them, and
+-- is always null when `all_day` is set. A day has no length to state.
+CREATE TABLE occasions (
+    id         TEXT    PRIMARY KEY,
+    group_id   TEXT    NOT NULL REFERENCES groups(id),
+    agent_id   TEXT    REFERENCES agents(id) ON DELETE SET NULL,
+    title      TEXT    NOT NULL,
+    detail     TEXT    NOT NULL DEFAULT '',
+    place      TEXT    NOT NULL DEFAULT '',
+    starts_at  INTEGER NOT NULL,
+    minutes    INTEGER,
+    all_day    INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- The two questions anything asks. The operator's view is every crew across a
+-- window of days, and an agent's is one crew across the fortnight in front of
+-- it; neither is served well by the other's index.
+CREATE INDEX occasions_when ON occasions (starts_at);
+CREATE INDEX occasions_crew ON occasions (group_id, starts_at);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way
