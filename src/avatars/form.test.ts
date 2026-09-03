@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { CHARACTERS } from "./catalog";
-import { AIM, aimedEye, type Drawn, eyesAt, gazeAt } from "./eyes";
-import { blend, bodyPoints, FORM, outline } from "./form";
+import { AIM, aimedEye, type Drawn, eyesAt, gazeAt, type Mass, SETTLE, settle } from "./eyes";
+import { blend, bodyPoints, FORM, grip, outline, PULL } from "./form";
 import { MOODS, type Mood } from "./moods";
 
 const MOOD_KEYS = Object.keys(MOODS) as Mood[];
@@ -42,6 +42,74 @@ describe("the body", () => {
       }
     }
     expect(worst, `furthest was ${where}`).toBeLessThanOrEqual(FORM.reach);
+  });
+
+  // A message landing is added to the look, so the gaze the body is handed can
+  // be further than any gaze a mood produces, and an aimed look can land on any
+  // mood at all. `PULL.hold` caps the look and the stretch is cut to the room
+  // the outline has left, so this drives every creature in every mood a good
+  // deal past the cap, in every direction, and expects the outline to stop
+  // where it says. Before the stretch was bounded on the outline, a puddle
+  // aimed down was three units over, and nothing sampled it.
+  it("stays inside the reach whatever it is handed", () => {
+    const past = PULL.hold * 1.15;
+    let worst = 0;
+    let where = "";
+    for (const lump of CHARACTERS) {
+      for (const key of MOOD_KEYS) {
+        const mood = MOODS[key];
+        for (let dir = 0; dir < 16; dir++) {
+          const a = (dir / 16) * Math.PI * 2;
+          const gaze: [number, number] = [Math.cos(a) * past, Math.sin(a) * past];
+          for (let step = 0; step < 8; step++) {
+            const t = step * 0.37;
+            for (const [x, y] of bodyPoints(lump, mood.shape, t, gaze).pts) {
+              const away = Math.hypot(x - FORM.center, y - FORM.center);
+              if (away > worst) {
+                worst = away;
+                where = `${lump.key} ${key} at ${t.toFixed(2)}s looking ${dir}/16`;
+              }
+            }
+          }
+        }
+      }
+    }
+    expect(worst, `furthest was ${where}`).toBeLessThanOrEqual(FORM.reach);
+  });
+
+  // And the cut is a cut, not a cure: a look that fits is left exactly as it
+  // was asked for, so the bound changes nothing about a frame that was inside.
+  it("leaves a look that fits alone", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const rest = bodyPoints(lump, {}, 0).pts;
+    const look = bodyPoints(lump, {}, 0, [0.3, 0]).pts;
+    const expected = 0.3 * (PULL.stretch + PULL.lean) * FORM.radius;
+    const drawn = ((look[0] as number[])[0] as number) - ((rest[0] as number[])[0] as number);
+    // the shear moves the same point a little; the stretch and the lean are the rest
+    expect(drawn).toBeGreaterThan(expected * 0.9);
+    expect(drawn).toBeLessThan(expected * 1.2);
+  });
+
+  // The whole of what tells a pear from a lump: the front narrows as it is
+  // drawn out, and the back is left the shape it was.
+  it("draws the front out into a snout and leaves the back round", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const rest = bodyPoints(lump, {}, 0).pts;
+    const look = bodyPoints(lump, {}, 0, [0.36, 0]).pts;
+    const n = FORM.samples;
+    // a point a quarter turn ahead of the tip, on the way to it, is narrower
+    const shoulder = Math.floor(n / 8);
+    const restShoulder = (rest[shoulder] as number[])[1] as number;
+    const lookShoulder = (look[shoulder] as number[])[1] as number;
+    expect(lookShoulder - FORM.center).toBeLessThan(restShoulder - FORM.center);
+    // and the back has moved by the lean and the shear, which is a fraction of
+    // what the tip has
+    const back = Math.floor(n / 2);
+    const moved = ((look[back] as number[])[0] as number) - ((rest[back] as number[])[0] as number);
+    const tip = ((look[0] as number[])[0] as number) - ((rest[0] as number[])[0] as number);
+    expect(Math.abs(moved)).toBeLessThan(tip / 3);
   });
 
   // The number is not decoration: `orb.test.ts` seats a crew on it, so a reach
@@ -85,6 +153,61 @@ describe("the body", () => {
     const far = Math.floor(FORM.samples / 2);
     expect((right[near] as number[])[0]).toBeGreaterThan((rest[near] as number[])[0] as number);
     expect((right[far] as number[])[0]).toBeGreaterThan((rest[far] as number[])[0] as number);
+  });
+
+  // The whole point of the ramp: an idle creature glancing about is a creature
+  // whose body is still, and a look to the edge of the range is the one that
+  // takes the body with it. Measured on the outline, not on `grip`, so a term
+  // that read the raw gaze would fail here.
+  it("hardly moves for a glance and moves for a stare", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const moved = (gaze: [number, number]) => {
+      const rest = bodyPoints(lump, {}, 0).pts;
+      const look = bodyPoints(lump, {}, 0, gaze).pts;
+      let most = 0;
+      for (let i = 0; i < rest.length; i++) {
+        const [ax, ay] = rest[i] as [number, number];
+        const [bx, by] = look[i] as [number, number];
+        most = Math.max(most, Math.hypot(bx - ax, by - ay));
+      }
+      return most;
+    };
+    const glance = moved([0.12, 0]);
+    const stare = moved([0.36, 0]);
+    expect(glance).toBeLessThan(0.6);
+    expect(stare).toBeGreaterThan(glance * 10);
+  });
+
+  it("answers no look under quiet, the whole look past wide, and none past hold", () => {
+    expect(grip(PULL.quiet)).toBe(0);
+    expect(grip(PULL.wide)).toBeCloseTo(PULL.wide, 6);
+    expect(grip(PULL.hold * 2)).toBeCloseTo(PULL.hold, 6);
+    // and it is monotone, so a longer look never moves the body less
+    let last = 0;
+    for (let r = 0; r <= 0.6; r += 0.01) {
+      const g = grip(r);
+      expect(g).toBeGreaterThanOrEqual(last);
+      last = g;
+    }
+  });
+
+  // A lean is the top going further than the base. The other way round is a
+  // creature sliding across its box, which is the thing this design exists to
+  // avoid, and a shear about the center would move both by the same amount.
+  it("cranes over toward a hard look on a planted base", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const rest = bodyPoints(lump, {}, 0).pts;
+    const right = bodyPoints(lump, {}, 0, [0.36, 0]).pts;
+    const top = Math.floor((FORM.samples * 3) / 4);
+    const base = Math.floor(FORM.samples / 4);
+    const topMoved =
+      ((right[top] as number[])[0] as number) - ((rest[top] as number[])[0] as number);
+    const baseMoved =
+      ((right[base] as number[])[0] as number) - ((rest[base] as number[])[0] as number);
+    expect(topMoved).toBeGreaterThan(1);
+    expect(Math.abs(baseMoved)).toBeLessThan(topMoved / 3);
   });
 
   it("blends one shape into another without leaving either", () => {
@@ -240,6 +363,43 @@ describe("the eyes", () => {
     expect(up.dy).toBe(dash.dy);
   });
 
+  // A cocked brow is the one expression a mirrored pair cannot make.
+  it("lifts one eye over the other by the skew", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const [left, right] = eyesAt(
+      lump,
+      { w: 0.5, h: 1.5, skew: 0.3 },
+      { blink: false },
+      0,
+      true,
+      [0, 0],
+    ) as [Drawn, Drawn];
+    expect(right.y).toBeLessThan(left.y);
+    expect(left.y - right.y).toBeCloseTo(0.6 * lump.eye.r, 6);
+    const [a, b] = eyesAt(lump, { w: 0.5, h: 1.5 }, { blink: false }, 0, true, [0, 0]) as [
+      Drawn,
+      Drawn,
+    ];
+    expect(a.y).toBe(b.y);
+  });
+
+  // Perspective on a turned head: the eye that went round the curve is smaller.
+  it("shrinks the far eye and grows the near one on a sideways look", () => {
+    const lump = CHARACTERS[0];
+    if (!lump) throw new Error("no cast");
+    const [left, right] = eyesAt(lump, { w: 0.02, h: 2 }, { blink: false }, 0, true, [0.36, 0]) as [
+      Drawn,
+      Drawn,
+    ];
+    expect(right.h).toBeGreaterThan(left.h);
+    const [l0, r0] = eyesAt(lump, { w: 0.02, h: 2 }, { blink: false }, 0, true, [0, 0]) as [
+      Drawn,
+      Drawn,
+    ];
+    expect(l0.h).toBe(r0.h);
+  });
+
   it("draws one eye for a one-eyed character and two for everyone else", () => {
     for (const lump of CHARACTERS) {
       const drawn = eyesAt(lump, MOODS.idle.eye, MOODS.idle.watch, 0, true, [0, 0]);
@@ -276,6 +436,50 @@ describe("the eyes", () => {
     expect(moving).toBeLessThan(200 * 0.25);
   });
 
+  // Without `far`, no target is at the edge of the range, because a uniform
+  // draw does not land there; with it, some are exactly there and level.
+  it("goes the whole way to one side for the share of looks it was told to", () => {
+    const glances = { range: 0.4, hz: 1, cross: 0.01 };
+    const looks = { ...glances, far: 0.3 };
+    let farthest = 0;
+    let far = 0;
+    const N = 400;
+    for (let i = 0; i < N; i++) {
+      // sampled at the end of each slot, so every reading is a held target
+      const t = i + 0.99;
+      farthest = Math.max(farthest, Math.abs(gazeAt(t, glances)[0]));
+      const [x, y] = gazeAt(t, looks);
+      if (Math.abs(Math.abs(x) - 0.4) < 1e-9) {
+        far++;
+        expect(Math.abs(y)).toBeLessThan(0.4 * 0.2 + 1e-9);
+      }
+    }
+    expect(farthest).toBeLessThan(0.4);
+    expect(far / N).toBeGreaterThan(0.2);
+    expect(far / N).toBeLessThan(0.4);
+  });
+
+  // Every hold the same length is a metronome, and a metronome is the thing a
+  // slide is, arrived at from the other side.
+  it("does not jump on the beat every time", () => {
+    const gaze = { range: 0.3, hz: 1, cross: 0.05 };
+    const starts: number[] = [];
+    let last = gazeAt(0, gaze);
+    for (let step = 1; step < 4000; step++) {
+      const t = step * 0.005;
+      const at = gazeAt(t, gaze);
+      const still = Math.hypot(at[0] - last[0], at[1] - last[1]) < 1e-6;
+      const wasStill =
+        step > 1 &&
+        Math.hypot(last[0] - gazeAt(t - 0.01, gaze)[0], last[1] - gazeAt(t - 0.01, gaze)[1]) < 1e-6;
+      if (!still && wasStill) starts.push(t % 1);
+      last = at;
+    }
+    expect(starts.length).toBeGreaterThan(10);
+    const spread = Math.max(...starts) - Math.min(...starts);
+    expect(spread).toBeGreaterThan(0.2);
+  });
+
   it("follows a written gaze in the order it was written", () => {
     const script: [number, number, number][] = [
       [0, 0, 1],
@@ -286,5 +490,49 @@ describe("the eyes", () => {
     expect(gazeAt(1.5, gaze)[1]).toBeCloseTo(-0.3, 2);
     // and it cycles rather than running out
     expect(gazeAt(2.9, gaze)[1]).toBeCloseTo(0, 2);
+  });
+});
+
+describe("the look", () => {
+  // The eyes read this too, so it must never pass its target: an eye that
+  // overshoots is a wobble. And it must be quick, or a flick becomes a slide.
+  it("takes a step in about the settle time and never passes it", () => {
+    const mass: Mass = { gaze: [0, 0], vel: [0, 0] };
+    let peak = 0;
+    let arrived = Number.POSITIVE_INFINITY;
+    const dt = 1 / 120;
+    for (let step = 0; step < 240; step++) {
+      settle(mass, [0.3, 0], dt);
+      peak = Math.max(peak, mass.gaze[0]);
+      if (mass.gaze[0] > 0.3 * 0.95 && arrived === Number.POSITIVE_INFINITY) arrived = step * dt;
+    }
+    expect(peak).toBeLessThanOrEqual(0.3 + 1e-9);
+    expect(arrived).toBeLessThan(SETTLE * 2.5);
+    expect(mass.gaze[0]).toBeCloseTo(0.3, 3);
+  });
+
+  // A look the whole way to one side takes longer than a glance, because the
+  // body comes with it now, and a body that becomes a pear in a quarter of a
+  // second is a body that snapped.
+  it("crosses a long look more slowly than a short one", () => {
+    const time = (script: [number, number, number][]) => {
+      const gaze = { script, cross: 0.2 };
+      const target = script[1] as [number, number, number];
+      for (let t = 1; t < 2; t += 0.005) {
+        if (Math.abs(gazeAt(t, gaze)[0] - target[0]) < 1e-3) return t - 1;
+      }
+      return Number.POSITIVE_INFINITY;
+    };
+    const glance = time([
+      [0, 0, 1],
+      [0.1, 0, 1],
+    ]);
+    const look = time([
+      [0, 0, 1],
+      [0.4, 0, 1],
+    ]);
+    expect(glance).toBeLessThan(0.25);
+    expect(look).toBeGreaterThan(glance * 1.5);
+    expect(look).toBeLessThan(0.45);
   });
 });

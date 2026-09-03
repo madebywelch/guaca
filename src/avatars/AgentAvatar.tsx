@@ -5,7 +5,7 @@ import type { LiveCall } from "../lib/trail";
 import type { Activity, Lifecycle } from "../lib/types";
 import { lookupCharacter } from "./catalog";
 import { gaitOf, join, type Painter } from "./clock";
-import { AIM, aimedEye, blendEyes, type Drawn, eyePath, eyesAt, gazeAt, SETTLE } from "./eyes";
+import { AIM, aimedEye, blendEyes, type Drawn, eyePath, eyesAt, gazeAt, settle } from "./eyes";
 import { blend, bodyPoints, FORM, outline, type Point } from "./form";
 import { MOODS, type Mood, markFor, moodFor } from "./moods";
 
@@ -41,8 +41,6 @@ interface Props {
 
 /** How long one mood takes to become another. */
 const MORPH = 0.6;
-/** Stiffness of the follow, from the time the clay is allowed to take. */
-const SPRING = 2.2 / SETTLE;
 
 /** What a throw and a catch do to the mass, in body radii. */
 const KNOCK = {
@@ -60,7 +58,7 @@ interface Cell {
    * allowed to be a property of its id.
    */
   at: number;
-  /** Where the mass has got to, and how fast, in body radii. */
+  /** Where the look has got to, and how fast, in body radii. */
   gaze: Point;
   vel: Point;
   last: number;
@@ -184,8 +182,8 @@ export function AgentAvatar({
     const raw = live ? Math.min(1, (seconds - state.at) / MORPH) : 1;
     const u = raw * raw * (3 - 2 * raw);
 
-    /* Where it is looking. An aimed look at a peer outranks whatever the mood
-       would have done, because the point of that look is who it is for. */
+    /* Where it is asked to look. An aimed look at a peer outranks whatever the
+       mood would have done, because the point of that look is who it is for. */
     let eyeGaze: Point;
     if (now.look) {
       eyeGaze = [0, now.look === "up" ? -AIM.up : AIM.down];
@@ -197,18 +195,18 @@ export function AgentAvatar({
       eyeGaze = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
     }
 
-    /* The mass follows on a critically damped spring, so a look, a peer being
-       addressed and a message landing all arrive through one filter and none of
-       them can snap. */
+    /* One look, smoothed once, read by the eyes and the body at the same
+       instant, so the body is pulled as the eyes go rather than after they
+       went. `eyes.ts` owns the smoother, and the outline is bounded whatever
+       it is handed. */
     const dt = live ? Math.min(0.05, Math.max(0, seconds - state.last)) : 0;
     state.last = seconds;
-    for (const i of [0, 1] as const) {
-      const x = state.gaze[i];
-      const v = state.vel[i];
-      const accel = SPRING * SPRING * (eyeGaze[i] - x) - 2 * SPRING * v;
-      state.vel[i] = v + accel * dt;
-      state.gaze[i] = x + state.vel[i] * dt;
+    if (live) settle(state, eyeGaze, dt);
+    else {
+      state.gaze = [eyeGaze[0], eyeGaze[1]];
+      state.vel = [0, 0];
     }
+    eyeGaze = [state.gaze[0], state.gaze[1]];
     const bodyGaze: Point = [state.gaze[0], state.gaze[1]];
 
     /* A throw and a catch are displacements, not transforms: the creature is
