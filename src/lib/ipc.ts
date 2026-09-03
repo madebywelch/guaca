@@ -49,6 +49,9 @@ import type {
   HarnessOnMachine,
   HeaderPair,
   MessageId,
+  Occasion,
+  OccasionDraft,
+  OccasionId,
   Plugin,
   PluginAccess,
   PluginId,
@@ -360,6 +363,28 @@ export const api = {
   openEscalations: () => invoke<Escalation[]>("open_escalations"),
   /** Takes one off the desk. Not an answer: nothing is waiting on it. */
   clearEscalation: (id: EscalationId) => invoke<void>("clear_escalation", { id }),
+
+  /**
+   * What is on the calendar between two moments, soonest first.
+   *
+   * `groupId` left out is every crew at once, which is the operator's default
+   * and the one read in the app that crosses the wall between crews. Theirs to
+   * cross: the wall keeps one crew's agents from moving another's meeting, not
+   * the operator from seeing their own workspace.
+   *
+   * Half-open on `until`, so paging a month at a time neither drops an occasion
+   * nor draws one twice.
+   */
+  calendar: (from: number, until: number, groupId?: GroupId) =>
+    invoke<Occasion[]>("calendar", { from, until, groupId: groupId ?? null }),
+  createOccasion: (draft: OccasionDraft) => invoke<Occasion>("create_occasion", { draft }),
+  /**
+   * Rewrites one. The crew is taken from the row rather than from the draft:
+   * moving an occasion between crews is not an edit, and nothing offers it.
+   */
+  updateOccasion: (id: OccasionId, draft: OccasionDraft) =>
+    invoke<Occasion>("update_occasion", { id, draft }),
+  deleteOccasion: (id: OccasionId) => invoke<void>("delete_occasion", { id }),
 
   /** Refused if it was already answered or has lapsed. */
   decideApproval: (id: ApprovalId, decision: Decision) =>

@@ -28,6 +28,7 @@ pub const OPEN_ON_DESKTOP: &str = "open_on_desktop";
 pub const USE_SCREEN: &str = "use_screen";
 pub const BROWSE: &str = "browse";
 pub const SCHEDULE: &str = "schedule";
+pub const CALENDAR: &str = "calendar";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
 pub const ASK_OPERATOR: &str = "ask_operator";
@@ -899,6 +900,77 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: CALENDAR.to_string(),
+            // Every sentence about what does *not* happen is load-bearing. Told
+            // it had a calendar, a model treats writing a date on it as having
+            // arranged the thing: one added "Call Priya, Tue 3pm" and reported
+            // to the operator that the call was booked. Nobody outside this
+            // machine can see this, so the tool has to say so before it says
+            // anything else.
+            //
+            // The distinction from `schedule` is the other half, and it is the
+            // one an agent gets wrong in the expensive direction. A routine
+            // wakes it up; this does not. An agent that wants both writes both,
+            // and it is told that here rather than left to work it out from two
+            // tool names that sound alike.
+            description: format!(
+                "Your crew's calendar: what is coming that you and the operator are answerable \
+                 for. Meetings, deadlines, filings, renewals, launches, anything with a date on \
+                 it that somebody needs to see in advance. Keep it current as you learn things: \
+                 when a customer moves a call, `update` the occasion rather than adding a second \
+                 one, and `cancel` what is no longer happening. Everything on it belongs to your \
+                 crew and every agent in it reads the same list, so what you put here is how the \
+                 rest of them find out.\n\n\
+                 This is a record, not an arrangement. Writing here books nothing, invites \
+                 nobody and sends no mail: it is a note to your crew and to the operator. If the \
+                 thing itself needs arranging, arrange it, and then write down what you \
+                 arranged.\n\n\
+                 It also wakes nobody, which is what makes it different from `schedule`. A \
+                 routine is work you will do and it fires; an occasion is a thing that is \
+                 happening and it does not. If you need to prepare for something on this \
+                 calendar, put the occasion here and a routine there.\n\n\
+                 Times are local, written `2026-09-14 15:00`. A date on its own, `2026-09-14`, \
+                 is a whole day, which is what a deadline or a filing is. Today's date is in \
+                 your system prompt with the rest of the calendar; work from that rather than \
+                 guessing. Nothing here repeats: for a standing weekly meeting, add the next one \
+                 and keep a routine that adds the one after it. Titles are cut past {} \
+                 characters, so put what it is first and the rest in `detail`.",
+                crate::domain::occasion::MAX_TITLE
+            ),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "action": { "type": "string", "enum": ["list", "add", "update", "cancel"] },
+                    "title": {
+                        "type": "string",
+                        "description": "What is happening, in a few words: `Board call`,                                         `Q3 filing due`. On `update`, leave it out to keep the                                         title it already has."
+                    },
+                    "starts_at": {
+                        "type": "string",
+                        "description": "Local time, `2026-09-14 15:00`. A date on its own,                                         `2026-09-14`, is a whole day with no time on it. On                                         `update` this moves it; leave it out to change the                                         wording without moving the date."
+                    },
+                    "minutes": {
+                        "type": "integer",
+                        "description": "How long it runs, in minutes. Leave it out for something                                         with no length, which most deadlines and reminders are."
+                    },
+                    "place": {
+                        "type": "string",
+                        "description": "Where it happens, if that matters: a room, a city, a                                         link."
+                    },
+                    "detail": {
+                        "type": "string",
+                        "description": "What the operator needs in order to walk into it                                         prepared. One short paragraph, not a briefing."
+                    },
+                    "id": {
+                        "type": "string",
+                        "description": "The occasion to `update` or `cancel`. `list` shows every                                         one your crew has with its id."
+                    }
+                },
+                "required": ["action"],
+                "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: WRITE_DOCUMENT.to_string(),
             // The twelfth, and it exists because the eleventh had a hole under
             // it. `attach_file` hands over a file; until this, the only way an
@@ -1098,6 +1170,11 @@ pub enum ToolInvocation {
     Schedule {
         action: ScheduleAction,
     },
+    /// A write to the crew's calendar. The group is never in here: it is read
+    /// off the calling agent's own card at dispatch, which is the wall.
+    Calendar {
+        action: CalendarAction,
+    },
     CreateAgent {
         draft: NewAgent,
     },
@@ -1168,6 +1245,47 @@ pub enum ScheduleAction {
     },
 }
 
+/// What an agent can do to its crew's calendar.
+///
+/// Shaped like [`ScheduleAction`] on purpose. They are different things — one
+/// fires and one does not — but they are the two lists an agent keeps, and an
+/// agent that has learned `list`/`add`/`update`/`cancel` on one should not have
+/// to learn a second vocabulary for the other.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalendarAction {
+    List,
+    Add {
+        title: String,
+        detail: String,
+        place: String,
+        /// The date exactly as it was written, unparsed. Read where the error
+        /// can be handed back with the two shapes that work in it, which is the
+        /// runtime rather than here: a parse failure at this level would come
+        /// back as "unknown tool"-shaped noise instead of as a date the model
+        /// can correct.
+        starts_at: String,
+        minutes: Option<u32>,
+    },
+    /// Changes one that is already on it.
+    ///
+    /// Every field is optional and an absent one is left alone, for the reason
+    /// [`ScheduleAction::Update`] does the same: the commonest edit is a new
+    /// time on a meeting nobody renamed, and making an agent restate the title
+    /// to move the clock is how a second occasion for the same meeting gets
+    /// written.
+    Update {
+        id: String,
+        title: Option<String>,
+        detail: Option<String>,
+        place: Option<String>,
+        starts_at: Option<String>,
+        minutes: Option<u32>,
+    },
+    Cancel {
+        id: String,
+    },
+}
+
 /// What an agent can do to the screen it is looking at.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenAction {
@@ -1186,7 +1304,7 @@ pub enum ToolParseError {
     #[error(
         "unknown tool {name:?}. Available tools: directory, send_message, attach_file, \
          update_memory, note_progress, run_command, open_on_desktop, use_screen, browse, \
-         schedule, create_agent."
+         schedule, calendar, create_agent."
     )]
     UnknownTool { name: String },
     #[error("arguments for {name} were not valid JSON: {detail}")]
@@ -1221,6 +1339,10 @@ pub enum ToolParseError {
     UnknownScheduleAction,
     #[error("schedule needs {needs}")]
     IncompleteSchedule { needs: String },
+    #[error("calendar needs a known `action`")]
+    UnknownCalendarAction,
+    #[error("calendar needs {needs}")]
+    IncompleteCalendar { needs: String },
     #[error("use_screen {action} needs {needs}")]
     IncompleteScreenAction { action: String, needs: String },
     #[error("create_agent needs {needs}")]
@@ -1257,6 +1379,18 @@ impl ToolParseError {
                  listings\", \"repeat\": \"weekdays\"}}. To change one you already have, \
                  which is what a routine that needs a new time or new wording wants: \
                  {{\"action\": \"update\", \"id\": \"3\", \"repeat\": \"daily\"}}."
+            ),
+            ToolParseError::UnknownCalendarAction => {
+                "Error: `action` must be list, add, update or cancel. Use \
+                 {\"action\": \"list\"} to see what your crew already has on its calendar."
+                    .to_string()
+            }
+            ToolParseError::IncompleteCalendar { needs } => format!(
+                "Error: that `calendar` call needs {needs}. To add one: \
+                 {{\"action\": \"add\", \"title\": \"Board call\", \"starts_at\": \
+                 \"2026-09-14 15:00\", \"minutes\": 60}}. A date on its own is a whole day. \
+                 To move one your crew already has: {{\"action\": \"update\", \"id\": \
+                 \"...\", \"starts_at\": \"2026-09-15 10:00\"}}."
             ),
             ToolParseError::UnknownBrowseAction => {
                 "Error: `action` must be one of open, read, click, type, scroll or back. \
@@ -1861,6 +1995,94 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 .ok_or(ToolParseError::MissingText)?;
 
             Ok(ToolInvocation::Escalate { summary })
+        }
+        CALENDAR => {
+            let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
+                name: CALENDAR.to_string(),
+                detail: e.to_string(),
+            })?;
+            // A blank string is a model padding out its arguments rather than
+            // an instruction to blank the field: on an update it would wipe the
+            // title of a meeting that was only being moved. Same rule
+            // `schedule` follows one tool up, and for the same reason.
+            let words = |key: &str| {
+                value
+                    .get(key)
+                    .and_then(|v| v.as_str())
+                    .map(|text| text.trim().to_string())
+                    .filter(|text| !text.is_empty())
+            };
+            // Read as a string as well, because a model asked for an integer
+            // sends `"60"` often enough that dropping it would silently lose
+            // the length it was setting. Zero is a moment, settled in
+            // `occasion::Clean`, so it does not have to be caught twice.
+            let minutes = value.get("minutes").and_then(|v| match v {
+                serde_json::Value::Number(n) => n.as_i64(),
+                serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+                _ => None,
+            });
+            // Saturated rather than dropped, so an absurd number still reaches
+            // `occasion::Clean`, which refuses it as too long and says so. A
+            // dropped one would read back as an occasion with no length, which
+            // is the model's mistake made invisible.
+            let minutes = minutes.filter(|n| *n >= 0).map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+            // `when` and `date` are what a model reaches for when it has not
+            // read the schema, and both mean this. Refusing them costs a whole
+            // round trip to learn a synonym.
+            let starts = || words("starts_at").or_else(|| words("when")).or_else(|| words("date"));
+
+            match value.get("action").and_then(|v| v.as_str()).unwrap_or("list") {
+                "list" => Ok(ToolInvocation::Calendar { action: CalendarAction::List }),
+                "add" | "create" => {
+                    let Some(title) = words("title").or_else(|| words("what")) else {
+                        return Err(ToolParseError::IncompleteCalendar {
+                            needs: "a `title` saying what is happening".to_string(),
+                        });
+                    };
+                    let Some(starts_at) = starts() else {
+                        return Err(ToolParseError::IncompleteCalendar {
+                            needs: "a `starts_at` date".to_string(),
+                        });
+                    };
+                    Ok(ToolInvocation::Calendar {
+                        action: CalendarAction::Add {
+                            title,
+                            detail: words("detail").or_else(|| words("notes")).unwrap_or_default(),
+                            place: words("place").or_else(|| words("location")).unwrap_or_default(),
+                            starts_at,
+                            minutes,
+                        },
+                    })
+                }
+                "update" | "edit" | "change" | "move" | "reschedule" => {
+                    let Some(id) = words("id") else {
+                        return Err(ToolParseError::IncompleteCalendar {
+                            needs: "the `id` of the occasion to change, which `list` shows \
+                                    against every one your crew has"
+                                .to_string(),
+                        });
+                    };
+                    Ok(ToolInvocation::Calendar {
+                        action: CalendarAction::Update {
+                            id,
+                            title: words("title").or_else(|| words("what")),
+                            detail: words("detail").or_else(|| words("notes")),
+                            place: words("place").or_else(|| words("location")),
+                            starts_at: starts(),
+                            minutes,
+                        },
+                    })
+                }
+                "cancel" | "delete" | "remove" => {
+                    let Some(id) = words("id") else {
+                        return Err(ToolParseError::IncompleteCalendar {
+                            needs: "the `id` of the occasion to cancel".to_string(),
+                        });
+                    };
+                    Ok(ToolInvocation::Calendar { action: CalendarAction::Cancel { id } })
+                }
+                _ => Err(ToolParseError::UnknownCalendarAction),
+            }
         }
         SEND_MESSAGE => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -3054,13 +3276,183 @@ mod tests {
     }
 
     #[test]
+    fn a_calendar_add_carries_the_date_exactly_as_it_was_written() {
+        // Unparsed on purpose. A date the runtime cannot read has to come back
+        // to the model as a date with the two working shapes beside it, and a
+        // failure at this level would arrive as unknown-tool-shaped noise.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"add\", \"title\": \"  Board call  \", \
+              \"starts_at\": \"2026-09-14 15:00\", \"minutes\": 60, \
+              \"place\": \"Zoom\", \"detail\": \"Bring Q3\"}",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Calendar {
+                action: CalendarAction::Add {
+                    title: "Board call".to_string(),
+                    detail: "Bring Q3".to_string(),
+                    place: "Zoom".to_string(),
+                    starts_at: "2026-09-14 15:00".to_string(),
+                    minutes: Some(60),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn the_words_a_model_reaches_for_are_read_as_the_fields_they_mean() {
+        // `when`, `date`, `what`, `notes` and `location` all cost a round trip
+        // to be refused over, on a call that was otherwise correct.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"create\", \"what\": \"Filing due\", \"date\": \"2026-04-15\", \
+              \"notes\": \"Q1\", \"location\": \"Delaware\"}",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Calendar {
+                action: CalendarAction::Add {
+                    title: "Filing due".to_string(),
+                    detail: "Q1".to_string(),
+                    place: "Delaware".to_string(),
+                    starts_at: "2026-04-15".to_string(),
+                    minutes: None,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn a_length_sent_as_a_string_is_still_a_length() {
+        // A model asked for an integer sends `"60"` often enough that dropping
+        // it would silently lose the field it was setting.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"add\", \"title\": \"Standup\", \
+              \"starts_at\": \"2026-09-14 09:00\", \"minutes\": \"15\"}",
+        ))
+        .unwrap();
+        let ToolInvocation::Calendar { action: CalendarAction::Add { minutes, .. } } = parsed
+        else {
+            panic!("expected an add");
+        };
+        assert_eq!(minutes, Some(15));
+    }
+
+    #[test]
+    fn an_absurd_length_reaches_the_runtime_rather_than_being_dropped_here() {
+        // 90000 is "an hour and a half" in seconds. Dropped, it reads back as
+        // an occasion with no length and the model never learns; saturated, it
+        // is refused with a reason.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"add\", \"title\": \"Standup\", \
+              \"starts_at\": \"2026-09-14 09:00\", \"minutes\": 90000}",
+        ))
+        .unwrap();
+        let ToolInvocation::Calendar { action: CalendarAction::Add { minutes, .. } } = parsed
+        else {
+            panic!("expected an add");
+        };
+        assert_eq!(minutes, Some(90_000));
+    }
+
+    #[test]
+    fn an_update_leaves_out_what_it_is_not_changing() {
+        // The commonest edit is a new time on a meeting nobody renamed. Making
+        // an agent restate the title to move the clock is how a second occasion
+        // for one meeting gets written.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"reschedule\", \"id\": \"abc\", \
+              \"starts_at\": \"2026-09-15 10:00\"}",
+        ))
+        .unwrap();
+        assert_eq!(
+            parsed,
+            ToolInvocation::Calendar {
+                action: CalendarAction::Update {
+                    id: "abc".to_string(),
+                    title: None,
+                    detail: None,
+                    place: None,
+                    starts_at: Some("2026-09-15 10:00".to_string()),
+                    minutes: None,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn a_blank_calendar_field_is_padding_rather_than_an_erasure() {
+        // A model filling out every property it was shown must not wipe the
+        // title of a meeting it was only moving.
+        let parsed = parse(&call(
+            CALENDAR,
+            "{\"action\": \"update\", \"id\": \"abc\", \"title\": \"  \", \
+              \"detail\": \"\"}",
+        ))
+        .unwrap();
+        let ToolInvocation::Calendar { action: CalendarAction::Update { title, detail, .. } } =
+            parsed
+        else {
+            panic!("expected an update");
+        };
+        assert_eq!((title, detail), (None, None));
+    }
+
+    #[test]
+    fn a_calendar_call_with_no_action_lists() {
+        // The safe reading. Every other action changes something, and a model
+        // that forgot the field is far more likely to have meant "show me".
+        assert_eq!(
+            parse(&call(CALENDAR, "{}")).unwrap(),
+            ToolInvocation::Calendar { action: CalendarAction::List }
+        );
+    }
+
+    #[test]
+    fn an_incomplete_calendar_call_is_told_what_a_working_one_looks_like() {
+        let err =
+            parse(&call(CALENDAR, "{\"action\": \"add\", \"title\": \"Board call\"}")).unwrap_err();
+        assert!(matches!(err, ToolParseError::IncompleteCalendar { .. }));
+        let said = err.guidance();
+        assert!(said.contains("2026-09-14 15:00"), "{said}");
+        assert!(said.contains("whole day"), "{said}");
+
+        let no_id = parse(&call(CALENDAR, "{\"action\": \"cancel\"}")).unwrap_err();
+        assert!(matches!(no_id, ToolParseError::IncompleteCalendar { .. }));
+    }
+
+    #[test]
+    fn an_unknown_calendar_action_is_named_with_the_four_that_work() {
+        let err = parse(&call(CALENDAR, "{\"action\": \"invite\"}")).unwrap_err();
+        assert_eq!(err, ToolParseError::UnknownCalendarAction);
+        assert!(err.guidance().contains("list, add, update or cancel"), "{}", err.guidance());
+    }
+
+    #[test]
+    fn the_calendar_says_what_it_does_not_do() {
+        // The two sentences that stop a model reporting a booking it never
+        // made, and stop it reaching for this when it meant `schedule`. Both
+        // are failures the tool name invites.
+        let spec = spec(CALENDAR);
+        assert!(spec.description.contains("books nothing"), "{}", spec.description);
+        assert!(spec.description.contains("wakes nobody"), "{}", spec.description);
+        assert!(spec.description.contains("`schedule`"), "{}", spec.description);
+    }
+
+    #[test]
     fn every_tool_is_offered_with_a_strict_schema() {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            17,
+            18,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             create_agent, request_permission, ask_operator, escalate, send_message, \
+             calendar, create_agent, request_permission, ask_operator, escalate, send_message, \
              write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {

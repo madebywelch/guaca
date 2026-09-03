@@ -6747,6 +6747,261 @@ button {
 }
 
 /* ==========================================================================
+   The calendar
+
+   Guaca's own, and the one surface in the app that draws every crew at once.
+   Built like the compost and the cafeteria — a panel owning its own height,
+   with a head and a foot pinned to it and one scrolling half — because it is
+   the same kind of thing: somewhere you go, look at the whole workspace, and
+   come back from.
+
+   Wider than either of them, because a row here carries four things (a time, a
+   title, the crew it belongs to, where it is) and the time is a fixed column
+   the titles have to line up against. Narrower than settings, because there is
+   only ever one column of days.
+
+   The time column is the whole layout. Every row's title starts at the same
+   x whatever its time says, which is what makes a day scannable as a list of
+   what rather than a list of when; without it `All day` and `3:00 – 4:00 PM`
+   push their titles to two different places and the column visibly wanders.
+   ========================================================================== */
+
+.dialog--calendar:focus,
+.dialog--calendar:focus-visible {
+  outline: none;
+}
+
+.dialog.dialog--calendar {
+  width: min(46rem, 100%);
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 3rem);
+  padding: 0;
+}
+
+.calendar__head {
+  padding: var(--space-7) var(--space-7) var(--space-5);
+  border-bottom: 1px solid var(--edge);
+  flex: none;
+}
+
+.calendar__title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.calendar__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex: none;
+}
+
+/* A fieldset because it is one: a set of controls that only mean anything
+   together. Its own border and padding are cleared, since what separates this
+   row from the heading above it is air, not a box. */
+.calendar__crews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  border: 0;
+}
+
+/* A filter, not a tab: picking one narrows what is drawn and picking it again
+   is not how you get back — "All crews" is. So it is pressed rather than
+   selected, and the pressed state is the accent's ground rather than the
+   accent, because a row of amber chips would spend the one color that means
+   "answer me" on a filter. */
+.calendar__crew {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--control-h-sm);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--ground);
+  font-family: var(--font-ui);
+  font-size: var(--type-small);
+  color: var(--muted);
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease),
+    border-color var(--tempo-tap) var(--ease);
+}
+
+.calendar__crew:hover {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.calendar__crew[aria-pressed="true"] {
+  background: var(--flesh-soft);
+  border-color: var(--flesh);
+  color: var(--flesh);
+}
+
+.calendar__count {
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  color: var(--faint);
+}
+
+.calendar__crew[aria-pressed="true"] .calendar__count {
+  color: var(--flesh);
+}
+
+.calendar__body {
+  overflow-y: auto;
+  flex: 1;
+  padding: var(--space-4) var(--space-7) var(--space-6);
+}
+
+.calendar__day {
+  padding-top: var(--space-5);
+}
+
+/* The date sticks to the top of the scroll, so a month scrolled halfway still
+   says which day you are looking at. It is the one thing in this panel that
+   would otherwise leave the viewport while the rows it names are still in it. */
+.calendar__date {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) 0;
+  background: var(--ground);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.calendar__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.occasion {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  align-items: baseline;
+  gap: var(--space-5);
+  width: 100%;
+  padding: var(--space-4) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--tempo-tap) var(--ease);
+}
+
+.occasion:hover {
+  background: var(--sunken);
+}
+
+/* Drawn back rather than hidden. Something that happened this morning is still
+   what today was, and a calendar that dropped it would be a calendar that
+   empties itself as the day goes on. */
+.occasion[data-past="true"] {
+  opacity: 0.55;
+}
+
+.occasion__when {
+  font-family: var(--font-mono);
+  font-size: var(--type-meta);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.occasion__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.occasion__title {
+  font-family: var(--font-ui);
+  font-size: var(--type-ui);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.occasion__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  font-size: var(--type-small);
+  color: var(--faint);
+}
+
+/* The crew, which is the one thing on a row that says why one crew's agents
+   cannot touch it. Marked out from the rest of the meta so it reads as the
+   thing it belongs to rather than as another detail about it. */
+.occasion__crew {
+  font-family: var(--font-mono);
+  font-size: var(--type-mark);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Opens under the list rather than over it, and does not scroll with it: what
+   is being edited is a row the operator can still see, and a dialog over a
+   dialog would hide the day it is being moved within. */
+.calendar__editor {
+  flex: none;
+  padding: var(--space-6) var(--space-7);
+  border-top: 1px solid var(--edge);
+  background: var(--sunken);
+  max-height: 55vh;
+  overflow-y: auto;
+}
+
+.calendar__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+}
+
+.calendar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.calendar__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-6);
+  padding: var(--space-5) var(--space-7);
+  border-top: 1px solid var(--edge);
+  flex: none;
+}
+
+/* The one thing about this surface nobody would guess: the app has a Google
+   Calendar plugin and this is not it. Said once, at the bottom, because it is
+   the same sentence about every row. */
+.calendar__note {
+  margin: 0;
+  font-size: var(--type-small);
+  color: var(--faint);
+  line-height: var(--lead-ui);
+}
+
+/* ==========================================================================
    Settings
 
    Settings stopped being one column the moment it stopped being one subject.

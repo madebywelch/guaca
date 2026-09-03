@@ -21,10 +21,11 @@ use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
 use crate::domain::escalation::{Escalation, Raised};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RepositoryId,
-    RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, OccasionId, PluginId,
+    RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
+use crate::domain::occasion::{Clean as CleanOccasion, Occasion};
 use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
@@ -1515,6 +1516,201 @@ impl Store {
             "UPDATE escalations SET cleared_at=?2 WHERE agent_id=?1 AND cleared_at IS NULL",
             params![agent.to_string(), at],
         )?)
+    }
+
+    // ---- the calendar ----------------------------------------------------
+    //
+    // Every write below takes the crew as a parameter and matches on it in the
+    // WHERE clause, and that is the wall rather than a belt-and-braces filter.
+    // An id is a thing a model can invent, so `update_occasion` given one that
+    // belongs to another crew has to come back empty. It reads as "no such
+    // occasion" and not as a refusal on purpose: telling an agent that a row it
+    // may not touch exists, and whose it is, is the leak the wall exists to
+    // stop.
+    //
+    // The operator's own commands pass the group they read off the row, which
+    // is not a check and is not meant to be one. Their reads and writes are
+    // above the wall: it stands between crews, not between them and a crew.
+
+    pub fn create_occasion(&self, clean: &CleanOccasion) -> Result<Occasion, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let occasion = Occasion {
+            id: OccasionId::new(),
+            group_id: clean.group_id,
+            agent_id: clean.agent_id,
+            title: clean.title.clone(),
+            detail: clean.detail.clone(),
+            place: clean.place.clone(),
+            starts_at: clean.starts_at,
+            minutes: clean.minutes,
+            all_day: clean.all_day,
+            created_at: now,
+            updated_at: now,
+        };
+
+        conn.execute(
+            "INSERT INTO occasions
+                (id,group_id,agent_id,title,detail,place,starts_at,minutes,all_day,
+                 created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
+            params![
+                occasion.id.to_string(),
+                occasion.group_id.to_string(),
+                occasion.agent_id.map(|id| id.to_string()),
+                occasion.title,
+                occasion.detail,
+                occasion.place,
+                occasion.starts_at,
+                occasion.minutes,
+                occasion.all_day,
+                now,
+            ],
+        )?;
+        Ok(occasion)
+    }
+
+    /// One occasion, if it is on this crew's calendar.
+    pub fn occasion(&self, id: OccasionId, group: GroupId) -> Result<Option<Occasion>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{OCCASION_COLUMNS} WHERE id=?1 AND group_id=?2"))?;
+        match stmt
+            .query_row(params![id.to_string(), group.to_string()], row_to_occasion)
+            .optional()?
+        {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// One occasion from anywhere in the workspace. The operator's read, and
+    /// the only one with no crew on it.
+    pub fn any_occasion(&self, id: OccasionId) -> Result<Option<Occasion>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!("{OCCASION_COLUMNS} WHERE id=?1"))?;
+        match stmt.query_row(params![id.to_string()], row_to_occasion).optional()? {
+            Some(row) => Ok(Some(row?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Rewrites one, and only inside the crew that holds it.
+    ///
+    /// Everything the caller sends is written, because the caller is the one
+    /// that decided what an absent field meant: the tool and the command both
+    /// read the existing row first and fill in what was not sent. Merging here
+    /// as well would put that decision in two places.
+    ///
+    /// `None` is a row this crew does not have, which is what an id from
+    /// another crew's calendar comes back as.
+    pub fn update_occasion(
+        &self,
+        id: OccasionId,
+        group: GroupId,
+        clean: &CleanOccasion,
+    ) -> Result<Option<Occasion>, StoreError> {
+        let conn = self.conn()?;
+        let now = now_ms();
+        let changed = conn.execute(
+            "UPDATE occasions
+                SET title=?3, detail=?4, place=?5, starts_at=?6, minutes=?7, all_day=?8,
+                    updated_at=?9
+              WHERE id=?1 AND group_id=?2",
+            params![
+                id.to_string(),
+                group.to_string(),
+                clean.title,
+                clean.detail,
+                clean.place,
+                clean.starts_at,
+                clean.minutes,
+                clean.all_day,
+                now,
+            ],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        self.occasion(id, group)
+    }
+
+    /// Takes one off, and only inside the crew that holds it.
+    ///
+    /// `false` is a row that was already gone or was never this crew's. The
+    /// caller reports both as nothing rather than as a failure, for the reason
+    /// `clear_escalation` does: either way the list the caller is holding is
+    /// behind the store, and the read that follows is what corrects it.
+    pub fn delete_occasion(&self, id: OccasionId, group: GroupId) -> Result<bool, StoreError> {
+        let conn = self.conn()?;
+        Ok(conn.execute(
+            "DELETE FROM occasions WHERE id=?1 AND group_id=?2",
+            params![id.to_string(), group.to_string()],
+        )? > 0)
+    }
+
+    /// What is on a calendar between two moments, soonest first.
+    ///
+    /// `group` is `None` for the operator's view across every crew, which is
+    /// the one read in the app that deliberately crosses the wall. Half-open on
+    /// the far end so two adjacent windows neither drop an occasion nor draw it
+    /// twice.
+    ///
+    /// Soonest first, which is the opposite of every other list here. A
+    /// transcript, a desk and a set of working notes are all about what has
+    /// happened; this is the one surface about what has not, and the row that
+    /// matters most is the one nearest.
+    pub fn occasions(
+        &self,
+        from: i64,
+        until: i64,
+        group: Option<GroupId>,
+        limit: u32,
+    ) -> Result<Vec<Occasion>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "{OCCASION_COLUMNS}
+              WHERE starts_at >= ?1 AND starts_at < ?2
+                AND (?3 IS NULL OR group_id = ?3)
+              ORDER BY starts_at ASC, id ASC LIMIT ?4"
+        ))?;
+        let rows = stmt.query_map(
+            params![from, until, group.map(|id| id.to_string()), limit],
+            row_to_occasion,
+        )?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Everything one crew has ahead of it, however far ahead that is.
+    ///
+    /// The agent's own read, and it has no far end because `list` is what an
+    /// agent calls when the fortnight in its prompt was not enough. A limit
+    /// rather than a window: what is being asked for is the next N, and a crew
+    /// with nothing this month should still be told about the audit in
+    /// November.
+    pub fn crew_calendar(
+        &self,
+        group: GroupId,
+        from: i64,
+        limit: u32,
+    ) -> Result<Vec<Occasion>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(&format!(
+            "{OCCASION_COLUMNS}
+              WHERE group_id=?1 AND starts_at >= ?2
+              ORDER BY starts_at ASC, id ASC LIMIT ?3"
+        ))?;
+        let rows = stmt.query_map(params![group.to_string(), from, limit], row_to_occasion)?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
     }
 
     // ---- connectors ------------------------------------------------------
@@ -3009,6 +3205,10 @@ impl Store {
             params![id.to_string()],
         )?;
         conn.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
+        // And its calendar. Nothing outside the crew reads it, so there is
+        // nobody left for the dates to be true for; leaving them would fail the
+        // foreign key on the line below in any case.
+        conn.execute("DELETE FROM occasions WHERE group_id=?1", params![id.to_string()])?;
         conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
         Ok(())
     }
@@ -3758,6 +3958,43 @@ fn row_to_routine_run(row: &Row<'_>) -> RowResult<RoutineRun> {
                 cost: row.get::<_, Option<f64>>(5)?,
                 calls: row.get::<_, i64>(6)? as u64,
             },
+        })
+    })())
+}
+
+/// Every column an occasion is read back from, in the order `row_to_occasion`
+/// expects them. One string because five queries select the same eleven
+/// columns, and a list written five times is a list that disagrees with itself.
+const OCCASION_COLUMNS: &str = "SELECT id,group_id,agent_id,title,detail,place,starts_at,minutes,\
+                                all_day,created_at,updated_at FROM occasions";
+
+fn row_to_occasion(row: &Row<'_>) -> RowResult<Occasion> {
+    let id_raw: String = row.get(0)?;
+    let group_raw: String = row.get(1)?;
+    let agent_raw: Option<String> = row.get(2)?;
+
+    Ok((|| {
+        Ok(Occasion {
+            id: id_raw
+                .parse::<OccasionId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad occasion id {id_raw:?}: {e}")))?,
+            group_id: group_raw
+                .parse::<GroupId>()
+                .map_err(|e| StoreError::Corrupt(format!("bad group id {group_raw:?}: {e}")))?,
+            agent_id: agent_raw
+                .map(|raw| {
+                    raw.parse::<AgentId>()
+                        .map_err(|e| StoreError::Corrupt(format!("bad agent id {raw:?}: {e}")))
+                })
+                .transpose()?,
+            title: row.get(3)?,
+            detail: row.get(4)?,
+            place: row.get(5)?,
+            starts_at: row.get(6)?,
+            minutes: row.get(7)?,
+            all_day: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })())
 }
@@ -6727,6 +6964,190 @@ mod tests {
         assert_eq!(f.store.delete_agent_approvals(manager.id).unwrap(), 1);
         assert!(!f.store.has_standing_grant(manager.id, ProtectedAction::CreateAgent).unwrap());
         assert!(f.store.get_approval(request.id).unwrap().is_none());
+    }
+
+    // ---- the calendar ----------------------------------------------------
+
+    /// One occasion on a crew's calendar, at a fixed instant.
+    fn occasion_at(store: &Store, group: GroupId, title: &str, starts_at: i64) -> Occasion {
+        let clean = CleanOccasion::new(
+            group,
+            None,
+            title,
+            "",
+            "",
+            crate::domain::occasion::When { starts_at, all_day: false },
+            Some(30),
+        )
+        .unwrap();
+        store.create_occasion(&clean).unwrap()
+    }
+
+    #[test]
+    fn an_occasion_is_written_and_read_back_whole() {
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Ops")).unwrap();
+        let agent = f.store.create_agent(&draft_in("Manager", crew.id)).unwrap();
+
+        let clean = CleanOccasion::new(
+            crew.id,
+            Some(agent.id),
+            "Board call",
+            "Bring the Q3 numbers",
+            "Zoom",
+            crate::domain::occasion::When { starts_at: 1_800_000_000_000, all_day: false },
+            Some(60),
+        )
+        .unwrap();
+        let written = f.store.create_occasion(&clean).unwrap();
+
+        let back = f.store.occasion(written.id, crew.id).unwrap().unwrap();
+        assert_eq!(back, written);
+        assert_eq!(back.agent_id, Some(agent.id));
+        assert_eq!(back.detail, "Bring the Q3 numbers");
+        assert_eq!(back.place, "Zoom");
+        assert_eq!(back.minutes, Some(60));
+        assert!(!back.all_day);
+    }
+
+    #[test]
+    fn a_whole_day_reads_back_as_one_rather_than_as_midnight() {
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Finance")).unwrap();
+        let when = crate::domain::occasion::parse_when("2026-04-15").unwrap();
+        let clean = CleanOccasion::new(crew.id, None, "Filing due", "", "", when, None).unwrap();
+
+        let back = f.store.create_occasion(&clean).unwrap();
+        assert!(back.all_day);
+        assert_eq!(back.minutes, None);
+    }
+
+    #[test]
+    fn one_crew_cannot_move_another_crews_meeting() {
+        // The wall, and the whole reason every write below takes a group. An id
+        // is a thing a model can invent, and an invented one that landed on
+        // another crew's board call would move it.
+        let f = fixture();
+        let ours = f.store.create_group(&group_named("Ops")).unwrap();
+        let theirs = f.store.create_group(&group_named("Legal")).unwrap();
+
+        let mine = occasion_at(&f.store, theirs.id, "Deposition", 1_800_000_000_000);
+
+        let moved = CleanOccasion::new(
+            theirs.id,
+            None,
+            "Deposition",
+            "",
+            "",
+            crate::domain::occasion::When { starts_at: 1_900_000_000_000, all_day: false },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(f.store.update_occasion(mine.id, ours.id, &moved).unwrap(), None);
+        assert!(!f.store.delete_occasion(mine.id, ours.id).unwrap());
+
+        // Still where it was, still saying what it said.
+        let untouched = f.store.occasion(mine.id, theirs.id).unwrap().unwrap();
+        assert_eq!(untouched.starts_at, mine.starts_at);
+    }
+
+    #[test]
+    fn a_crew_cannot_even_read_another_crews_calendar() {
+        // Not found rather than refused: telling an agent that a row exists and
+        // whose it is would be the leak the wall exists to stop.
+        let f = fixture();
+        let ours = f.store.create_group(&group_named("Ops")).unwrap();
+        let theirs = f.store.create_group(&group_named("Legal")).unwrap();
+        let hidden = occasion_at(&f.store, theirs.id, "Deposition", 1_800_000_000_000);
+
+        assert_eq!(f.store.occasion(hidden.id, ours.id).unwrap(), None);
+        assert!(f.store.crew_calendar(ours.id, 0, 50).unwrap().is_empty());
+    }
+
+    #[test]
+    fn the_operators_view_crosses_every_crew_and_a_filtered_one_does_not() {
+        // The one read in the app that is deliberately above the wall: it is
+        // the operator's workspace and all of it is theirs to see at once.
+        let f = fixture();
+        let ops = f.store.create_group(&group_named("Ops")).unwrap();
+        let legal = f.store.create_group(&group_named("Legal")).unwrap();
+        occasion_at(&f.store, ops.id, "Board call", 1_800_000_000_000);
+        occasion_at(&f.store, legal.id, "Deposition", 1_800_100_000_000);
+
+        let every = f.store.occasions(0, i64::MAX, None, 50).unwrap();
+        assert_eq!(every.len(), 2);
+        assert_eq!(every[0].title, "Board call", "soonest first");
+
+        let one = f.store.occasions(0, i64::MAX, Some(legal.id), 50).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].title, "Deposition");
+    }
+
+    #[test]
+    fn a_window_is_half_open_so_two_of_them_neither_drop_nor_double() {
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Ops")).unwrap();
+        let edge = 1_800_000_000_000;
+        occasion_at(&f.store, crew.id, "On the boundary", edge);
+
+        assert!(f.store.occasions(0, edge, None, 50).unwrap().is_empty());
+        assert_eq!(f.store.occasions(edge, edge + 1, None, 50).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_agents_own_read_starts_where_it_is_asked_to_and_looks_no_further_back() {
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Ops")).unwrap();
+        occasion_at(&f.store, crew.id, "Last month", 1_700_000_000_000);
+        occasion_at(&f.store, crew.id, "Next week", 1_800_000_000_000);
+
+        let ahead = f.store.crew_calendar(crew.id, 1_750_000_000_000, 50).unwrap();
+        assert_eq!(ahead.len(), 1);
+        assert_eq!(ahead[0].title, "Next week");
+    }
+
+    #[test]
+    fn an_occasion_outlives_the_agent_that_noticed_it() {
+        // A deleted agent's memory, schedule and working notes all go with it,
+        // because those are the agent's own. This is not: a board call does not
+        // stop happening because the agent that heard about it was let go, and
+        // the calendar it is on belongs to the crew. `Runtime::purge_agent`
+        // names every store this clears and deliberately does not name this
+        // one.
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Ops")).unwrap();
+        let agent = f.store.create_agent(&draft_in("Manager", crew.id)).unwrap();
+
+        let clean = CleanOccasion::new(
+            crew.id,
+            Some(agent.id),
+            "Board call",
+            "",
+            "",
+            crate::domain::occasion::When { starts_at: 1_800_000_000_000, all_day: false },
+            None,
+        )
+        .unwrap();
+        let written = f.store.create_occasion(&clean).unwrap();
+
+        f.store.set_lifecycle(agent.id, Lifecycle::Terminated).unwrap();
+
+        let kept = f.store.occasion(written.id, crew.id).unwrap().unwrap();
+        assert_eq!(kept.title, "Board call");
+        assert_eq!(kept.agent_id, Some(agent.id), "who noticed it is still worth drawing");
+    }
+
+    #[test]
+    fn disbanding_a_crew_takes_its_calendar_with_it() {
+        // These foreign keys are enforced, so a row left behind would refuse
+        // the delete rather than dangle.
+        let f = fixture();
+        let crew = f.store.create_group(&group_named("Ops")).unwrap();
+        occasion_at(&f.store, crew.id, "Board call", 1_800_000_000_000);
+
+        f.store.delete_group(crew.id).unwrap();
+        assert!(f.store.occasions(0, i64::MAX, None, 50).unwrap().is_empty());
     }
 
     // ---- escalations -----------------------------------------------------

@@ -31,6 +31,7 @@ src/                  React + TypeScript. A view over the runtime, nothing more.
   lib/palette.ts      Eight hues in one order, and why that order and not another.
   lib/diff.ts         Two versions of a page, as the lines between them.
   lib/reasoning.ts    A turn's own thinking: how much is held, what is drawn.
+  lib/calendar.ts     What a calendar shows, and in what order. No DOM.
   lib/cafeteria.ts    Preset agents, waiting to be hired. Content, not runtime.
   lib/compost.ts      Where a deleted agent waits, and how long it has left.
   lib/roles.ts        What an agent is for, in OpenRouter's twelve words.
@@ -54,6 +55,8 @@ src-tauri/src/
     repository.rs     A directory an agent may write code in, which of two
                       programs writes it, and whether it asks before pushing.
     worknote.rs       A line about work in flight, and why it is not memory.
+    occasion.rs       A date the crew is answerable for. It fires nothing, which
+                      is the whole of what separates it from a routine.
     promise.rs        A closing sentence that says the work is still coming,
                       in a turn that is over. One rule, two readers.
     approval.rs       The two things an agent stops to ask a person, and why
@@ -158,6 +161,11 @@ repo: the frontend renders state and forwards intent.
 | Attachments, previews, drops, handing a document to the operator | *Files are references, and what a model gets depends on what they are* |
 | SQLite, the pool, migrations | *Storage*, and the two comments in `Store::open` |
 | Schedules, triggers, what a firing looks like | `docs/ROUTINES.md` |
+| The crew's calendar, the `calendar` tool, what an occasion is for | `docs/CALENDAR.md`, then `domain/occasion.rs` and `Runtime::keep_calendar` |
+| Whether one crew can reach another crew's dates, and what a refusal may say | *A crew's calendar, and one crew cannot touch another's* in `docs/CALENDAR.md`, then the WHERE clauses in `Store::update_occasion` and `Store::delete_occasion` |
+| A deadline with no time on it, a meeting with a length, one `starts_at` column | *One instant column, two kinds of date* in `docs/CALENDAR.md`, then `occasion::Clean::new`, which is the only place the invariant lives |
+| A date an agent wrote, what it is told back, what the prompt says the day is | *A model has no clock* and *Every write is answered with the date that was stored* in `docs/CALENDAR.md`, then `parse_when` and `Occasion::describe` |
+| What the calendar panel draws, the crew filter, the month it opens on | *What the operator sees is every crew, a month at a time* in `docs/CALENDAR.md`, then `src/lib/calendar.ts` and the suite beside it, which is the gate |
 | Whether a firing lands on an agent that is already working | *A firing can be skipped, which is not the same as deferred* and *A skipped firing is in the history* in `docs/ROUTINES.md`, then `Activity::is_working` and `Runtime::sweep_schedule` |
 | What an agent knows about its own schedule, and how it changes one | *An agent reads its own schedule before it decides to write another one* and *Changing a routine is `update`* in `docs/ROUTINES.md` |
 | Whether an agent may have a computer or a browser at all | *A computer is given to one agent, not to the workspace* in `docs/MACHINES.md`, then `Runtime::surfaces_for` |
@@ -285,6 +293,22 @@ of calls, the runtime dispatches them exactly as it does for the other two, and
 its loop over because it is a different unit of work with its own budget. A turn
 cannot: it is the unit the five limits are written in.
 
+**A calendar records and a routine fires, and they are two tables because of
+that one word.** Both are lists an agent keeps and a model reads them as near
+synonyms, so the split is enforced in the design rather than in wording alone: a
+`routines` row owns a moment the scheduler sweeps and reaches the agent as a
+message, and an `occasions` row owns a moment nothing sweeps. Give the calendar
+a trigger and every note about a customer's schedule becomes an agent running at
+3am; drop the calendar and every deadline an agent learns becomes a wake-up.
+`docs/CALENDAR.md`.
+
+It is also not the Google plugin, which reads the operator's real calendar and
+can genuinely book things. Nothing here leaves the machine, and the word
+"calendar" carries the opposite assumption strongly enough that *books nothing,
+invites nobody* is said in the tool description, the prompt section and the
+panel's own footer. A model wrote an occasion and told the operator the call was
+booked, which is what all three are for.
+
 **A creature is a shape, not a drawing.** Every agent is cut from one of five
 silhouettes (circle, octagon, square, water drop, cloud) and recomputed every
 frame from that shape, a character (a row of numbers) and a mood (another row).
@@ -361,6 +385,7 @@ the gotchas file says what it already cost somebody to change it.
 | Plugins, MCP, and the OAuth they and the account share | `docs/gotchas/plugins.md` |
 | Computers, browsers, sandboxes, sign-ins found on them | `docs/gotchas/machines.md` |
 | Schedules, triggers, firings | `docs/gotchas/routines.md` |
+| A crew's calendar, an occasion, the wall between two crews' dates | `docs/gotchas/calendar.md` |
 | Approvals, questions, escalations, the desk | `docs/gotchas/attention.md` |
 | An agent's memory, its working notes, and the panels for both | `docs/gotchas/memory.md` |
 | A turn drawn while it runs: the bubble, the trail, the thinking | `docs/gotchas/transcript.md` |

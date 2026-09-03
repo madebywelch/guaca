@@ -4,6 +4,7 @@ import { AgentAvatar } from "./avatars/AgentAvatar";
 import { AgentEditor } from "./components/AgentEditor";
 import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Cafeteria } from "./components/Cafeteria";
+import { Calendar } from "./components/Calendar";
 import { ChannelView } from "./components/ChannelView";
 import { Compost } from "./components/Compost";
 import { Desk } from "./components/Desk";
@@ -73,6 +74,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCompost, setShowCompost] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
 
   // The three shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
@@ -205,6 +207,7 @@ export default function App() {
         onEditAgent={(agent) => setEditing(agent)}
         onOpenCafeteria={() => setShowCafeteria(true)}
         onOpenCompost={() => setShowCompost(true)}
+        onOpenCalendar={() => setShowCalendar(true)}
         onEditGroup={(group) => setEditingGroup(group)}
         onOpenSettings={() => setShowSettings(true)}
         onOpenSearch={() => setSearching(true)}
@@ -337,6 +340,7 @@ export default function App() {
         />
       )}
       {showCafeteria && <Cafeteria onClose={() => setShowCafeteria(false)} />}
+      {showCalendar && <Calendar onClose={() => setShowCalendar(false)} />}
       {showCompost && <Compost onClose={() => setShowCompost(false)} />}
       {showSettings && (
         <SettingsDialog
