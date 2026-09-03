@@ -403,6 +403,15 @@ use prompt::{NameTable, ReplyMode};
 /// How many messages one turn reads at once.
 const MAX_BATCH: usize = 12;
 
+/// How much of its crew's calendar an agent gets back from one `list`.
+///
+/// Larger than what the prompt draws, because the two answer different
+/// questions. The prompt is the fortnight in front of the agent, which is what
+/// it needs on every turn without asking; `list` is what it calls when that was
+/// not enough, and cutting it to the same window would make the tool useless
+/// for the one case it exists for.
+const LISTED_OCCASIONS: u32 = 60;
+
 /// How much transcript is replayed into a prompt.
 const HISTORY_WINDOW: u32 = 40;
 
@@ -3446,6 +3455,26 @@ impl Runtime {
             tracing::warn!(%err, "could not read this agent's schedule for its prompt");
             Vec::new()
         });
+        // And what the crew has coming, which is the other list and is not this
+        // agent's: every agent in a crew reads the same one. Bounded twice, by
+        // a fortnight and by a count, because this is on every turn of every
+        // agent and a busy crew must not spend its context on its own diary.
+        let calendar = {
+            let now = now_ms();
+            let from = crate::domain::occasion::day_of(now);
+            self.inner
+                .store
+                .occasions(
+                    from,
+                    crate::domain::occasion::horizon(now),
+                    Some(card.group_id),
+                    crate::domain::occasion::MAX_SHOWN as u32,
+                )
+                .unwrap_or_else(|err| {
+                    tracing::warn!(%err, "could not read the crew's calendar for this prompt");
+                    Vec::new()
+                })
+        };
         // Refreshed before the prompt is built, not after, because the whole
         // point is that an agent knows what it can reach *when it is asked*.
         // Hanging this off the editor panel alone meant the first time anyone
@@ -3545,6 +3574,7 @@ impl Runtime {
             &memory,
             &working_notes,
             &routines,
+            &calendar,
             &history,
             &batch,
             mode,
@@ -4763,6 +4793,16 @@ impl Runtime {
                     }
                 };
                 (rendered, Part::tool_call(tools::SCHEDULE, arguments, outcome))
+            }
+
+            ToolInvocation::Calendar { action } => {
+                let (rendered, outcome) = match self.keep_calendar(card, &action) {
+                    Ok(summary) => (summary.clone(), ToolOutcome::Ok { summary }),
+                    Err(err) => {
+                        (format!("Error: {err}"), ToolOutcome::Failed { error: err.to_string() })
+                    }
+                };
+                (rendered, Part::tool_call(tools::CALENDAR, arguments, outcome))
             }
 
             ToolInvocation::Browse { action, args } => {
@@ -6531,6 +6571,188 @@ impl Runtime {
     /// arrive from anywhere an agent reads — a peer's message, a page, a file —
     /// and a schedule is not shared, so one agent must never be able to retime
     /// or cancel another's.
+    /// The crew's calendar, read and written by one of its agents.
+    ///
+    /// The group is taken from the card and never from the call, which is the
+    /// whole of the wall: every store call below is scoped to `card.group_id`,
+    /// so an id belonging to another crew comes back as nothing. What the agent
+    /// is then told is "you have no occasion with that id", not "that is not
+    /// yours" — the second sentence confirms the row exists and hints at whose
+    /// it is, which is the leak the wall is for.
+    ///
+    /// Every answer restates the occasion through `Occasion::describe`, and
+    /// that is load-bearing rather than tidy. A date is the one argument a
+    /// model gets wrong silently: `2026-09-14 15:00` written when it meant the
+    /// 15th, or a zone it did not intend. Told back the local wall clock that
+    /// was stored, it reads its own mistake in the same turn instead of the
+    /// operator finding it a week later.
+    fn keep_calendar(
+        &self,
+        card: &AgentCard,
+        action: &tools::CalendarAction,
+    ) -> Result<String, crate::db::StoreError> {
+        use crate::domain::occasion::{self, Clean, When};
+
+        let now = now_ms();
+        // Everything from the start of today rather than from this moment. An
+        // occasion at nine this morning is still on today's list at two, and an
+        // agent that cannot see it reports the day as empty.
+        let from = occasion::day_of(now);
+
+        // One id lookup, and the only one there is. Nothing here parses an id
+        // without immediately scoping it to the crew.
+        let mine = |id: &str| -> Result<Option<occasion::Occasion>, crate::db::StoreError> {
+            let Ok(parsed) = id.trim().parse() else {
+                return Ok(None);
+            };
+            self.inner.store.occasion(parsed, card.group_id)
+        };
+
+        match action {
+            tools::CalendarAction::List => {
+                let ahead =
+                    self.inner.store.crew_calendar(card.group_id, from, LISTED_OCCASIONS)?;
+                if ahead.is_empty() {
+                    return Ok(
+                        "Your crew's calendar is empty. `add` puts something on it.".to_string()
+                    );
+                }
+                let mut out = String::from("Your crew's calendar:\n");
+                for one in &ahead {
+                    out.push_str(&format!("  {} — {}\n", one.id, one.describe(now)));
+                }
+                out.push_str(
+                    "`update` and an id changes one of these: a new time, a new title, or both, \
+                     leaving whatever you do not send alone. `cancel` and an id takes one off.",
+                );
+                Ok(out)
+            }
+
+            tools::CalendarAction::Add { title, detail, place, starts_at, minutes } => {
+                let when = match occasion::parse_when(starts_at) {
+                    Ok(when) => when,
+                    Err(err) => return Ok(format!("Refused: {err}.")),
+                };
+                let clean = match Clean::new(
+                    card.group_id,
+                    Some(card.id),
+                    title,
+                    detail,
+                    place,
+                    when,
+                    *minutes,
+                ) {
+                    Ok(clean) => clean,
+                    Err(err) => return Ok(format!("Refused: {err}.")),
+                };
+
+                // Read before the write, so the answer can say what this now
+                // stands beside.
+                let standing =
+                    self.inner.store.crew_calendar(card.group_id, from, LISTED_OCCASIONS)?;
+                let written = self.inner.store.create_occasion(&clean)?;
+                self.emit(UiEvent::CalendarChanged { group_id: card.group_id });
+
+                let mut answer = format!(
+                    "On the calendar: {}. Its id is {}.",
+                    written.describe(now),
+                    written.id
+                );
+                if clean.cut {
+                    answer.push_str(
+                        " It was long for a calendar line and the end was cut, so check what is \
+                         left says what it needs to; the rest belongs in `detail`.",
+                    );
+                }
+                // Said, never refused, for the reason a duplicate routine is
+                // only mentioned: nothing here can tell "the call moved to
+                // four" from "there is a second call at four", and the turn
+                // that knows which it meant is the only one that can decide.
+                let clashes: Vec<String> = standing
+                    .iter()
+                    .filter(|other| occasion::overlaps(other, &written))
+                    .map(|other| format!("{} ({})", other.id, other.title))
+                    .collect();
+                if !clashes.is_empty() {
+                    answer.push_str(&format!(
+                        " Note: your crew already has {} at that time. If this is the same thing \
+                         moved, `cancel` this one and `update` that one instead.",
+                        clashes.join(", ")
+                    ));
+                }
+                Ok(answer)
+            }
+
+            tools::CalendarAction::Update { id, title, detail, place, starts_at, minutes } => {
+                let Some(existing) = mine(id)? else {
+                    return Ok(format!(
+                        "Your crew has no occasion with the id {id}. `list` shows every one it \
+                         does have, with its id; `add` is how a new one starts."
+                    ));
+                };
+
+                // An absent field keeps what the row already says. Making an
+                // agent restate the title to move the time is how a second
+                // occasion for one meeting gets written.
+                let when = match starts_at {
+                    Some(written) => match occasion::parse_when(written) {
+                        Ok(when) => when,
+                        Err(err) => {
+                            return Ok(format!("Refused: {err}. {} is unchanged.", existing.id))
+                        }
+                    },
+                    None => When { starts_at: existing.starts_at, all_day: existing.all_day },
+                };
+                let clean = match Clean::new(
+                    existing.group_id,
+                    existing.agent_id,
+                    title.as_deref().unwrap_or(&existing.title),
+                    detail.as_deref().unwrap_or(&existing.detail),
+                    place.as_deref().unwrap_or(&existing.place),
+                    when,
+                    // A length sent with no new date still applies, and one
+                    // sent with a date that turned out to be a whole day is
+                    // dropped by `Clean::new` rather than argued about here.
+                    minutes.or(existing.minutes),
+                ) {
+                    Ok(clean) => clean,
+                    Err(err) => {
+                        return Ok(format!("Refused: {err}. {} is unchanged.", existing.id))
+                    }
+                };
+
+                let Some(written) =
+                    self.inner.store.update_occasion(existing.id, card.group_id, &clean)?
+                else {
+                    return Ok(format!(
+                        "Your crew has no occasion with the id {id} any more; somebody may have \
+                         canceled it. `list` shows what it does have."
+                    ));
+                };
+                self.emit(UiEvent::CalendarChanged { group_id: card.group_id });
+                Ok(format!("Updated {}: {}.", written.id, written.describe(now)))
+            }
+
+            tools::CalendarAction::Cancel { id } => {
+                let Some(existing) = mine(id)? else {
+                    return Ok(format!(
+                        "Your crew has no occasion with the id {id}. `list` shows every one it \
+                         does have."
+                    ));
+                };
+                if !self.inner.store.delete_occasion(existing.id, card.group_id)? {
+                    return Ok(format!("{} was already off the calendar.", existing.id));
+                }
+                self.emit(UiEvent::CalendarChanged { group_id: card.group_id });
+                Ok(format!(
+                    "Canceled {}: {}. It is off your crew's calendar; nobody outside this \
+                     workspace was told, so if the thing itself needs calling off, do that too.",
+                    existing.id, existing.title
+                ))
+            }
+        }
+    }
+
     fn my_routine(
         &self,
         card: &AgentCard,

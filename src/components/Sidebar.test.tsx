@@ -86,6 +86,7 @@ function draw(
         onEditGroup={vi.fn()}
         onOpenCafeteria={vi.fn()}
         onOpenCompost={vi.fn()}
+        onOpenCalendar={vi.fn()}
         onOpenSettings={vi.fn()}
         onOpenSearch={vi.fn()}
         onNewAgent={onNewAgent}

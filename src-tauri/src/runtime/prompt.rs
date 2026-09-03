@@ -23,6 +23,7 @@ use crate::domain::plugin::PluginToolset;
 /// is cut is the oldest, which is also the least likely to still be live.
 const MAX_WAITING: usize = 10;
 use crate::domain::escalation::Escalation;
+use crate::domain::occasion::{self, Occasion};
 use crate::domain::repository::Repository;
 use crate::domain::routine::Routine;
 use crate::domain::signin::Signin;
@@ -82,6 +83,16 @@ pub fn system_prompt(
     // keeps has to know it keeps it before it decides what to do, and a list it
     // has to go and ask for is a list it asks for after deciding.
     routines: &[Routine],
+    // What the crew has coming, soonest first, over the next fortnight. Not
+    // this agent's: every agent in a crew reads the same calendar, which is
+    // what makes it the place to put something the rest of them need to know.
+    //
+    // In the prompt for the reason the routines above it are, and with one of
+    // its own that is stronger. An agent asked whether it can do something on
+    // Thursday answers before it would ever call a tool, and an agent that
+    // cannot see what is already on Thursday answers wrong. A calendar fetched
+    // after the decision is a calendar that was not consulted.
+    calendar: &[Occasion],
     mode: ReplyMode,
     // What this agent has asked for and not heard back on, newest first.
     //
@@ -122,6 +133,9 @@ pub fn system_prompt(
     modalities: Modalities,
 ) -> String {
     let mut out = String::new();
+    // Read once for the whole prompt. Three sections date something against it,
+    // and two clocks a few lines apart could disagree across a midnight.
+    let now = crate::domain::now_ms();
 
     out.push_str(&format!(
         "You are {name}, an agent in a local multi-agent workspace called Guaca.\n",
@@ -486,6 +500,52 @@ pub fn system_prompt(
         );
     }
 
+    // Under the schedule, because the two are read against each other and the
+    // difference between them is the thing an agent gets wrong. A routine fires
+    // and this does not, so an agent that puts a deadline in `schedule` wakes
+    // itself at 3am and one that puts a sweep on the calendar never runs it.
+    // Adjacent, each saying what the other is for, is the arrangement that
+    // makes the distinction readable rather than a rule to remember.
+    //
+    // Today's date is here and nowhere else in the prompt, which is a decision
+    // rather than an oversight. A model has no clock: asked to put "the board
+    // meeting next Thursday" on a calendar it has to know what today is, and
+    // guessing produces a date nobody catches. It is stated in the one section
+    // that needs it, beside the dates it is used to compute.
+    out.push_str("\n## Your crew's calendar\n");
+    out.push_str(&format!(
+        "Today is {}. `calendar` is your crew's, not yours: everyone in it reads this same list, \
+         so it is where something the rest of them need to know about goes. Meetings, deadlines, \
+         filings, renewals, launches — anything with a date on it that somebody needs in \
+         advance. Keep it current as you learn things: when a date moves, `update` that occasion \
+         rather than adding a second one, and `cancel` what is not happening.\n\n\
+         It is a record and not an arrangement. Nothing here books anything, invites anybody or \
+         sends any mail, and nothing outside this workspace can see it. Arrange the thing, then \
+         write down what you arranged.\n\n\
+         It also wakes nobody. That is the whole difference from your schedule above: a routine \
+         fires and reaches you as a message, and an occasion sits there being true. If you have \
+         to prepare for something on this calendar, the occasion goes here and the routine that \
+         prepares for it goes there.\n",
+        occasion::when_words(now, true).replace(", all day", "")
+    ));
+
+    if calendar.is_empty() {
+        out.push_str(&format!(
+            "\nNothing is on it for the next {} days.\n",
+            occasion::HORIZON_DAYS
+        ));
+    } else {
+        out.push_str(&format!("\nThe next {} days:\n\n", occasion::HORIZON_DAYS));
+        for one in calendar {
+            out.push_str(&format!("- {} — {}\n", one.id, one.describe(now)));
+        }
+        out.push_str(
+            "\nThe id is how you reach one. This is the fortnight in front of you and not the \
+             whole calendar: `list` gives you everything your crew has, further out and with the \
+             notes on each.\n",
+        );
+    }
+
     // Placed before the roster and the rules: an agent's own accumulated
     // understanding of itself should color how it reads everything after.
     //
@@ -550,7 +610,6 @@ pub fn system_prompt(
         // The age is the reason this section is worth reading. A list of notes
         // with no dates says an agent is waiting; the same list with "6d ago"
         // against it says the thing it waits for is not coming.
-        let now = crate::domain::now_ms();
         for note in working_notes {
             out.push_str(&format!(
                 "- {} — {}\n",
@@ -1037,6 +1096,7 @@ pub fn build_messages(
     memory: &str,
     working_notes: &[WorkingNote],
     routines: &[Routine],
+    calendar: &[Occasion],
     history: &[Envelope],
     inbound: &[Envelope],
     mode: ReplyMode,
@@ -1056,6 +1116,7 @@ pub fn build_messages(
         memory,
         working_notes,
         routines,
+        calendar,
         mode,
         waiting_on,
         escalation,
@@ -1108,6 +1169,7 @@ mod tests {
             notes,
             &[],
             &[],
+            &[],
             mode,
             &[],
             None,
@@ -1129,6 +1191,7 @@ mod tests {
             &[],
             "",
             notes,
+            &[],
             &[],
             ReplyMode::ToOperator,
             &[],
@@ -1155,6 +1218,7 @@ mod tests {
             "",
             &[],
             routines,
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1183,6 +1247,7 @@ mod tests {
             &[],
             names,
             notes,
+            &[],
             &[],
             &[],
             history,
@@ -1438,6 +1503,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1498,6 +1564,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1532,6 +1599,7 @@ mod tests {
             &[],
             &[set],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -1571,6 +1639,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1603,6 +1672,7 @@ mod tests {
             &[],
             &[plugin(PluginKind::Cloudflare, &["execute"])],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -1646,6 +1716,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1680,6 +1751,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -1721,6 +1793,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -1753,6 +1826,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -1857,6 +1931,118 @@ mod tests {
             last_run_at: None,
             created_at: 0,
         }
+    }
+
+    /// The prompt for an agent whose crew has something coming.
+    fn prompt_facing(card: &AgentCard, calendar: &[Occasion]) -> String {
+        system_prompt(
+            card,
+            "",
+            &[],
+            &[],
+            &[],
+            &[],
+            "",
+            &[],
+            &[],
+            calendar,
+            ReplyMode::ToOperator,
+            &[],
+            None,
+            None,
+            Surfaces::both(),
+            Modalities::seeing(),
+        )
+    }
+
+    fn coming(title: &str, starts_at: i64, all_day: bool, minutes: Option<u32>) -> Occasion {
+        Occasion {
+            id: crate::domain::ids::OccasionId::new(),
+            group_id: crate::domain::ids::GroupId::new(),
+            agent_id: None,
+            title: title.to_string(),
+            detail: String::new(),
+            place: String::new(),
+            starts_at,
+            minutes,
+            all_day,
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    #[test]
+    fn an_agent_reads_its_crews_calendar_before_it_promises_a_day() {
+        // The failure this is for: an agent asked whether Thursday works
+        // answers before it would ever call a tool, and one that cannot see
+        // what is already on Thursday answers wrong. A calendar fetched after
+        // the decision is a calendar that was not consulted.
+        let one = coming("Board call", crate::domain::now_ms() + 2 * 86_400_000, false, Some(60));
+        let prompt = prompt_facing(&card("Manager"), std::slice::from_ref(&one));
+        let calendar = section(&prompt, "## Your crew's calendar");
+
+        assert!(calendar.contains("Board call"), "{calendar}");
+        assert!(
+            calendar.contains(&one.id.to_string()),
+            "and the id, or it has nothing to change it by: {calendar}"
+        );
+        assert!(calendar.contains("in 2 days"), "with how far off it is: {calendar}");
+        assert!(
+            calendar.contains("`list`"),
+            "and the way past the fortnight it is shown: {calendar}"
+        );
+    }
+
+    #[test]
+    fn the_calendar_is_the_one_place_the_prompt_says_what_day_it_is() {
+        // A model has no clock. Asked to put "the board meeting next Thursday"
+        // on a calendar it has to know what today is, and a guess is a date
+        // nobody catches. Stated in the section that needs it, beside the dates
+        // it is used to compute.
+        let prompt = prompt_facing(&card("Manager"), &[]);
+        let calendar = section(&prompt, "## Your crew's calendar");
+        let today = crate::domain::local(crate::domain::now_ms()).unwrap();
+
+        assert!(calendar.contains(&today.format("%a %-d %b %Y").to_string()), "{calendar}");
+    }
+
+    #[test]
+    fn an_agent_with_an_empty_calendar_is_told_that_plainly() {
+        // Silence reads as "no calendar section applies to me", and empty is
+        // the ordinary case.
+        let prompt = prompt_facing(&card("Manager"), &[]);
+        let calendar = section(&prompt, "## Your crew's calendar");
+        assert!(calendar.contains("Nothing is on it"), "{calendar}");
+    }
+
+    #[test]
+    fn the_calendar_and_the_schedule_each_say_what_the_other_is_for() {
+        // The one distinction an agent gets wrong in the expensive direction: a
+        // routine fires and an occasion does not, so a deadline written into
+        // `schedule` wakes an agent at 3am and a sweep written onto the
+        // calendar never runs at all.
+        let prompt = prompt_facing(&card("Manager"), &[]);
+        let calendar = section(&prompt, "## Your crew's calendar");
+
+        assert!(calendar.contains("wakes nobody"), "{calendar}");
+        assert!(calendar.contains("schedule"), "{calendar}");
+        assert!(
+            calendar.contains("books anything"),
+            "an agent that thinks writing here arranges the thing reports it as booked: \
+             {calendar}"
+        );
+    }
+
+    #[test]
+    fn a_whole_day_on_the_calendar_is_not_drawn_as_midnight() {
+        // A filing due on the 15th read as "12:00 AM" is a filing nobody reads
+        // as a deadline.
+        let midnight = crate::domain::occasion::day_of(crate::domain::now_ms() + 3 * 86_400_000);
+        let prompt = prompt_facing(&card("Manager"), &[coming("Q3 filing", midnight, true, None)]);
+        let calendar = section(&prompt, "## Your crew's calendar");
+
+        assert!(calendar.contains("all day"), "{calendar}");
+        assert!(!calendar.contains("12:00 AM"), "{calendar}");
     }
 
     #[test]
@@ -2073,6 +2259,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             &[sent],
             &[],
             ReplyMode::ToOperator,
@@ -2174,6 +2361,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -2192,6 +2380,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -2279,6 +2468,7 @@ mod tests {
             "",
             &[note(now, "Robert owes a decision on the six items")],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &waiting,
             None,
@@ -2325,6 +2515,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -2548,6 +2739,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -2569,6 +2761,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -2595,6 +2788,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             mode,
@@ -2699,6 +2893,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &[],
             None,
@@ -2726,6 +2921,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,
@@ -3009,6 +3205,7 @@ mod tests {
             "",
             &[],
             &[],
+            &[],
             ReplyMode::ToOperator,
             &waiting,
             None,
@@ -3040,6 +3237,7 @@ mod tests {
             &[],
             &[],
             "",
+            &[],
             &[],
             &[],
             ReplyMode::ToOperator,

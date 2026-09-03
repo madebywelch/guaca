@@ -68,6 +68,7 @@ declare_id!(ConnectorId, "connector");
 declare_id!(EscalationId, "escalation");
 declare_id!(GroupId, "group");
 declare_id!(MessageId, "msg");
+declare_id!(OccasionId, "occasion");
 declare_id!(PluginId, "plugin");
 declare_id!(RepositoryId, "repo");
 declare_id!(RoutineId, "routine");

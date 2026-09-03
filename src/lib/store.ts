@@ -278,6 +278,18 @@ interface State {
   routineVersion: Record<AgentId, number | undefined>;
 
   /**
+   * A counter bumped whenever any crew's calendar moves.
+   *
+   * One number for the workspace rather than one per crew, which is the
+   * opposite of `routineVersion` beside it and is the right shape for the same
+   * reason that one is per agent: the surface that reads it draws every crew at
+   * once by default. Keyed by crew, the view showing all of them would have to
+   * watch every key, and the operator filtered to one crew would still want the
+   * count on the others to be right.
+   */
+  calendarVersion: number;
+
+  /**
    * The same counter for each agent's memory, and it is a second one rather
    * than a share of the first. A schedule and a memory move on different
    * occasions, and a panel that read the whole file back every time a routine
@@ -474,6 +486,7 @@ export const useStore = create<State>((set, get) => ({
   focused: null,
   openingRoutine: null,
   routineVersion: {},
+  calendarVersion: 0,
   memoryVersion: {},
   workingNotesVersion: {},
   banner: null,
@@ -1129,6 +1142,15 @@ export const useStore = create<State>((set, get) => ({
           tone: "error",
           text: `A coding job in ${event.repository} could not run on ${event.harness}: ${event.reason}`,
         });
+        break;
+      }
+
+      case "calendarChanged": {
+        // No payload kept. The panel reads the window it is showing back from
+        // Rust, and holding a copy here would be a second cache to keep in step
+        // with the one the component already has — the argument `routineVersion`
+        // makes one field up.
+        set((state) => ({ calendarVersion: state.calendarVersion + 1 }));
         break;
       }
 

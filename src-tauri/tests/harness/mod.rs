@@ -87,6 +87,11 @@ pub enum Script {
     /// A `schedule` call that retimes a routine the agent already has, which is
     /// the whole of what it should do when asked to change one.
     Retime { id: String, repeat: String },
+    /// Emit a `calendar` call that puts something on the crew's calendar.
+    Note { title: String, starts_at: String },
+    /// A `calendar` call aimed at an occasion by id: what a model plays when it
+    /// has been told one exists, whether or not the id is its crew's.
+    Move { action: String, id: String, starts_at: String },
     /// Emit a `request_permission` tool call.
     AskPermission { action: String, because: String },
     /// Emit an `ask_operator` tool call. Empty options is a written answer.
@@ -367,6 +372,29 @@ pub fn render(script: &Script) -> String {
             body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
                 {"index":0,"id":"call_retime","type":"function",
                  "function":{"name":"schedule","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Note { title, starts_at } => {
+            let args =
+                serde_json::json!({ "action": "add", "title": title, "starts_at": starts_at })
+                    .to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_note","type":"function",
+                 "function":{"name":"calendar","arguments": args}}
+            ]}}]})));
+            body.push_str(&frame(
+                serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),
+            ));
+        }
+        Script::Move { action, id, starts_at } => {
+            let args = serde_json::json!({ "action": action, "id": id, "starts_at": starts_at })
+                .to_string();
+            body.push_str(&frame(serde_json::json!({"choices":[{"delta":{"tool_calls":[
+                {"index":0,"id":"call_move","type":"function",
+                 "function":{"name":"calendar","arguments": args}}
             ]}}]})));
             body.push_str(&frame(
                 serde_json::json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}),

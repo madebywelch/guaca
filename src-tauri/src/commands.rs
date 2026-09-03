@@ -23,10 +23,11 @@ use crate::domain::envelope::Envelope;
 use crate::domain::escalation::Escalation;
 use crate::domain::group::{Group, GroupDraft, GroupInference};
 use crate::domain::ids::{
-    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, PluginId, RepositoryId,
-    RoutineId, RunId,
+    AgentId, ApprovalId, ConnectorId, EscalationId, GroupId, MessageId, OccasionId, PluginId,
+    RepositoryId, RoutineId, RunId,
 };
 use crate::domain::now_ms;
+use crate::domain::occasion::{self, Occasion};
 use crate::domain::plugin::{
     self, HeaderPair, Headers, Plugin, PluginAccess, PluginKind, PluginOffer, ServerReport,
 };
@@ -1317,6 +1318,118 @@ pub fn open_escalations(state: State<'_, AppState>) -> Reply<Vec<Escalation>> {
 #[tauri::command]
 pub fn clear_escalation(state: State<'_, AppState>, id: EscalationId) -> Reply<()> {
     state.runtime.clear_escalation(id)?;
+    Ok(())
+}
+
+// ---- the calendar --------------------------------------------------------
+
+/// How many occasions one read of the calendar hands back.
+///
+/// The view asks for a window of days, so this is a ceiling on a pathological
+/// crew rather than a page size: a year of a busy workspace is a few hundred
+/// rows, and the panel is a list the operator scrolls. Past it, what is cut is
+/// the far end of the window, which is the part they were not looking at.
+const MAX_OCCASIONS: u32 = 500;
+
+/// What is on the calendar between two moments.
+///
+/// `groupId` absent is every crew at once, which is the operator's default and
+/// the one read in the app that deliberately crosses the wall between crews. It
+/// is theirs to cross: the wall stands between crews so an agent cannot move
+/// another crew's meeting, not between the operator and a workspace they own.
+#[tauri::command]
+pub fn calendar(
+    state: State<'_, AppState>,
+    from: i64,
+    until: i64,
+    group_id: Option<GroupId>,
+) -> Reply<Vec<Occasion>> {
+    Ok(state.runtime.store().occasions(from, until, group_id, MAX_OCCASIONS)?)
+}
+
+/// What the operator can set on an occasion.
+///
+/// Deliberately the same shape the agent's own `calendar` tool takes, so one
+/// written by hand and one written by an agent are the same row. The date
+/// arrives as the string that was typed and is parsed here, which is what lets
+/// the panel accept `2026-09-14` for a whole day and `2026-09-14 15:00` for a
+/// time without a second field saying which it meant.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OccasionDraft {
+    pub group_id: GroupId,
+    pub title: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub place: String,
+    pub starts_at: String,
+    pub minutes: Option<u32>,
+}
+
+impl OccasionDraft {
+    /// The operator's own writes carry no agent, which is what `agentId: null`
+    /// means everywhere it is read back.
+    fn checked(&self) -> Result<occasion::Clean, CommandError> {
+        let when = occasion::parse_when(&self.starts_at)
+            .map_err(|e| CommandError::new("validation", e.to_string()))?;
+        occasion::Clean::new(
+            self.group_id,
+            None,
+            &self.title,
+            &self.detail,
+            &self.place,
+            when,
+            self.minutes,
+        )
+        .map_err(|e| CommandError::new("validation", e.to_string()))
+    }
+}
+
+#[tauri::command]
+pub fn create_occasion(state: State<'_, AppState>, draft: OccasionDraft) -> Reply<Occasion> {
+    let clean = draft.checked()?;
+    let occasion = state.runtime.store().create_occasion(&clean)?;
+    // The crew's agents read this at the top of every turn, and the panel may
+    // be open on another window of the same calendar.
+    state.runtime.emit(UiEvent::CalendarChanged { group_id: occasion.group_id });
+    Ok(occasion)
+}
+
+/// Rewrites one. The crew it is on is taken from the row rather than from the
+/// draft: moving an occasion between crews is not an edit, and there is no
+/// surface that offers it.
+#[tauri::command]
+pub fn update_occasion(
+    state: State<'_, AppState>,
+    id: OccasionId,
+    draft: OccasionDraft,
+) -> Reply<Occasion> {
+    let existing = state
+        .runtime
+        .store()
+        .any_occasion(id)?
+        .ok_or_else(|| CommandError::new("notFound", format!("no occasion with id {id}")))?;
+
+    let clean = OccasionDraft { group_id: existing.group_id, ..draft }.checked()?;
+    let occasion = state
+        .runtime
+        .store()
+        .update_occasion(id, existing.group_id, &clean)?
+        .ok_or_else(|| CommandError::new("notFound", format!("no occasion with id {id}")))?;
+    state.runtime.emit(UiEvent::CalendarChanged { group_id: occasion.group_id });
+    Ok(occasion)
+}
+
+#[tauri::command]
+pub fn delete_occasion(state: State<'_, AppState>, id: OccasionId) -> Reply<()> {
+    // Read before the delete, because the event names the crew whose calendar
+    // moved and afterward there is nothing left to ask.
+    let Some(existing) = state.runtime.store().any_occasion(id)? else {
+        return Ok(());
+    };
+    state.runtime.store().delete_occasion(id, existing.group_id)?;
+    state.runtime.emit(UiEvent::CalendarChanged { group_id: existing.group_id });
     Ok(())
 }
 
