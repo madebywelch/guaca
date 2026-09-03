@@ -48,9 +48,10 @@ describe("a creature's own clock", () => {
   // rail of agents breathing together, forever, a fixed beat apart. A phase
   // offset alone drifts by exactly nothing here.
   it("does not let two creatures hold the gap they started with", () => {
-    const idle = MOODS.idle.shape.knead;
-    if (!idle) throw new Error("idle stopped breathing");
-    const cycle = 1 / idle.hz;
+    // idle is deliberately still, so the slowest breath left is thinking's
+    const breath = MOODS.thinking.shape.knead;
+    if (!breath) throw new Error("thinking stopped breathing");
+    const cycle = 1 / breath.hz;
     const drifts: number[] = [];
     for (let i = 0; i < CREW.length; i++) {
       for (let j = i + 1; j < CREW.length; j++) {

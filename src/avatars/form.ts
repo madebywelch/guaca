@@ -16,7 +16,9 @@
  *
  * The amplitudes here are deliberately small. The body breathes, leans and
  * settles; it does not act. What acts is `eyes.ts`, because a body that emotes
- * as hard as a face is a body nobody can read a face on.
+ * as hard as a face is a body nobody can read a face on. The one time the body
+ * goes further is after a hard look, and then it goes as a consequence of the
+ * eyes rather than on its own account: `PULL` is the whole of that bargain.
  */
 
 import { SILHOUETTES, type Silhouette } from "./silhouette";
@@ -130,19 +132,70 @@ export function pulse(t: number, hz: number, sharp?: boolean): number {
 }
 
 /**
- * How hard the mass follows a look.
+ * How hard the mass follows a look, and how that grows with the look.
  *
- * `swell` is the bulge on the side the eyes went to and `flatten` is what the
- * side they left gives up. Both are multiplied by how far the gaze has gone, so
- * a creature looking straight ahead is exactly its resting shape.
+ * A look pulls the body into a pear pointed at it: the front is drawn out by
+ * `stretch`, narrowed by `taper` as it goes, and the back is left round, so a
+ * circle looking hard to the right is a snout with the eyes in it and the mass
+ * behind. `lean` carries the center, `shear` carries the top further than the
+ * base, and `crane` stands the creature up a little. None of it is applied to
+ * the gaze as the eyes took it. It is applied to `grip` of it, which is nothing
+ * under `quiet`, everything past `wide`, and a smooth ramp between, so a glance
+ * is the eyes alone and a look to the edge of the range takes the body with it.
+ * The linear swell this replaced moved a body as much for a glance as for a
+ * stare, scaled, and an idle creature glancing about was a creature that would
+ * not sit still.
+ *
+ * `hold` is the most look the mass will answer, in body radii. A message
+ * landing is added to the look on top of whatever the eyes were doing, so the
+ * gaze the body is handed can be further than any gaze a mood produces; this
+ * is the bound, and `form.test.ts` drives the body past it to prove the
+ * outline stops here.
  */
-const PULL = { swell: 0.8, flatten: 0.32, lean: 0.1, width: 0.7 };
+export const PULL = {
+  quiet: 0.06,
+  wide: 0.26,
+  hold: 0.38,
+  /** How far the front is drawn out, in body radii per body radius of look. */
+  stretch: 1.2,
+  /** How much the front narrows as it goes, per body radius of look. */
+  taper: 1.1,
+  /** Where along the body the pull begins, in body radii behind the center. */
+  back: 0.15,
+  /**
+   * How much further the eyes go, across, when the body answers: they lead the
+   * snout rather than sit behind it. Across only, because up is the starved
+   * direction (`eyes.ts` has the measurement) and down already has the lid.
+   */
+  lead: 0.6,
+  lean: 0.1,
+  shear: 0.2,
+  /** Where the shear turns, below the center, in body radii. The base stays put. */
+  pivot: 0.45,
+  crane: 0.1,
+};
+
+/** Quintic step over 0..1. Leaves and arrives with no corner on it. */
+function smooth(u: number): number {
+  const e = Math.max(0, Math.min(1, u));
+  return e * e * e * (e * (e * 6 - 15) + 10);
+}
+
+/** How much of a look, at this distance, the mass answers. */
+export function grip(reach: number): number {
+  const held = Math.min(reach, PULL.hold);
+  return held * smooth((held - PULL.quiet) / (PULL.wide - PULL.quiet));
+}
 
 /** One frame of one creature, as points. `t` is seconds, `gaze` in body radii. */
 export function bodyPoints(lump: Lump, shape: Shape, t: number, gaze?: Point) {
-  const gx = gaze ? gaze[0] : 0;
-  const gy = gaze ? gaze[1] : 0;
-  const reach = Math.hypot(gx, gy);
+  const seen = Math.hypot(gaze ? gaze[0] : 0, gaze ? gaze[1] : 0);
+  /* The look the body answers is the eyes' look through `grip`, in the same
+     direction and shorter. Everything below reads this pair and never the raw
+     gaze, so a glance costs the outline nothing. */
+  const reach = seen > 0.004 ? grip(seen) : 0;
+  const gx = gaze && seen > 0.004 ? (gaze[0] / seen) * reach : 0;
+  const gy = gaze && seen > 0.004 ? (gaze[1] / seen) * reach : 0;
   const R = FORM.radius;
 
   /* The mass leans after the eyes. Not far: what sells it is that the lean and
@@ -153,47 +206,106 @@ export function bodyPoints(lump: Lump, shape: Shape, t: number, gaze?: Point) {
 
   const knead = shape.knead ? pulse(t, shape.knead.hz, shape.knead.sharp) * shape.knead.amp : 0;
   /* Volume preserving: wide when short and the other way round, which is the
-     whole of why clay reads as clay rather than as a balloon. */
-  const ax = lump.ax * (shape.aspect ? shape.aspect[0] : 1) * (1 + knead * 0.9);
-  const ay = lump.ay * (shape.aspect ? shape.aspect[1] : 1) * (1 - knead);
+     whole of why clay reads as clay rather than as a balloon. A hard look also
+     cranes: taller and a shade thinner, which is the body reaching after what
+     the eyes found, and it is spent on height because height is the cheap
+     direction, since every one of these bodies has room over its head and
+     none to spare at its sides. */
+  const crane = reach * PULL.crane;
+  const ax = lump.ax * (shape.aspect ? shape.aspect[0] : 1) * (1 + knead * 0.9) * (1 - crane * 0.5);
+  const ay = lump.ay * (shape.aspect ? shape.aspect[1] : 1) * (1 - knead) * (1 + crane);
 
   const heave = shape.heave
     ? Math.max(0, Math.sin(t * shape.heave.hz * TAU)) ** 3 * shape.heave.amp
     : 0;
 
-  const towards = reach > 0.004 ? Math.atan2(gy, gx) / TAU : 0;
+  const ux = reach > 0.004 ? gx / reach : 1;
+  const uy = reach > 0.004 ? gy / reach : 0;
   const silhouette = SILHOUETTES[lump.form];
-  const pts: Point[] = [];
-  for (let i = 0; i < FORM.samples; i++) {
-    const a = (i / FORM.samples) * TAU;
-    let rr = silhouette(a);
-    for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
-    if (shape.wob) for (const w of shape.wob) rr += w.amp * Math.sin(w.k * a + w.spd * t);
-    if (reach > 0.004) {
-      rr += press(a, towards, PULL.width, reach * PULL.swell);
-      rr += press(a, towards + 0.5, PULL.width + 0.1, -reach * PULL.flatten);
-    }
-    if (shape.press) {
-      for (const p of shape.press) {
-        const amp = p.beat ? p.amp * (0.55 + 0.45 * Math.sin(t * p.beat)) : p.amp;
-        rr += press(a, p.th + (p.spin ? p.spin * t : 0), p.w, amp);
+  const walk = (swell: number): Point[] => {
+    const pts: Point[] = [];
+    for (let i = 0; i < FORM.samples; i++) {
+      const a = (i / FORM.samples) * TAU;
+      let rr = silhouette(a);
+      for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
+      if (shape.wob) for (const w of shape.wob) rr += w.amp * Math.sin(w.k * a + w.spd * t);
+      if (shape.press) {
+        for (const p of shape.press) {
+          const amp = p.beat ? p.amp * (0.55 + 0.45 * Math.sin(t * p.beat)) : p.amp;
+          rr += press(a, p.th + (p.spin ? p.spin * t : 0), p.w, amp);
+        }
       }
-    }
-    rr += heave * Math.max(0, -Math.sin(a));
+      rr += heave * Math.max(0, -Math.sin(a));
 
-    let x = cx + Math.cos(a) * R * rr * ax;
-    let y = cy + Math.sin(a) * R * rr * (ay + heave * 0.5);
+      let x = cx + Math.cos(a) * R * rr * ax;
+      let y = cy + Math.sin(a) * R * rr * (ay + heave * 0.5);
 
-    /* Gravity, applied after the outline. The underside is the part that knows
-       about the table, and a puddle is not an ellipse. */
-    if (shape.sag) {
-      const below = Math.max(0, (y - cy) / R);
-      y += shape.sag * below * below;
-      x = cx + (x - cx) * (1 + (shape.spread ?? 0) * below);
+      /* The pear. In the frame of the look, `u` is along it and `v` across it,
+         and `s` rises from nothing at the back of the body to one at the front,
+         so the back keeps its shape while the front is drawn out and narrowed.
+         Done on the point rather than the radius because a radius can only
+         bulge: the narrowing is what says the eyes are pulling the body and not
+         that the body has grown a lump. */
+      if (reach > 0.004) {
+        const dx = (x - cx) / R;
+        const dy = (y - cy) / R;
+        const u = dx * ux + dy * uy;
+        const v = -dx * uy + dy * ux;
+        const s = smooth((u + PULL.back) / (1 + PULL.back));
+        const u2 = u + swell * s * s;
+        const v2 = v * (1 - reach * PULL.taper * s * s);
+        x = cx + (u2 * ux - v2 * uy) * R;
+        y = cy + (u2 * uy + v2 * ux) * R;
+      }
+
+      /* The top goes further than the base. A shear about a point under the
+         center, so a creature looking hard to one side cranes over toward it on
+         a planted underside rather than sliding across its box, which is the
+         difference between a body leaning and a sprite being moved. It is only
+         ever sideways: up and down, the lean and the crane already say it. */
+      x += (cy + PULL.pivot * R - y) * gx * PULL.shear;
+
+      /* Gravity, applied after the outline. The underside is the part that knows
+         about the table, and a puddle is not an ellipse. */
+      if (shape.sag) {
+        const below = Math.max(0, (y - cy) / R);
+        y += shape.sag * below * below;
+        x = cx + (x - cx) * (1 + (shape.spread ?? 0) * below);
+      }
+      pts.push([x, y]);
     }
-    pts.push([x, y]);
+    return pts;
+  };
+
+  /* The stretch spends the room that is left and no more. What is left depends
+     on everything above: a creature that has sat down has spent the room under
+     it on sitting, a tall one on being tall, and a puddle grows faster than
+     the stretch that feeds it because the sag is quadratic. So the bound is
+     taken on the outline rather than on the numbers that made it: if the full
+     stretch puts a point past `FORM.reach`, it is cut back along the secant to
+     the stretch that does not, and once more if the puddle bent the line. A
+     tuned swell held this by two hundredths of a pixel and only in the frames
+     somebody thought to sample. */
+  let swell = reach * PULL.stretch;
+  let pts = walk(swell);
+  if (swell > 0) {
+    let rest = Number.NaN;
+    for (let pass = 0; pass < 3; pass++) {
+      const far = furthest(pts);
+      if (far <= FORM.reach) break;
+      if (Number.isNaN(rest)) rest = furthest(walk(0));
+      swell = rest >= FORM.reach ? 0 : swell * ((FORM.reach - rest) / (far - rest)) * 0.98;
+      pts = walk(swell);
+    }
   }
   return { pts, knead };
+}
+
+/** How far the furthest point of an outline is from the center of the box. */
+function furthest(pts: Point[]): number {
+  let most = 0;
+  for (const [x, y] of pts) most = Math.max(most, Math.hypot(x - FORM.center, y - FORM.center));
+  return most;
 }
 
 /** A gaussian thumbprint at one angle. */

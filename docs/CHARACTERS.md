@@ -127,14 +127,34 @@ An eye is an arc with a round cap and four numbers on it, in eye radii:
 - `h` its weight. A dot with `w` of 0 and `h` of 2 is a circle of radius 1.
 - `c` how far it bows. Negative curves up, which is the only smile there is.
 - `a` how far it tilts, mirrored between the two. Positive drops the inner ends.
+- `skew` one eye higher than the other, and `lop` one eye narrower. The two
+  numbers that are not mirrored.
 
-A blink is the dot moulded into a line. Upset is the line tilted in. Nothing is
-ever swapped for anything, which is what lets a face sit halfway between two
-moods and lets a mood change be an interpolation rather than a cut.
+A blink is the dot moulded into a line. Upset is the line tilted in. A brow is
+the line raised and thinned until it is all that is left of the eye: `frustrated`
+wears two of them, tilted in until the stroke is a scowl, and `stuck` wears the
+same thing with the inner ends up, which is worry. Nothing is ever swapped for
+anything, which is what lets a face sit halfway between two moods and lets a
+mood change be an interpolation rather than a cut.
 
 There are no eyebrows and there is no mouth. Both were tried. An eyebrow is a
 second object that has to stay in register with the eye under it, and it was
 doing work the tilt of the eye itself does better. A mouth at 22px is a smudge.
+
+**A mirror can be calm, cross or afraid, but never doubtful.** Every expression
+above is the same stroke on both sides, and one whole family of faces is the
+two sides disagreeing: one brow up and the other eye narrowed. `skew` is the
+height of that disagreement and `lop` is the width of it, both in eye radii,
+and both lerp like the other four. `thinking` wears both, which is what turned
+a mild pair into a creature weighing something up, and `blocked` puts them on
+as it squints up at its badge, so it is looking at the badge and doubting it.
+
+**The far eye is smaller.** A hard look to one side turns the head, and on a
+turned head the eye that went round the curve is foreshortened: `PEEK` grows the
+near eye and shrinks the far one by the same share of the look. Without it a
+look to the edge of the range is two equal marks slid across a ball, and the
+foreshortening of the *gap* between them, which was already there, was not
+enough on its own.
 
 **Eyes flick, they never slide.** A gaze picks a target, crosses to it over a
 number of seconds that has nothing to do with how often it happens, and holds.
@@ -143,6 +163,18 @@ screensaver; holding still between jumps is what makes it read as attention.
 `hz` and `cross` are separate for that reason: a creature that looks around
 rarely does not also move its eyes slowly, and tying the two together made every
 mood feel hurried.
+
+**And they do not flick on the beat.** Each slot's jump lands somewhere in the
+first half of it rather than at its start, so no two holds are the same length.
+A hold that never varies is a metronome, which is the thing a slide is, arrived
+at from the other side.
+
+**Most looks are glances and some are looks.** `gaze.far` is the share of
+saccades that go the whole way to one side and level; the rest stay inside the
+middle of the range. Without it every target is anywhere in the box and a
+creature never quite commits to looking at anything. `idle` sets it to 0.3, and
+the far look is the one thing that moves an idle body at all, which is the next
+section.
 
 **A gaze can be written down.** Random saccades are right for idle and thinking
 and wrong for a mood that is looking at one particular thing. `gaze.script` is
@@ -157,14 +189,64 @@ switch to.
 
 ## The gaze moves the body
 
-This is the part worth protecting. The same gaze vector is read twice: sharp for
-the eyes, and followed by the body on a critically damped spring tuned to
-`SETTLE`. The eyes go, and about half a second later the side they went to
-swells out, the side they left flattens, and the whole creature leans that way.
+This is the part worth protecting. One gaze vector, smoothed once through
+`settle`, is read by the eyes and the body at the same instant. As the eyes go
+the body is pulled into a pear pointed after them: the front is drawn out and
+narrowed with the eyes leading it, the back is left round, the top cranes over
+on a planted base, and the creature stands up a shade.
 
-Read at the same instant, the bulge looks like part of the drawing. Read late
-and smoothed, it looks like a consequence of it. One number in two places is why
-it reads as being pulled rather than as two things being animated at once.
+**Together, not after.** The body used to follow the eyes on a spring almost
+half a second behind, on the argument that a bulge read late reads as a
+consequence of the look. That was true of a bulge and false of a pear: the
+eyes went, and then something else happened to the body, which read as two
+animations rather than one creature. So the smoother sits in front of both.
+It is short, so a flick is still a flick, and it is there at all because an
+aimed look arrives as a step and a step through nothing is a cut, for the eyes
+as much as for the body. It is critically damped, because the eyes read it and
+an eye that overshoots is a wobble.
+
+**A long look is slower than a glance.** The crossing time a mood sets is for
+an ordinary glance; a jump the whole way to one side takes up to twice it,
+scaled by how far it goes. The body comes with the eyes now, and a body that
+becomes a pear in a quarter of a second is a body that snapped.
+
+**The body answers a stare, not a glance.** The look the mass follows is `grip`
+of the look the eyes took: nothing under `PULL.quiet`, all of it past
+`PULL.wide`, a smooth ramp between. The linear version moved a body as much for
+a glance as for a stare, scaled, and an idle creature glancing about was a
+creature that would not sit still. Now an idle body is still until an eye goes
+to the edge, and then it goes further than anything did before.
+
+**A look pulls a pear, not a bulge.** The first version added a bump to the
+radius on the side the eyes went to, and a bump is a lump: a bigger one read as
+a growth rather than as the eyes taking the body with them. So the pull is done
+on the point rather than on the radius, in the frame of the look: the front is
+drawn out by `stretch` and narrowed by `taper`, both rising from nothing at the
+back of the body to everything at the tip, so the back keeps its shape and the
+front becomes a snout. Across, the eyes travel up to `lead` further as the body
+answers, so they sit at the narrow end rather than in the middle. Not up and
+down: up has a third of a unit to spare and down already has the lid. On top
+of it a shear about a pivot under the center leans the top and not the base,
+and a crane on height stands the creature up, which is the free direction since
+every one of these bodies has room over its head and none at its sides.
+
+**An idle body is still.** It had a breath and a wobble, and beside a face that
+blinks and looks about, a body that also pulsed read as a second animation
+running rather than as a creature at rest. The only body that breathes at rest
+now is `paused`, which is asleep. Everything else that moves a body is either a
+look or work.
+
+**The outline is bounded whatever it is handed.** A message landing is added
+to the look on top of whatever the eyes were doing, so the gaze the body is
+handed can be further than any gaze a mood produces, and the bound on the
+outline cannot be a bound on the gaze. It is two things: `PULL.hold` caps the
+look, and the stretch is then cut to the room the outline actually has left,
+measured on the outline itself every frame. Before that cut a puddle (`stuck`,
+`paused`) or a tall face (`surprised`) aimed downward at a peer drew past
+`FORM.reach` by up to two units, because a quadratic sag grows faster than the
+swell feeding it, and nothing sampled the combination. `form.test.ts` now
+drives every creature in every mood a good deal past the cap in sixteen
+directions and expects the outline to stop where it says.
 
 A throw and a catch go through the same channel: a decaying displacement added
 to the body's gaze, so a message landing deforms the creature rather than
@@ -212,15 +294,15 @@ component learns about it, no stylesheet gains a rule.
 
 | Mood | What it is | What the app reads it from |
 |---|---|---|
-| idle | Round, breathing, looking about | Active with nothing in flight |
-| listening | Eyes open, held on you | A message queued |
-| thinking | Flicking away and back | A turn between rounds |
+| idle | Still, blinking, looking about, now and then all the way to one side | Active with nothing in flight |
+| listening | Eyes open and raised, held on you | A message queued |
+| thinking | One brow up and one eye narrowed, flicking away and back | A turn between rounds |
 | working | Narrowed, scanning, kneading on a beat | A tool call in flight |
-| frustrated | Tilted in, trembling | The last call back was refused or failed |
-| blocked | Looks up at its badge, then back at you | A turn parked on a person |
+| frustrated | Two brows tilted in, trembling, glaring off to a side | The last call back was refused or failed |
+| blocked | Looks up at its badge, cocks a brow at it, then back at you | A turn parked on a person |
 | pleased | Eased off, quietly satisfied | Its reply landed in the last few seconds |
 | paused | Shut, slow, sitting down, grey | Lifecycle paused, or composted |
-| stuck | Small, low, staring at nothing | An escalation of its own is open |
+| stuck | Low, worried, eyes darting where the body cannot go | An escalation of its own is open |
 | surprised | Everything open at once | It has just been handed a message |
 
 `moodFor` is the only place a runtime signal becomes an expression, and
