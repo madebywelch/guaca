@@ -1,0 +1,2352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>Guaca characters: the caricature pass</title>
+</head>
+<body>
+<script>
+"use strict";
+(() => {
+  // node_modules/.cache/avatars-before/catalog.ts
+  var CHARACTERS = [
+    {
+      key: "orb",
+      label: "Orb",
+      form: "circle",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.02, phase: 0.4 }],
+      eye: { spread: 6.6, r: 2.9 }
+    },
+    {
+      key: "egg",
+      label: "Egg",
+      form: "drop",
+      ax: 0.98,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.02, phase: 1.4 }],
+      eye: { spread: 5.9, r: 2.8, y: 2.2 }
+    },
+    {
+      key: "pebble",
+      label: "Pebble",
+      form: "circle",
+      ax: 1.07,
+      ay: 0.94,
+      sig: [
+        { k: 2, amp: 0.026, phase: 0.2 },
+        { k: 3, amp: 0.018, phase: 1.1 }
+      ],
+      eye: { spread: 7.4, r: 2.8 }
+    },
+    {
+      key: "drop",
+      label: "Drop",
+      form: "drop",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 3, amp: 0.018, phase: 0.9 }],
+      eye: { spread: 6.2, r: 2.9, y: 3 }
+    },
+    {
+      key: "bean",
+      label: "Bean",
+      form: "cloud",
+      ax: 1.01,
+      ay: 0.99,
+      sig: [{ k: 1, amp: 0.028, phase: 0.6 }],
+      eye: { spread: 6.4, r: 2.8, x: -1.4, y: 1 }
+    },
+    {
+      key: "lobe",
+      label: "Lobe",
+      form: "cloud",
+      ax: 1.02,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.022, phase: -1.57 }],
+      eye: { spread: 6.4, r: 3, y: 1 }
+    },
+    {
+      key: "puck",
+      label: "Puck",
+      form: "octagon",
+      ax: 1.04,
+      ay: 0.95,
+      sig: [{ k: 2, amp: 0.022, phase: 1.57 }],
+      eye: { spread: 7.2, r: 2.7 }
+    },
+    {
+      key: "cell",
+      label: "Cell",
+      form: "circle",
+      ax: 1.02,
+      ay: 1.02,
+      sig: [{ k: 4, amp: 0.03, phase: 0.8 }],
+      eye: { spread: 0, r: 3.6, one: true }
+    },
+    {
+      key: "knot",
+      label: "Knot",
+      form: "square",
+      ax: 1,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.02, phase: 1.2 }],
+      eye: { spread: 5.6, r: 2.7 }
+    },
+    {
+      key: "moon",
+      label: "Moon",
+      form: "circle",
+      ax: 1.02,
+      ay: 1,
+      sig: [
+        { k: 1, amp: 0.05, phase: 3.14 },
+        { k: 3, amp: 0.014, phase: 0.5 }
+      ],
+      eye: { spread: 6.6, r: 2.9, x: 1.6 }
+    },
+    {
+      key: "wave",
+      label: "Wave",
+      form: "cloud",
+      ax: 1.03,
+      ay: 0.98,
+      sig: [{ k: 3, amp: 0.018, phase: 0 }],
+      eye: { spread: 6.2, r: 2.8, y: 1 }
+    },
+    {
+      key: "mote",
+      label: "Mote",
+      form: "octagon",
+      ax: 1.02,
+      ay: 0.97,
+      sig: [{ k: 2, amp: 0.022, phase: 2 }],
+      eye: { spread: 8, r: 2.2 }
+    },
+    {
+      key: "bead",
+      label: "Bead",
+      form: "circle",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.015, phase: 0.9 }],
+      eye: { spread: 4.6, r: 2.3 }
+    },
+    {
+      key: "gourd",
+      label: "Gourd",
+      form: "drop",
+      ax: 0.99,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.024, phase: 0.3 }],
+      eye: { spread: 6, r: 2.9, y: 3.6 }
+    },
+    {
+      key: "slab",
+      label: "Slab",
+      form: "square",
+      ax: 1.04,
+      ay: 0.96,
+      sig: [],
+      eye: { spread: 7, r: 3.3 }
+    },
+    {
+      key: "pip",
+      label: "Pip",
+      form: "drop",
+      ax: 0.99,
+      ay: 1.02,
+      sig: [{ k: 4, amp: 0.016, phase: 1 }],
+      eye: { spread: 5.4, r: 2.5, y: 1.6 }
+    },
+    {
+      key: "husk",
+      label: "Husk",
+      form: "octagon",
+      ax: 1.03,
+      ay: 0.98,
+      sig: [{ k: 1, amp: 0.026, phase: 1.3 }],
+      eye: { spread: 7, r: 2.6 }
+    },
+    {
+      key: "loop",
+      label: "Loop",
+      form: "octagon",
+      ax: 1.01,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.024, phase: -0.6 }],
+      eye: { spread: 0, r: 2.8, one: true }
+    },
+    {
+      key: "crumb",
+      label: "Crumb",
+      form: "square",
+      ax: 1.02,
+      ay: 1,
+      sig: [{ k: 1, amp: 0.03, phase: 0 }],
+      eye: { spread: 6, r: 2.7, x: 1, y: 1.4 }
+    },
+    {
+      key: "tide",
+      label: "Tide",
+      form: "cloud",
+      ax: 0.98,
+      ay: 1.02,
+      sig: [{ k: 2, amp: 0.026, phase: 0 }],
+      eye: { spread: 5.8, r: 3.1, y: 1 }
+    },
+    {
+      key: "cinder",
+      label: "Cinder",
+      form: "square",
+      ax: 1.01,
+      ay: 0.99,
+      sig: [{ k: 3, amp: 0.02, phase: 0.5 }],
+      eye: { spread: 6.8, r: 2.4 }
+    }
+  ];
+  var BY_KEY = new Map(CHARACTERS.map((c) => [c.key, c]));
+  var ACCENTS = [
+    { name: "Ochre", value: "#c28c31" },
+    { name: "Terracotta", value: "#bf5f3c" },
+    { name: "Madder", value: "#a8453a" },
+    { name: "Clay", value: "#b3805c" },
+    { name: "Olive", value: "#8b8f45" },
+    { name: "Moss", value: "#5e8158" },
+    { name: "Verdigris", value: "#4d8b83" },
+    { name: "Slate", value: "#5a7d99" },
+    { name: "Indigo", value: "#4f5f96" },
+    { name: "Plum", value: "#7c5a8c" },
+    { name: "Rose", value: "#b26f86" },
+    { name: "Graphite", value: "#6c6f70" }
+  ];
+  var DEFAULT_ACCENT = ACCENTS[0]?.value;
+
+  // node_modules/.cache/avatars-before/silhouette.ts
+  var CREST = 1.06;
+  var TAU = Math.PI * 2;
+  function ball(a, cx, cy, r) {
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    const along = cx * dx + cy * dy;
+    const off = cx * dy - cy * dx;
+    const under = r * r - off * off;
+    return under <= 0 ? 0 : Math.max(0, along + Math.sqrt(under));
+  }
+  function fromUp(a) {
+    let w = a + Math.PI / 2;
+    while (w > Math.PI) w -= TAU;
+    while (w <= -Math.PI) w += TAU;
+    return w;
+  }
+  function drop(aspect) {
+    const b = 1;
+    const k = (aspect - 1) * b;
+    const h2 = k + b;
+    const sin = b / (h2 + k);
+    const cone = Math.asin(sin);
+    const side = Math.sqrt((h2 + k) * (h2 + k) - b * b);
+    const seam = Math.atan2(side * sin, h2 - side * Math.cos(cone));
+    return (a) => {
+      const w = fromUp(a);
+      if (Math.abs(w) <= seam) return h2 * sin / Math.sin(Math.abs(w) + cone);
+      return -k * Math.cos(w) + Math.sqrt(b * b - k * k * Math.sin(w) * Math.sin(w));
+    };
+  }
+  function cloud(puffs, floor) {
+    return (a) => {
+      let r = 0;
+      for (const [cx, cy, br] of puffs) r = Math.max(r, ball(a, cx, cy, br));
+      const down = Math.sin(a);
+      return down > 1e-6 ? Math.min(r, floor / down) : r;
+    };
+  }
+  function squeeze(shape, kx, ky) {
+    return (a) => {
+      const ux = Math.cos(a) / kx;
+      const uy = Math.sin(a) / ky;
+      return shape(Math.atan2(uy, ux)) / Math.hypot(ux, uy);
+    };
+  }
+  var RAW = {
+    circle: () => 1,
+    /* A stop sign: flat to the right, left, top and bottom, corners between. */
+    octagon: (a) => {
+      const seg = Math.PI / 4;
+      return Math.cos(seg / 2) / Math.cos(a - Math.round(a / seg) * seg);
+    },
+    /* A superellipse rather than four lines: the corner radius is a number here
+       rather than a consequence of how many samples the outline is walked in. */
+    square: (a) => {
+      const n = 6;
+      return (Math.abs(Math.cos(a)) ** n + Math.abs(Math.sin(a)) ** n) ** (-1 / n);
+    },
+    drop: drop(1.24),
+    /* The puffs already carry the shift that stands the shape in the middle of
+       its own box, so the tallest puff and the underside sit the same distance
+       out. `silhouette.test.ts` is what says so, and a shape drawn off center
+       leans in every rail it appears in with nothing else to catch it. */
+    cloud: squeeze(
+      cloud(
+        [
+          [0, -0.17, 0.46],
+          [-0.48, 0.13, 0.42],
+          [0.48, 0.13, 0.42],
+          [0, 0.21, 0.6]
+        ],
+        0.63
+      ),
+      0.94,
+      1.064
+    )
+  };
+  var STEPS = 2048;
+  function encloses(shape) {
+    let sum = 0;
+    for (let i = 0; i < STEPS; i++) {
+      const r = shape(i / STEPS * TAU);
+      sum += 0.5 * r * r * (TAU / STEPS);
+    }
+    return sum;
+  }
+  function crestOf(shape) {
+    let most = 0;
+    for (let i = 0; i < STEPS; i++) most = Math.max(most, shape(i / STEPS * TAU));
+    return most;
+  }
+  function sizeOf(shape) {
+    const even = Math.sqrt(Math.PI / encloses(shape));
+    return Math.min(even, CREST / crestOf(shape));
+  }
+  var SIZE = Object.fromEntries(
+    Object.entries(RAW).map(([key, shape]) => [key, sizeOf(shape)])
+  );
+  var SILHOUETTES = Object.fromEntries(
+    Object.entries(RAW).map(([key, shape]) => {
+      const scale = SIZE[key];
+      return [key, (a) => shape(a) * scale];
+    })
+  );
+
+  // node_modules/.cache/avatars-before/form.ts
+  var FORM = {
+    /** The viewBox every character is drawn in. */
+    box: 64,
+    center: 32,
+    /** Resting radius of the body. What two creatures side by side are spaced on. */
+    radius: 20,
+    /**
+     * Nothing is ever drawn outside this radius of the center, at any character,
+     * in any mood, at any point of any cycle. `form.test.ts` samples the whole
+     * space and holds the geometry to it, and `orb.test.ts` seats a crew against
+     * it, so a mood that grew could not quietly push a face through the rim of
+     * its group's circle.
+     */
+    reach: 30,
+    /**
+     * Radii in the outline.
+     *
+     * Divisible by eight, which is the part that matters: a square's corners sit
+     * at 45 degrees and an octagon's at 22.5, and a corner that falls between two
+     * samples is a corner that gets chamfered off. At the 28 this started with,
+     * an octagon drew as a lumpy circle and nothing failed.
+     */
+    samples: 32
+  };
+  var TAU2 = Math.PI * 2;
+  function pulse(t, hz, sharp) {
+    const u = t * hz % 1;
+    if (!sharp) return Math.sin(u * TAU2);
+    return u < 0.3 ? Math.sin(u / 0.3 * Math.PI) : -0.34 * Math.sin((u - 0.3) / 0.7 * Math.PI);
+  }
+  var PULL = { swell: 0.8, flatten: 0.32, lean: 0.1, width: 0.7 };
+  function bodyPoints(lump, shape, t, gaze) {
+    const gx = gaze ? gaze[0] : 0;
+    const gy = gaze ? gaze[1] : 0;
+    const reach = Math.hypot(gx, gy);
+    const R = FORM.radius;
+    const cx = FORM.center + gx * R * PULL.lean;
+    const cy = FORM.center + (shape.rise ?? 0) + gy * R * PULL.lean;
+    const knead = shape.knead ? pulse(t, shape.knead.hz, shape.knead.sharp) * shape.knead.amp : 0;
+    const ax = lump.ax * (shape.aspect ? shape.aspect[0] : 1) * (1 + knead * 0.9);
+    const ay = lump.ay * (shape.aspect ? shape.aspect[1] : 1) * (1 - knead);
+    const heave = shape.heave ? Math.max(0, Math.sin(t * shape.heave.hz * TAU2)) ** 3 * shape.heave.amp : 0;
+    const towards = reach > 4e-3 ? Math.atan2(gy, gx) / TAU2 : 0;
+    const silhouette = SILHOUETTES[lump.form];
+    const pts = [];
+    for (let i = 0; i < FORM.samples; i++) {
+      const a = i / FORM.samples * TAU2;
+      let rr = silhouette(a);
+      for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
+      if (shape.wob) for (const w of shape.wob) rr += w.amp * Math.sin(w.k * a + w.spd * t);
+      if (reach > 4e-3) {
+        rr += press(a, towards, PULL.width, reach * PULL.swell);
+        rr += press(a, towards + 0.5, PULL.width + 0.1, -reach * PULL.flatten);
+      }
+      if (shape.press) {
+        for (const p of shape.press) {
+          const amp = p.beat ? p.amp * (0.55 + 0.45 * Math.sin(t * p.beat)) : p.amp;
+          rr += press(a, p.th + (p.spin ? p.spin * t : 0), p.w, amp);
+        }
+      }
+      rr += heave * Math.max(0, -Math.sin(a));
+      let x = cx + Math.cos(a) * R * rr * ax;
+      let y = cy + Math.sin(a) * R * rr * (ay + heave * 0.5);
+      if (shape.sag) {
+        const below = Math.max(0, (y - cy) / R);
+        y += shape.sag * below * below;
+        x = cx + (x - cx) * (1 + (shape.spread ?? 0) * below);
+      }
+      pts.push([x, y]);
+    }
+    return { pts, knead };
+  }
+  function press(a, th, w, amp) {
+    let d = a - th * TAU2;
+    while (d > Math.PI) d -= TAU2;
+    while (d < -Math.PI) d += TAU2;
+    return amp * Math.exp(-(d * d) / (w * w));
+  }
+  function blend(a, b, u) {
+    const out = [];
+    for (let i = 0; i < a.length; i++) {
+      const p = a[i];
+      const q = b[i];
+      out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+    }
+    return out;
+  }
+  function outline(pts) {
+    const first = pts[0];
+    const d = [`M${first[0].toFixed(2)} ${first[1].toFixed(2)}`];
+    for (let i = 0; i < pts.length; i++) {
+      const p0 = pts[(i - 1 + pts.length) % pts.length];
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % pts.length];
+      const p3 = pts[(i + 2) % pts.length];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d.push(
+        `C${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`
+      );
+    }
+    return d.join("");
+  }
+
+  // node_modules/.cache/avatars-before/eyes.ts
+  var TAU3 = Math.PI * 2;
+  var SETTLE = 0.44;
+  var AIM = { down: 0.3, up: 0.22 };
+  var AIMED = {
+    down: { lid: 0.34, bow: 0.2, sep: -0.08, dy: 0.45 },
+    up: { lid: -0.4, bow: -0.06, sep: -0.06, dy: 0 }
+  };
+  function aimedEye(eye, at) {
+    const { lid, bow, sep, dy } = AIMED[at];
+    return {
+      ...eye,
+      /* Eased toward a line rather than swapped for one, as a blink is, so an eye
+         that is already a dash does not grow a second length of its own; and back
+         toward the dot it was cut from when the look lifts instead. */
+      w: lid > 0 ? eye.w + (1.3 - eye.w) * lid : eye.w * (1 + lid),
+      h: eye.h * (1 - 0.62 * Math.max(lid, 0)),
+      c: (eye.c ?? 0) + bow,
+      sep: (eye.sep ?? 0) + sep,
+      dy: (eye.dy ?? 0) + dy
+    };
+  }
+  function rnd(i) {
+    const x = Math.sin(i * 127.1 + 197.3) * 43758.5453;
+    return x - Math.floor(x);
+  }
+  function blinkAmount(t) {
+    const P = 4.6;
+    const DUR = 0.18;
+    let out = 0;
+    for (let k = -1; k <= 0; k++) {
+      const i = Math.floor(t / P) + k;
+      const at = i * P + rnd(i) * (P - 0.8);
+      const d = t - at;
+      if (d >= 0 && d < DUR) out = Math.max(out, Math.sin(d / DUR * Math.PI));
+      if (rnd(i + 0.5) > 0.7) {
+        const again = t - (at + 0.25);
+        if (again >= 0 && again < DUR) out = Math.max(out, Math.sin(again / DUR * Math.PI));
+      }
+    }
+    return out;
+  }
+  function ease(u) {
+    const e = Math.max(0, Math.min(1, u));
+    return e * e * e * (e * (e * 6 - 15) + 10);
+  }
+  function scripted(t, g) {
+    const steps = g.script;
+    const total = steps.reduce((sum, step) => sum + step[2], 0);
+    let u = t % total;
+    if (u < 0) u += total;
+    let i = 0;
+    while (u >= steps[i][2]) {
+      u -= steps[i][2];
+      i = (i + 1) % steps.length;
+    }
+    const from = steps[(i - 1 + steps.length) % steps.length];
+    const to = steps[i];
+    const k = ease(u / (g.cross ?? 0.26));
+    return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+  }
+  function gazeAt(t, g) {
+    if (!g) return [0, 0];
+    if (g.script) return scripted(t, g);
+    const range = g.range ?? 0;
+    const P = 1 / (g.hz ?? 0.5);
+    const i = Math.floor(t / P);
+    let u = t / P % 1;
+    if (u < 0) u += 1;
+    const at = (k2) => [
+      (rnd(k2) * 2 - 1) * range + (g.bias ? g.bias[0] : 0),
+      (rnd(k2 + 0.37) * 2 - 1) * range * 0.62 + (g.bias ? g.bias[1] : 0)
+    ];
+    const from = at(i - 1);
+    const to = at(i);
+    const k = ease(u * P / (g.cross ?? 0.26));
+    return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+  }
+  function geometry(e, r, side, blink, breath, squint, squintTo) {
+    let w = e.w;
+    let h2 = e.h;
+    let c = e.c ?? 0;
+    let ang = (e.a ?? 0) * side;
+    if (squint > 0) {
+      w += squint * (squintTo.w ?? 0);
+      h2 += squint * (squintTo.h ?? 0);
+      ang += squint * (squintTo.a ?? 0) * side;
+    }
+    if (breath) {
+      h2 *= 1 + breath * 0.16;
+      c *= 1 + breath * 0.3;
+    }
+    if (blink > 0) {
+      w = w + (1.3 - w) * blink;
+      h2 = h2 * (1 - 0.88 * blink);
+      c = c * (1 - blink);
+    }
+    return {
+      w: Math.max(w, 0.012) * r,
+      h: Math.max(h2, 0.1) * r,
+      c: c * r,
+      ang: ang * Math.PI / 180
+    };
+  }
+  function eyesAt(lump, eye, watch, t, live2, gaze) {
+    const anim = watch ?? {};
+    const r = lump.eye.r;
+    const [gx, gy] = gaze;
+    const sep = (lump.eye.spread + (eye.sep ?? 0) * r) * (1 - Math.abs(gx) * 0.5);
+    const blink = live2 && anim.blink !== false ? blinkAmount(t * (anim.blink === "slow" ? 0.55 : 1)) : 0;
+    const jitter = live2 && anim.jitter ? anim.jitter : 0;
+    const jx = jitter ? Math.sin(t * 41) * jitter : 0;
+    const jy = jitter ? Math.sin(t * 33 + 1.7) * jitter * 0.7 : 0;
+    const breath = live2 && anim.breath ? Math.sin(t * anim.breath.hz * TAU3) * anim.breath.amp : 0;
+    const squintTo = anim.squint ?? {};
+    const squint = anim.squint ? Math.max(0, Math.min(1, -gy / anim.squint.at)) : 0;
+    const x = FORM.center + (lump.eye.x ?? 0) + gx * FORM.radius + (jx + (eye.dx ?? 0)) * r;
+    const y = FORM.center + (lump.eye.y ?? 0) + gy * FORM.radius + (jy + (eye.dy ?? 0)) * r;
+    if (lump.eye.one) {
+      return [{ x, y, ...geometry(eye, r * 1.5, 1, blink, breath, squint, squintTo) }];
+    }
+    return [
+      { x: x - sep, y, ...geometry(eye, r, 1, blink, breath, squint, squintTo) },
+      { x: x + sep, y, ...geometry(eye, r, -1, blink, breath, squint, squintTo) }
+    ];
+  }
+  function eyePath(e) {
+    const dx = Math.cos(e.ang) * e.w;
+    const dy = Math.sin(e.ang) * e.w;
+    const px = -Math.sin(e.ang) * e.c * 2;
+    const py = Math.cos(e.ang) * e.c * 2;
+    return `M${(e.x - dx).toFixed(2)} ${(e.y - dy).toFixed(2)}Q${(e.x + px).toFixed(2)} ${(e.y + py).toFixed(2)} ${(e.x + dx).toFixed(2)} ${(e.y + dy).toFixed(2)}`;
+  }
+  function blendEyes(a, b, u) {
+    const at = (k, fallback) => (a[k] ?? fallback) * (1 - u) + (b[k] ?? fallback) * u;
+    return {
+      w: at("w", 0),
+      h: at("h", 1),
+      c: at("c", 0),
+      a: at("a", 0),
+      sep: at("sep", 0),
+      dx: at("dx", 0),
+      dy: at("dy", 0)
+    };
+  }
+
+  // node_modules/.cache/avatars-before/moods.ts
+  var MOODS = {
+    idle: {
+      shape: {
+        knead: { amp: 0.03, hz: 0.22 },
+        wob: [
+          { k: 2, amp: 8e-3, spd: 0.4 },
+          { k: 3, amp: 6e-3, spd: -0.3 }
+        ]
+      },
+      eye: { w: 0.02, h: 2 },
+      watch: { blink: true, gaze: { range: 0.28, hz: 0.26, cross: 0.3 } }
+    },
+    listening: {
+      shape: {
+        aspect: [0.985, 1.03],
+        knead: { amp: 0.025, hz: 0.5 },
+        press: [{ th: 0.76, w: 0.5, amp: 0.035, beat: 2.4 }]
+      },
+      eye: { w: 0.02, h: 2.35, sep: 0.15, dy: -0.15 },
+      watch: {
+        blink: true,
+        gaze: { range: 0.07, hz: 0.5, cross: 0.3 },
+        breath: { amp: 0.35, hz: 0.5 }
+      }
+    },
+    thinking: {
+      shape: { knead: { amp: 0.03, hz: 0.34 }, wob: [{ k: 3, amp: 0.018, spd: 1.2 }] },
+      eye: { w: 0.45, h: 1.6, a: -7 },
+      watch: { blink: true, gaze: { range: 0.2, hz: 0.68, cross: 0.22, bias: [-0.17, -0.15] } },
+      mark: "dots"
+    },
+    working: {
+      shape: { knead: { amp: 0.075, hz: 1.1, sharp: true } },
+      eye: { w: 1.15, h: 1, a: 10, dy: 0.22 },
+      watch: { blink: true, gaze: { range: 0.14, hz: 1.9, cross: 0.12, bias: [0, 0.07] } }
+    },
+    frustrated: {
+      shape: {
+        aspect: [1.045, 0.965],
+        knead: { amp: 0.03, hz: 2.4 },
+        wob: [
+          { k: 7, amp: 0.01, spd: 8 },
+          { k: 4, amp: 8e-3, spd: 5 }
+        ]
+      },
+      eye: { w: 1.6, h: 1.05, a: 26, c: -0.12 },
+      watch: { blink: "slow", gaze: { range: 0.045, hz: 2.4, cross: 0.08 }, jitter: 0.055 }
+    },
+    /* The one mood that acts rather than holds a pose: it looks up at its own
+       badge, narrows at it, and comes back to you. A fixed face over a pulsing
+       body is what this replaced, and it read as a loading spinner. */
+    blocked: {
+      shape: { knead: { amp: 0.03, hz: 0.24 } },
+      eye: { w: 0.02, h: 2.5, sep: 0.2 },
+      watch: {
+        blink: "slow",
+        squint: { at: 0.3, w: 0.8, h: -0.62, a: 14 },
+        gaze: {
+          cross: 0.34,
+          script: [
+            [0, 0.02, 1.7],
+            [0.24, -0.24, 1.2],
+            [0.28, -0.29, 0.9],
+            [0, 0.02, 1.5]
+          ]
+        }
+      },
+      mark: "bang"
+    },
+    pleased: {
+      shape: { knead: { amp: 0.075, hz: 0.42, sharp: true } },
+      eye: { w: 0.95, h: 0.82, c: -0.62, dy: -0.1 },
+      watch: {
+        blink: "slow",
+        gaze: { range: 0.1, hz: 0.3, cross: 0.42, bias: [0, -0.05] },
+        breath: { amp: 0.3, hz: 0.42 }
+      }
+    },
+    paused: {
+      shape: {
+        aspect: [1.02, 0.965],
+        sag: 1.1,
+        spread: 0.07,
+        knead: { amp: 0.025, hz: 0.13 },
+        rise: 1
+      },
+      eye: { w: 1.35, h: 0.5, c: 0.16 },
+      watch: { blink: false, breath: { amp: 0.12, hz: 0.13 } },
+      mark: "z",
+      dim: true
+    },
+    stuck: {
+      shape: {
+        aspect: [1.08, 0.915],
+        sag: 2.1,
+        spread: 0.13,
+        rise: 1.9,
+        knead: { amp: 0.045, hz: 0.1 },
+        heave: { amp: 0.05, hz: 0.12 }
+      },
+      eye: { w: 0.02, h: 1.28, dy: 0.5, sep: -0.22 },
+      watch: { blink: "slow", gaze: { range: 0.035, hz: 0.13, cross: 0.6, bias: [0, 0.06] } }
+    },
+    surprised: {
+      shape: {
+        aspect: [0.965, 1.055],
+        knead: { amp: 0.04, hz: 1.9 },
+        wob: [{ k: 5, amp: 0.018, spd: 6 }]
+      },
+      eye: { w: 0.02, h: 2.85, sep: 0.4 },
+      watch: {
+        blink: false,
+        gaze: { range: 0.02, hz: 3, cross: 0.06 },
+        breath: { amp: 0.3, hz: 1.6 }
+      }
+    }
+  };
+  function markFor(mood) {
+    switch (MOODS[mood].mark) {
+      case "dots":
+        return `<g class="avatar__dots" fill="var(--eye)" opacity="0.7"><circle cx="48" cy="12" r="1.5"/><circle cx="52.6" cy="9.4" r="1.8"/><circle cx="57.4" cy="6.2" r="2.1"/></g>`;
+      case "bang":
+        return `<g transform="translate(52 11)"><circle class="avatar__halo" r="9" fill="none" stroke="var(--flesh)" stroke-width="2"/><circle r="7" fill="var(--flesh)"/><path d="M0 -3.6v4.4" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cy="3.4" r="1.1" fill="#fff"/></g>`;
+      case "z":
+        return `<g transform="translate(45 15)"><g class="avatar__z"><path d="M-3.2 -3.2h6.4l-6.4 6.4h6.4" stroke="var(--eye)" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/></g></g>`;
+      default:
+        return "";
+    }
+  }
+
+  // src/avatars/catalog.ts
+  var CHARACTERS2 = [
+    {
+      key: "orb",
+      label: "Orb",
+      form: "circle",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.02, phase: 0.4 }],
+      eye: { spread: 6.6, r: 2.9 }
+    },
+    {
+      key: "egg",
+      label: "Egg",
+      form: "drop",
+      ax: 0.98,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.02, phase: 1.4 }],
+      eye: { spread: 5.9, r: 2.8, y: 2.2 }
+    },
+    {
+      key: "pebble",
+      label: "Pebble",
+      form: "circle",
+      ax: 1.07,
+      ay: 0.94,
+      sig: [
+        { k: 2, amp: 0.026, phase: 0.2 },
+        { k: 3, amp: 0.018, phase: 1.1 }
+      ],
+      eye: { spread: 7.4, r: 2.8 }
+    },
+    {
+      key: "drop",
+      label: "Drop",
+      form: "drop",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 3, amp: 0.018, phase: 0.9 }],
+      eye: { spread: 6.2, r: 2.9, y: 3 }
+    },
+    {
+      key: "bean",
+      label: "Bean",
+      form: "cloud",
+      ax: 1.01,
+      ay: 0.99,
+      sig: [{ k: 1, amp: 0.028, phase: 0.6 }],
+      eye: { spread: 6.4, r: 2.8, x: -1.4, y: 1 }
+    },
+    {
+      key: "lobe",
+      label: "Lobe",
+      form: "cloud",
+      ax: 1.02,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.022, phase: -1.57 }],
+      eye: { spread: 6.4, r: 3, y: 1 }
+    },
+    {
+      key: "puck",
+      label: "Puck",
+      form: "octagon",
+      ax: 1.04,
+      ay: 0.95,
+      sig: [{ k: 2, amp: 0.022, phase: 1.57 }],
+      eye: { spread: 7.2, r: 2.7 }
+    },
+    {
+      key: "cell",
+      label: "Cell",
+      form: "circle",
+      ax: 1.02,
+      ay: 1.02,
+      sig: [{ k: 4, amp: 0.03, phase: 0.8 }],
+      eye: { spread: 0, r: 3.6, one: true }
+    },
+    {
+      key: "knot",
+      label: "Knot",
+      form: "square",
+      ax: 1,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.02, phase: 1.2 }],
+      eye: { spread: 5.6, r: 2.7 }
+    },
+    {
+      key: "moon",
+      label: "Moon",
+      form: "circle",
+      ax: 1.02,
+      ay: 1,
+      sig: [
+        { k: 1, amp: 0.05, phase: 3.14 },
+        { k: 3, amp: 0.014, phase: 0.5 }
+      ],
+      eye: { spread: 6.6, r: 2.9, x: 1.6 }
+    },
+    {
+      key: "wave",
+      label: "Wave",
+      form: "cloud",
+      ax: 1.03,
+      ay: 0.98,
+      sig: [{ k: 3, amp: 0.018, phase: 0 }],
+      eye: { spread: 6.2, r: 2.8, y: 1 }
+    },
+    {
+      key: "mote",
+      label: "Mote",
+      form: "octagon",
+      ax: 1.02,
+      ay: 0.97,
+      sig: [{ k: 2, amp: 0.022, phase: 2 }],
+      eye: { spread: 8, r: 2.2 }
+    },
+    {
+      key: "bead",
+      label: "Bead",
+      form: "circle",
+      ax: 1,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.015, phase: 0.9 }],
+      eye: { spread: 4.6, r: 2.3 }
+    },
+    {
+      key: "gourd",
+      label: "Gourd",
+      form: "drop",
+      ax: 0.99,
+      ay: 1,
+      sig: [{ k: 2, amp: 0.024, phase: 0.3 }],
+      eye: { spread: 6, r: 2.9, y: 3.6 }
+    },
+    {
+      key: "slab",
+      label: "Slab",
+      form: "square",
+      ax: 1.04,
+      ay: 0.96,
+      sig: [],
+      eye: { spread: 7, r: 3.3 }
+    },
+    {
+      key: "pip",
+      label: "Pip",
+      form: "drop",
+      ax: 0.99,
+      ay: 1.02,
+      sig: [{ k: 4, amp: 0.016, phase: 1 }],
+      eye: { spread: 5.4, r: 2.5, y: 1.6 }
+    },
+    {
+      key: "husk",
+      label: "Husk",
+      form: "octagon",
+      ax: 1.03,
+      ay: 0.98,
+      sig: [{ k: 1, amp: 0.026, phase: 1.3 }],
+      eye: { spread: 7, r: 2.6 }
+    },
+    {
+      key: "loop",
+      label: "Loop",
+      form: "octagon",
+      ax: 1.01,
+      ay: 1.01,
+      sig: [{ k: 2, amp: 0.024, phase: -0.6 }],
+      eye: { spread: 0, r: 2.8, one: true }
+    },
+    {
+      key: "crumb",
+      label: "Crumb",
+      form: "square",
+      ax: 1.02,
+      ay: 1,
+      sig: [{ k: 1, amp: 0.03, phase: 0 }],
+      eye: { spread: 6, r: 2.7, x: 1, y: 1.4 }
+    },
+    {
+      key: "tide",
+      label: "Tide",
+      form: "cloud",
+      ax: 0.98,
+      ay: 1.02,
+      sig: [{ k: 2, amp: 0.026, phase: 0 }],
+      eye: { spread: 5.8, r: 3.1, y: 1 }
+    },
+    {
+      key: "cinder",
+      label: "Cinder",
+      form: "square",
+      ax: 1.01,
+      ay: 0.99,
+      sig: [{ k: 3, amp: 0.02, phase: 0.5 }],
+      eye: { spread: 6.8, r: 2.4 }
+    }
+  ];
+  var BY_KEY2 = new Map(CHARACTERS2.map((c) => [c.key, c]));
+  var ACCENTS2 = [
+    { name: "Ochre", value: "#c28c31" },
+    { name: "Terracotta", value: "#bf5f3c" },
+    { name: "Madder", value: "#a8453a" },
+    { name: "Clay", value: "#b3805c" },
+    { name: "Olive", value: "#8b8f45" },
+    { name: "Moss", value: "#5e8158" },
+    { name: "Verdigris", value: "#4d8b83" },
+    { name: "Slate", value: "#5a7d99" },
+    { name: "Indigo", value: "#4f5f96" },
+    { name: "Plum", value: "#7c5a8c" },
+    { name: "Rose", value: "#b26f86" },
+    { name: "Graphite", value: "#6c6f70" }
+  ];
+  var DEFAULT_ACCENT2 = ACCENTS2[0]?.value;
+
+  // src/avatars/clock.ts
+  var onScreen = /* @__PURE__ */ new WeakSet();
+  var watching = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver(
+    (rows) => {
+      for (const row of rows) {
+        if (row.isIntersecting) onScreen.add(row.target);
+        else onScreen.delete(row.target);
+      }
+    },
+    /* Generous, so a row scrolled to is already moving by the time it
+       arrives rather than starting its breath under the operator's eye. */
+    { rootMargin: "240px" }
+  );
+  var SPREAD = { phase: 9, rate: 0.22 };
+  function hashed(seed, salt) {
+    let h2 = salt >>> 0;
+    for (let i = 0; i < seed.length; i++) h2 = Math.imul(h2, 31) + seed.charCodeAt(i) >>> 0;
+    h2 = (h2 ^ h2 >>> 16) >>> 0;
+    h2 = Math.imul(h2, 2146121005) >>> 0;
+    h2 = (h2 ^ h2 >>> 15) >>> 0;
+    return h2 % 1e5 / 1e5;
+  }
+  function gaitOf(seed) {
+    return {
+      phase: hashed(seed, 0) * SPREAD.phase,
+      rate: 1 + (hashed(seed, 2654435761) * 2 - 1) * SPREAD.rate
+    };
+  }
+
+  // src/avatars/silhouette.ts
+  var CREST2 = 1.06;
+  var TAU4 = Math.PI * 2;
+  function ball2(a, cx, cy, r) {
+    const dx = Math.cos(a);
+    const dy = Math.sin(a);
+    const along = cx * dx + cy * dy;
+    const off = cx * dy - cy * dx;
+    const under = r * r - off * off;
+    return under <= 0 ? 0 : Math.max(0, along + Math.sqrt(under));
+  }
+  function fromUp2(a) {
+    let w = a + Math.PI / 2;
+    while (w > Math.PI) w -= TAU4;
+    while (w <= -Math.PI) w += TAU4;
+    return w;
+  }
+  function drop2(aspect) {
+    const b = 1;
+    const k = (aspect - 1) * b;
+    const h2 = k + b;
+    const sin = b / (h2 + k);
+    const cone = Math.asin(sin);
+    const side = Math.sqrt((h2 + k) * (h2 + k) - b * b);
+    const seam = Math.atan2(side * sin, h2 - side * Math.cos(cone));
+    return (a) => {
+      const w = fromUp2(a);
+      if (Math.abs(w) <= seam) return h2 * sin / Math.sin(Math.abs(w) + cone);
+      return -k * Math.cos(w) + Math.sqrt(b * b - k * k * Math.sin(w) * Math.sin(w));
+    };
+  }
+  function cloud2(puffs, floor) {
+    return (a) => {
+      let r = 0;
+      for (const [cx, cy, br] of puffs) r = Math.max(r, ball2(a, cx, cy, br));
+      const down = Math.sin(a);
+      return down > 1e-6 ? Math.min(r, floor / down) : r;
+    };
+  }
+  function squeeze2(shape, kx, ky) {
+    return (a) => {
+      const ux = Math.cos(a) / kx;
+      const uy = Math.sin(a) / ky;
+      return shape(Math.atan2(uy, ux)) / Math.hypot(ux, uy);
+    };
+  }
+  var RAW2 = {
+    circle: () => 1,
+    /* A stop sign: flat to the right, left, top and bottom, corners between. */
+    octagon: (a) => {
+      const seg = Math.PI / 4;
+      return Math.cos(seg / 2) / Math.cos(a - Math.round(a / seg) * seg);
+    },
+    /* A superellipse rather than four lines: the corner radius is a number here
+       rather than a consequence of how many samples the outline is walked in. */
+    square: (a) => {
+      const n = 6;
+      return (Math.abs(Math.cos(a)) ** n + Math.abs(Math.sin(a)) ** n) ** (-1 / n);
+    },
+    drop: drop2(1.24),
+    /* The puffs already carry the shift that stands the shape in the middle of
+       its own box, so the tallest puff and the underside sit the same distance
+       out. `silhouette.test.ts` is what says so, and a shape drawn off center
+       leans in every rail it appears in with nothing else to catch it. */
+    cloud: squeeze2(
+      cloud2(
+        [
+          [0, -0.17, 0.46],
+          [-0.48, 0.13, 0.42],
+          [0.48, 0.13, 0.42],
+          [0, 0.21, 0.6]
+        ],
+        0.63
+      ),
+      0.94,
+      1.064
+    )
+  };
+  var STEPS2 = 2048;
+  function encloses2(shape) {
+    let sum = 0;
+    for (let i = 0; i < STEPS2; i++) {
+      const r = shape(i / STEPS2 * TAU4);
+      sum += 0.5 * r * r * (TAU4 / STEPS2);
+    }
+    return sum;
+  }
+  function crestOf2(shape) {
+    let most = 0;
+    for (let i = 0; i < STEPS2; i++) most = Math.max(most, shape(i / STEPS2 * TAU4));
+    return most;
+  }
+  function sizeOf2(shape) {
+    const even = Math.sqrt(Math.PI / encloses2(shape));
+    return Math.min(even, CREST2 / crestOf2(shape));
+  }
+  var SIZE2 = Object.fromEntries(
+    Object.entries(RAW2).map(([key, shape]) => [key, sizeOf2(shape)])
+  );
+  var SILHOUETTES2 = Object.fromEntries(
+    Object.entries(RAW2).map(([key, shape]) => {
+      const scale = SIZE2[key];
+      return [key, (a) => shape(a) * scale];
+    })
+  );
+
+  // src/avatars/form.ts
+  var FORM2 = {
+    /** The viewBox every character is drawn in. */
+    box: 64,
+    center: 32,
+    /** Resting radius of the body. What two creatures side by side are spaced on. */
+    radius: 20,
+    /**
+     * Nothing is ever drawn outside this radius of the center, at any character,
+     * in any mood, at any point of any cycle. `form.test.ts` samples the whole
+     * space and holds the geometry to it, and `orb.test.ts` seats a crew against
+     * it, so a mood that grew could not quietly push a face through the rim of
+     * its group's circle.
+     */
+    reach: 30,
+    /**
+     * Radii in the outline.
+     *
+     * Divisible by eight, which is the part that matters: a square's corners sit
+     * at 45 degrees and an octagon's at 22.5, and a corner that falls between two
+     * samples is a corner that gets chamfered off. At the 28 this started with,
+     * an octagon drew as a lumpy circle and nothing failed.
+     */
+    samples: 32
+  };
+  var TAU5 = Math.PI * 2;
+  function pulse2(t, hz, sharp) {
+    const u = t * hz % 1;
+    if (!sharp) return Math.sin(u * TAU5);
+    return u < 0.3 ? Math.sin(u / 0.3 * Math.PI) : -0.34 * Math.sin((u - 0.3) / 0.7 * Math.PI);
+  }
+  var PULL2 = {
+    quiet: 0.06,
+    wide: 0.26,
+    hold: 0.38,
+    /** How far the front is drawn out, in body radii per body radius of look. */
+    stretch: 1.2,
+    /** How much the front narrows as it goes, per body radius of look. */
+    taper: 1.1,
+    /** Where along the body the pull begins, in body radii behind the center. */
+    back: 0.15,
+    /**
+     * How much further the eyes go, across, when the body answers: they lead the
+     * snout rather than sit behind it. Across only, because up is the starved
+     * direction (`eyes.ts` has the measurement) and down already has the lid.
+     */
+    lead: 0.6,
+    lean: 0.1,
+    shear: 0.2,
+    /** Where the shear turns, below the center, in body radii. The base stays put. */
+    pivot: 0.45,
+    crane: 0.1
+  };
+  function smooth(u) {
+    const e = Math.max(0, Math.min(1, u));
+    return e * e * e * (e * (e * 6 - 15) + 10);
+  }
+  function grip(reach) {
+    const held = Math.min(reach, PULL2.hold);
+    return held * smooth((held - PULL2.quiet) / (PULL2.wide - PULL2.quiet));
+  }
+  function bodyPoints2(lump, shape, t, gaze) {
+    const seen = Math.hypot(gaze ? gaze[0] : 0, gaze ? gaze[1] : 0);
+    const reach = seen > 4e-3 ? grip(seen) : 0;
+    const gx = gaze && seen > 4e-3 ? gaze[0] / seen * reach : 0;
+    const gy = gaze && seen > 4e-3 ? gaze[1] / seen * reach : 0;
+    const R = FORM2.radius;
+    const cx = FORM2.center + gx * R * PULL2.lean;
+    const cy = FORM2.center + (shape.rise ?? 0) + gy * R * PULL2.lean;
+    const knead = shape.knead ? pulse2(t, shape.knead.hz, shape.knead.sharp) * shape.knead.amp : 0;
+    const crane = reach * PULL2.crane;
+    const ax = lump.ax * (shape.aspect ? shape.aspect[0] : 1) * (1 + knead * 0.9) * (1 - crane * 0.5);
+    const ay = lump.ay * (shape.aspect ? shape.aspect[1] : 1) * (1 - knead) * (1 + crane);
+    const heave = shape.heave ? Math.max(0, Math.sin(t * shape.heave.hz * TAU5)) ** 3 * shape.heave.amp : 0;
+    const ux = reach > 4e-3 ? gx / reach : 1;
+    const uy = reach > 4e-3 ? gy / reach : 0;
+    const silhouette = SILHOUETTES2[lump.form];
+    const walk = (swell2) => {
+      const pts2 = [];
+      for (let i = 0; i < FORM2.samples; i++) {
+        const a = i / FORM2.samples * TAU5;
+        let rr = silhouette(a);
+        for (const lobe of lump.sig) rr += lobe.amp * Math.sin(lobe.k * a + lobe.phase);
+        if (shape.wob) for (const w of shape.wob) rr += w.amp * Math.sin(w.k * a + w.spd * t);
+        if (shape.press) {
+          for (const p of shape.press) {
+            const amp = p.beat ? p.amp * (0.55 + 0.45 * Math.sin(t * p.beat)) : p.amp;
+            rr += press2(a, p.th + (p.spin ? p.spin * t : 0), p.w, amp);
+          }
+        }
+        rr += heave * Math.max(0, -Math.sin(a));
+        let x = cx + Math.cos(a) * R * rr * ax;
+        let y = cy + Math.sin(a) * R * rr * (ay + heave * 0.5);
+        if (reach > 4e-3) {
+          const dx = (x - cx) / R;
+          const dy = (y - cy) / R;
+          const u = dx * ux + dy * uy;
+          const v = -dx * uy + dy * ux;
+          const s = smooth((u + PULL2.back) / (1 + PULL2.back));
+          const u2 = u + swell2 * s * s;
+          const v2 = v * (1 - reach * PULL2.taper * s * s);
+          x = cx + (u2 * ux - v2 * uy) * R;
+          y = cy + (u2 * uy + v2 * ux) * R;
+        }
+        x += (cy + PULL2.pivot * R - y) * gx * PULL2.shear;
+        if (shape.sag) {
+          const below = Math.max(0, (y - cy) / R);
+          y += shape.sag * below * below;
+          x = cx + (x - cx) * (1 + (shape.spread ?? 0) * below);
+        }
+        pts2.push([x, y]);
+      }
+      return pts2;
+    };
+    let swell = reach * PULL2.stretch;
+    let pts = walk(swell);
+    if (swell > 0) {
+      let rest = Number.NaN;
+      for (let pass = 0; pass < 3; pass++) {
+        const far = furthest(pts);
+        if (far <= FORM2.reach) break;
+        if (Number.isNaN(rest)) rest = furthest(walk(0));
+        swell = rest >= FORM2.reach ? 0 : swell * ((FORM2.reach - rest) / (far - rest)) * 0.98;
+        pts = walk(swell);
+      }
+    }
+    return { pts, knead };
+  }
+  function furthest(pts) {
+    let most = 0;
+    for (const [x, y] of pts) most = Math.max(most, Math.hypot(x - FORM2.center, y - FORM2.center));
+    return most;
+  }
+  function press2(a, th, w, amp) {
+    let d = a - th * TAU5;
+    while (d > Math.PI) d -= TAU5;
+    while (d < -Math.PI) d += TAU5;
+    return amp * Math.exp(-(d * d) / (w * w));
+  }
+  function blend2(a, b, u) {
+    const out = [];
+    for (let i = 0; i < a.length; i++) {
+      const p = a[i];
+      const q = b[i];
+      out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+    }
+    return out;
+  }
+  function outline2(pts) {
+    const first = pts[0];
+    const d = [`M${first[0].toFixed(2)} ${first[1].toFixed(2)}`];
+    for (let i = 0; i < pts.length; i++) {
+      const p0 = pts[(i - 1 + pts.length) % pts.length];
+      const p1 = pts[i];
+      const p2 = pts[(i + 1) % pts.length];
+      const p3 = pts[(i + 2) % pts.length];
+      const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d.push(
+        `C${c1x.toFixed(2)} ${c1y.toFixed(2)} ${c2x.toFixed(2)} ${c2y.toFixed(2)} ${p2[0].toFixed(2)} ${p2[1].toFixed(2)}`
+      );
+    }
+    return d.join("");
+  }
+
+  // src/avatars/eyes.ts
+  var TAU6 = Math.PI * 2;
+  var SETTLE2 = 0.12;
+  var OMEGA = 2.2 / SETTLE2;
+  function settle(mass, target, dt) {
+    for (const i of [0, 1]) {
+      const x = mass.gaze[i];
+      const v = mass.vel[i];
+      const accel = OMEGA * OMEGA * (target[i] - x) - 2 * OMEGA * v;
+      mass.vel[i] = v + accel * dt;
+      mass.gaze[i] = x + mass.vel[i] * dt;
+    }
+  }
+  var AIM2 = { down: 0.3, up: 0.22 };
+  var AIMED2 = {
+    down: { lid: 0.34, bow: 0.2, sep: -0.08, dy: 0.45 },
+    up: { lid: -0.4, bow: -0.06, sep: -0.06, dy: 0 }
+  };
+  var PEEK = 0.3;
+  function aimedEye2(eye, at) {
+    const { lid, bow, sep, dy } = AIMED2[at];
+    return {
+      ...eye,
+      /* Eased toward a line rather than swapped for one, as a blink is, so an eye
+         that is already a dash does not grow a second length of its own; and back
+         toward the dot it was cut from when the look lifts instead. */
+      w: lid > 0 ? eye.w + (1.3 - eye.w) * lid : eye.w * (1 + lid),
+      h: eye.h * (1 - 0.62 * Math.max(lid, 0)),
+      c: (eye.c ?? 0) + bow,
+      sep: (eye.sep ?? 0) + sep,
+      dy: (eye.dy ?? 0) + dy
+    };
+  }
+  function rnd2(i) {
+    const x = Math.sin(i * 127.1 + 197.3) * 43758.5453;
+    return x - Math.floor(x);
+  }
+  function blinkAmount2(t) {
+    const P = 4.6;
+    const DUR = 0.18;
+    let out = 0;
+    for (let k = -1; k <= 0; k++) {
+      const i = Math.floor(t / P) + k;
+      const at = i * P + rnd2(i) * (P - 0.8);
+      const d = t - at;
+      if (d >= 0 && d < DUR) out = Math.max(out, Math.sin(d / DUR * Math.PI));
+      if (rnd2(i + 0.5) > 0.7) {
+        const again = t - (at + 0.25);
+        if (again >= 0 && again < DUR) out = Math.max(out, Math.sin(again / DUR * Math.PI));
+      }
+    }
+    return out;
+  }
+  function ease2(u) {
+    const e = Math.max(0, Math.min(1, u));
+    return e * e * e * (e * (e * 6 - 15) + 10);
+  }
+  function span(from, to, cross) {
+    const far = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    return cross * Math.max(1, Math.min(2, far / 0.25));
+  }
+  function scripted2(t, g) {
+    const steps = g.script;
+    const total = steps.reduce((sum, step) => sum + step[2], 0);
+    let u = t % total;
+    if (u < 0) u += total;
+    let i = 0;
+    while (u >= steps[i][2]) {
+      u -= steps[i][2];
+      i = (i + 1) % steps.length;
+    }
+    const from = steps[(i - 1 + steps.length) % steps.length];
+    const to = steps[i];
+    const k = ease2(u / span([from[0], from[1]], [to[0], to[1]], g.cross ?? 0.26));
+    return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+  }
+  function gazeAt2(t, g) {
+    if (!g) return [0, 0];
+    if (g.script) return scripted2(t, g);
+    const range = g.range ?? 0;
+    const P = 1 / (g.hz ?? 0.5);
+    const starts = (k2) => k2 * P + rnd2(k2 + 0.83) * P * 0.5;
+    let i = Math.floor(t / P);
+    if (t < starts(i)) i -= 1;
+    const at = (k2) => {
+      const bx = g.bias ? g.bias[0] : 0;
+      const by = g.bias ? g.bias[1] : 0;
+      if (g.far && rnd2(k2 + 0.61) < g.far) {
+        return [(rnd2(k2) < 0.5 ? -1 : 1) * range + bx, (rnd2(k2 + 0.37) * 2 - 1) * range * 0.2 + by];
+      }
+      const within = g.far ? g.near ?? 0.6 : 1;
+      return [
+        (rnd2(k2) * 2 - 1) * range * within + bx,
+        (rnd2(k2 + 0.37) * 2 - 1) * range * 0.62 * within + by
+      ];
+    };
+    const from = at(i - 1);
+    const to = at(i);
+    const k = ease2((t - starts(i)) / span(from, to, g.cross ?? 0.26));
+    return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
+  }
+  function geometry2(e, r, side, blink, breath, squint, squintTo) {
+    let w = e.w;
+    let h2 = e.h;
+    let c = e.c ?? 0;
+    let ang = (e.a ?? 0) * side;
+    if (squint > 0) {
+      w += squint * (squintTo.w ?? 0);
+      h2 += squint * (squintTo.h ?? 0);
+      ang += squint * (squintTo.a ?? 0) * side;
+    }
+    const lop = ((e.lop ?? 0) + squint * (squintTo.lop ?? 0)) * -side;
+    if (lop !== 0) {
+      w = Math.max(0.02, w + lop);
+      h2 *= Math.max(0.3, 1 - lop * 0.45);
+    }
+    if (breath) {
+      h2 *= 1 + breath * 0.16;
+      c *= 1 + breath * 0.3;
+    }
+    if (blink > 0) {
+      w = w + (1.3 - w) * blink;
+      h2 = h2 * (1 - 0.88 * blink);
+      c = c * (1 - blink);
+    }
+    return {
+      w: Math.max(w, 0.012) * r,
+      h: Math.max(h2, 0.1) * r,
+      c: c * r,
+      ang: ang * Math.PI / 180
+    };
+  }
+  function eyesAt2(lump, eye, watch, t, live2, gaze) {
+    const anim = watch ?? {};
+    const r = lump.eye.r;
+    const [gx, gy] = gaze;
+    const sep = (lump.eye.spread + (eye.sep ?? 0) * r) * (1 - Math.abs(gx) * 0.5);
+    const blink = live2 && anim.blink !== false ? blinkAmount2(t * (anim.blink === "slow" ? 0.55 : 1)) : 0;
+    const jitter = live2 && anim.jitter ? anim.jitter : 0;
+    const jx = jitter ? Math.sin(t * 41) * jitter : 0;
+    const jy = jitter ? Math.sin(t * 33 + 1.7) * jitter * 0.7 : 0;
+    const breath = live2 && anim.breath ? Math.sin(t * anim.breath.hz * TAU6) * anim.breath.amp : 0;
+    const squintTo = anim.squint ?? {};
+    const squint = anim.squint ? Math.max(0, Math.min(1, -gy / anim.squint.at)) : 0;
+    const seen = Math.hypot(gx, gy);
+    const lead = 1 + PULL2.lead * (seen > 4e-3 ? grip(seen) / seen : 0);
+    const x = FORM2.center + (lump.eye.x ?? 0) + gx * FORM2.radius * lead + (jx + (eye.dx ?? 0)) * r;
+    const y = FORM2.center + (lump.eye.y ?? 0) + gy * FORM2.radius + (jy + (eye.dy ?? 0)) * r;
+    if (lump.eye.one) {
+      return [{ x, y, ...geometry2(eye, r * 1.5, 1, blink, breath, squint, squintTo) }];
+    }
+    const skew = ((eye.skew ?? 0) + squint * (squintTo.skew ?? 0)) * r;
+    const turn = gx * PEEK;
+    return [
+      {
+        x: x - sep,
+        y: y + skew,
+        ...geometry2(eye, r * (1 - turn), 1, blink, breath, squint, squintTo)
+      },
+      {
+        x: x + sep,
+        y: y - skew,
+        ...geometry2(eye, r * (1 + turn), -1, blink, breath, squint, squintTo)
+      }
+    ];
+  }
+  function eyePath2(e) {
+    const dx = Math.cos(e.ang) * e.w;
+    const dy = Math.sin(e.ang) * e.w;
+    const px = -Math.sin(e.ang) * e.c * 2;
+    const py = Math.cos(e.ang) * e.c * 2;
+    return `M${(e.x - dx).toFixed(2)} ${(e.y - dy).toFixed(2)}Q${(e.x + px).toFixed(2)} ${(e.y + py).toFixed(2)} ${(e.x + dx).toFixed(2)} ${(e.y + dy).toFixed(2)}`;
+  }
+  function blendEyes2(a, b, u) {
+    const at = (k, fallback) => (a[k] ?? fallback) * (1 - u) + (b[k] ?? fallback) * u;
+    return {
+      w: at("w", 0),
+      h: at("h", 1),
+      c: at("c", 0),
+      a: at("a", 0),
+      sep: at("sep", 0),
+      dx: at("dx", 0),
+      dy: at("dy", 0),
+      skew: at("skew", 0),
+      lop: at("lop", 0)
+    };
+  }
+
+  // src/avatars/moods.ts
+  var MOODS2 = {
+    /* Still in the body and busy in the eyes. It had a breath and a wobble, and
+       beside a face that blinks and looks about a body that also pulsed read as
+       a second animation rather than as a creature at rest. What an idle
+       creature does is look: mostly glances, and now and then a look the whole
+       way to one side, which is the one thing that moves the body at all. */
+    idle: {
+      shape: {},
+      eye: { w: 0.02, h: 2 },
+      watch: { blink: true, gaze: { range: 0.4, hz: 0.32, cross: 0.26, far: 0.3 } }
+    },
+    listening: {
+      shape: {
+        aspect: [0.985, 1.03],
+        knead: { amp: 0.025, hz: 0.5 },
+        press: [{ th: 0.76, w: 0.5, amp: 0.035, beat: 2.4 }]
+      },
+      /* Raised: the dot lifted off its resting line is a pair of brows up. */
+      eye: { w: 0.02, h: 2.45, sep: 0.3, dy: -0.5 },
+      watch: {
+        blink: true,
+        gaze: { range: 0.07, hz: 0.5, cross: 0.3 },
+        breath: { amp: 0.35, hz: 0.5 }
+      }
+    },
+    /* One brow up and the other eye in a squint. The pair used to be a mirror
+       here and read as mild; the two disagreeing is what turns mild into
+       weighing something up. */
+    thinking: {
+      shape: { knead: { amp: 0.024, hz: 0.34 }, wob: [{ k: 3, amp: 0.014, spd: 1.2 }] },
+      eye: { w: 0.4, h: 1.6, a: -12, skew: 0.42, lop: 0.4 },
+      watch: {
+        blink: true,
+        gaze: { range: 0.22, hz: 0.68, cross: 0.22, bias: [-0.15, -0.14], far: 0.25 }
+      },
+      mark: "dots"
+    },
+    working: {
+      shape: { knead: { amp: 0.075, hz: 1.1, sharp: true } },
+      eye: { w: 1.3, h: 0.85, a: 20, dy: 0.25 },
+      watch: { blink: true, gaze: { range: 0.14, hz: 2.2, cross: 0.1, bias: [0, 0.07] } }
+    },
+    frustrated: {
+      shape: {
+        aspect: [1.045, 0.965],
+        knead: { amp: 0.03, hz: 2.4 },
+        wob: [
+          { k: 7, amp: 0.01, spd: 8 },
+          { k: 4, amp: 8e-3, spd: 5 }
+        ]
+      },
+      /* The eye has become the brow: raised, thinned and tilted in until the
+         stroke is nothing but a scowl. It glares off to one side now and then,
+         which is where the body follows it. */
+      eye: { w: 1.65, h: 0.78, a: 40, c: -0.1, dy: -0.5 },
+      watch: {
+        blink: "slow",
+        gaze: { range: 0.36, hz: 1.6, cross: 0.1, far: 0.22, near: 0.12 },
+        jitter: 0.065
+      }
+    },
+    /* The one mood that acts rather than holds a pose: it looks up at its own
+       badge, narrows at it, and comes back to you. A fixed face over a pulsing
+       body is what this replaced, and it read as a loading spinner. */
+    blocked: {
+      shape: { knead: { amp: 0.03, hz: 0.24 } },
+      eye: { w: 0.02, h: 2.5, sep: 0.2 },
+      watch: {
+        blink: "slow",
+        squint: { at: 0.3, w: 0.8, h: -0.62, a: 20, skew: 0.36, lop: 0.3 },
+        gaze: {
+          cross: 0.34,
+          script: [
+            [0, 0.02, 1.7],
+            [0.24, -0.24, 1.2],
+            [0.28, -0.29, 0.9],
+            [0, 0.02, 1.5]
+          ]
+        }
+      },
+      mark: "bang"
+    },
+    pleased: {
+      shape: { knead: { amp: 0.075, hz: 0.42, sharp: true } },
+      eye: { w: 1.05, h: 0.8, c: -0.8, dy: -0.2 },
+      watch: {
+        blink: "slow",
+        gaze: { range: 0.1, hz: 0.3, cross: 0.42, bias: [0, -0.05] },
+        breath: { amp: 0.3, hz: 0.42 }
+      }
+    },
+    paused: {
+      shape: {
+        aspect: [1.02, 0.965],
+        sag: 1.1,
+        spread: 0.07,
+        knead: { amp: 0.025, hz: 0.13 },
+        rise: 1
+      },
+      eye: { w: 1.35, h: 0.5, c: 0.16 },
+      watch: { blink: false, breath: { amp: 0.12, hz: 0.13 } },
+      mark: "z",
+      dim: true
+    },
+    stuck: {
+      shape: {
+        aspect: [1.08, 0.915],
+        sag: 2.1,
+        spread: 0.13,
+        rise: 1.9,
+        knead: { amp: 0.045, hz: 0.1 },
+        heave: { amp: 0.05, hz: 0.12 }
+      },
+      /* Worried rather than blank: inner ends up, one higher than the other,
+         and the eyes darting where the body cannot go. What this replaced was a
+         pair of small dots staring at nothing, which read as sleepy beside
+         `paused` rather than as a creature that needs somebody. */
+      eye: { w: 1.1, h: 0.7, a: -28, c: 0.14, dy: 0.35, sep: -0.15, skew: 0.24 },
+      watch: {
+        blink: "slow",
+        gaze: { range: 0.14, hz: 1.3, cross: 0.1, bias: [0, 0.05] },
+        jitter: 0.03
+      }
+    },
+    surprised: {
+      shape: {
+        aspect: [0.965, 1.055],
+        knead: { amp: 0.04, hz: 1.9 },
+        wob: [{ k: 5, amp: 0.018, spd: 6 }]
+      },
+      eye: { w: 0.02, h: 2.85, sep: 0.55 },
+      watch: {
+        blink: false,
+        gaze: { range: 0.02, hz: 3, cross: 0.06 },
+        breath: { amp: 0.3, hz: 1.6 }
+      }
+    }
+  };
+  function markFor2(mood) {
+    switch (MOODS2[mood].mark) {
+      case "dots":
+        return `<g class="avatar__dots" fill="var(--eye)" opacity="0.7"><circle cx="48" cy="12" r="1.5"/><circle cx="52.6" cy="9.4" r="1.8"/><circle cx="57.4" cy="6.2" r="2.1"/></g>`;
+      case "bang":
+        return `<g transform="translate(52 11)"><circle class="avatar__halo" r="9" fill="none" stroke="var(--flesh)" stroke-width="2"/><circle r="7" fill="var(--flesh)"/><path d="M0 -3.6v4.4" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cy="3.4" r="1.1" fill="#fff"/></g>`;
+      case "z":
+        return `<g transform="translate(45 15)"><g class="avatar__z"><path d="M-3.2 -3.2h6.4l-6.4 6.4h6.4" stroke="var(--eye)" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round" opacity="0.6"/></g></g>`;
+      default:
+        return "";
+    }
+  }
+
+  // scripts/caricature-review.ts
+  var OLD_SPRING = 2.2 / SETTLE;
+  function oldSettle(mass, target, dt) {
+    for (const i of [0, 1]) {
+      const x = mass.gaze[i];
+      const v = mass.vel[i];
+      const accel = OLD_SPRING * OLD_SPRING * (target[i] - x) - 2 * OLD_SPRING * v;
+      mass.vel[i] = v + accel * dt;
+      mass.gaze[i] = x + mass.vel[i] * dt;
+    }
+  }
+  var BEFORE = {
+    name: "before",
+    FORM,
+    MOODS,
+    CHARACTERS,
+    bodyPoints,
+    blend,
+    outline,
+    eyesAt,
+    eyePath,
+    gazeAt,
+    blendEyes,
+    aimedEye,
+    AIM,
+    markFor,
+    settle: oldSettle,
+    grip: (r) => r,
+    together: false
+  };
+  var AFTER = {
+    name: "after",
+    FORM: FORM2,
+    MOODS: MOODS2,
+    CHARACTERS: CHARACTERS2,
+    bodyPoints: bodyPoints2,
+    blend: blend2,
+    outline: outline2,
+    eyesAt: eyesAt2,
+    eyePath: eyePath2,
+    gazeAt: gazeAt2,
+    blendEyes: blendEyes2,
+    aimedEye: aimedEye2,
+    AIM: AIM2,
+    markFor: markFor2,
+    settle,
+    grip,
+    together: true
+  };
+  var KITS = [BEFORE, AFTER];
+  var MORPH = 0.6;
+  var KNOCK = {
+    send: { amp: 0.26, hz: 1.5, decay: 0.28, life: 0.9 },
+    receive: { amp: 0.3, hz: 2.2, decay: 0.3, life: 0.8 }
+  };
+  var ACCENT = {
+    orb: "#8b8f45",
+    husk: "#4f5f96",
+    crumb: "#bf5f3c",
+    wave: "#5e8158",
+    pip: "#a8453a",
+    slab: "#5a7d99",
+    gourd: "#b3805c",
+    pebble: "#6c6f70",
+    tide: "#4d8b83",
+    cell: "#7c5a8c",
+    knot: "#c28c31",
+    mote: "#b26f86"
+  };
+  var MOOD_KEYS = Object.keys(AFTER.MOODS);
+  var MOOD_NOTES = {
+    idle: "Active with nothing in flight. Now: the body is still. No breath, no wobble. The eyes blink, look wider, and one look in three goes the whole way to a side, which is the only thing that moves the body, and then it moves it into a pear.",
+    listening: "A message queued. Now: the dots lifted off their line, which is a pair of brows up.",
+    thinking: "A turn between rounds. Now: one brow up and the other eye in a squint. The pair was a mirror and read as mild.",
+    working: "A tool call in flight. Now: the dash tilted in a little further, scanning a little faster.",
+    frustrated: "The last call back was refused or failed. Now: the eye has become the brow. Raised, thinned, tilted in until the stroke is a scowl, and it glares off to one side now and then, which drags the body after it.",
+    blocked: "A turn parked on a person. Now: the squint at the badge cocks one brow as it goes, so it is looking at the badge and doubting it.",
+    pleased: "Its reply landed in the last few seconds. Unchanged but for sitting a shade higher.",
+    paused: "Lifecycle paused, or composted. Unchanged.",
+    stuck: "An escalation of its own is open. Now: worried rather than blank. Inner ends up, one higher than the other, eyes darting where the body cannot go. This is the one semantic change: the old face read as sleepy beside paused.",
+    surprised: "It has just been handed a message. Unchanged: the widest eyes on the table have a third of a unit of room over them when it looks up at whoever threw it, and a raise did not fit."
+  };
+  var clock = 0;
+  var speed = 1;
+  var paused = false;
+  var painters = [];
+  var lastFrame = performance.now();
+  function frame(now) {
+    requestAnimationFrame(frame);
+    const dt = (now - lastFrame) / 1e3;
+    lastFrame = now;
+    if (!paused) clock += Math.min(dt, 0.1) * speed;
+    for (const paint of painters) paint(clock);
+  }
+  var SVG = "http://www.w3.org/2000/svg";
+  var Creature = class {
+    el;
+    skin;
+    eyes;
+    mark;
+    kit;
+    lump;
+    gait = { phase: 0, rate: 1 };
+    want;
+    mood;
+    from;
+    at = -MORPH;
+    mass = { gaze: [0, 0], vel: [0, 0] };
+    last = 0;
+    look = null;
+    gesture = null;
+    gestureAt = 0;
+    marked = null;
+    /** A gaze the eyes hold instead of the mood's own. For the scrubber. */
+    hold = null;
+    /** An eye that replaces the mood's, held still. For the vocabulary sheet. */
+    pose = null;
+    constructor(kit, key, mood, size, seed) {
+      this.kit = kit;
+      const lump = kit.CHARACTERS.find((c) => c.key === key);
+      if (!lump) throw new Error(`no character ${key}`);
+      this.lump = lump;
+      this.gait = gaitOf(seed ?? key);
+      this.want = mood;
+      this.mood = mood;
+      this.from = mood;
+      this.el = document.createElement("span");
+      this.el.className = `avatar avatar--${size}`;
+      this.el.style.setProperty("--accent", ACCENT[key] ?? "#8b8f45");
+      this.el.style.setProperty("--gait", `${this.gait.phase.toFixed(2)}s`);
+      this.el.title = `${lump.label} \xB7 ${kit.name}`;
+      const svg = document.createElementNS(SVG, "svg");
+      svg.setAttribute("viewBox", `0 0 ${kit.FORM.box} ${kit.FORM.box}`);
+      svg.setAttribute("class", "avatar__body");
+      this.skin = document.createElementNS(SVG, "path");
+      this.skin.setAttribute("fill", "var(--accent)");
+      this.eyes = document.createElementNS(SVG, "g");
+      this.eyes.setAttribute("fill", "none");
+      this.eyes.setAttribute("stroke", "var(--eye)");
+      this.eyes.setAttribute("stroke-linecap", "round");
+      this.eyes.append(document.createElementNS(SVG, "path"), document.createElementNS(SVG, "path"));
+      this.mark = document.createElementNS(SVG, "g");
+      svg.append(this.skin, this.eyes, this.mark);
+      this.el.append(svg);
+    }
+    throw_(gesture) {
+      this.gesture = gesture;
+      this.gestureAt = clock;
+    }
+    paint(seconds, live2 = true) {
+      const kit = this.kit;
+      const t = seconds * this.gait.rate + this.gait.phase;
+      if (this.want !== this.mood) {
+        this.from = this.mood;
+        this.mood = this.want;
+        this.at = seconds;
+      }
+      if (this.marked !== this.mood) {
+        this.marked = this.mood;
+        this.mark.innerHTML = kit.markFor(this.mood);
+        this.el.setAttribute("data-mood", this.mood);
+      }
+      const to = kit.MOODS[this.mood];
+      const from = kit.MOODS[this.from];
+      const raw = live2 ? Math.min(1, (seconds - this.at) / MORPH) : 1;
+      const u = raw * raw * (3 - 2 * raw);
+      let eyeGaze;
+      if (this.look) {
+        eyeGaze = [0, this.look === "up" ? -kit.AIM.up : kit.AIM.down];
+      } else if (this.hold) {
+        eyeGaze = [this.hold[0], this.hold[1]];
+      } else if (!live2) {
+        eyeGaze = [0, 0];
+      } else {
+        const a = kit.gazeAt(t, from.watch?.gaze);
+        const b = kit.gazeAt(t, to.watch?.gaze);
+        eyeGaze = [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u];
+      }
+      const dt = live2 ? Math.min(0.05, Math.max(0, seconds - this.last)) : 0;
+      this.last = seconds;
+      if (live2) kit.settle(this.mass, eyeGaze, dt);
+      else this.mass = { gaze: [eyeGaze[0], eyeGaze[1]], vel: [0, 0] };
+      if (kit.together) eyeGaze = [this.mass.gaze[0], this.mass.gaze[1]];
+      const bodyGaze = [this.mass.gaze[0], this.mass.gaze[1]];
+      if (this.gesture) {
+        const knock = KNOCK[this.gesture];
+        const age = seconds - this.gestureAt;
+        if (age > knock.life) {
+          this.gesture = null;
+        } else if (live2) {
+          const wave = this.gesture === "send" ? Math.sin(age * knock.hz * Math.PI * 2) : Math.cos(age * knock.hz * Math.PI * 2);
+          const away = this.look === "down" ? -1 : 1;
+          const push = away * knock.amp * wave * Math.exp(-age / knock.decay);
+          bodyGaze[1] += push;
+          eyeGaze[1] += push * 0.35;
+        }
+      }
+      const shape = kit.bodyPoints(this.lump, to.shape, t, bodyGaze);
+      const pts = u >= 1 ? shape.pts : kit.blend(kit.bodyPoints(this.lump, from.shape, t, bodyGaze).pts, shape.pts, u);
+      this.skin.setAttribute("d", kit.outline(pts));
+      const blended = this.pose ?? (u >= 1 ? to.eye : kit.blendEyes(from.eye, to.eye, u));
+      const eye = this.look ? kit.aimedEye(blended, this.look) : blended;
+      const watch = this.pose ? { blink: false } : u > 0.5 ? to.watch : from.watch;
+      const drawn = kit.eyesAt(this.lump, eye, watch, t, live2, eyeGaze);
+      const paths = this.eyes.children;
+      for (let i = 0; i < paths.length; i++) {
+        const path = paths[i];
+        const one = drawn[i];
+        if (!one) {
+          path.setAttribute("d", "");
+          continue;
+        }
+        path.setAttribute("d", kit.eyePath(one));
+        path.setAttribute("stroke-width", one.h.toFixed(2));
+      }
+    }
+  };
+  function live(c) {
+    painters.push((s) => c.paint(s));
+    return c;
+  }
+  function h(tag, attrs = {}, ...children) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") el.className = v;
+      else el.setAttribute(k, v);
+    }
+    el.append(...children);
+    return el;
+  }
+  function section(title, ...lede2) {
+    const id = title.toLowerCase().replace(/[^a-z]+/g, "-").replace(/^-|-$/g, "");
+    const s = h("section", { id }, h("h2", {}, title));
+    for (const p of lede2) {
+      const el = h("p", { class: "lede" });
+      el.innerHTML = p;
+      s.append(el);
+    }
+    return s;
+  }
+  function labelled(kit, node) {
+    const after = kit.name === "after";
+    return h(
+      "div",
+      { class: after ? "labelled labelled--after" : "labelled" },
+      h("span", { class: "tag" }, after ? "Proposed" : "Shipped"),
+      node
+    );
+  }
+  function pair(build) {
+    return h("div", { class: "pair" }, labelled(BEFORE, build(BEFORE)), labelled(AFTER, build(AFTER)));
+  }
+  var RAIL = ["orb", "husk", "wave", "pip", "slab", "tide", "cell", "crumb"];
+  function idleRail() {
+    const s = section(
+      "Idle. Eight of them.",
+      "The complaint was that an idle rail would not sit still. The idle body is now still: no breath, no wobble, nothing but the eyes. And the look no longer moves the body at all under a glance: <code>grip</code> answers nothing under 0.06 body radii, everything past 0.26, and a smooth ramp between.",
+      "What is new is that the eyes look further, hold for uneven lengths, and one look in three goes the whole way to one side. That look is what moves the body, and it pulls the body into a pear pointed at it as the eyes go, not after: the front is drawn out and narrowed with the eyes leading it, the back is left round, and the top cranes over on a planted base."
+    );
+    s.append(
+      pair((kit) => {
+        const row = h("div", { class: "row" });
+        for (const key of RAIL) row.append(live(new Creature(kit, key, "idle", "lg")).el);
+        return row;
+      })
+    );
+    return s;
+  }
+  function lookDemo() {
+    const s = section(
+      "The look moves the body. Nonlinearly.",
+      "Drag the look. Shipped bulges toward a glance and a stare in proportion; proposed answers a glance with the eyes alone and a stare by stretching into a pear with the eyes at the narrow end. Press a flick to see the timing: shipped moves the eyes at once and the body half a second later; proposed moves both together, on one smoothed look, and a long look crosses more slowly than a glance.",
+      "The body's answer is capped at 0.38 body radii of look, and the stretch is then cut to whatever room the outline has left, measured on the outline every frame. That last part fixes a hole that predates this pass: a puddle (<code>stuck</code>, <code>paused</code>) or a tall face (<code>surprised</code>) aimed downward at a peer already drew past <code>FORM.reach</code> by up to two units, and nothing sampled it."
+    );
+    const subjects = KITS.map((kit) => new Creature(kit, "pebble", "idle", "xl"));
+    for (const c of subjects) {
+      c.hold = [0, 0];
+      live(c);
+    }
+    const x = h("input", { type: "range", min: "-0.45", max: "0.45", step: "0.005", value: "0" });
+    const y = h("input", { type: "range", min: "-0.3", max: "0.3", step: "0.005", value: "0" });
+    const read = h("output", {}, "0.00, 0.00");
+    const apply = () => {
+      const gx = Number.parseFloat(x.value);
+      const gy = Number.parseFloat(y.value);
+      for (const c of subjects) c.hold = [gx, gy];
+      read.textContent = `${gx.toFixed(2)}, ${gy.toFixed(2)} \xB7 grip ${AFTER.grip(Math.hypot(gx, gy)).toFixed(2)}`;
+    };
+    x.addEventListener("input", apply);
+    y.addEventListener("input", apply);
+    const flick = (gx, gy) => () => {
+      x.value = String(gx);
+      y.value = String(gy);
+      apply();
+    };
+    const buttons = h(
+      "div",
+      { class: "buttons" },
+      button("Flick left", flick(-0.4, 0)),
+      button("Flick right", flick(0.4, 0)),
+      button("Glance", flick(0.12, -0.04)),
+      button("Up", flick(0, -0.22)),
+      button("Down", flick(0, 0.3)),
+      button("Center", flick(0, 0))
+    );
+    let auto = null;
+    const autoBox = h("input", { type: "checkbox" });
+    const AUTO = [
+      [0, 0, 1.6],
+      [0.12, -0.03, 1.4],
+      [0, 0, 1.2],
+      [0.4, 0, 1.8],
+      [0, 0, 1.6],
+      [-0.1, 0.04, 1.4],
+      [-0.4, 0.05, 1.8],
+      [0, 0, 1.2]
+    ];
+    autoBox.addEventListener("change", () => {
+      if (auto !== null) {
+        window.clearTimeout(auto);
+        auto = null;
+      }
+      if (!autoBox.checked) return;
+      let i = 0;
+      const step = () => {
+        const [gx, gy, hold] = AUTO[i % AUTO.length];
+        flick(gx, gy)();
+        i++;
+        auto = window.setTimeout(step, hold * 1e3 / speed);
+      };
+      step();
+    });
+    const controls = h(
+      "div",
+      { class: "controls" },
+      h("label", {}, "Across ", x),
+      h("label", {}, "Up and down ", y),
+      read,
+      buttons,
+      h("label", { class: "check" }, autoBox, " Glance, stare, glance, stare")
+    );
+    s.append(
+      h(
+        "div",
+        { class: "stage-pair" },
+        labelled(BEFORE, h("div", { class: "stage" }, subjects[0].el)),
+        labelled(AFTER, h("div", { class: "stage" }, subjects[1].el)),
+        h("div", { class: "plot" }, gripPlot())
+      ),
+      controls,
+      lede(
+        "The same look, held still, at four distances. Left to right: straight ahead, a glance, a look, and the edge of the idle range. Shipped moves the body from the first step; proposed moves it from the third."
+      ),
+      pair((kit) => {
+        const row = h("div", { class: "row" });
+        for (const gx of [0, 0.12, 0.25, 0.4]) {
+          const c = new Creature(kit, "pebble", "idle", "xl");
+          c.hold = [gx, 0];
+          painters.push(() => c.paint(0, false));
+          row.append(h("div", { class: "still" }, c.el, h("small", {}, gx.toFixed(2))));
+        }
+        return row;
+      })
+    );
+    return s;
+  }
+  function gripPlot() {
+    const W = 220;
+    const H = 160;
+    const pad = 26;
+    const svg = document.createElementNS(SVG, "svg");
+    svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+    svg.setAttribute("class", "grip");
+    const sx = (r) => pad + r / 0.5 * (W - pad - 8);
+    const sy = (g) => H - pad - g / 0.5 * (H - pad - 8);
+    const line = (pts2, cls) => {
+      const p = document.createElementNS(SVG, "polyline");
+      p.setAttribute("points", pts2);
+      p.setAttribute("class", cls);
+      svg.append(p);
+    };
+    line(`${sx(0)},${sy(0)} ${sx(0.5)},${sy(0.5)}`, "grip__was");
+    const pts = [];
+    for (let r = 0; r <= 0.5001; r += 5e-3) pts.push(`${sx(r)},${sy(AFTER.grip(r))}`);
+    line(pts.join(" "), "grip__is");
+    const mark = (r, label) => {
+      const g = document.createElementNS(SVG, "line");
+      g.setAttribute("x1", String(sx(r)));
+      g.setAttribute("x2", String(sx(r)));
+      g.setAttribute("y1", String(sy(0)));
+      g.setAttribute("y2", String(sy(0.5)));
+      g.setAttribute("class", "grip__tick");
+      const t = document.createElementNS(SVG, "text");
+      t.setAttribute("x", String(sx(r)));
+      t.setAttribute("y", String(H - 8));
+      t.setAttribute("text-anchor", "middle");
+      t.textContent = label;
+      svg.append(g, t);
+    };
+    const P = PULL2;
+    mark(P.quiet, "quiet");
+    mark(P.wide, "wide");
+    mark(P.hold, "hold");
+    const ax = document.createElementNS(SVG, "text");
+    ax.setAttribute("x", "4");
+    ax.setAttribute("y", "12");
+    ax.textContent = "body answers";
+    const ay = document.createElementNS(SVG, "text");
+    ay.setAttribute("x", String(W - 8));
+    ay.setAttribute("y", String(H - pad - 6));
+    ay.setAttribute("text-anchor", "end");
+    ay.textContent = "eyes went";
+    svg.append(ax, ay);
+    return svg;
+  }
+  var POSES = [
+    { name: "round", note: "idle. A dot.", eye: { w: 0.02, h: 2 } },
+    { name: "wide", note: "surprised. The same dot, heavier.", eye: { w: 0.02, h: 2.85, sep: 0.4 } },
+    { name: "raised", note: "listening. Lifted off the line: brows up.", eye: { w: 0.02, h: 2.45, sep: 0.3, dy: -0.5 } },
+    {
+      name: "cocked",
+      note: "thinking. One brow up, the other eye squinting: skew and lop.",
+      eye: { w: 0.4, h: 1.6, a: -12, skew: 0.42, lop: 0.4 }
+    },
+    { name: "dash", note: "working. A lid, tilted in.", eye: { w: 1.3, h: 0.85, a: 20, dy: 0.25 } },
+    {
+      name: "scowl",
+      note: "frustrated. The brow is all that is left of the eye.",
+      eye: { w: 1.65, h: 0.78, a: 40, c: -0.1, dy: -0.5 }
+    },
+    {
+      name: "worried",
+      note: "stuck. Inner ends up, uneven, low.",
+      eye: { w: 1.1, h: 0.7, a: -28, c: 0.14, dy: 0.35, sep: -0.15, skew: 0.24 }
+    },
+    {
+      name: "doubting",
+      note: "blocked, at its badge. Squint, one brow up, one eye narrowed.",
+      eye: { w: 0.82, h: 1.88, a: 20, sep: 0.2, skew: 0.36, lop: 0.3 }
+    },
+    { name: "smile", note: "pleased. The only bow that curves up.", eye: { w: 1.05, h: 0.8, c: -0.8, dy: -0.2 } },
+    { name: "shut", note: "paused. Bowed down, no weight.", eye: { w: 1.35, h: 0.5, c: 0.16 } }
+  ];
+  function vocabulary() {
+    const s = section(
+      "The eye is still one stroke.",
+      "There is no second object. An eye is an arc with four numbers on it (length, weight, bow, tilt) plus two now that let the pair disagree: <code>skew</code> lifts one over the other and <code>lop</code> narrows one against the other. A brow is what the stroke becomes when it is raised, thinned and tilted until nothing of the eye is left, and because nothing is swapped, a face can sit anywhere between any two of these. Drawn on Orb, held still, with the proposed code."
+    );
+    const sheet = h("div", { class: "sheet" });
+    const stills = [];
+    for (const pose of POSES) {
+      const c = new Creature(AFTER, "orb", "idle", "lg");
+      c.pose = pose.eye;
+      c.hold = [0, 0];
+      stills.push(c);
+      sheet.append(
+        h("div", { class: "still" }, c.el, h("b", {}, pose.name), h("small", {}, pose.note))
+      );
+    }
+    s.append(sheet);
+    const from = select(POSES.map((p) => p.name), "round");
+    const to = select(POSES.map((p) => p.name), "scowl");
+    const strip = h("div", { class: "strip" });
+    const morphs = [];
+    const STEPS3 = 7;
+    for (let i = 0; i < STEPS3; i++) {
+      const c = new Creature(AFTER, "orb", "idle", "md");
+      c.hold = [0, 0];
+      morphs.push(c);
+      strip.append(c.el);
+    }
+    const redraw = () => {
+      const a = POSES.find((p) => p.name === from.value)?.eye ?? POSES[0]?.eye;
+      const b = POSES.find((p) => p.name === to.value)?.eye ?? POSES[0]?.eye;
+      if (!a || !b) return;
+      morphs.forEach((c, i) => {
+        c.pose = AFTER.blendEyes(a, b, i / (STEPS3 - 1));
+        c.paint(0, false);
+      });
+    };
+    from.addEventListener("change", redraw);
+    to.addEventListener("change", redraw);
+    s.append(
+      h("p", { class: "lede" }, "Halfway between any two, by lerping the numbers. Pick a pair."),
+      h("div", { class: "controls" }, h("label", {}, "From ", from), h("label", {}, "to ", to)),
+      strip
+    );
+    painters.push(() => {
+      for (const c of stills) c.paint(0, false);
+    });
+    redraw();
+    return s;
+  }
+  var TRIO = ["orb", "slab", "tide"];
+  function moods() {
+    const s = section(
+      "Ten moods, three shapes.",
+      "One card per row of the table in <code>docs/CHARACTERS.md</code>. Circle, square and cloud, because the shear and the crane read differently on a flat side than on a round one, and the cloud is the one that is not convex."
+    );
+    const grid = h("div", { class: "cards" });
+    for (const key of MOOD_KEYS) {
+      const card = h("div", { class: "card" }, h("h3", {}, key), h("p", {}, MOOD_NOTES[key]));
+      card.append(
+        pair((kit) => {
+          const row = h("div", { class: "row row--tight" });
+          for (const who of TRIO) row.append(live(new Creature(kit, who, key, "lg", `${who}-${key}`)).el);
+          return row;
+        })
+      );
+      grid.append(card);
+    }
+    s.append(grid);
+    return s;
+  }
+  var MORNING = [
+    { mood: "idle", dur: 5, say: "nothing in flight" },
+    { mood: "listening", dur: 2.4, say: "a message queued" },
+    { mood: "thinking", dur: 4, say: "between rounds" },
+    { mood: "working", dur: 4, say: "a tool call in flight" },
+    { mood: "frustrated", dur: 3, say: "the call back was refused" },
+    { mood: "working", dur: 2.4, say: "trying again" },
+    { mood: "pleased", dur: 2.6, say: "the reply landed" },
+    { mood: "idle", dur: 3, say: "nothing in flight" },
+    { mood: "surprised", look: "down", gesture: "receive", dur: 0.9, say: "hit from below" },
+    { mood: "thinking", look: "down", dur: 1.6, say: "still looking at who threw it" },
+    { mood: "thinking", dur: 2, say: "between rounds" },
+    { mood: "thinking", look: "up", gesture: "send", dur: 1.4, say: "sending upward" },
+    { mood: "blocked", dur: 5, say: "parked on a person" },
+    { mood: "stuck", dur: 5, say: "an escalation open" },
+    { mood: "paused", dur: 4, say: "paused" }
+  ];
+  function morning() {
+    const s = section(
+      "A morning, twice.",
+      "The same script of signals run through both versions: every mood the app can reach, in an order a real agent might, with a message caught from below and one thrown upward. The label is the signal; the face is what each version makes of it."
+    );
+    const subjects = KITS.map((kit) => new Creature(kit, "gourd", "idle", "xl", "morning"));
+    for (const c of subjects) live(c);
+    const label = h("div", { class: "cue" }, "");
+    let i = -1;
+    let until = 0;
+    painters.push((seconds) => {
+      if (seconds < until) return;
+      i = (i + 1) % MORNING.length;
+      const step = MORNING[i];
+      until = seconds + step.dur;
+      for (const c of subjects) {
+        c.want = step.mood;
+        c.look = step.look ?? null;
+        if (step.gesture) c.throw_(step.gesture);
+      }
+      label.textContent = `${step.mood} \xB7 ${step.say}`;
+    });
+    s.append(
+      h(
+        "div",
+        { class: "stage-pair" },
+        labelled(BEFORE, h("div", { class: "stage" }, subjects[0].el)),
+        labelled(AFTER, h("div", { class: "stage" }, subjects[1].el))
+      ),
+      label
+    );
+    return s;
+  }
+  function numbers() {
+    const s = section(
+      "What moved, in numbers.",
+      "Everything is a constant in <code>src/avatars</code>. Nothing on this page was drawn by hand."
+    );
+    const rows = [
+      ["idle breath", "0.03 at 0.22 Hz", "none: the idle body is still"],
+      ["idle outline wobble", "0.008, 0.006", "none"],
+      ["idle look range", "0.28 body radii, uniform", "0.40, 30% of looks to the full side, the rest inside 0.6 of it"],
+      ["saccade timing", "on the beat", "in the first half of each slot, varied"],
+      ["body's answer to a look", "linear, 0.8 swell", "ramp: 0 under 0.06, full past 0.26, capped at 0.38"],
+      ["what the answer does", "a bulge on the near side, a flatten on the far", "a pear: front drawn out by 1.2 and narrowed by 1.1 per body radius of look, back left round"],
+      ["eye travel across", "1.0 of the look", "up to 1.6 as the body answers, so the eyes lead the snout"],
+      ["lean of the center", "0.10", "0.10, plus a shear of 0.20 about a pivot 0.45 under the center"],
+      ["crane", "none", "1% taller per 0.1 of look, half that thinner"],
+      ["when the body moves", "0.44 s after the eyes, on a spring", "with the eyes, on one 0.12 s smoother in front of both"],
+      ["how long a look takes", "cross, whatever the distance", "cross for a glance, up to twice it for a look the whole way"],
+      ["stretch against the reach", "tuned, worst frame 0.02 under", "cut on the outline each frame, tested in 16 directions past the cap"],
+      ["eye numbers", "w, h, c, a, sep, dx, dy", "and skew, and lop"],
+      ["far eye on a sideways look", "same size", "30% smaller per body radius of look, near eye larger"],
+      ["stuck", "small dots, staring", "worried brows, darting"],
+      ["tests in form.test.ts", "15", "28"]
+    ];
+    const table = h("table", {}, h("tr", {}, h("th", {}, ""), h("th", {}, "Shipped"), h("th", {}, "Proposed")));
+    for (const [what, was, is] of rows) {
+      table.append(h("tr", {}, h("td", {}, what), h("td", {}, was), h("td", {}, is)));
+    }
+    s.append(table);
+    return s;
+  }
+  function button(label, onClick, pressed) {
+    const b = h("button", { type: "button" }, label);
+    if (pressed !== void 0) b.setAttribute("aria-pressed", String(pressed));
+    b.addEventListener("click", onClick);
+    return b;
+  }
+  function select(options, value) {
+    const s = h("select");
+    for (const o of options) s.append(h("option", { value: o }, o));
+    s.value = value;
+    return s;
+  }
+  function group(name, options, current, onPick) {
+    const box = h("span", { class: "group" });
+    const buttons = options.map(
+      (o) => button(
+        o.label,
+        () => {
+          for (const b of buttons) b.setAttribute("aria-pressed", "false");
+          const me = buttons[options.indexOf(o)];
+          me?.setAttribute("aria-pressed", "true");
+          onPick(o.value);
+        },
+        o.value === current
+      )
+    );
+    box.append(...buttons);
+    return h("label", {}, `${name} `, box);
+  }
+  function bar() {
+    const play = button("Pause", () => {
+      paused = !paused;
+      play.textContent = paused ? "Play" : "Pause";
+    });
+    return h(
+      "div",
+      { class: "bar" },
+      play,
+      group(
+        "Speed",
+        [
+          { label: "\xBD", value: "0.5" },
+          { label: "1", value: "1" },
+          { label: "2", value: "2" }
+        ],
+        "1",
+        (v) => {
+          speed = Number.parseFloat(v);
+        }
+      ),
+      group(
+        "Behind",
+        [
+          { label: "Paper", value: "paper" },
+          { label: "Ink", value: "ink" }
+        ],
+        "paper",
+        (v) => document.body.setAttribute("data-surface", v)
+      )
+    );
+  }
+  var CSS = `
+:root {
+  --ink: #0b0b0a; --paper: #ffffff; --rail: #f5f3ee; --edge: #e2e0da;
+  --muted: #54524d; --faint: #8a877f; --amber: #b4530a; --flesh: #b4530a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 15px/1.6 ui-sans-serif, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--rail); }
+main { max-width: 1180px; margin: 0 auto; padding: 56px 32px 120px; }
+h1 { font-size: 34px; letter-spacing: -0.02em; margin: 0 0 4px; }
+h2 { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); margin: 56px 0 14px; font-weight: 600; }
+h3 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+.lede { max-width: 72ch; color: var(--muted); margin: 0 0 10px; }
+.lede strong { color: var(--ink); font-weight: 600; }
+code { font: 12px ui-monospace, monospace; background: var(--rail); border: 1px solid var(--edge); border-radius: 4px; padding: 1px 5px; }
+.bar { position: sticky; top: 0; z-index: 10; display: flex; gap: 22px; flex-wrap: wrap; align-items: center; margin: 28px 0 0; padding: 12px 16px; background: rgba(245,243,238,0.93); backdrop-filter: blur(8px); border: 1px solid var(--edge); border-radius: 10px; }
+.bar label { font-size: 12px; color: var(--muted); display: flex; gap: 7px; align-items: center; }
+.group { display: flex; gap: 2px; background: #fff; border: 1px solid var(--edge); border-radius: 7px; padding: 2px; }
+button { font: inherit; font-size: 12px; border: 1px solid var(--edge); background: #fff; color: var(--muted); padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+.group button { border: 0; background: transparent; border-radius: 5px; }
+button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+select { font: inherit; font-size: 12px; padding: 3px 6px; border: 1px solid var(--edge); border-radius: 6px; background: #fff; }
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.labelled { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.tag { font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: var(--faint); }
+.labelled--after .tag { color: var(--amber); }
+.row { display: flex; flex-wrap: wrap; gap: 18px; padding: 22px; border-radius: 12px; align-items: center; }
+.row--tight { gap: 10px; padding: 14px; }
+.stage-pair { display: grid; grid-template-columns: 1fr 1fr auto; gap: 16px; align-items: end; }
+.stage { display: flex; justify-content: center; align-items: center; padding: 28px; border-radius: 12px; min-height: 200px; }
+.plot { align-self: stretch; display: flex; align-items: flex-end; }
+body[data-surface="paper"] .row, body[data-surface="paper"] .stage, body[data-surface="paper"] .sheet, body[data-surface="paper"] .strip { background: #fff; box-shadow: inset 0 0 0 1px var(--edge); }
+body[data-surface="ink"] .row, body[data-surface="ink"] .stage, body[data-surface="ink"] .sheet, body[data-surface="ink"] .strip { background: #17171a; }
+body[data-surface="ink"] .still b, body[data-surface="ink"] .still small { color: rgba(255,255,255,0.75); }
+.controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 14px 0 0; font-size: 12px; color: var(--muted); }
+.controls label { display: flex; gap: 8px; align-items: center; }
+.controls input[type="range"] { width: 180px; }
+.controls output { font: 12px ui-monospace, monospace; }
+.buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.check { gap: 6px; }
+.grip { width: 220px; height: 160px; font: 10px ui-monospace, monospace; fill: var(--faint); }
+.grip .grip__was { fill: none; stroke: var(--edge); stroke-width: 1.5; }
+.grip .grip__is { fill: none; stroke: var(--amber); stroke-width: 2; }
+.grip .grip__tick { stroke: var(--edge); stroke-dasharray: 2 3; }
+.sheet { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; padding: 18px; border-radius: 12px; }
+.still { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.still b { font-size: 12px; }
+.still small { font-size: 11px; color: var(--muted); line-height: 1.35; }
+.strip { display: flex; gap: 14px; padding: 16px 20px; border-radius: 12px; margin-top: 10px; align-items: center; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 18px; }
+.card { background: #fff; border: 1px solid var(--edge); border-radius: 12px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.card p { margin: 0; font-size: 13px; color: var(--muted); min-height: 3.6em; }
+.card .row { padding: 12px; }
+.cue { margin-top: 12px; font: 13px ui-monospace, monospace; color: var(--muted); }
+table { border-collapse: collapse; font-size: 13px; max-width: 900px; }
+th, td { text-align: left; padding: 6px 12px 6px 0; border-bottom: 1px solid var(--edge); vertical-align: top; }
+th { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+td:first-child { color: var(--muted); white-space: nowrap; }
+footer { margin-top: 64px; font-size: 13px; color: var(--muted); max-width: 72ch; }
+
+/* .avatar, as in src/styles.css */
+.avatar { --eye: color-mix(in oklab, var(--accent, var(--flesh)) 34%, #171410); display: inline-grid; place-items: center; flex: none; position: relative; }
+.avatar--md { width: 2.75rem; height: 2.75rem; }
+.avatar--lg { width: 4.25rem; height: 4.25rem; }
+.avatar--xl { width: 9rem; height: 9rem; }
+.avatar__body { width: 100%; height: 100%; overflow: visible; }
+.avatar[data-mood="paused"] .avatar__body { filter: grayscale(0.72); opacity: 0.5; }
+.avatar__dots circle { animation: think-dot 1.5s ease-in-out infinite; animation-delay: calc(var(--gait, 0s) * -1); }
+.avatar__dots circle:nth-child(2) { animation-delay: calc(var(--gait, 0s) * -1 + 0.18s); }
+.avatar__dots circle:nth-child(3) { animation-delay: calc(var(--gait, 0s) * -1 + 0.36s); }
+@keyframes think-dot { 0%, 100% { opacity: 0.15; } 50% { opacity: 0.9; } }
+.avatar__halo { transform-box: fill-box; transform-origin: center; animation: attention 1.9s ease-in-out infinite; animation-delay: calc(var(--gait, 0s) * -1); }
+@keyframes attention { 0% { opacity: 0.5; transform: scale(0.85); } 100% { opacity: 0; transform: scale(1.5); } }
+.avatar__z { animation: snooze 3.4s ease-in-out infinite; animation-delay: calc(var(--gait, 0s) * -1); }
+@keyframes snooze { 0% { opacity: 0; transform: translate(0, 1px) scale(0.75); } 30% { opacity: 0.75; } 100% { opacity: 0; transform: translate(4px, -7px) scale(1.15); } }
+`;
+  function page() {
+    document.head.append(h("style", {}, CSS));
+    document.title = "Guaca characters: the caricature pass";
+    document.body.setAttribute("data-surface", "paper");
+    const main = h("main");
+    main.append(
+      h("h1", {}, "Characters, caricatured"),
+      lede(
+        "Less body when idle, more body when the eyes go to the edge, more from the eyes all round, and the eye itself becoming the brow. Every creature on this page is drawn by the app's own code: the left of each pair by <code>src/avatars</code> at HEAD, the right by the working tree. Same clock, same seeds, same script."
+      ),
+      lede(
+        "What to look for, in order: whether the idle rail sits still; whether a hard sideways look now reads as the creature turning toward it rather than a mark sliding; whether the brows read at 44px, which is the rail's size; and whether <code>stuck</code> should change meaning, which is the one call on this page that is not about drawing."
+      ),
+      bar(),
+      idleRail(),
+      lookDemo(),
+      vocabulary(),
+      moods(),
+      morning(),
+      numbers(),
+      h(
+        "footer",
+        {},
+        h(
+          "p",
+          {},
+          "Gates: form.test.ts holds the outline to FORM.reach in every direction past the cap and both eyes inside the body in every mood and under both aimed looks. moods.test.ts still proves every mood is reachable from a real signal. No new mood, no new shape, no second object on a face, no transform on a drawing."
+        )
+      )
+    );
+    document.body.append(main);
+    const only = new URLSearchParams(location.search).get("only");
+    if (only) {
+      for (const el of main.querySelectorAll("section")) if (el.id !== only) el.remove();
+    }
+    if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+    requestAnimationFrame(frame);
+  }
+  function lede(html) {
+    const p = h("p", { class: "lede" });
+    p.innerHTML = html;
+    return p;
+  }
+  page();
+})();
+
+</script>
+</body>
+</html>

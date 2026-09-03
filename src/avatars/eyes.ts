@@ -4,9 +4,10 @@
  * An eye is one stroke with a round cap and four numbers on it: `w` half its
  * length, `h` its weight, `c` how far it bows and `a` how far it tilts, all in
  * eye radii. A dot is that stroke with no length. A blink is the same dot
- * moulded into a line. Upset is the line tilted in. Nothing is ever swapped for
- * anything, which is what lets a face sit halfway between two moods and lets a
- * mood change be an interpolation rather than a cut.
+ * moulded into a line. Upset is the line tilted in, and a brow is the same line
+ * raised and thinned until it is all that is left of the eye. Nothing is ever
+ * swapped for anything, which is what lets a face sit halfway between two moods
+ * and lets a mood change be an interpolation rather than a cut.
  *
  * On top of the shape sits behavior, and it is the behavior that reads as alive:
  * a blink that is sometimes a double, and a gaze that flicks somewhere and
@@ -15,7 +16,7 @@
  * makes it read as attention.
  */
 
-import { FORM, type Lump, type Point } from "./form";
+import { FORM, grip, type Lump, type Point, PULL } from "./form";
 
 const TAU = Math.PI * 2;
 
@@ -34,6 +35,20 @@ export interface Eye {
   /** Fixed offset from the middle of the body, in eye radii. */
   dx?: number;
   dy?: number;
+  /**
+   * One eye higher than the other, in eye radii. Positive lifts the one on the
+   * creature's left, which is the viewer's right. The pair is otherwise a
+   * mirror, and a mirror can be calm, cross or afraid but never doubtful: a
+   * cocked brow is the one expression that needs the two to disagree.
+   */
+  skew?: number;
+  /**
+   * One eye narrowed against the other, in eye radii of length. Positive
+   * lengthens and thins the eye on the creature's right and does the opposite
+   * to its left, so with `skew` a face can hold one brow up and the other eye
+   * in a squint, which is the whole of a doubting look.
+   */
+  lop?: number;
 }
 
 /** Where a mood looks, and how it holds itself while it looks. */
@@ -64,16 +79,57 @@ export interface Gaze {
   bias?: Point;
   /** `[x, y, hold]` steps, cycled. For a mood that is looking at something. */
   script?: [number, number, number][];
+  /**
+   * What share of the saccades go the whole way to one side. With it set, the
+   * rest stay inside the middle of the range, so a creature mostly glances and
+   * now and then takes a look; without it every target is anywhere in the box,
+   * which is a creature that never quite commits to looking at anything.
+   */
+  far?: number;
+  /** How much of the range the ordinary glances use, when `far` is set. 0.6 by default. */
+  near?: number;
 }
 
 /**
- * How long the clay takes to catch up with the eyes, in seconds. The whole of
- * what makes a look read as pulling the body rather than as two things being
- * animated at once. Spent in `AgentAvatar`, which follows it with a critically
- * damped spring so that a look, a peer being addressed and a message landing
- * all arrive through the same filter.
+ * How long a change of where to look takes to be taken, in seconds, by the
+ * eyes and the body together.
+ *
+ * This used to be the body's lag behind the eyes, at almost half a second, on
+ * the argument that a bulge read late reads as a consequence of the look. With
+ * the body pulled into a pear it read as the opposite: the eyes went, and then
+ * something else happened to the body. So there is one gaze, both read it at
+ * the same instant, and this is only the smoothing in front of both, short
+ * enough that a flick is still a flick and long enough that an aimed look, which
+ * arrives as a step, is not a cut. Spent in `AgentAvatar` through `settle`.
  */
-export const SETTLE = 0.44;
+export const SETTLE = 0.12;
+
+const OMEGA = 2.2 / SETTLE;
+
+/** Where the look has got to, and how fast, in body radii. */
+export interface Mass {
+  gaze: Point;
+  vel: Point;
+}
+
+/**
+ * One step of the look toward where it was asked to go, in place.
+ *
+ * Critically damped, so it never passes the target: the eyes read this too,
+ * and an eye that overshoots reads as a wobble. A look, a peer being addressed
+ * and a message landing all arrive through this one filter, so none of them
+ * can snap. `dt` is seconds since the last step, already bounded by the caller:
+ * a tab that was hidden for a minute is one big step, not a minute of them.
+ */
+export function settle(mass: Mass, target: Point, dt: number): void {
+  for (const i of [0, 1] as const) {
+    const x = mass.gaze[i];
+    const v = mass.vel[i];
+    const accel = OMEGA * OMEGA * (target[i] - x) - 2 * OMEGA * v;
+    mass.vel[i] = v + accel * dt;
+    mass.gaze[i] = x + mass.vel[i] * dt;
+  }
+}
 
 /**
  * Where an aimed look points, in body radii, and what it does to the stroke.
@@ -103,6 +159,13 @@ const AIMED = {
   down: { lid: 0.34, bow: 0.2, sep: -0.08, dy: 0.45 },
   up: { lid: -0.4, bow: -0.06, sep: -0.06, dy: 0 },
 } as const;
+
+/**
+ * How much of a sideways look the two eyes disagree in size, per body radius of
+ * look. Perspective on a turned head: the near eye grows by this and the far
+ * one shrinks by it.
+ */
+const PEEK = 0.3;
 
 /** One mood's eye, with an aimed look moulded into it. */
 export function aimedEye(eye: Eye, at: "up" | "down"): Eye {
@@ -150,6 +213,17 @@ function ease(u: number): number {
   return e * e * e * (e * (e * 6 - 15) + 10);
 }
 
+/**
+ * How long one jump takes, from how far it goes. `cross` is the time of an
+ * ordinary glance; a look the whole way to one side takes up to twice that,
+ * because the body comes with it now and a body that becomes a pear in a
+ * quarter of a second is a body that snapped.
+ */
+function span(from: Point, to: Point, cross: number): number {
+  const far = Math.hypot(to[0] - from[0], to[1] - from[1]);
+  return cross * Math.max(1, Math.min(2, far / 0.25));
+}
+
 /** A gaze that was written down: `[x, y, hold]` steps, cycled. */
 function scripted(t: number, g: Gaze): Point {
   const steps = g.script as [number, number, number][];
@@ -163,7 +237,7 @@ function scripted(t: number, g: Gaze): Point {
   }
   const from = steps[(i - 1 + steps.length) % steps.length] as [number, number, number];
   const to = steps[i] as [number, number, number];
-  const k = ease(u / (g.cross ?? 0.26));
+  const k = ease(u / span([from[0], from[1]], [to[0], to[1]], g.cross ?? 0.26));
   return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
 }
 
@@ -178,16 +252,29 @@ export function gazeAt(t: number, g?: Gaze): Point {
   if (g.script) return scripted(t, g);
   const range = g.range ?? 0;
   const P = 1 / (g.hz ?? 0.5);
-  const i = Math.floor(t / P);
-  let u = (t / P) % 1;
-  if (u < 0) u += 1;
-  const at = (k: number): Point => [
-    (rnd(k) * 2 - 1) * range + (g.bias ? g.bias[0] : 0),
-    (rnd(k + 0.37) * 2 - 1) * range * 0.62 + (g.bias ? g.bias[1] : 0),
-  ];
+  /* Each slot's jump lands somewhere in the first half of it rather than on
+     its beat. On the beat, a creature holds every look for exactly as long as
+     the last, and a hold that never varies reads as a metronome: the same
+     thing a slide reads as, arrived at from the other side. */
+  const starts = (k: number) => k * P + rnd(k + 0.83) * P * 0.5;
+  let i = Math.floor(t / P);
+  if (t < starts(i)) i -= 1;
+  const at = (k: number): Point => {
+    const bx = g.bias ? g.bias[0] : 0;
+    const by = g.bias ? g.bias[1] : 0;
+    if (g.far && rnd(k + 0.61) < g.far) {
+      /* The whole way to one side, and level: a look, rather than a glance. */
+      return [(rnd(k) < 0.5 ? -1 : 1) * range + bx, (rnd(k + 0.37) * 2 - 1) * range * 0.2 + by];
+    }
+    const within = g.far ? (g.near ?? 0.6) : 1;
+    return [
+      (rnd(k) * 2 - 1) * range * within + bx,
+      (rnd(k + 0.37) * 2 - 1) * range * 0.62 * within + by,
+    ];
+  };
   const from = at(i - 1);
   const to = at(i);
-  const k = ease((u * P) / (g.cross ?? 0.26));
+  const k = ease((t - starts(i)) / span(from, to, g.cross ?? 0.26));
   return [from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k];
 }
 
@@ -221,6 +308,13 @@ function geometry(
     w += squint * (squintTo.w ?? 0);
     h += squint * (squintTo.h ?? 0);
     ang += squint * (squintTo.a ?? 0) * side;
+  }
+  const lop = ((e.lop ?? 0) + squint * (squintTo.lop ?? 0)) * -side;
+  if (lop !== 0) {
+    /* The narrowed eye is longer and thinner, the other shorter and fuller, as
+       a blink is: a squint is a lid, and a lid is a moulding. */
+    w = Math.max(0.02, w + lop);
+    h *= Math.max(0.3, 1 - lop * 0.45);
   }
   if (breath) {
     h *= 1 + breath * 0.16;
@@ -261,18 +355,38 @@ export function eyesAt(
   const jx = jitter ? Math.sin(t * 41) * jitter : 0;
   const jy = jitter ? Math.sin(t * 33 + 1.7) * jitter * 0.7 : 0;
   const breath = live && anim.breath ? Math.sin(t * anim.breath.hz * TAU) * anim.breath.amp : 0;
-  const squintTo = anim.squint ?? {};
+  const squintTo: Partial<Eye> = anim.squint ?? {};
   const squint = anim.squint ? Math.max(0, Math.min(1, -gy / anim.squint.at)) : 0;
 
-  const x = FORM.center + (lump.eye.x ?? 0) + gx * FORM.radius + (jx + (eye.dx ?? 0)) * r;
+  /* Across, the eyes go further as the body answers, so they lead the snout
+     the look pulls out rather than sit in the middle of it. Not up and down:
+     up has a third of a unit to spare and down already has the lid. */
+  const seen = Math.hypot(gx, gy);
+  const lead = 1 + PULL.lead * (seen > 0.004 ? grip(seen) / seen : 0);
+  const x = FORM.center + (lump.eye.x ?? 0) + gx * FORM.radius * lead + (jx + (eye.dx ?? 0)) * r;
   const y = FORM.center + (lump.eye.y ?? 0) + gy * FORM.radius + (jy + (eye.dy ?? 0)) * r;
 
   if (lump.eye.one) {
     return [{ x, y, ...geometry(eye, r * 1.5, 1, blink, breath, squint, squintTo) }];
   }
+  /* One brow cocked: the pair disagree by `skew`, and a look upward that
+     squints can cock one as it goes. */
+  const skew = ((eye.skew ?? 0) + squint * (squintTo.skew ?? 0)) * r;
+  /* The far eye is smaller. A hard look to one side turns the head, and on a
+     turned head the eye that went round the curve is foreshortened; without it
+     a far look is two equal marks slid across a ball. */
+  const turn = gx * PEEK;
   return [
-    { x: x - sep, y, ...geometry(eye, r, 1, blink, breath, squint, squintTo) },
-    { x: x + sep, y, ...geometry(eye, r, -1, blink, breath, squint, squintTo) },
+    {
+      x: x - sep,
+      y: y + skew,
+      ...geometry(eye, r * (1 - turn), 1, blink, breath, squint, squintTo),
+    },
+    {
+      x: x + sep,
+      y: y - skew,
+      ...geometry(eye, r * (1 + turn), -1, blink, breath, squint, squintTo),
+    },
   ];
 }
 
@@ -297,5 +411,7 @@ export function blendEyes(a: Eye, b: Eye, u: number): Eye {
     sep: at("sep", 0),
     dx: at("dx", 0),
     dy: at("dy", 0),
+    skew: at("skew", 0),
+    lop: at("lop", 0),
   };
 }
