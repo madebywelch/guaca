@@ -74,12 +74,12 @@ pub enum Cadence {
 /// what [`EventTrigger::parse`] enforces, and the service is lowered so the
 /// stored form is canonical: one routine per event, not one per spelling.
 ///
-/// **Nothing delivers one of these yet.** There is no event source, so a
-/// routine triggered this way fires only when the operator presses Test run.
-/// What exists is the shape: it stores, it reads back, it is described, it
-/// keeps a history, and the scheduler leaves it alone. What is missing is the
-/// half that cannot be written without a service to receive from: a webhook or
-/// a poll that turns an arriving event into `Runtime::send_from_routine`.
+/// What delivers one is a POST to the loopback receiver in `webhook.rs`,
+/// addressed by the same two identifiers: `/events/stripe/invoice.payment_failed`
+/// fires every active routine standing on that trigger, through
+/// `Runtime::deliver_event`. Nothing polls a service and nothing reaches out
+/// to one; whatever posts the event is the operator's to wire, and the
+/// routine's panel shows the address and the secret it takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventTrigger {
     pub service: String,
@@ -433,6 +433,14 @@ pub enum RunKind {
     /// happen leaves a gap in this history, and a gap is what a broken
     /// scheduler looks like too.
     Skipped,
+    /// Its event arrived and was delivered. Nothing on the clock moved,
+    /// because there was nothing on the clock.
+    ///
+    /// Its own kind rather than `Scheduled`, because the two answer different
+    /// questions when a routine misbehaves: a scheduled firing at the wrong
+    /// hour is the cadence, and an event firing nobody expected is whatever is
+    /// posting to the receiver.
+    Event,
 }
 
 impl RunKind {
@@ -441,6 +449,7 @@ impl RunKind {
             RunKind::Scheduled => "scheduled",
             RunKind::Test => "test",
             RunKind::Skipped => "skipped",
+            RunKind::Event => "event",
         }
     }
 
@@ -449,6 +458,7 @@ impl RunKind {
             "scheduled" => Some(RunKind::Scheduled),
             "test" => Some(RunKind::Test),
             "skipped" => Some(RunKind::Skipped),
+            "event" => Some(RunKind::Event),
             _ => None,
         }
     }

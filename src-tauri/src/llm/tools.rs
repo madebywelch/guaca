@@ -63,6 +63,23 @@ pub struct Surfaces {
     pub repository: bool,
 }
 
+/// Which machine a tool call is spent on, by the tool's name, or none for a
+/// tool that reaches no machine.
+///
+/// The one place the four machine tools are listed as machine tools. The
+/// runtime marks an agent as on its computer or in its browser for exactly as
+/// long as one of these is in flight, and the rail and the menu bar say so:
+/// "typing" is what a model does, and an operator who sees "on its computer"
+/// knows there is a screen to go and watch.
+pub fn surface_of(name: &str) -> Option<crate::domain::signin::Surface> {
+    use crate::domain::signin::Surface;
+    match name {
+        RUN_COMMAND | OPEN_ON_DESKTOP | USE_SCREEN => Some(Surface::Computer),
+        BROWSE => Some(Surface::Browser),
+        _ => None,
+    }
+}
+
 impl Surfaces {
     pub fn both() -> Self {
         Surfaces { computer: true, browser: true, repository: true }
@@ -1674,8 +1691,10 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
             // 86400 means the weekdays.
             //
             // Read as a cadence rather than as any trigger: this tool sets a
-            // clock, and a model that improvised `event:...` here would be
-            // handed a routine nothing can fire.
+            // clock. An event routine fires when something posts to the
+            // receiver, and only the operator can wire that; a model that
+            // improvised `event:...` here would be handed a routine waiting
+            // on a post nobody has arranged.
             let clock = |repeat: Option<&str>, every: Option<u32>| match (repeat, every) {
                 (Some(named), _) => {
                     Cadence::parse(named).map(Trigger::Clock).map(Some).ok_or_else(|| {
@@ -2352,6 +2371,20 @@ pub fn render_deliveries(results: &[Delivery]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_four_machine_tools_name_their_machine_and_nothing_else_does() {
+        use crate::domain::signin::Surface;
+        for name in [RUN_COMMAND, OPEN_ON_DESKTOP, USE_SCREEN] {
+            assert_eq!(surface_of(name), Some(Surface::Computer), "{name}");
+        }
+        assert_eq!(surface_of(BROWSE), Some(Surface::Browser));
+        // The repository's shell is the operator's own machine, and a coding
+        // job is a process rather than a place the operator can watch.
+        for name in [SHELL, CODE, SEND_MESSAGE, SCHEDULE, "linear__create_issue"] {
+            assert_eq!(surface_of(name), None, "{name}");
+        }
+    }
     use crate::domain::plugin::PluginTool;
 
     fn call(name: &str, arguments: &str) -> ToolCall {

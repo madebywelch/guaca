@@ -297,11 +297,14 @@ export function WritingRow({ peer }: { peer: WirePeer }) {
 export function RoutineRow({
   title,
   what,
+  payload,
   at,
   onOpen,
 }: {
   title: string;
   what: string;
+  /** What the event arrived with, when one did. Shown on hover, not drawn. */
+  payload: string | null;
   at: number;
   onOpen: () => void;
 }) {
@@ -310,7 +313,11 @@ export function RoutineRow({
       <button
         type="button"
         className="wire__chip wire__chip--open"
-        title={`Open this routine. It asked: ${what}`}
+        title={
+          payload
+            ? `Open this routine. It asked: ${what}\n\nThe event arrived with:\n${payload}`
+            : `Open this routine. It asked: ${what}`
+        }
         onClick={onOpen}
       >
         <span className="routine__mark" aria-hidden="true" />

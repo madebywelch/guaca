@@ -386,7 +386,7 @@ use crate::domain::now_ms;
 use crate::domain::plugin::PluginKind;
 use crate::domain::promise;
 use crate::domain::repository::{Gate, Harness};
-use crate::domain::routine::{Routine, RunKind};
+use crate::domain::routine::{EventTrigger, Routine, RunKind};
 use crate::domain::signin::{self, BrowserState, Signin, Surface};
 use crate::domain::worknote;
 use crate::files::FileStore;
@@ -774,6 +774,18 @@ struct Inner {
     bridge: crate::coding::Bridge,
     /// Loopback port of the computer viewer. Zero until it is listening.
     viewer_port: AtomicU16,
+    /// Loopback port of the event receiver. Zero until it is listening, which
+    /// is also what the routine panel reads to say the receiver is not up.
+    webhook_port: AtomicU16,
+    /// Which agents have a machine tool call in flight, and on which machine.
+    ///
+    /// Held for exactly the length of the call by [`OnMachine`], a guard that
+    /// takes the entry out when it drops, so a run stopped mid-call clears it
+    /// too. Read by the menu bar, which has no other way to know: the activity
+    /// map says thinking, and a model thinking and a model driving a rented
+    /// desktop are the same word there and not the same thing to go and look
+    /// at.
+    on_machine: Mutex<HashMap<AgentId, Surface>>,
     /// Where each plugin's MCP server is, when it is not where it usually is.
     ///
     /// Keyed by slug rather than by kind, so a server the operator added can be
@@ -800,6 +812,32 @@ struct Inner {
     /// things, and a leaked task is invisible without counting it.
     live_actors: Arc<AtomicUsize>,
     events: Arc<dyn EventSink>,
+}
+
+/// What became of one event: how many routines stood on it, and of those how
+/// many were delivered and how many were dropped for an agent already working.
+///
+/// The three are answered to whoever posted the event, because that is the
+/// one party who can act on them: a receiver answering 200 to an event nobody
+/// stands on is a webhook wired to the wrong topic that looks like it works.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EventDelivery {
+    pub listening: usize,
+    pub delivered: usize,
+    pub skipped: usize,
+}
+
+/// An agent's place on a machine, held while a machine tool call runs.
+struct OnMachine<'a> {
+    runtime: &'a Runtime,
+    id: AgentId,
+}
+
+impl Drop for OnMachine<'_> {
+    fn drop(&mut self) {
+        self.runtime.inner.on_machine.lock().remove(&self.id);
+    }
 }
 
 #[derive(Clone)]
@@ -873,6 +911,8 @@ impl Runtime {
                 benches,
                 bridge: crate::coding::Bridge::new(),
                 viewer_port: AtomicU16::new(0),
+                webhook_port: AtomicU16::new(0),
+                on_machine: Mutex::new(HashMap::new()),
                 plugin_endpoints: std::sync::OnceLock::new(),
                 account: std::sync::OnceLock::new(),
                 modalities: modality::Registry::new(),
@@ -955,6 +995,14 @@ impl Runtime {
 
     pub fn viewer_port(&self) -> u16 {
         self.inner.viewer_port.load(Ordering::SeqCst)
+    }
+
+    pub fn set_webhook_port(&self, port: u16) {
+        self.inner.webhook_port.store(port, Ordering::SeqCst);
+    }
+
+    pub fn webhook_port(&self) -> u16 {
+        self.inner.webhook_port.load(Ordering::SeqCst)
     }
 
     pub fn store(&self) -> &Store {
@@ -1369,6 +1417,17 @@ impl Runtime {
         self.inner.activity.lock().clone()
     }
 
+    /// Which agents are on a machine right now, and which machine.
+    pub fn machines_in_use(&self) -> HashMap<AgentId, Surface> {
+        self.inner.on_machine.lock().clone()
+    }
+
+    /// Marks an agent as on a machine until the guard drops.
+    fn on_machine(&self, id: AgentId, surface: Surface) -> OnMachine<'_> {
+        self.inner.on_machine.lock().insert(id, surface);
+        OnMachine { runtime: self, id }
+    }
+
     /// Whether work sent to this agent now would have to wait.
     ///
     /// An agent with no entry is one with no actor: nothing is running, so
@@ -1767,7 +1826,16 @@ impl Runtime {
     /// says a routine fired in one line the operator can open, instead of
     /// several sentences of system prompting drawn as though somebody had
     /// typed them into the conversation.
-    pub fn send_from_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
+    ///
+    /// `payload` is what an event arrived with, and `None` for the clock and
+    /// the button. It rides on the part, where the projection fences it as
+    /// data below the instruction: the envelope's trust is the routine's,
+    /// which is the operator's, and the body must not borrow it.
+    pub fn send_from_routine(
+        &self,
+        routine: &Routine,
+        payload: Option<String>,
+    ) -> Result<RunId, RuntimeError> {
         let to = routine.agent_id;
         let card = self.inner.store.get_agent(to)?.ok_or(RuntimeError::UnknownAgent(to))?;
         if card.lifecycle != Lifecycle::Active {
@@ -1785,6 +1853,7 @@ impl Runtime {
                 routine_id: routine.id,
                 name: routine.name.clone(),
                 what: routine.what.trim().to_string(),
+                payload,
             }],
             trust: Trust::Operator,
             hop: 0,
@@ -1811,9 +1880,73 @@ impl Runtime {
     /// the agent was mid-turn would answer a question nobody asked, and read
     /// as the button being broken.
     pub fn test_routine(&self, routine: &Routine) -> Result<RunId, RuntimeError> {
-        let run = self.send_from_routine(routine)?;
+        let run = self.send_from_routine(routine, None)?;
         self.log_routine_run(routine, Some(run), RunKind::Test, now_ms());
         Ok(run)
+    }
+
+    /// An event arrived: every active routine standing on it fires now.
+    ///
+    /// The receiver's half of what `sweep_schedule` does for the clock, and
+    /// the same three steps in the same order for each routine it reaches:
+    /// the skip question is asked first, because it is about what the agent
+    /// was doing at the moment the event came; the row is moved before the
+    /// delivery, so a delivery that fails is not retried by the next event
+    /// into a pile; and the firing is written down whichever way it went,
+    /// because a firing that leaves no trace is what a receiver that has
+    /// stopped working looks like too.
+    ///
+    /// What comes back is counts rather than nothing, and they are the whole
+    /// answer the caller gets to give: `listening == 0` is the one worth
+    /// saying out loud, since whoever posted an event nobody stands on has
+    /// wired the wrong service or the wrong topic and would otherwise watch a
+    /// 200 do nothing.
+    ///
+    /// The body is handed to every routine on the trigger as it came,
+    /// untouched and unparsed. Which service's shape it is in is nothing the
+    /// runtime knows, and the agent reading it is the one with the instruction
+    /// that says what to look for in it.
+    pub fn deliver_event(
+        &self,
+        event: &EventTrigger,
+        payload: Option<String>,
+    ) -> Result<EventDelivery, StoreError> {
+        let now = now_ms();
+        let standing = self.inner.store.event_routines(event)?;
+        let mut delivery = EventDelivery { listening: standing.len(), ..Default::default() };
+
+        for routine in standing {
+            let skipping = routine.skip_if_working && self.working(routine.agent_id);
+
+            if let Err(err) = self.inner.store.routine_ran(&routine, now) {
+                tracing::error!(%err, "could not record an event routine as fired; skipping it");
+                continue;
+            }
+            self.emit(UiEvent::RoutinesChanged { agent_id: routine.agent_id });
+
+            tracing::info!(
+                agent = %routine.agent_id.short(),
+                trigger = %routine.trigger.as_str(),
+                bytes = payload.as_ref().map_or(0, String::len),
+                skipping,
+                "an event arrived for a routine"
+            );
+
+            if skipping {
+                self.log_routine_run(&routine, None, RunKind::Skipped, now);
+                delivery.skipped += 1;
+                continue;
+            }
+
+            match self.send_from_routine(&routine, payload.clone()) {
+                Ok(run) => {
+                    self.log_routine_run(&routine, Some(run), RunKind::Event, now);
+                    delivery.delivered += 1;
+                }
+                Err(err) => tracing::warn!(%err, "an event routine could not be delivered"),
+            }
+        }
+        Ok(delivery)
     }
 
     /// Files a firing against the routine that caused it.
@@ -1904,7 +2037,7 @@ impl Runtime {
                 continue;
             }
 
-            match self.send_from_routine(&routine) {
+            match self.send_from_routine(&routine, None) {
                 Ok(run) => self.log_routine_run(&routine, Some(run), RunKind::Scheduled, now),
                 Err(err) => tracing::warn!(%err, "a routine could not be delivered"),
             }
@@ -4432,6 +4565,13 @@ impl Runtime {
             arguments: arguments.clone(),
         });
 
+        // Marked for the length of the call and no longer. A guard rather
+        // than a pair of writes, because a stopped run drops this future
+        // wherever it is, and a mark left behind would be an agent the menu
+        // bar reports on its computer for the rest of the session.
+        let on_machine =
+            tools::surface_of(&call.name).map(|surface| self.on_machine(card.id, surface));
+
         let (rendered, part, image) = self
             .dispatch_tool(
                 card,
@@ -4448,6 +4588,11 @@ impl Runtime {
                 plugins,
             )
             .await;
+
+        // Before `ToolFinished` goes out, because that event is what makes the
+        // menu bar read the mark again, and a read that lands first would
+        // draw the machine for one more redraw than the call lasted.
+        drop(on_machine);
 
         // The part itself, so what is drawn while the turn runs and what is
         // drawn afterward are the same value and not two readings of it. Every

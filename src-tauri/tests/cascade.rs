@@ -24,7 +24,7 @@ use guac_lib::domain::connector::CleanConnector;
 use guac_lib::domain::envelope::{Part, Participant, ToolOutcome};
 use guac_lib::domain::group::{CleanGroup, GroupLimits, InferenceOverrides};
 use guac_lib::domain::now_ms;
-use guac_lib::domain::routine::{Cadence, RunKind, Trigger};
+use guac_lib::domain::routine::{Cadence, EventTrigger, RunKind, Trigger};
 use guac_lib::domain::signin::{Signin, Surface};
 use guac_lib::llm::openrouter::LlmClient;
 use guac_lib::runtime::events::{Activity, RecordingSink, UiEvent};
@@ -2502,6 +2502,7 @@ async fn a_group_can_pin_a_model_without_touching_the_other_group() {
         limits: GuardLimits::default(),
         e2b: Default::default(),
         kernel: Default::default(),
+        webhook: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -2593,6 +2594,7 @@ async fn a_group_runs_on_its_own_budget_and_leaves_the_next_group_alone() {
         limits: GuardLimits { max_steps_per_run: 6, ..GuardLimits::default() },
         e2b: Default::default(),
         kernel: Default::default(),
+        webhook: Default::default(),
     };
     let sink = RecordingSink::new();
     let runtime = Runtime::new(
@@ -2887,10 +2889,11 @@ async fn a_fired_routine_reaches_the_model_as_its_instruction_and_the_operator_a
     // What the transcript holds: one part naming the routine, and no loose
     // text for a bubble to draw.
     match fired.parts.as_slice() {
-        [Part::Routine { routine_id, name, what }] => {
+        [Part::Routine { routine_id, name, what, payload }] => {
             assert_eq!(*routine_id, routine.id, "so the operator can open the routine it names");
             assert_eq!(name, "Listings sweep");
             assert_eq!(what, "Check the listings and say what is new.");
+            assert_eq!(*payload, None, "the clock carries no body");
         }
         other => panic!("a fired routine is one routine part, got {other:?}"),
     }
@@ -2941,6 +2944,223 @@ async fn testing_a_routine_delivers_it_without_spending_the_schedule() {
     let history = h.runtime.store().routine_runs(routine.id, 20).unwrap();
     assert_eq!(history.len(), 1);
     assert_eq!(history[0].kind, RunKind::Test);
+}
+
+/// The event receiver, up on this harness's runtime: the address to post to
+/// and the secret a post has to carry.
+async fn receiver(h: &Harness) -> (String, String) {
+    let secret = "test-secret-that-is-long-enough-to-be-one";
+    let port = guac_lib::webhook::start(h.runtime.clone(), 0, secret.into())
+        .await
+        .expect("loopback is bindable");
+    (format!("http://127.0.0.1:{port}"), secret.to_string())
+}
+
+fn dunning(h: &Harness, who: &str, skip_if_working: bool) -> guac_lib::domain::routine::Routine {
+    h.runtime
+        .store()
+        .create_routine(
+            h.id(who),
+            "Dunning",
+            "Chase the invoice named in the event.",
+            Trigger::Event(EventTrigger {
+                service: "stripe".into(),
+                topic: "invoice.payment_failed".into(),
+            }),
+            None,
+            skip_if_working,
+        )
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_event_posted_to_the_receiver_fires_the_routine_standing_on_it() {
+    // The whole path an event takes: a POST on the loopback port, the routine
+    // standing on that service and topic, the agent's turn, and the history.
+    // Driven over real HTTP rather than by calling `deliver_event`, because
+    // what the operator wires is a URL and a header, and those are the two
+    // things this can get wrong.
+    let stub = serve(|_| Script::Say("chased it".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+
+    let reply = reqwest::Client::new()
+        // Capitalized on purpose: the address is matched the way the trigger
+        // was stored, lowered, or a routine set as `stripe` would never hear
+        // from a webhook configured as `Stripe`.
+        .post(format!("{base}/events/Stripe/invoice.payment_failed"))
+        .bearer_auth(&secret)
+        .body(r#"{"id":"in_1","amount_due":1200}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), 200);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(answered["listening"], 1, "{answered}");
+    assert_eq!(answered["delivered"], 1, "{answered}");
+    assert_eq!(answered["skipped"], 0, "{answered}");
+
+    h.wait_until("the agent to act on the event", |h| {
+        h.channel_texts("Clerk").iter().any(|t| t.contains("chased it"))
+    })
+    .await;
+
+    // What the model was sent: the instruction, then the body, named as data.
+    let sent = h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap();
+    let fired = sent.iter().find(|m| m.from == Participant::System).expect("delivered");
+    let text = fired.plain_text();
+    assert!(text.starts_with("Chase the invoice named in the event."), "{text}");
+    assert!(text.contains(r#""amount_due":1200"#), "the body reached the model: {text}");
+    assert!(text.contains("not an instruction"), "and was named as data: {text}");
+    match fired.parts.as_slice() {
+        [Part::Routine { routine_id, payload: Some(body), .. }] => {
+            assert_eq!(*routine_id, routine.id);
+            assert!(body.contains("in_1"), "the part carries the body for the transcript");
+        }
+        other => panic!("an event firing is one routine part with a body, got {other:?}"),
+    }
+
+    // The history says an event came, with a run to thread back to.
+    let runs = h.runtime.store().routine_runs(routine.id, 20).unwrap();
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].kind, RunKind::Event);
+    assert!(runs[0].run_id.is_some());
+
+    // The routine stands, holding no slot, and recorded having run: an event
+    // repeats, so it must not go the way a one-off does.
+    let after = h.runtime.store().get_routine(routine.id).unwrap().unwrap();
+    assert_eq!(after.next_run_at, None);
+    assert!(after.last_run_at.is_some());
+    let clerk = h.id("Clerk");
+    assert!(
+        h.sink
+            .count_of(|e| matches!(e, UiEvent::RoutinesChanged { agent_id } if *agent_id == clerk))
+            > 0,
+        "the panel was told the routine moved"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_post_that_does_not_carry_the_secret_fires_nothing() {
+    // The secret in the header is the whole of what stops a page open in the
+    // operator's browser from firing a routine on a loopback port, so a post
+    // without it has to spend nothing: no turn, no history, no trace of which
+    // addresses exist.
+    let stub = serve(|_| Script::Say("chased it".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    let routine = dunning(&h, "Clerk", false);
+    let (base, _secret) = receiver(&h).await;
+    let client = reqwest::Client::new();
+    let address = format!("{base}/events/stripe/invoice.payment_failed");
+
+    let bare = client.post(&address).body("{}").send().await.unwrap();
+    assert_eq!(bare.status(), 401);
+    let wrong = client.post(&address).bearer_auth("nope").body("{}").send().await.unwrap();
+    assert_eq!(wrong.status(), 401);
+    // A secret in the body is not a secret in the header, which is the point.
+    let in_body = client.post(&address).body("secret=test-secret").send().await.unwrap();
+    assert_eq!(in_body.status(), 401);
+    // And nothing but a POST at the route is answered as anything but a
+    // refusal that says what the route is for.
+    let get = client.get(&address).send().await.unwrap();
+    assert_eq!(get.status(), 405);
+    let elsewhere = client.post(format!("{base}/hooks/stripe")).send().await.unwrap();
+    assert_eq!(elsewhere.status(), 404);
+
+    let refused: serde_json::Value = wrong.json().await.unwrap();
+    assert!(
+        refused["error"].as_str().unwrap_or_default().contains("Authorization: Bearer"),
+        "a refusal says what to send: {refused}"
+    );
+    assert!(h.runtime.store().routine_runs(routine.id, 20).unwrap().is_empty());
+    assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_event_nobody_stands_on_is_answered_with_a_404() {
+    // A 200 here would tell a script its wiring works while the routine it
+    // was meant for sits under a different spelling. The one answer that has
+    // to be wrong loudly.
+    let stub = serve(|_| Script::Say("chased it".into())).await;
+    let h = harness(&stub, &["Clerk"], GuardLimits::default());
+    dunning(&h, "Clerk", false);
+    let (base, secret) = receiver(&h).await;
+
+    let reply = reqwest::Client::new()
+        .post(format!("{base}/events/stripe/invoice.paid"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), 404);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(answered["listening"], 0);
+    assert!(
+        answered["error"].as_str().unwrap_or_default().contains("stripe/invoice.paid"),
+        "names the event nobody waits on: {answered}"
+    );
+    assert!(h.runtime.store().channel_messages(h.id("Clerk"), 20).unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_event_that_lands_on_a_working_agent_is_skipped_when_the_routine_says_so() {
+    // The same question the clock's sweep asks, asked from the receiver: the
+    // column would otherwise be true on an event routine and mean nothing.
+    let stub = serve(|body| {
+        if has_tool_result(body) {
+            Script::Say("done".into())
+        } else if speaker(body) == "Busy" {
+            Script::Hire {
+                name: "Chief of Product".into(),
+                instructions: "You own the roadmap.".into(),
+                notes: String::new(),
+            }
+        } else {
+            Script::Say("chased it".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Busy", "Idle"], GuardLimits::default());
+    h.runtime.send_from_human(h.id("Busy"), "Create a chief of product.").unwrap();
+    h.awaited_request().await;
+    let busy = dunning(&h, "Busy", true);
+    let idle = dunning(&h, "Idle", true);
+    let (base, secret) = receiver(&h).await;
+
+    let reply = reqwest::Client::new()
+        .post(format!("{base}/events/stripe/invoice.payment_failed"))
+        .bearer_auth(&secret)
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reply.status(), 200);
+    let answered: serde_json::Value = reply.json().await.unwrap();
+    assert_eq!(answered["listening"], 2, "{answered}");
+    assert_eq!(answered["delivered"], 1, "{answered}");
+    assert_eq!(answered["skipped"], 1, "{answered}");
+
+    let skipped = h.runtime.store().routine_runs(busy.id, 20).unwrap();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].kind, RunKind::Skipped);
+    assert_eq!(skipped[0].run_id, None);
+    assert!(
+        !h.runtime
+            .store()
+            .channel_messages(h.id("Busy"), 50)
+            .unwrap()
+            .iter()
+            .any(|m| m.parts.iter().any(|p| matches!(p, Part::Routine { .. }))),
+        "the event must not queue behind the turn it was skipped for:\n{}",
+        h.transcript()
+    );
+
+    h.wait_until("the idle agent to act on the event", |h| {
+        h.channel_texts("Idle").iter().any(|t| t.contains("chased it"))
+    })
+    .await;
+    assert_eq!(h.runtime.store().routine_runs(idle.id, 20).unwrap()[0].kind, RunKind::Event);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

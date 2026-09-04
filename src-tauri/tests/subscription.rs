@@ -503,6 +503,7 @@ fn signed_in_where(
         limits: GuardLimits::default(),
         e2b: Default::default(),
         kernel: Default::default(),
+        webhook: Default::default(),
     };
 
     let sink = RecordingSink::new();
@@ -922,6 +923,7 @@ async fn a_real_subscription_answers_a_real_turn() {
         limits: GuardLimits::default(),
         e2b: Default::default(),
         kernel: Default::default(),
+        webhook: Default::default(),
     };
 
     let sink = RecordingSink::new();

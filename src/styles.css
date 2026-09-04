@@ -6016,6 +6016,23 @@ button {
   background: var(--raised);
 }
 
+/* The line an operator copies into whatever posts an event. Selectable as one
+   piece, because the secret in it is forty characters nobody should retype. */
+.webhook {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+  font-family: var(--font-mono);
+  font-size: var(--type-fine);
+  line-height: var(--lead-ui);
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 .history {
   list-style: none;
   margin: 0;

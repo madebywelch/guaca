@@ -51,3 +51,8 @@ shut* in `docs/WORKSPACE.md`, then `menubar.rs`, `tray.rs` and `app.rs`.
   window is not a closed one, so preventing the close is the whole mechanism.
   The condition is not caution: an app with no window and no menu bar icon is
   one the operator cannot see, cannot reach and cannot stop.
+- **The machine mark is a guard, not a pair of writes.** `Runtime::on_machine`
+  inserts and its `Drop` removes, so a run stopped in the middle of a
+  `use_screen` call clears the mark with the future it drops. Written as an
+  insert before the call and a remove after it, a stop would leave the agent
+  reported on its computer for the rest of the session.

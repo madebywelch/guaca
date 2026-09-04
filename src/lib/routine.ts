@@ -16,11 +16,56 @@
  * repeat after the first inherits it.
  */
 
-import type { Routine, TriggerSpec } from "./types";
+import type { Routine, TriggerSpec, WebhookAddress } from "./types";
 
 const HOUR_SECS = 3600;
 const GAP_PREFIX = "every:";
 const EVENT_PREFIX = "event:";
+
+/**
+ * The picker's word for an event, before the operator has said which.
+ *
+ * A trigger spec with the prefix and nothing after it. The Rust parser refuses
+ * it, which is the point: it is what the panel holds while the two names are
+ * being typed, and {@link eventSpec} is what turns it into one that saves.
+ */
+export const EVENT_CHOICE: TriggerSpec = `${EVENT_PREFIX}/`;
+
+/** `event:stripe/invoice.paid`, from its two halves. Mirrors `EventTrigger::as_str`. */
+export function eventSpec(service: string, topic: string): TriggerSpec {
+  return `${EVENT_PREFIX}${service.trim()}/${topic.trim()}`;
+}
+
+/**
+ * The two halves of an event trigger as they are being typed, or null for a
+ * trigger that is not one. Unlike {@link parseTrigger} this reads a half-filled
+ * one, because the panel has to draw the fields before both are filled in.
+ */
+export function eventFields(spec: TriggerSpec): { service: string; topic: string } | null {
+  const raw = spec.trim();
+  if (!raw.startsWith(EVENT_PREFIX)) return null;
+  const rest = raw.slice(EVENT_PREFIX.length);
+  const cut = rest.indexOf("/");
+  return cut < 0
+    ? { service: rest, topic: "" }
+    : { service: rest.slice(0, cut), topic: rest.slice(cut + 1) };
+}
+
+/**
+ * The line the operator copies into whatever posts the event.
+ *
+ * One `curl`, because it is the one form every reader can translate into their
+ * own: a shell script, a tunnel's forwarding rule, a vendor's webhook form. The
+ * secret goes in the header and nowhere else; `webhook.rs` says why that is
+ * the mechanism and not a convention.
+ */
+export function webhookLine(address: WebhookAddress, service: string, topic: string): string {
+  return [
+    `curl -X POST http://127.0.0.1:${address.port}/events/${service.trim()}/${topic.trim()} \\`,
+    `  -H 'Authorization: Bearer ${address.secret}' \\`,
+    `  -d '{"any":"body"}'`,
+  ].join("\n");
+}
 
 /** The calendar repeats, which are the ones that keep a time of day. */
 export type CalendarRepeat = "daily" | "weekdays" | "weekly" | "monthly";
@@ -105,9 +150,10 @@ export interface TriggerChoice {
  * rest are calendar repeats, which keep their time of day across a clock
  * change and, for weekdays, genuinely skip the weekend.
  *
- * No event trigger is offered. The storage, the scheduler, the panel and this
- * file all handle one, but nothing delivers an event yet, so offering it would
- * be a routine the operator could set and watch never fire.
+ * The event is last, and it is offered at all only because something now
+ * delivers one: a POST to the receiver in `webhook.rs`. Before that existed
+ * it was deliberately kept out, since a routine the operator can set and then
+ * watch never fire is worse than one they cannot set yet.
  */
 export const TRIGGER_CHOICES: TriggerChoice[] = [
   { spec: `every:${HOUR_SECS}`, label: "Every hour" },
@@ -116,7 +162,19 @@ export const TRIGGER_CHOICES: TriggerChoice[] = [
   { spec: "weekly", label: "Every week" },
   { spec: "monthly", label: "Every month" },
   { spec: "once", label: "Once" },
+  { spec: EVENT_CHOICE, label: "When an event is posted" },
 ];
+
+/**
+ * Which choice the picker should show for a stored trigger.
+ *
+ * Every event is the one event choice, whatever its two names: the names are
+ * typed in the fields beside the picker, and the picker's job is only to say
+ * that this is that kind of routine.
+ */
+export function choiceFor(spec: TriggerSpec): TriggerSpec {
+  return eventFields(spec) ? EVENT_CHOICE : spec;
+}
 
 /** `stripe` as `Stripe`. Mirrors `titled` in Rust. */
 function titled(word: string): string {

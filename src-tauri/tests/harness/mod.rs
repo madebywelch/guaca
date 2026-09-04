@@ -747,6 +747,7 @@ fn build(
         limits,
         e2b,
         kernel,
+        webhook: Default::default(),
     };
 
     let sink = RecordingSink::new();

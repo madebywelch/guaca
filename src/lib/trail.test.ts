@@ -4,6 +4,8 @@ import {
   callInFlight,
   foldTrail,
   hasDetail,
+  type LiveCall,
+  machineInUse,
   readSpent,
   type Step,
   stepDiff,
@@ -319,6 +321,24 @@ describe("a call while it is still happening", () => {
     // thing the operator is waiting on: a command still running is not a
     // command that ran.
     expect(callInFlight("run_command", { command: "npm test" })).toBe("Running a command");
+  });
+
+  it("says which machine a turn is on, off the call that has not come back", () => {
+    // Mirrors `tools::surface_of`, which the menu bar reads. A call that has
+    // returned is not a machine in use, and a tool that reaches no machine
+    // never is, whatever else is in flight.
+    const live = (name: string, done: Part | null = null) =>
+      ({ callId: name, name, arguments: {}, done, startedAt: 0 }) as LiveCall;
+    const finished = { type: "toolCall", name: "browse", arguments: {}, outcome: { kind: "ok" } };
+    expect(machineInUse(undefined)).toBeNull();
+    expect(machineInUse([live("send_message"), live("use_screen")])).toBe("computer");
+    expect(machineInUse([live("run_command")])).toBe("computer");
+    expect(machineInUse([live("open_on_desktop")])).toBe("computer");
+    expect(machineInUse([live("browse")])).toBe("browser");
+    expect(machineInUse([live("browse", finished as unknown as Part)])).toBeNull();
+    // The repository's shell is the operator's own machine, and a coding job
+    // is a process rather than a place to watch.
+    expect(machineInUse([live("shell"), live("code")])).toBeNull();
     expect(callInFlight("update_memory", { content: "x" })).toBe("Updating its memory");
   });
 

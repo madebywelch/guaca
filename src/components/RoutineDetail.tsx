@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "../lib/ipc";
 import {
   anchorFor,
+  choiceFor,
   clockTime,
+  eventFields,
+  eventSpec,
   firstRunDelay,
   type Moment,
   momentOf,
@@ -15,6 +18,7 @@ import {
   routineTitle,
   TRIGGER_CHOICES,
   WEEKDAYS,
+  webhookLine,
 } from "../lib/routine";
 import { relativeTime, useNow } from "../lib/time";
 import {
@@ -24,6 +28,7 @@ import {
   type RoutineDraft,
   type RoutineId,
   type RoutineRun,
+  type WebhookAddress,
 } from "../lib/types";
 import { compact, money, priced } from "./Spend";
 
@@ -93,8 +98,13 @@ function draftOf(editing: Editing, moved: boolean): RoutineDraft {
   };
 }
 
-/** Why the moment on screen is not one, or null when it is. */
-function momentProblem(editing: Editing): string | null {
+/** Why the trigger on screen cannot be saved yet, or null when it can. */
+function triggerProblem(editing: Editing): string | null {
+  // An event half-named is not one, and the backend refuses it; the fields
+  // are on screen, so the sentence says which of them is wanted.
+  if (eventFields(editing.trigger) && parseTrigger(editing.trigger).kind !== "event") {
+    return "Name the service and what it reports, with no spaces in either.";
+  }
   const anchor = anchorFor(editing.trigger);
   if (anchor === "none") return null;
   if (firstRunDelay(editing.trigger, editing.moment) !== null) return null;
@@ -130,6 +140,9 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Where an event is posted, read the first time the draft becomes one. Null
+  // until then, and null is drawn as the sentence without the address.
+  const [address, setAddress] = useState<WebhookAddress | null>(null);
   const now = useNow(30_000);
 
   const load = useCallback(async () => {
@@ -189,7 +202,25 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
     draft.trigger !== routine.trigger ||
     draftOf(draft, moved).skipIfWorking !== routine.skipIfWorking;
 
-  const problem = momentProblem(draft);
+  const problem = triggerProblem(draft);
+  const event = eventFields(draft.trigger);
+  const waiting = event !== null;
+
+  useEffect(() => {
+    if (!waiting || address !== null) return;
+    let stale = false;
+    api
+      .webhookAddress()
+      .then((found) => {
+        if (!stale) setAddress(found);
+      })
+      .catch((caught) => {
+        if (!stale) setError(errorMessage(caught));
+      });
+    return () => {
+      stale = true;
+    };
+  }, [waiting, address]);
 
   const save = () =>
     void run(async () => {
@@ -208,7 +239,6 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
   if (loading) return <p className="routines__note">Loading…</p>;
 
   const anchor = anchorFor(draft.trigger);
-  const waiting = parseTrigger(draft.trigger).kind === "event";
 
   return (
     <div className="detail">
@@ -336,13 +366,13 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
           <select
             className="input input--slim"
             aria-label="Trigger"
-            value={draft.trigger}
-            onChange={(event) => {
-              patch({ trigger: event.target.value });
+            value={choiceFor(draft.trigger)}
+            onChange={(change) => {
+              patch({ trigger: change.target.value });
               // Choosing a trigger with a moment is a decision about when, so
               // the moment goes with it rather than staying where the old row
               // was. A trigger with none leaves the schedule alone.
-              if (anchorFor(event.target.value) !== "none") setMoved(true);
+              if (anchorFor(change.target.value) !== "none") setMoved(true);
             }}
           >
             {TRIGGER_CHOICES.map((choice) => (
@@ -351,13 +381,36 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
               </option>
             ))}
             {/* A trigger this picker does not offer: a gap an agent chose for
-                itself, or an event. Dropping it would silently rewrite the
-                agent's schedule the first time an operator saved an unrelated
-                edit. */}
-            {!TRIGGER_CHOICES.some((choice) => choice.spec === draft.trigger) && (
+                itself. Dropping it would silently rewrite the agent's schedule
+                the first time an operator saved an unrelated edit. */}
+            {!TRIGGER_CHOICES.some((choice) => choice.spec === choiceFor(draft.trigger)) && (
               <option value={draft.trigger}>{repeatLabel(draft.trigger)}</option>
             )}
           </select>
+
+          {event && (
+            <>
+              <input
+                className="input input--slim"
+                aria-label="Service"
+                placeholder="stripe"
+                value={event.service}
+                onChange={(change) =>
+                  patch({ trigger: eventSpec(change.target.value, event.topic) })
+                }
+              />
+              <span className="hint">reports</span>
+              <input
+                className="input input--slim"
+                aria-label="Event"
+                placeholder="invoice.payment_failed"
+                value={event.topic}
+                onChange={(change) =>
+                  patch({ trigger: eventSpec(event.service, change.target.value) })
+                }
+              />
+            </>
+          )}
 
           {anchor === "weekday" && (
             <select
@@ -419,11 +472,22 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             stays on the {ordinal(draft.moment.monthday)} of the months that have one.
           </span>
         )}
-        {waiting && (
+        {event && (
           <span className="field__hint">
-            This one keeps no place in the clock: nothing fires until that happens. Test run
-            delivers it now.
+            Nothing on the clock: it fires each time this is posted to Guaca, and Test run delivers
+            it now.
+            {address?.port === 0 &&
+              " The receiver is not running this session, so nothing can post to it; the log says why."}
           </span>
+        )}
+        {event && address && address.port !== 0 && parseTrigger(draft.trigger).kind === "event" && (
+          <>
+            <pre className="webhook">{webhookLine(address, event.service, event.topic)}</pre>
+            <span className="field__hint">
+              The body, if there is one, reaches the agent under the instruction as data. Guaca
+              calls nobody and polls nothing: whatever posts this is yours to wire.
+            </span>
+          </>
         )}
         {routine?.active && !dirty && routine.nextRunAt !== null && (
           <span className="field__hint">

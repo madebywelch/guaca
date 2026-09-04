@@ -858,6 +858,39 @@ describe("an agent that has stopped and said so", () => {
     expect(screen.getByText("stuck 2d")).toBeTruthy();
   });
 
+  // The row says the thing the operator can go and watch.
+  it("says which machine a typing agent is on, while a call to it is in flight", () => {
+    draw([group("everyone")], [agent("Manager")], { Manager: { state: "thinking" } });
+    expect(screen.getByText("typing")).toBeTruthy();
+
+    act(() => {
+      useStore.setState({
+        trail: {
+          Manager: [
+            {
+              callId: "c1",
+              name: "use_screen",
+              arguments: { action: "look" },
+              done: null,
+              startedAt: 0,
+            },
+          ],
+        },
+      });
+    });
+    expect(screen.getByText("on its computer")).toBeTruthy();
+
+    act(() => {
+      useStore.setState({
+        trail: {
+          Manager: [{ callId: "c2", name: "browse", arguments: {}, done: null, startedAt: 0 }],
+        },
+      });
+    });
+    expect(screen.getByText("in its browser")).toBeTruthy();
+    expect(screen.queryByText("typing")).toBeNull();
+  });
+
   // A state that resolves itself must not hide one that does not.
   it("says it over anything the agent happens to be doing right now", () => {
     draw([group("everyone")], [agent("Manager")], { Manager: { state: "thinking" } }, [

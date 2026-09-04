@@ -24,6 +24,7 @@ use crate::runtime::events::{EventSink, UiEvent, CHANNEL};
 use crate::runtime::{OnDisk, Runtime};
 use crate::subscription::Subscription;
 use crate::tray::{self, Tray};
+use crate::webhook;
 
 /// Bridges runtime events onto the webview's event bus, and onto the menu bar.
 ///
@@ -344,6 +345,35 @@ pub fn run() {
                     .map_err(|e| format!("could not start the artifact viewer: {e}"))?,
             ));
 
+            // The receiver an event is posted to. Its port and its secret are
+            // written into the settings so the address the operator wired
+            // something to is the address it has tomorrow; `webhook.rs` says
+            // why both, and why the secret goes in a header. Not up is not
+            // fatal: the app is whole without it, and the routine panel says
+            // the receiver is not running rather than printing an address.
+            {
+                let mut config = runtime.config();
+                let changed = webhook::prepare(&mut config.webhook);
+                let secret = config.webhook.secret.clone();
+                match tauri::async_runtime::block_on(webhook::start(
+                    runtime.clone(),
+                    config.webhook.port,
+                    secret,
+                )) {
+                    Ok(port) => {
+                        runtime.set_webhook_port(port);
+                        if changed || port != config.webhook.port {
+                            config.webhook.port = port;
+                            if let Err(err) = config::save(&config_path, &config) {
+                                tracing::warn!(%err, "could not persist the event receiver's address");
+                            }
+                            runtime.set_config(config);
+                        }
+                    }
+                    Err(err) => tracing::warn!(%err, "no event receiver this session"),
+                }
+            }
+
             // Anything this app left running that no agent still refers to is
             // released, since a forgotten sandbox bills exactly like a used one.
             {
@@ -509,6 +539,7 @@ pub fn run() {
             commands::update_routine,
             commands::set_routine_active,
             commands::test_routine,
+            commands::webhook_address,
             commands::routine_runs,
             commands::delete_routine,
             commands::usage_summary,
