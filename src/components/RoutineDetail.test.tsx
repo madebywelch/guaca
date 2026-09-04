@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { Routine, RoutineDraft, RoutineRun } from "../lib/types";
+import type { Routine, RoutineDraft, RoutineRun, WebhookAddress } from "../lib/types";
 import { RoutineDetail } from "./RoutineDetail";
 
 const agentRoutines = vi.fn<() => Promise<Routine[]>>();
@@ -11,6 +11,7 @@ const updateRoutine = vi.fn<(id: string, draft: RoutineDraft) => Promise<Routine
 const setRoutineActive = vi.fn<(id: string, active: boolean) => Promise<Routine>>();
 const testRoutine = vi.fn<(id: string) => Promise<string>>();
 const deleteRoutine = vi.fn<(id: string) => Promise<void>>();
+const webhookAddress = vi.fn<() => Promise<WebhookAddress>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
@@ -21,6 +22,7 @@ vi.mock("../lib/ipc", () => ({
     setRoutineActive: (id: string, active: boolean) => setRoutineActive(id, active),
     testRoutine: (id: string) => testRoutine(id),
     deleteRoutine: (id: string) => deleteRoutine(id),
+    webhookAddress: () => webhookAddress(),
   },
 }));
 
@@ -76,6 +78,7 @@ describe("RoutineDetail", () => {
     setRoutineActive.mockImplementation(async (_id, active) => routine({ active }));
     testRoutine.mockResolvedValue("run-1");
     deleteRoutine.mockResolvedValue(undefined);
+    webhookAddress.mockResolvedValue({ port: 4711, secret: "s3cr3t-s3cr3t" });
   });
 
   afterEach(() => {
@@ -266,22 +269,78 @@ describe("RoutineDetail", () => {
     expect(screen.getByText(/already passed/)).toBeTruthy();
   });
 
-  it("draws a routine waiting on an event without inventing a next firing", async () => {
-    // Nothing delivers an event yet, so this is a row a future build writes and
-    // this one has to read. It must not claim a moment it does not hold.
+  it("draws a routine waiting on an event as its two names and the address to post to", async () => {
+    // It must not claim a moment it does not hold, and it has to hand the
+    // operator the one thing they need from this screen: the line that fires
+    // it, with the secret in the header.
     open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
 
     await waitFor(() =>
-      expect((screen.getByLabelText("Trigger") as HTMLSelectElement).value).toBe(
-        "event:stripe/invoice.payment_failed",
-      ),
+      expect((screen.getByLabelText("Trigger") as HTMLSelectElement).value).toBe("event:/"),
     );
-    expect(screen.getByText(/keeps no place in the clock/)).toBeTruthy();
+    expect((screen.getByLabelText("Service") as HTMLInputElement).value).toBe("stripe");
+    expect((screen.getByLabelText("Event") as HTMLInputElement).value).toBe(
+      "invoice.payment_failed",
+    );
+    expect(screen.getByText(/Nothing on the clock/)).toBeTruthy();
+    const line = await screen.findByText(/curl -X POST/);
+    expect(line.textContent).toContain(
+      "http://127.0.0.1:4711/events/stripe/invoice.payment_failed",
+    );
+    expect(line.textContent).toContain("Authorization: Bearer s3cr3t-s3cr3t");
     // No moment to state, so nothing offers to state one.
     expect(screen.queryByLabelText("Time of day")).toBeNull();
     expect(screen.queryByLabelText("Date")).toBeNull();
-    // And Test run is still there: it is the only way to fire one today.
+    // And Test run is still there, and still needs nothing posted.
     expect(screen.getByRole("button", { name: "Test run" })).toBeTruthy();
+    // Nothing about reading it was an edit.
+    expect(screen.queryByRole("button", { name: "Save changes" })).toBeNull();
+  });
+
+  it("says when the receiver is not running rather than printing a dead address", async () => {
+    webhookAddress.mockResolvedValue({ port: 0, secret: "s3cr3t-s3cr3t" });
+    open({ trigger: "event:stripe/invoice.payment_failed", nextRunAt: null });
+
+    expect(await screen.findByText(/receiver is not running/)).toBeTruthy();
+    expect(screen.queryByText(/curl -X POST/)).toBeNull();
+  });
+
+  it("holds a half-named event and creates a whole one", async () => {
+    // The picker says "an event"; the two names say which. Until both are
+    // typed the backend would refuse the spec, so the panel refuses first and
+    // says what it is waiting for.
+    render(<RoutineDetail agentId="a1" routineId="new" onBack={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Instruction"), {
+      target: { value: "chase the invoice" },
+    });
+    fireEvent.change(screen.getByLabelText("Trigger"), { target: { value: "event:/" } });
+
+    expect(await screen.findByLabelText("Service")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Create routine" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByText(/Name the service and what it reports/)).toBeTruthy();
+    expect(screen.queryByText(/curl -X POST/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Service"), { target: { value: "Stripe" } });
+    fireEvent.change(screen.getByLabelText("Event"), { target: { value: "invoice.paid" } });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Create routine" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    // Named, the address is drawn for the names as typed.
+    expect((await screen.findByText(/curl -X POST/)).textContent).toContain(
+      "/events/Stripe/invoice.paid",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Create routine" }));
+    await waitFor(() => expect(createRoutine).toHaveBeenCalledTimes(1));
+    const [, draft] = createRoutine.mock.calls[0]!;
+    expect(draft.trigger).toBe("event:Stripe/invoice.paid");
+    // No moment to send: an event has no start time, and the backend refuses
+    // one.
+    expect(draft.inSecs).toBeNull();
   });
 
   it("does not move the schedule when only the wording changed", async () => {

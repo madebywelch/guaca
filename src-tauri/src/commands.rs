@@ -2191,6 +2191,34 @@ pub fn test_routine(state: State<'_, AppState>, id: RoutineId) -> Reply<RunId> {
     Ok(state.runtime.test_routine(&routine)?)
 }
 
+/// Where an event is posted to fire a routine, and the secret the post carries.
+///
+/// The one secret this surface hands to the webview, and the exception is
+/// argued rather than slipped in. The API key is kept from the webview because
+/// nothing on that side ever needs it: every call it pays for is made from
+/// here. This secret is the opposite case. Its only use is to be copied out of
+/// the app into whatever the operator wires to post here, and the routine's
+/// panel is where they are standing when they need it. What it unlocks is the
+/// same thing the Test run button does, on a loopback port, from a process
+/// that could read the config file anyway.
+///
+/// A port of zero is a receiver that is not up, and the panel says so rather
+/// than printing an address nothing answers.
+#[tauri::command]
+pub fn webhook_address(state: State<'_, AppState>) -> Reply<WebhookAddress> {
+    Ok(WebhookAddress {
+        port: state.runtime.webhook_port(),
+        secret: state.runtime.config().webhook.secret,
+    })
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookAddress {
+    pub port: u16,
+    pub secret: String,
+}
+
 /// What a routine has done lately, newest first.
 #[tauri::command]
 pub fn routine_runs(state: State<'_, AppState>, id: RoutineId) -> Reply<Vec<RoutineRun>> {

@@ -85,7 +85,14 @@ export type Part =
    * `name` is the routine's name at the moment it fired, so a routine since
    * renamed does not rewrite what the transcript said it was.
    */
-  | { type: "routine"; routineId: RoutineId; name: string; what: string }
+  | {
+      type: "routine";
+      routineId: RoutineId;
+      name: string;
+      what: string;
+      /** What an event arrived with, when one did. Data, never instruction. */
+      payload: string | null;
+    }
   /**
    * An agent asking the operator for permission. Carries its own wording, so an
    * old channel still says what was asked; what came of it is read from
@@ -1231,9 +1238,10 @@ export interface Routine {
 
 /**
  * What happened at one firing. A test is the operator's button, not the clock;
- * a skip is a firing the routine dropped because the agent was already working.
+ * a skip is a firing the routine dropped because the agent was already working;
+ * an event is a post to the receiver, which moved nothing on the clock.
  */
-export type RunKind = "scheduled" | "test" | "skipped";
+export type RunKind = "scheduled" | "test" | "skipped" | "event";
 
 /**
  * One firing. `runId` threads back to everything it produced: the messages in
@@ -1255,6 +1263,17 @@ export interface RoutineRun {
    * that worked.
    */
   spent: Tokens;
+}
+
+/**
+ * Where an event is posted to fire a routine, and what the post carries.
+ *
+ * A port of zero is a receiver that is not running, and the panel says so
+ * rather than printing an address nothing answers.
+ */
+export interface WebhookAddress {
+  port: number;
+  secret: string;
 }
 
 /** Absent `inSecs` on an edit leaves the next firing where it was. */

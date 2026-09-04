@@ -154,6 +154,7 @@ export const MessageItem = memo(function MessageItem({
       <RoutineRow
         title={routineTitle({ name: fired.name, what: fired.what })}
         what={fired.what}
+        payload={fired.payload}
         at={message.createdAt}
         onOpen={() => onOpenRoutine(fired.routineId)}
       />

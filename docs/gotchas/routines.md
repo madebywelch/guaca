@@ -33,3 +33,19 @@ is already working. `docs/ROUTINES.md`, then `domain/routine.rs` and
   wrote a second routine beside the first and reported the change as made. Both
   fired. `docs/ROUTINES.md` before you take the section out, and note that
   `update` is what the ids in it are for.
+- **An event routine is fired by a POST, and the secret goes in the header
+  rather than the body.** Loopback does not stop a page in the operator's
+  browser from posting to a loopback port; a bearer header does, because the
+  browser will not attach one cross-origin without a preflight that is answered
+  with no CORS headers. Moving the secret into the body or the query string
+  reads as equivalent and reopens that. `webhook.rs`.
+- **The receiver's port is recorded, not taken fresh.** Whatever the operator
+  wired was given one address. A receiver that binds port zero on every launch
+  breaks that wiring silently every launch; `WebhookConfig` is where the port
+  and the secret survive a restart, and a recorded port that is taken falls
+  back to a free one and writes it down.
+- **The body reaches the model as data, under the instruction.** It rides on
+  `Part::Routine` as `payload` and `as_plain_text` fences it under a line that
+  says it is not an instruction. Appending it to `what` would hand a vendor's
+  payload the operator's authority, which is what `Trust::Operator` on the
+  envelope means.

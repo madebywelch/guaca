@@ -30,7 +30,7 @@ use crate::domain::plugin::{
     Headers, Plugin, PluginAccess, PluginKind, PluginTool, PluginToolCard, PluginToolset,
 };
 use crate::domain::repository::{Bench, CleanRepository, Gate, Harness, Repository};
-use crate::domain::routine::{NextSlot, Routine, RoutineRun, RunKind, Trigger};
+use crate::domain::routine::{EventTrigger, NextSlot, Routine, RoutineRun, RunKind, Trigger};
 use crate::domain::search::{
     contains_fold, excerpt, like_pattern, links_in, FileHit, LinkHit, MessageHit, SearchHits,
 };
@@ -879,6 +879,32 @@ impl Store {
               ORDER BY r.next_run_at",
         )?;
         let rows = stmt.query_map(params![now], row_to_routine)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        Ok(out)
+    }
+
+    /// Everything standing on one event, oldest first.
+    ///
+    /// The counterpart of `due_routines` for the trigger that holds no slot:
+    /// matched on the stored trigger text, which is canonical because
+    /// `EventTrigger::parse` lowers the service on the way in, so one event is
+    /// one string however it was spelled. Same two guards as the clock's sweep,
+    /// for the same reason: a routine switched off or belonging to an agent
+    /// that cannot act would otherwise fire into nothing every time the event
+    /// came.
+    pub fn event_routines(&self, event: &EventTrigger) -> Result<Vec<Routine>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT r.id,r.agent_id,r.name,r.what,r.fires,r.active,r.next_run_at,r.last_run_at,r.created_at,r.skip_if_working
+               FROM routines r
+               JOIN agents a ON a.id = r.agent_id
+              WHERE r.fires = ?1 AND r.active = 1 AND a.lifecycle = 'active'
+              ORDER BY r.created_at",
+        )?;
+        let rows = stmt.query_map(params![event.as_str()], row_to_routine)?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row??);
@@ -4455,7 +4481,7 @@ mod tests {
     use crate::domain::envelope::channel_for;
     use crate::domain::ids::RunId;
     use crate::domain::plugin::HeaderPair;
-    use crate::domain::routine::{Cadence, EventTrigger};
+    use crate::domain::routine::Cadence;
 
     /// A trigger on the clock, which is what most of these are about.
     fn clock(cadence: Cadence) -> Trigger {
@@ -5470,6 +5496,57 @@ mod tests {
         assert_eq!(after.trigger, trigger, "the trigger survives the round trip");
         assert_eq!(after.next_run_at, None, "still holding no slot");
         assert_eq!(after.last_run_at, Some(5_000), "and it recorded having run");
+    }
+
+    #[test]
+    fn an_event_finds_every_live_routine_standing_on_it_and_nothing_else() {
+        // The receiver's one query. Matched on the canonical stored text, so a
+        // post to `Stripe/invoice.paid` reaches a routine set as `stripe`; and
+        // guarded the way the clock's sweep is, so a routine switched off or
+        // belonging to an agent that cannot act is not fired into nothing on
+        // every event.
+        let f = fixture();
+        let scout = f.store.create_agent(&draft("Scout")).unwrap();
+        let clerk = f.store.create_agent(&draft("Clerk")).unwrap();
+        let paused = f.store.create_agent(&draft("Paused")).unwrap();
+        // Through the parser, which is the only way a trigger arrives from
+        // the panel and where the service is lowered: constructed by hand, a
+        // capital would be stored as typed and never match.
+        let paid =
+            |service: &str| Trigger::parse(&format!("event:{service}/invoice.paid")).unwrap();
+
+        let standing = f
+            .store
+            .create_routine(scout.id, "Thank them", "say thanks", paid("stripe"), None, false)
+            .unwrap();
+        let also = f
+            .store
+            .create_routine(clerk.id, "Book it", "post the ledger", paid("Stripe"), None, false)
+            .unwrap();
+        let off = f
+            .store
+            .create_routine(scout.id, "Off", "nothing", paid("stripe"), None, false)
+            .unwrap();
+        f.store.set_routine_active(off.id, false).unwrap();
+        f.store
+            .create_routine(paused.id, "Asleep", "nothing", paid("stripe"), None, false)
+            .unwrap();
+        f.store.set_lifecycle(paused.id, Lifecycle::Paused).unwrap();
+        f.store
+            .create_routine(
+                scout.id,
+                "Other topic",
+                "nothing",
+                Trigger::parse("event:stripe/invoice.voided").unwrap(),
+                None,
+                false,
+            )
+            .unwrap();
+
+        let event = EventTrigger::parse("STRIPE/invoice.paid").unwrap();
+        let found: Vec<_> =
+            f.store.event_routines(&event).unwrap().into_iter().map(|r| r.id).collect();
+        assert_eq!(found, vec![standing.id, also.id], "oldest first, live and on only");
     }
 
     #[test]

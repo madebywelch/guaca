@@ -19,14 +19,53 @@ and it owns nothing: it has no next moment, and no clock will ever produce one.
 Splitting them in the type is what keeps `next_after`, `first_run` and `accepts`
 off a value that has no answer for any of them.
 
-**Nothing delivers an event yet.** What exists is every layer under it: the
-value parses and round-trips, the row stores, the scheduler leaves it alone, the
-panel and the list draw it, `Test run` fires it, and the history records it. What
-is missing is the one part that cannot be written without a service to receive
-from, a webhook or a poll that turns an arriving event into
-`Runtime::send_from_routine`. It is deliberately not in the trigger picker
-either: a routine an operator can set and then watch never fire is worse than
-one they cannot set yet.
+What delivers one is a POST. `webhook.rs` is a loopback receiver, and
+`/events/stripe/invoice.payment_failed` on it fires every active routine
+standing on that trigger through `Runtime::deliver_event`, which asks the same
+three things the clock's sweep asks, in the same order: is the agent working
+and does the routine skip, move the row, write the firing down. The body of the
+post rides on the fired part as `payload` and reaches the model below the
+instruction, fenced and named as data. Nothing polls a service and nothing
+signs in to one for this: whatever posts is the operator's to wire, and the
+routine's panel shows the address and the secret it takes. The trigger is in
+the picker now for exactly that reason. It was kept out until something could
+deliver one, because a routine an operator can set and then watch never fire is
+worse than one they cannot set yet.
+
+## The receiver is loopback, and the secret is in a header because of that
+
+Loopback is what the two viewers are, and it is enough for them because reading
+a page an agent drew changes nothing. A post here starts a turn, so loopback is
+not enough: any page open in the operator's browser can POST to a loopback port
+cross-origin, and a secret carried in the body rides along in such a post
+unread. The secret is a bearer token in `Authorization`, and that placement is
+the mechanism. A browser will not attach that header cross-origin without a
+preflight, the preflight is answered with no CORS headers at all, and the POST
+is never sent. A secret in a query string or a body would look identical to a
+reader and close nothing.
+
+The port and the secret are written into the settings the first time the
+receiver comes up and read back on every launch after, because the operator
+wires something to an address once. A receiver that took a fresh port from the
+OS every morning would break that wiring every morning with nothing on screen
+to say so. A recorded port that is taken is not fatal either: the receiver takes
+a free one, says so in the log, and writes the new one down. The panel shows
+whichever address is current, and a port of zero, which is a receiver that did
+not come up at all, is drawn as that sentence rather than as an address nothing
+answers.
+
+An event nobody stands on is a 404, and that is the answer that matters most. A
+200 would tell a script its wiring works while the routine it was meant for sits
+under a different spelling. The service is lowered on both sides for the same
+reason: a routine set as `stripe` hears from a webhook configured as `Stripe`.
+The body is drained before a refusal is written, because a client still sending
+when the answer arrives reads a reset instead of the sentence that says what it
+did wrong.
+
+The `schedule` tool still reads a cadence and nothing else. An agent that
+improvised `event:...` there would hold a routine waiting on a post nobody has
+arranged, and it has no way to tell whoever might post where to post to. The
+operator sets these, and the agent reads them in its prompt like any other.
 
 ## A routine with no next firing has no next firing
 
@@ -118,16 +157,20 @@ nothing off its inbox at all. An agent with no entry in the map has no actor
 and is not working, because a routine that does not run is invisible in a way
 one that runs is not, and the failure worth having is the noisy one.
 
-Two paths deliberately do not consult it. Test run is the operator pressing a
+One path deliberately does not consult it. Test run is the operator pressing a
 button, and a test that quietly did nothing would read as the button being
-broken. And an event trigger fires from wherever an event arrives, which is a
-path that does not exist yet: whatever builds it has to ask the same question
-the sweep does, or the column will be true on those rows and mean nothing.
+broken. The receiver does consult it, through the same `working` read the sweep
+uses, because the column would otherwise be true on an event routine and mean
+nothing: a burst of posts landing on an agent mid-turn is the same pile-up the
+option exists to prevent, arriving from the other direction.
 
 ## A skipped firing is in the history, and has no run behind it
 
 `RunKind` has a third value and `routine_runs.run_id` is nullable since
-migration 34. Both halves are the same argument. A firing that leaves no trace
+migration 34. A fourth, `event`, is a post that was delivered; it is kept apart
+from `scheduled` because the two answer different questions when a routine
+misbehaves. A scheduled firing at the wrong hour is the cadence, and an event
+firing nobody expected is whatever is posting to the receiver. Both halves are the same argument. A firing that leaves no trace
 is a gap in the history, and a gap is also what a scheduler that has stopped
 working looks like; but a skip recorded under an invented run id reads back as
 a delivery that bought no model calls, which is the *other* failure this

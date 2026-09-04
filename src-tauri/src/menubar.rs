@@ -30,6 +30,7 @@ use std::collections::HashMap;
 use crate::domain::approval::{Approval, Decision, ProtectedAction};
 use crate::domain::escalation::Escalation;
 use crate::domain::ids::{AgentId, ApprovalId, GroupId};
+use crate::domain::signin::Surface;
 use crate::domain::usage::Tokens;
 use crate::domain::worknote;
 use crate::runtime::events::{Activity, UiEvent};
@@ -281,6 +282,13 @@ pub struct Presence {
     /// this is the order the operator already learned in the window.
     pub crews: Vec<Crew>,
     pub activity: HashMap<AgentId, Activity>,
+    /// Which of the working agents are on a machine, and which machine.
+    ///
+    /// Beside the activity map rather than in it, because it is a different
+    /// read with a different life: the activity map says a turn is running,
+    /// and this says one call inside it is on a rented desktop or a hosted
+    /// browser, which is the moment worth opening the window for.
+    pub on_machine: HashMap<AgentId, Surface>,
     /// Pending requests, oldest first.
     pub waiting: Vec<Approval>,
     /// Open escalations, oldest first. Beside the requests rather than in with
@@ -342,7 +350,17 @@ impl Presence {
             .iter()
             .filter_map(|(id, activity)| {
                 let (rank, what) = match activity {
-                    Activity::Thinking => (0, "thinking".to_string()),
+                    // The machine over the model: an agent driving its
+                    // computer is thinking too, and "thinking" is the less
+                    // useful of the two things to be told about it.
+                    Activity::Thinking => (
+                        0,
+                        match self.on_machine.get(id) {
+                            Some(Surface::Computer) => "on its computer".to_string(),
+                            Some(Surface::Browser) => "in its browser".to_string(),
+                            None => "thinking".to_string(),
+                        },
+                    ),
                     Activity::Queued { depth } => (
                         1,
                         format!(
@@ -694,6 +712,11 @@ pub fn touches(event: &UiEvent) -> bool {
         event,
         UiEvent::AgentsChanged
             | UiEvent::ActivityChanged { .. }
+            // A machine tool starting or finishing is what moves a working
+            // row between "thinking" and "on its computer". Once per call
+            // rather than once per token, so this stays far from the delta.
+            | UiEvent::ToolStarted { .. }
+            | UiEvent::ToolFinished { .. }
             | UiEvent::TokensUsed { .. }
             | UiEvent::RunSettled { .. }
             | UiEvent::ApprovalRequested { .. }
@@ -1053,6 +1076,45 @@ mod tests {
         // Mid-inference first: that one is spending right now.
         assert_eq!(labels, vec!["Scout · thinking", "Analyst · 3 messages waiting"]);
         assert!(rows.iter().any(|row| matches!(row, Row::StopAll(_))));
+    }
+
+    #[test]
+    fn an_agent_on_a_machine_is_said_to_be_there_rather_than_thinking() {
+        // The activity map cannot tell a model thinking from a model driving
+        // a rented desktop, and the second is the one worth opening the
+        // window for: there is a screen to watch, and a sign-in may be
+        // happening in the operator's name.
+        let (mut presence, scout) = quiet();
+        let analyst = hire(&mut presence, "Analyst");
+        let clerk = hire(&mut presence, "Clerk");
+        presence.activity.insert(scout, Activity::Thinking);
+        presence.activity.insert(analyst, Activity::Thinking);
+        presence.activity.insert(clerk, Activity::Thinking);
+        presence.on_machine.insert(scout, Surface::Computer);
+        presence.on_machine.insert(analyst, Surface::Browser);
+        presence.running = 1;
+
+        let labels: Vec<String> = presence
+            .rows()
+            .iter()
+            .filter_map(|row| match row {
+                Row::Agent { label, .. } => Some(label.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            labels,
+            vec!["Analyst · in its browser", "Clerk · thinking", "Scout · on its computer"]
+        );
+
+        // The row moves back the moment the call ends, and that is an edit to
+        // the open menu rather than a menu replaced under the operator.
+        let before = presence.rows();
+        presence.on_machine.clear();
+        let Update::Text(edits) = plan(&before, &presence.rows()) else {
+            panic!("a label that moved replaced the menu");
+        };
+        assert!(edits.iter().any(|(_, text)| text == "Scout · thinking"), "{edits:?}");
     }
 
     #[test]
@@ -1543,6 +1605,30 @@ mod tests {
         presence.activity.insert(scout, Activity::Thinking);
 
         assert_eq!(plan(&before, &presence.rows()), Update::Rebuild);
+    }
+
+    #[test]
+    fn a_machine_tool_call_reaches_the_strip_and_a_token_does_not() {
+        // The gate on the whole mechanism. The machine mark changes with a
+        // tool call, so those two events have to get through; a delta arrives
+        // once per token and must not.
+        let id = crate::domain::ids::MessageId::new();
+        assert!(touches(&UiEvent::ToolStarted {
+            message_id: id,
+            call_id: "c1".into(),
+            name: "use_screen".into(),
+            arguments: serde_json::Value::Null,
+        }));
+        assert!(touches(&UiEvent::ToolFinished {
+            message_id: id,
+            call_id: "c1".into(),
+            part: crate::domain::envelope::Part::text("done"),
+        }));
+        assert!(!touches(&UiEvent::StreamDelta {
+            message_id: id,
+            channel_id: AgentId::new(),
+            text: "a".into(),
+        }));
     }
 
     #[test]
