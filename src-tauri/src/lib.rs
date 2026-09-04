@@ -24,6 +24,7 @@ pub mod shell;
 pub mod subscription;
 pub mod trajectory;
 pub mod tray;
+pub mod webhook;
 pub mod workspace;
 
 pub use app::run;

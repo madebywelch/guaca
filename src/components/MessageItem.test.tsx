@@ -519,6 +519,7 @@ describe("a routine coming due", () => {
           routineId: "rt1",
           name: "Listings sweep",
           what: "Check the listings. America/New_York. Post one copy and say what changed.",
+          payload: null,
         },
       ],
     });
@@ -538,7 +539,13 @@ describe("a routine coming due", () => {
   it("titles an unnamed routine by what it says, like the schedule panel does", () => {
     show(
       fired([
-        { type: "routine", routineId: "rt1", name: "", what: "Check the listings. Then post." },
+        {
+          type: "routine",
+          routineId: "rt1",
+          name: "",
+          what: "Check the listings. Then post.",
+          payload: null,
+        },
       ]),
     );
     expect(screen.getByText("Check the listings")).toBeTruthy();

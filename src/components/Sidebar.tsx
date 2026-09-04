@@ -7,6 +7,7 @@ import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
 import { relativeTime, useNow } from "../lib/time";
+import { machineInUse } from "../lib/trail";
 import type { Activity, AgentCard, AgentId, Group } from "../lib/types";
 import { GroupRail } from "./GroupRail";
 import { NewMenu } from "./NewMenu";
@@ -345,7 +346,17 @@ export function Sidebar({
 
     switch (state?.state) {
       case "thinking":
-        return { text: "typing", kind: "thinking" };
+        // The machine over the model. "typing" is what a model does, and an
+        // agent driving its computer is doing that too; the row says the
+        // thing the operator can go and watch.
+        switch (machineInUse(trail[id])) {
+          case "computer":
+            return { text: "on its computer", kind: "thinking" };
+          case "browser":
+            return { text: "in its browser", kind: "thinking" };
+          default:
+            return { text: "typing", kind: "thinking" };
+        }
       case "queued":
         return { text: `${state.depth} queued`, kind: "queued" };
       // The one state the operator is the fix for. It reads as an instruction

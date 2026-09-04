@@ -298,6 +298,7 @@ describe("what each interruption says", () => {
             routineId: "routine-7",
             name: "Morning sweep",
             what: "check the listings",
+            payload: null,
           },
         ],
         { from: { kind: "system" }, trust: "system" },

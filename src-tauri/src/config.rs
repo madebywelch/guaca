@@ -240,6 +240,26 @@ pub struct AppConfig {
     pub e2b: E2bConfig,
     #[serde(default)]
     pub kernel: KernelConfig,
+    #[serde(default)]
+    pub webhook: WebhookConfig,
+}
+
+/// Where an event is posted to fire a routine, and what the post has to carry.
+///
+/// Both are written by the app rather than typed by the operator, and both are
+/// here rather than derived so that they survive a restart: whatever the
+/// operator wired to post here was given one address and one secret, and an
+/// app that picked a fresh port or a fresh secret on every launch would break
+/// that wiring silently on every launch.
+///
+/// `port` is zero until the receiver has bound once, which tells it to take
+/// whatever the OS offers and write that down. `secret` is empty until the
+/// first launch generates one. `webhook.rs` is the reader of both.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WebhookConfig {
+    pub port: u16,
+    pub secret: String,
 }
 
 /// Credentials for the sandboxes agents run their computers in.

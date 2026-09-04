@@ -49,7 +49,15 @@ describe("plainText", () => {
     // here, the flow board could not say what opened the run.
     const message = envelope({
       from: { kind: "system" },
-      parts: [{ type: "routine", routineId: "rt1", name: "Sweep", what: "check the listings" }],
+      parts: [
+        {
+          type: "routine",
+          routineId: "rt1",
+          name: "Sweep",
+          what: "check the listings",
+          payload: null,
+        },
+      ],
     });
     expect(plainText(message)).toBe("check the listings");
   });

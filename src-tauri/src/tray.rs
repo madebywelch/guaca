@@ -430,6 +430,7 @@ fn read(runtime: &Runtime, session: Tokens) -> Presence {
         roster,
         crews,
         activity: runtime.activity_snapshot(),
+        on_machine: runtime.machines_in_use(),
         waiting,
         stuck,
         session,

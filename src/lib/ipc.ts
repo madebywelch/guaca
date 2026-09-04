@@ -77,6 +77,7 @@ import type {
   Staged,
   SubscriptionStatus,
   UiEvent,
+  WebhookAddress,
   WorkingNote,
 } from "./types";
 
@@ -604,6 +605,9 @@ export const api = {
 
   /** What it has done lately, newest first. */
   routineRuns: (id: RoutineId) => invoke<RoutineRun[]>("routine_runs", { id }),
+
+  /** Where an event is posted to fire a routine, and the secret it takes. */
+  webhookAddress: () => invoke<WebhookAddress>("webhook_address"),
 
   deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),

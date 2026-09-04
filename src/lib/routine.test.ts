@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   anchorFor,
+  choiceFor,
   describeTrigger,
+  EVENT_CHOICE,
+  eventFields,
+  eventSpec,
   firstRunDelay,
   humanGap,
   type Moment,
@@ -15,6 +19,7 @@ import {
   TRIGGER_CHOICES,
   toDateField,
   toTimeField,
+  webhookLine,
 } from "./routine";
 
 /** A local wall-clock moment, so every assertion reads in the operator's time. */
@@ -39,10 +44,41 @@ describe("trigger vocabulary", () => {
       "weekly",
       "monthly",
       "once",
+      EVENT_CHOICE,
     ]);
-    // And no event trigger, because nothing delivers an event yet: offering one
-    // would be a routine the operator can set and watch never fire.
-    expect(TRIGGER_CHOICES.some((c) => c.spec.startsWith("event:"))).toBe(false);
+    // The event choice is the one spec here the Rust parser refuses, on
+    // purpose: it is the picker's word for "an event, not yet named", and the
+    // panel holds the save until both names are typed.
+    expect(parseTrigger(EVENT_CHOICE).kind).toBe("unknown");
+    expect(anchorFor(EVENT_CHOICE)).toBe("none");
+  });
+
+  it("builds an event from its two names and reads them back while half typed", () => {
+    expect(eventSpec(" stripe ", "invoice.paid")).toBe("event:stripe/invoice.paid");
+    expect(parseTrigger(eventSpec("stripe", "invoice.paid")).kind).toBe("event");
+    // The fields are drawn before both names exist, so this reads what
+    // `parseTrigger` refuses.
+    expect(eventFields(EVENT_CHOICE)).toEqual({ service: "", topic: "" });
+    expect(eventFields("event:stripe")).toEqual({ service: "stripe", topic: "" });
+    expect(eventFields("event:stripe/invoice.paid")).toEqual({
+      service: "stripe",
+      topic: "invoice.paid",
+    });
+    expect(eventFields("daily")).toBeNull();
+    // Every event is the one event choice; the names live in the fields.
+    expect(choiceFor("event:stripe/invoice.paid")).toBe(EVENT_CHOICE);
+    expect(choiceFor("event:stripe")).toBe(EVENT_CHOICE);
+    expect(choiceFor("weekdays")).toBe("weekdays");
+  });
+
+  it("writes the line an operator copies, with the secret in the header", () => {
+    const line = webhookLine({ port: 4711, secret: "s3cr3t" }, "stripe", "invoice.paid");
+    expect(line).toContain("POST http://127.0.0.1:4711/events/stripe/invoice.paid");
+    expect(line).toContain("-H 'Authorization: Bearer s3cr3t'");
+    // In the header and nowhere else: a body-only secret rides along in a
+    // cross-origin post from a browser, and a header does not.
+    expect(line.split("\n").filter((part) => part.includes("s3cr3t"))).toHaveLength(1);
+    expect(line).toContain("-d '");
   });
 
   it("reads every stored form, including the ones no choice offers", () => {

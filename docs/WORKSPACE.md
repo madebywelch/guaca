@@ -1689,6 +1689,19 @@ the screen.
 - **The menu** is the whole picture. What is waiting, who is working, what has
   been spent, and the two things worth doing from here.
 
+A working row says which machine an agent is on, when it is on one. The
+activity map has one word for a turn in flight, and a model thinking and a
+model driving a rented desktop are the same word there and not the same thing
+to go and look at: one has a screen to watch, and a sign-in may be happening on
+it in the operator's name. So the runtime keeps a second, smaller read beside
+the activity map, `Runtime::machines_in_use`, held by a guard for exactly the
+length of a machine tool call and cleared when the call ends or the run is
+stopped mid-call. The strip reads it fresh like everything else, the row says
+*on its computer* or *in its browser* instead of *thinking*, and the rail says
+the same off the trail it already holds, through `machineInUse` in
+`src/lib/trail.ts`. `tools::surface_of` is the one place the four machine tools
+are named as machine tools, and the two readers mirror it.
+
 **The picture is drawn by crew, once there is more than one crew to draw.** A
 workspace is agents to the runtime and crews to the operator: two of them can
 hold two agents with the same name and the same face, and *Scout is thinking* on

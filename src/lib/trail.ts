@@ -377,6 +377,30 @@ export function trailStep(part: ToolCallPart, key: string): Step {
  * exception is a page being opened, because the wait is the site and the site
  * is in the arguments.
  */
+/**
+ * Which machine a turn is on right now, read off its live calls, or null.
+ *
+ * Mirrors `tools::surface_of` in Rust, which is what the menu bar reads. The
+ * rail reads it from here because the trail is already on this side: a call
+ * that has not come back on one of the four machine tools is an agent driving
+ * a rented desktop or a hosted browser, which is the moment there is a screen
+ * to go and watch.
+ */
+export function machineInUse(work: LiveCall[] | undefined): "computer" | "browser" | null {
+  for (const call of work ?? []) {
+    if (call.done !== null) continue;
+    if (call.name === "browse") return "browser";
+    if (
+      call.name === "run_command" ||
+      call.name === "open_on_desktop" ||
+      call.name === "use_screen"
+    ) {
+      return "computer";
+    }
+  }
+  return null;
+}
+
 export function callInFlight(name: string, raw: unknown): string {
   const args = asRecord(raw);
   switch (name) {
