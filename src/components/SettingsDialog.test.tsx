@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Prefs } from "../lib/prefs";
@@ -367,6 +367,7 @@ describe("what a save sends", () => {
   it("does not read a box of spaces as a key", async () => {
     open();
     pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
     type(/^API key/, "   ");
     pane("Machines");
     type(/^E2B API key/, " ");
@@ -428,6 +429,7 @@ describe("what a save sends", () => {
   it("trims a typed key and carries the rest of the panes with it", async () => {
     open();
     pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
     type(/^API key/, "  sk-or-v1-typed  ");
     type(/^Inference endpoint/, "http://localhost:1234/v1");
     type(/^Default model/, "qwen3-coder-30b");
@@ -503,6 +505,7 @@ describe("what a save sends", () => {
   it("puts every staged box back to blank, saying what was actually stored", async () => {
     open();
     pane("Provider");
+    fireEvent.click(screen.getByRole("button", { name: "Change API key" }));
     type(/^API key/, "sk-or-v1-typed");
     type(/^Give up on a call after/, "30");
     pane("Machines");
@@ -525,8 +528,8 @@ describe("what a save sends", () => {
     expect(field(/^Sleep computers after/).value).toBe("");
     expect(field(/^Sleep computers after/).placeholder).toBe("1440 minutes");
     pane("Provider");
-    expect(field(/^API key/).value).toBe("");
-    expect(field(/^API key/).placeholder).toBe("Stored …yped");
+    expect(screen.queryByLabelText(/^API key/)).toBeNull();
+    expect(screen.getByText("…yped")).toBeTruthy();
     expect(field(/^Give up on a call after/).value).toBe("");
   });
 
@@ -838,7 +841,9 @@ describe("the provider presets", () => {
     open(stored({ apiKeySet: true, apiKeyHint: "…9f2c" }));
     pane("Provider");
     expect(preset("OpenRouter").textContent).toContain("Key stored");
-    expect(field(/^API key/).getAttribute("placeholder")).toBe("Stored …9f2c");
+    expect(screen.queryByLabelText(/^API key/)).toBeNull();
+    expect(screen.getByText("API key saved")).toBeTruthy();
+    expect(screen.getByText("…9f2c")).toBeTruthy();
   });
 
   it("says nothing about a key on a row that is not the one chosen", () => {
@@ -934,7 +939,7 @@ describe("provider-specific configuration", () => {
       fireEvent.click(screen.getByRole("button", { name: "Use an API provider" }));
       expect(field(/^Inference endpoint/).value).toBe("https://openrouter.ai/api/v1");
       expect(field(/^Default model/).value).toBe("anthropic/claude-sonnet-4.5");
-      expect(field(/^API key/).placeholder).toBe("Stored …9f2c");
+      expect(screen.getByText("API key saved")).toBeTruthy();
       type(/^Inference endpoint/, "https://gateway.example/v1");
       type(/^Default model/, "custom-model");
       type(/^API key/, "replacement-key");
@@ -1532,5 +1537,144 @@ describe("about", () => {
     expect(document.querySelector(".about__version")?.textContent).toMatch(
       /^Version (—|[0-9a-f]{7,}(-dirty)?)$/,
     );
+  });
+});
+
+describe.each([
+  {
+    name: "Provider",
+    label: "API key",
+    section: "provider",
+    key: "apiKey",
+    configured: { apiKeySet: true, apiKeyHint: "…1234" },
+  },
+  {
+    name: "E2B",
+    label: "E2B API key",
+    section: "machines",
+    key: "e2bApiKey",
+    configured: { e2bKeySet: true, e2bKeyHint: "…1234" },
+  },
+  {
+    name: "Kernel",
+    label: "Kernel API key",
+    section: "machines",
+    key: "kernelApiKey",
+    configured: { kernelKeySet: true, kernelKeyHint: "…1234" },
+  },
+] as const)("$name credential state", ({ label: title, section, key, configured }) => {
+  const label = new RegExp(`^${title}`);
+  const change = () => screen.getByRole("button", { name: `Change ${title}` });
+  const cancel = () => screen.getByRole("button", { name: `Cancel changing ${title}` });
+  const group = () => within(screen.getByRole("group", { name: title }));
+
+  it("keeps a failed first save editable without claiming the key was saved", async () => {
+    updateSettings.mockRejectedValue(new Error("Could not save settings. Try again."));
+    open(stored({ apiKeySet: false, apiKeyHint: "" }), DEFAULT_PREFS, section);
+    type(label, "new-key");
+    fireEvent.click(save());
+    await waitFor(() => expect(banner().textContent).toContain("Could not save settings"));
+    expect(field(label).value).toBe("new-key");
+    expect(group().queryByText("API key saved")).toBeNull();
+    expect(save().disabled).toBe(false);
+  });
+
+  it("keeps the saved key and the replacement draft when saving fails", async () => {
+    updateSettings.mockRejectedValue(new Error("Could not save settings. Try again."));
+    open(stored(configured), DEFAULT_PREFS, section);
+    fireEvent.click(change());
+    expect(document.activeElement).toBe(field(label));
+    type(label, "replacement-key");
+    fireEvent.click(save());
+    await waitFor(() => expect(banner().textContent).toContain("Could not save settings"));
+    expect(field(label).value).toBe("replacement-key");
+    expect(group().getByText("…1234")).toBeTruthy();
+    fireEvent.click(cancel());
+    expect(screen.queryByLabelText(label)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(updateSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the runtime before replacing the entry with a saved state", async () => {
+    let settle: (value: Settings) => void = () => {};
+    updateSettings.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          settle = resolve;
+        }),
+    );
+    open(stored({ apiKeySet: false, apiKeyHint: "" }), DEFAULT_PREFS, section);
+    type(label, "  new-key  ");
+    fireEvent.click(save());
+    expect(field(label).disabled).toBe(true);
+    expect(group().queryByText("API key saved")).toBeNull();
+    settle(stored(configured));
+    await waitFor(() => expect(group().getByText("API key saved")).toBeTruthy());
+    expect(screen.queryByLabelText(label)).toBeNull();
+    expect(sentPatch()[key]).toBe("new-key");
+    expect(group().getByText("…1234")).toBeTruthy();
+    expect(change()).toBeTruthy();
+    if (section === "machines") {
+      expect(field(/^Sleep computers after/)).toBeTruthy();
+      expect(field(/^Close browsers after/)).toBeTruthy();
+    } else {
+      expect(field(/^Default model/)).toBeTruthy();
+      expect(probe()).toBeTruthy();
+    }
+    pane("General");
+    pane(section === "provider" ? "Provider" : "Machines");
+    expect(screen.queryByLabelText(label)).toBeNull();
+    expect(group().getByText("API key saved")).toBeTruthy();
+  });
+
+  it("preserves replacement edits across panes and hides the editor after saving", async () => {
+    open(stored(configured), DEFAULT_PREFS, section);
+    expect(group().getByText("API key saved")).toBeTruthy();
+    expect(screen.queryByLabelText(label)).toBeNull();
+    fireEvent.click(change());
+    expect(field(label).value).toBe("");
+    type(label, "replacement-key");
+    pane("General");
+    pane(section === "provider" ? "Provider" : "Machines");
+    expect(field(label).value).toBe("replacement-key");
+    updateSettings.mockResolvedValue(stored(configured));
+    fireEvent.click(save());
+    await waitFor(() => expect(screen.queryByLabelText(label)).toBeNull());
+    expect(sentPatch()[key]).toBe("replacement-key");
+    fireEvent.click(change());
+    expect(field(label).value).toBe("");
+  });
+
+  it("can cancel a replacement and save a timer without sending a key", async () => {
+    open(stored(configured), DEFAULT_PREFS, section);
+    fireEvent.click(change());
+    type(label, "discard-this-key");
+    type(section === "provider" ? /^Give up on a call after/ : /^Close browsers after/, "30");
+    fireEvent.click(cancel());
+    fireEvent.click(save());
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(sentPatch()).not.toHaveProperty(key);
+    expect(sentPatch()[section === "provider" ? "requestTimeoutSecs" : "browserIdleMinutes"]).toBe(
+      30,
+    );
+  });
+});
+
+describe("the provider key when an endpoint changes", () => {
+  it.each(["preset", "typed"])("opens the key editor for a %s endpoint change", async (kind) => {
+    open(stored(), DEFAULT_PREFS, "provider");
+    expect(screen.queryByLabelText(/^API key/)).toBeNull();
+    if (kind === "preset") {
+      fireEvent.click(screen.getByRole("button", { name: /Groq/ }));
+    } else {
+      type(/^Inference endpoint/, "https://gateway.example/v1");
+    }
+    expect(field(/^API key/).value).toBe("");
+    expect(screen.getByText(/including when changing endpoints/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel changing API key" }));
+    fireEvent.click(probe());
+    await waitFor(() => expect(testConnection).toHaveBeenCalledTimes(1));
+    expect(testConnection.mock.calls[0]?.[0]).not.toHaveProperty("apiKey");
+    expect(updateSettings).not.toHaveBeenCalled();
   });
 });
