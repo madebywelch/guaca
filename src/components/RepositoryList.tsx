@@ -92,13 +92,10 @@ function HarnessChoice({
             <code>{machine.find((row) => row.harness === chosen)?.signIn}</code>.
           </span>
         )}
-        {chosen === "codex" && (
-          <span>
-            {" "}
-            Codex jobs can be stopped, but cannot receive corrections or use the push-approval gate
-            yet.
-          </span>
-        )}
+        {chosen === "codex" &&
+          machine?.find((row) => row.harness === chosen)?.bridged === false && (
+            <span> Update Codex to version 0.153 or newer for corrections and push approvals.</span>
+          )}
         {missing.map((row) => (
           <span key={row.harness}>
             {" "}

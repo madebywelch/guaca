@@ -551,7 +551,7 @@ it("offers Codex and preserves assignments and the gate when switching harness",
       harness: "codex",
       installed: true,
       version: "codex-cli 0.153.3",
-      bridged: false,
+      bridged: true,
       install: "npm install -g @openai/codex",
     },
   ]);
@@ -569,7 +569,5 @@ it("offers Codex and preserves assignments and the gate when switching harness",
     ),
   );
   expect(setAgentRepository).not.toHaveBeenCalled();
-  expect(
-    await screen.findByText(/cannot receive corrections or use the push-approval gate/),
-  ).not.toBeNull();
+  expect((screen.getByLabelText(/Ask me before pushing/) as HTMLInputElement).disabled).toBe(false);
 });

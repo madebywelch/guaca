@@ -147,6 +147,32 @@ describe("CodingPanel", () => {
     ).toBe("stop after the tests");
   });
 
+  it("waits for acknowledgment without blocking Stop", async () => {
+    seed({ building: { [AGENT]: REPO } });
+    let acknowledge!: () => void;
+    messageCodingJob.mockReturnValue(
+      new Promise<void>((resolve) => {
+        acknowledge = resolve;
+      }),
+    );
+    render(<CodingPanel agent={AGENT} />);
+    const box = screen.getByLabelText(
+      "Send a correction to the running coding job",
+    ) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "use staging" } });
+    fireEvent.click(screen.getByText("Send"));
+    expect(screen.getByText("Sending correction…")).toBeTruthy();
+    expect(screen.queryByText(/Sent\./)).toBeNull();
+    expect(box.value).toBe("use staging");
+    expect((screen.getByText("Stop") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByText("Stop"));
+    fireEvent.click(screen.getByText("Stop it"));
+    await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(AGENT));
+    acknowledge();
+    expect(await screen.findByText(/Sent\./)).toBeTruthy();
+    expect(box.value).toBe("");
+  });
+
   it("arms the stop before it fires it, and says what survives", async () => {
     // This ends work that cannot be resumed. The confirmation is drawn where
     // the click happened rather than somewhere the operator has to go and find.
