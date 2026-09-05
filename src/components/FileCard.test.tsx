@@ -226,7 +226,9 @@ describe("FileCard", () => {
       const link = screen.getByRole("link", { name: "Download" }) as HTMLAnchorElement;
       expect(link.getAttribute("download")).toBe("brief.pdf");
       // The same address every preview reads from, whichever host spelled it.
-      expect(link.getAttribute("href")).toBe(fileUrl(file("brief.pdf", "application/pdf")));
+      expect(link.getAttribute("href")).toBe(
+        `${fileUrl(file("brief.pdf", "application/pdf"))}&download=true`,
+      );
       expect(saveFile).not.toHaveBeenCalled();
     } finally {
       state.capabilities = { ...state.capabilities, localFiles: true };

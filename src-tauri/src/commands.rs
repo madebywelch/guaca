@@ -2299,7 +2299,12 @@ pub async fn frame_artifact(state: &AppState, html: String) -> Reply<ArtifactAdd
         .artifacts
         .keep(&html)
         .map_err(|err| CommandError::new("artifact", err.to_string()))?;
-    Ok(ArtifactAddress { port: state.artifact_port.load(std::sync::atomic::Ordering::SeqCst), id })
+    let ticket = state.secret.as_deref().map(|secret| artifact_ticket(secret, &id));
+    Ok(ArtifactAddress {
+        port: state.artifact_port.load(std::sync::atomic::Ordering::SeqCst),
+        id,
+        ticket,
+    })
 }
 
 /// Where the renderer should point a frame.
@@ -2308,6 +2313,13 @@ pub async fn frame_artifact(state: &AppState, html: String) -> Reply<ArtifactAdd
 pub struct ArtifactAddress {
     pub port: u16,
     pub id: String,
+    pub ticket: Option<String>,
+}
+
+/// Domain-separated from screen tickets. A model's script can read its own
+/// address, so that address must never contain the workspace credential.
+pub fn artifact_ticket(secret: &str, id: &str) -> String {
+    screen_ticket(secret, &format!("artifact:{id}"))
 }
 
 /// Sends a failed turn's message again, as a new run.

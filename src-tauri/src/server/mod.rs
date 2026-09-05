@@ -41,13 +41,14 @@ use std::sync::Arc;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{DefaultBodyLimit, Path, Query, RawQuery, State};
-use axum::http::{HeaderMap, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::broadcast;
+use tower_http::cors::CorsLayer;
 
 use crate::commands::{AppState, Reach};
 use crate::domain::attachment::MAX_FILE_BYTES;
@@ -228,7 +229,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         // all, behind a ticket for that one sandbox.
         .route(
             &format!("{}/:ticket/:sandbox/:port/*rest", crate::commands::SCREEN_ROUTE),
-            any(screen),
+            any(screen).layer(axum::middleware::map_response(isolate_screen)),
         )
         .with_state(serving);
 
@@ -243,6 +244,22 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         );
         tracing::info!(web = %web.display(), "serving the app");
     }
+
+    // The desktop webview is cross-origin to every daemon. Never admit opaque
+    // origins here: the computer viewer deliberately has one.
+    app = app.layer(
+        CorsLayer::new()
+            .allow_origin([
+                HeaderValue::from_static("tauri://localhost"),
+                HeaderValue::from_static("http://tauri.localhost"),
+                HeaderValue::from_static("https://tauri.localhost"),
+                HeaderValue::from_static("http://localhost:1420"),
+                HeaderValue::from_static("http://127.0.0.1:1420"),
+            ])
+            .allow_methods([Method::GET, Method::POST])
+            .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::RANGE])
+            .expose_headers([header::CONTENT_RANGE, header::CONTENT_DISPOSITION]),
+    );
 
     let listener = tokio::net::TcpListener::bind(settings.bind)
         .await
@@ -439,12 +456,12 @@ async fn oauth_callback(State(serving): State<Serving>, RawQuery(query): RawQuer
 /// header, which is the trade the file route already makes.
 async fn artifact(
     State(serving): State<Serving>,
-    headers: HeaderMap,
     Query(ticket): Query<Ticket>,
     Path(id): Path<String>,
 ) -> Response {
-    if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref()) {
-        return *refused;
+    let expected = crate::commands::artifact_ticket(&serving.token, &id);
+    if !ticket.token.as_deref().is_some_and(|ticket| same(ticket, &expected)) {
+        return page(401, "That is not a ticket for this page.");
     }
     let (status, content_type, body) = crate::artifact::page_for(&serving.state.artifacts, &id);
     let mut response =
@@ -476,7 +493,7 @@ async fn artifact(
 async fn screen(
     State(serving): State<Serving>,
     Path((ticket, sandbox, port, rest)): Path<(String, String, String, String)>,
-    mut request: axum::extract::Request,
+    request: axum::extract::Request,
 ) -> Response {
     let Some(secret) = serving.state.secret.as_deref() else {
         return page(404, "No screen is reachable here.");
@@ -484,7 +501,16 @@ async fn screen(
     if !same(&ticket, &crate::commands::screen_ticket(secret, &sandbox)) {
         return page(404, "That is not a screen this workspace is showing.");
     }
-    let viewer = serving.state.runtime.viewer_port();
+    relay_screen(serving.state.runtime.viewer_port(), &sandbox, &port, &rest, request).await
+}
+
+async fn relay_screen(
+    viewer: u16,
+    sandbox: &str,
+    port: &str,
+    rest: &str,
+    mut request: axum::extract::Request,
+) -> Response {
     let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
     let target = format!("/{sandbox}/{port}/{rest}{query}");
 
@@ -553,6 +579,7 @@ async fn screen(
         let mut response = Response::new(axum::body::Body::empty());
         *response.status_mut() = StatusCode::SWITCHING_PROTOCOLS;
         apply_headers(response.headers_mut(), &upstream_headers);
+        response.headers_mut().insert(header::CONNECTION, HeaderValue::from_static("Upgrade"));
         return response;
     }
 
@@ -566,6 +593,19 @@ async fn screen(
     let mut response =
         (StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), body).into_response();
     apply_headers(response.headers_mut(), &upstream_headers);
+    response
+}
+
+/// Applies even to direct navigation and errors, not just the React iframe.
+/// noVNC's modules load across the opaque origin using CORS; the scoped screen
+/// ticket admits those bytes, never a workspace credential. Storage, the parent
+/// document, forms and top-level navigation stay unavailable to sandbox code.
+async fn isolate_screen(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers
+        .insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("sandbox allow-scripts"));
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+    headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
     response
 }
 
@@ -641,6 +681,13 @@ struct Ticket {
     token: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct FileRequest {
+    token: Option<String>,
+    #[serde(default)]
+    download: bool,
+}
+
 /// The event channel, which is the socket half of what Tauri gave for free.
 async fn events_socket(
     State(serving): State<Serving>,
@@ -707,7 +754,7 @@ async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>) {
 async fn file(
     State(serving): State<Serving>,
     headers: HeaderMap,
-    Query(ticket): Query<Ticket>,
+    Query(ticket): Query<FileRequest>,
     Path((digest, name)): Path<(String, String)>,
 ) -> Response {
     if let Err(refused) = authorized(&serving, &headers, ticket.token.as_deref()) {
@@ -727,6 +774,15 @@ async fn file(
             let headers = response.headers_mut();
             if let Ok(mime) = served.mime.parse() {
                 headers.insert(axum::http::header::CONTENT_TYPE, mime);
+            }
+            headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+            headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+            headers.insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static("sandbox; default-src 'none'; form-action 'none'"),
+            );
+            if ticket.download || served.mime == "text/html" {
+                headers.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment"));
             }
             if let Some(range) = served.content_range.and_then(|range| range.parse().ok()) {
                 headers.insert(axum::http::header::CONTENT_RANGE, range);
@@ -899,5 +955,56 @@ mod tests {
         let said = open("https://example.com").unwrap_err();
         assert!(said.contains("no browser here"), "{said}");
         assert!(said.contains("Sign in from"), "{said}");
+    }
+}
+
+#[cfg(test)]
+mod relay_tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+
+    #[tokio::test]
+    async fn a_screen_socket_upgrades_and_carries_bytes_both_ways() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let viewer = listener.local_addr().unwrap().port();
+        let upstream = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let message = socket.next().await.unwrap().unwrap();
+            socket.send(message).await.unwrap();
+        });
+        let app = Router::new()
+            .route(
+                "/",
+                any(move |request| async move {
+                    relay_screen(viewer, "test", "6080", "websockify", request).await
+                }),
+            )
+            .layer(axum::middleware::map_response(isolate_screen));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let proxy = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let (mut socket, _) =
+            tokio_tungstenite::connect_async(format!("ws://{addr}/")).await.unwrap();
+        socket
+            .send(tokio_tungstenite::tungstenite::Message::Binary(vec![1, 2, 3].into()))
+            .await
+            .unwrap();
+        let echoed = tokio::time::timeout(std::time::Duration::from_secs(2), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(echoed.into_data(), vec![1, 2, 3]);
+        upstream.await.unwrap();
+        proxy.abort();
+    }
+
+    #[tokio::test]
+    async fn the_viewer_is_opaque_and_its_modules_remain_loadable() {
+        let response = isolate_screen(page(200, "viewer")).await;
+        assert_eq!(response.headers()[header::CONTENT_SECURITY_POLICY], "sandbox allow-scripts");
+        assert_eq!(response.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+        assert_eq!(response.headers()[header::REFERRER_POLICY], "no-referrer");
     }
 }

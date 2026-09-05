@@ -602,7 +602,8 @@ export const api = {
    * inline inherits this document's content policy, and this document forbids
    * script. What the returned origin permits is `artifact.rs`'s argument.
    */
-  frameArtifact: (html: string) => invoke<{ port: number; id: string }>("frame_artifact", { html }),
+  frameArtifact: (html: string) =>
+    invoke<{ port: number; id: string; ticket: string | null }>("frame_artifact", { html }),
 
   /**
    * Sends what the operator typed, with the files they attached.

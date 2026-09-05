@@ -116,9 +116,9 @@ export function fileUrl(file: Pick<Attachment, "digest" | "name">): string {
  * daemon serves the same document on its own origin, behind the token, and
  * the frame's `sandbox` is what keeps the page's origin opaque either way.
  */
-export function artifactUrl(at: { port: number; id: string }): string {
+export function artifactUrl(at: { port: number; id: string; ticket?: string | null }): string {
   if (hosted) {
-    return `${workspaceOrigin()}/v1/artifact/${at.id}?token=${encodeURIComponent(token())}`;
+    return `${workspaceOrigin()}/v1/artifact/${at.id}?token=${encodeURIComponent(at.ticket ?? "")}`;
   }
   return `http://127.0.0.1:${at.port}/${at.id}`;
 }

@@ -398,13 +398,15 @@ async fn a_page_an_agent_wrote_is_served_on_this_origin_under_the_same_policy() 
     .await;
     assert_eq!(status, 200, "{body}");
     let id = body["ok"]["id"].as_str().expect("an id");
+    let ticket = body["ok"]["ticket"].as_str().expect("a scoped ticket");
+    assert_ne!(ticket, TOKEN);
 
     let client = reqwest::Client::new();
     let refused = client.get(format!("http://{addr}/v1/artifact/{id}")).send().await.unwrap();
     assert_eq!(refused.status(), 401);
 
     let page =
-        client.get(format!("http://{addr}/v1/artifact/{id}?token={TOKEN}")).send().await.unwrap();
+        client.get(format!("http://{addr}/v1/artifact/{id}?token={ticket}")).send().await.unwrap();
     assert_eq!(page.status(), 200);
     let csp = page.headers().get("content-security-policy").expect("the policy rides along");
     assert!(csp.to_str().unwrap().contains("sandbox allow-scripts"));
@@ -417,7 +419,7 @@ async fn a_page_an_agent_wrote_is_served_on_this_origin_under_the_same_policy() 
         .send()
         .await
         .unwrap();
-    assert_eq!(gone.status(), 404);
+    assert_eq!(gone.status(), 401);
 }
 
 #[tokio::test]
@@ -500,4 +502,79 @@ async fn a_stored_file_is_reachable_by_its_digest() {
         .await
         .expect("an answer");
     assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn the_desktop_can_preflight_a_command() {
+    let (addr, _dir) = workspace().await;
+    let response = reqwest::Client::new()
+        .request(reqwest::Method::OPTIONS, format!("http://{addr}/v1/call"))
+        .header("origin", "tauri://localhost")
+        .header("access-control-request-method", "POST")
+        .header("access-control-request-headers", "authorization,content-type")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        response.status().is_success(),
+        "preflight: {} {:?}",
+        response.status(),
+        response.headers()
+    );
+    assert!(response.headers().contains_key("access-control-allow-origin"));
+}
+
+#[tokio::test]
+async fn an_html_attachment_cannot_run_on_the_workspace_origin() {
+    let (addr, _dir) = workspace().await;
+    let client = reqwest::Client::new();
+    let stored: Value = client
+        .post(format!("http://{addr}/v1/upload?name=report.html"))
+        .bearer_auth(TOKEN)
+        .body("<script>document.title=localStorage.getItem('guaca.workspace.token')</script>")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let digest = stored["ok"]["digest"].as_str().unwrap();
+    let response = client
+        .get(format!("http://{addr}/v1/file/{digest}/report.html?token={TOKEN}"))
+        .send()
+        .await
+        .unwrap();
+    let headers = response.headers();
+    let sandboxed = headers
+        .get("content-security-policy")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|v| v.contains("sandbox"));
+    let download = headers
+        .get("content-disposition")
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|v| v.starts_with("attachment"));
+    assert!(sandboxed || download, "active document on workspace origin: {headers:?}");
+}
+
+#[tokio::test]
+async fn opaque_and_unrelated_origins_cannot_read_the_workspace() {
+    let (addr, _dir) = workspace().await;
+    for origin in ["null", "https://unrelated.example", "https://tauri.localhost.evil.example"] {
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/health"))
+            .header("origin", origin)
+            .send()
+            .await
+            .unwrap();
+        assert!(response.headers().get("access-control-allow-origin").is_none());
+    }
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/call"))
+        .header("origin", "tauri://localhost")
+        .json(&json!({"name":"capabilities"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(response.headers()["access-control-allow-origin"], "tauri://localhost");
 }

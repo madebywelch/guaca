@@ -97,7 +97,7 @@ pub const ARTIFACT_CSP: &str = "default-src 'none'; \
      font-src data:; \
      form-action 'none'; \
      base-uri 'none'; \
-     frame-ancestors 'self'; \
+     frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420; \
      sandbox allow-scripts";
 
 /// How many documents are kept at once.

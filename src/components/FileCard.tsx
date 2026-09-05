@@ -365,7 +365,7 @@ function SaveButton({ file }: { file: Attachment }) {
     return (
       <a
         className="btn btn--ghost btn--small"
-        href={fileUrl(file)}
+        href={`${fileUrl(file)}&download=true`}
         download={file.name}
         title={`Download ${file.name}`}
       >

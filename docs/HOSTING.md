@@ -402,3 +402,26 @@ What it does not have yet:
   is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a
   default that binds every interface is one operator's firewall away from a
   public workspace.
+
+## Browser isolation and desktop access
+
+The daemon admits cross-origin requests from the packaged Tauri origins and
+local development origins on port 1420. The workspace token is still required;
+opaque origins and unrelated sites receive no CORS access to workspace APIs.
+
+Screen documents carry `sandbox allow-scripts` in their response policy as
+well as on the hosted iframe. This keeps sandbox-served code away from the
+workspace's DOM and storage even when its URL is opened directly. Screen
+assets allow CORS so noVNC's JavaScript modules load from that opaque origin.
+The screen ticket authorizes those assets and its socket, never workspace APIs.
+The deliberate difference is that viewer settings cannot persist in browser
+storage. The remote computer's files, sign-ins and clipboard remain its own.
+
+HTML attachments download when opened directly and remain readable as text in
+the transcript. File responses prohibit script, disable MIME sniffing and carry
+no referrer. Explicit downloads request attachment disposition on the server,
+so a desktop window connected across origins also receives a download.
+
+An artifact URL carries a ticket for that document, not the workspace token:
+script can read its own URL even with an opaque origin. Artifact policies admit
+the desktop origins as ancestors, while retaining their opaque sandbox.
