@@ -49,6 +49,34 @@ function nest(...classes: string[]): HTMLElement {
   return at;
 }
 
+describe("avatar hit targets", () => {
+  it.each(["picker__item", "orb", "agent-row"])(
+    "keeps animated artwork out of hit testing inside %s",
+    (control) => {
+      const button = document.createElement("button");
+      button.className = control;
+      const avatar = document.createElement("span");
+      avatar.className = "avatar";
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.classList.add("avatar__body");
+      const layer = document.createElementNS(svg.namespaceURI, "use");
+      svg.append(layer);
+      avatar.append(svg);
+      button.append(avatar);
+      document.body.append(button);
+
+      // WebKit can lose the click when the referenced outline is repainted
+      // between press and release. Neither the SVG nor its layers is a target;
+      // the stable wrapper still receives input and bubbles it to the button.
+      expect(getComputedStyle(svg).pointerEvents).toBe("none");
+      expect(getComputedStyle(layer).pointerEvents).toBe("none");
+      expect(getComputedStyle(avatar).pointerEvents).toBe("auto");
+      expect(getComputedStyle(button).pointerEvents).toBe("auto");
+      button.remove();
+    },
+  );
+});
+
 describe("the file reading view", () => {
   // The card under a message clips and fades its preview on purpose. The full
   // view reuses the same classes with the bounds taken off, and `overflow` is
