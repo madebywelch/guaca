@@ -664,3 +664,30 @@ operator's own plan.
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
 ```
+
+## Codex runs through its official CLI
+
+`Harness::Codex` starts `codex exec --json` in the same prepared worktree as the
+other harnesses. Existing repositories keep their harness and assignments; no
+migration changes them. Codex owns model selection and authentication. On the
+backend, as the daemon's user, run `codex login --device-auth`. This sign-in is
+separate from Guaca's ChatGPT provider sign-in. The image pins the CLI version;
+its configuration, credentials and sessions live in the persistent home volume.
+
+The runner records the CLI thread id, tool activity, final answer and failures.
+It does not turn token counts into a dollar cost. A stream ending before
+`turn.completed` is an interrupted job, even if it printed some narration.
+Both process output pipes are drained concurrently under the job's deadline.
+
+This adapter can be stopped but has no correction mailbox or push-approval
+bridge yet. A Codex job in a repository with **Ask me before pushing** enabled
+is refused before work starts. Switching harnesses never silently clears that
+setting: choose Claude Code to keep the gate, or explicitly disable it. This
+is a declared limitation of the new adapter; Claude's existing bridge remains.
+
+The official Claude Code CLI can also run on an operator's own backend. Its
+local `claude auth login` and Codex's `codex login status` are CLI operations;
+Guaca offers setup instructions and reads only sign-in status, never credential
+files. No model call is needed to check either CLI. This does not introduce a
+Guaca Claude.ai login flow or authorize a managed service to route consumer
+subscriptions. See the provider's current terms before offering such a service.

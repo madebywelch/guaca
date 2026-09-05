@@ -330,7 +330,7 @@ export type RepositoryId = string;
  * whose one plan is spent needs the other program, not a different setting on
  * the same one.
  */
-export type Harness = "pi" | "claude";
+export type Harness = "pi" | "claude" | "codex";
 
 /**
  * Where a coding job in a repository actually runs.
@@ -402,8 +402,9 @@ export interface Repository {
 
 /** What an operator is shown for each, and what the panel offers in order. */
 export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
-  { id: "pi", label: "pi" },
+  { id: "codex", label: "Codex" },
   { id: "claude", label: "Claude Code" },
+  { id: "pi", label: "pi" },
 ];
 
 /**
@@ -452,6 +453,8 @@ export interface HarnessOnMachine {
    * disagrees with the operator's laptop and explains nothing.
    */
   withheld?: string | null;
+  signedIn?: boolean | null;
+  signIn?: string;
 }
 
 /**

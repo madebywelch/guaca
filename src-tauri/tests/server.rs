@@ -35,7 +35,6 @@ async fn workspace() -> (SocketAddr, tempfile::TempDir) {
         bind: "127.0.0.1:0".parse().expect("a loopback address"),
         token: TOKEN.to_string(),
         web: None,
-        claude_key: false,
         origin: None,
     })
     .await
@@ -116,52 +115,16 @@ async fn a_server_refuses_what_it_cannot_do_and_says_what_to_do_instead() {
 }
 
 #[tokio::test]
-async fn a_harness_that_spends_a_plan_on_a_laptop_is_withheld_rather_than_hidden() {
+async fn official_harnesses_are_available_on_the_backend_without_a_guaca_api_key() {
     let (addr, _dir) = workspace().await;
     let (_, body) = call(addr, "coding_harnesses", json!({})).await;
     let harnesses = body["ok"].as_array().expect("the harnesses");
-
-    // Both rows come back. A harness that silently vanishes from the list on a
-    // server is a panel that disagrees with the operator's own laptop and
-    // explains nothing.
-    assert_eq!(harnesses.len(), 2, "every harness is on the list: {body}");
-
-    let claude = harnesses.iter().find(|h| h["harness"] == "claude").expect("Claude Code's row");
-    let said = claude["withheld"].as_str().expect("a reason it is withheld");
-    assert!(said.contains("plan"), "the reason does not name the plan: {said}");
-    // A refusal that only says no gets retried; this one has two ways out.
-    assert!(said.contains("ANTHROPIC_API_KEY"), "the reason offers the key: {said}");
-    assert!(said.contains("other harness"), "the reason offers the other door: {said}");
-
-    let pi = harnesses.iter().find(|h| h["harness"] == "pi").expect("pi's row");
-    assert!(pi["withheld"].is_null(), "pi is not withheld anywhere: {pi}");
-}
-
-#[tokio::test]
-async fn a_key_in_the_environment_un_withholds_the_claude_harness() {
-    // The plan argument is about a credential on the operator's machine. A box
-    // given ANTHROPIC_API_KEY spends the key, so the row is offered.
-    let dir = tempfile::tempdir().expect("a temporary workspace");
-    let bound = guac_lib::server::bind(guac_lib::server::Settings {
-        root: dir.path().to_path_buf(),
-        bind: "127.0.0.1:0".parse().expect("a loopback address"),
-        token: TOKEN.to_string(),
-        web: None,
-        claude_key: true,
-        origin: None,
-    })
-    .await
-    .expect("the workspace opens");
-    let addr = bound.addr;
-    tokio::spawn(bound.serve());
-
-    let (_, body) = call(addr, "coding_harnesses", json!({})).await;
-    let claude = body["ok"]
-        .as_array()
-        .and_then(|rows| rows.iter().find(|h| h["harness"] == "claude"))
-        .expect("Claude Code's row")
-        .clone();
-    assert!(claude["withheld"].is_null(), "{claude}");
+    assert_eq!(harnesses.len(), 3);
+    for name in ["codex", "claude", "pi"] {
+        let row = harnesses.iter().find(|h| h["harness"] == name).unwrap();
+        assert!(row["withheld"].is_null(), "{row}");
+        assert!(row["signIn"].is_string());
+    }
 }
 
 #[tokio::test]
@@ -598,7 +561,6 @@ async fn two_hosts_cannot_run_the_same_workspace() {
         bind: "127.0.0.1:0".parse().unwrap(),
         token: TOKEN.into(),
         web: None,
-        claude_key: false,
         origin: None,
     })
     .await;

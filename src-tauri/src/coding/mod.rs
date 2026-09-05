@@ -80,9 +80,10 @@
 
 pub mod bridge;
 pub mod claude_code;
+pub mod codex;
 pub mod pi;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 use crate::domain::repository::Harness;
 
@@ -230,6 +231,7 @@ fn binary(harness: Harness) -> &'static str {
     match harness {
         Harness::Pi => pi::BINARY,
         Harness::Claude => claude_code::BINARY,
+        Harness::Codex => codex::BINARY,
     }
 }
 
@@ -243,6 +245,7 @@ pub fn install(harness: Harness) -> &'static str {
     match harness {
         Harness::Pi => pi::INSTALL,
         Harness::Claude => claude_code::INSTALL,
+        Harness::Codex => codex::INSTALL,
     }
 }
 
@@ -294,14 +297,17 @@ impl Presence {
 /// check for that, it cannot go stale between the question and the answer, and
 /// a refusal built on this one would refuse jobs that work.
 pub async fn presence(harness: Harness) -> Presence {
-    let asked = tokio::process::Command::new(binary(harness))
+    let mut command = tokio::process::Command::new(binary(harness));
+    command
         .arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
-        .await;
-
-    let Ok(asked) = asked else { return Presence::Missing };
+        .kill_on_drop(true);
+    let Ok(Ok(asked)) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), command.output()).await
+    else {
+        return Presence::Missing;
+    };
     if !asked.status.success() {
         return Presence::Missing;
     }
@@ -309,6 +315,37 @@ pub async fn presence(harness: Harness) -> Presence {
     let version = String::from_utf8_lossy(&asked.stdout).trim().to_string();
     let bridged = harness == Harness::Claude && at_least(&version, BRIDGE_FLOOR);
     Presence::Installed { version, bridged }
+}
+
+/// Commands are run by the operator on the backend, under the daemon's user.
+/// Guaca never opens a consumer OAuth flow or reads a CLI credential file.
+pub fn sign_in(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Codex => "codex login --device-auth",
+        Harness::Claude => "claude auth login",
+        Harness::Pi => "pi",
+    }
+}
+
+/// A CLI's own local status check, never a model call. Only the boolean crosses
+/// IPC: even status output may contain an account name or an API key prefix.
+pub async fn signed_in(harness: Harness) -> Option<bool> {
+    let args: &[&str] = match harness {
+        Harness::Codex => &["login", "status"],
+        Harness::Claude => &["auth", "status", "--json"],
+        Harness::Pi => return None,
+    };
+    let mut command = tokio::process::Command::new(binary(harness));
+    command.args(args).kill_on_drop(true).stderr(std::process::Stdio::null());
+    let asked = tokio::time::timeout(std::time::Duration::from_secs(5), command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if harness == Harness::Claude {
+        serde_json::from_slice::<serde_json::Value>(&asked.stdout).ok()?["loggedIn"].as_bool()
+    } else {
+        Some(asked.status.success())
+    }
 }
 
 /// Whether a `--version` line names a release at or past a floor.
@@ -353,6 +390,7 @@ pub async fn run(
         // `pi` has no hooks and no second interface, so the wiring is not
         // offered to it rather than being offered and ignored.
         Harness::Pi => (pi::argv(task), pi::absorb),
+        Harness::Codex => (codex::argv(task), codex::absorb),
         Harness::Claude => (claude_code::argv(task, wiring), claude_code::absorb),
     };
 
@@ -375,7 +413,7 @@ pub async fn run(
         })?;
 
     let stdout = child.stdout.take().ok_or_else(|| CodingError::Start("no output".into()))?;
-    let stderr = child.stderr.take();
+    let mut stderr = child.stderr.take().ok_or_else(|| CodingError::Start("no stderr".into()))?;
     let mut lines = BufReader::new(stdout).lines();
     // The session is set from what was asked for rather than read back off the
     // stream, which is the point of choosing it: a job killed at the ceiling
@@ -383,6 +421,7 @@ pub async fn run(
     // first event still says which one it was.
     let mut outcome = Outcome {
         session_id: wiring.map(|w| w.session_id.clone()).unwrap_or_default(),
+        failed: (harness == Harness::Codex).then(|| codex::INCOMPLETE.into()),
         ..Outcome::default()
     };
 
@@ -410,20 +449,36 @@ pub async fn run(
         }
     };
 
-    // Stopping is the caller aborting the task this runs in, which drops the
-    // child, which `kill_on_drop` turns into a killed process. A cancellation
-    // token beside that would be a second way to stop one thing, and the two
-    // would have to agree about which had happened.
-    tokio::select! {
-        _ = reading => {}
-        _ = tokio::time::sleep(CEILING) => {
+    // Drain both pipes concurrently, retaining only a bounded stderr prefix.
+    // Waiting for stdout before reading stderr deadlocks a noisy CLI once the
+    // stderr pipe fills. The ceiling also includes waiting for process exit.
+    let draining = async {
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = stderr.read(&mut chunk).await {
+            if n == 0 {
+                break;
+            }
+            let take = n.min(2000usize.saturating_sub(kept.len()));
+            kept.extend_from_slice(&chunk[..take]);
+        }
+        String::from_utf8_lossy(&kept).into_owned()
+    };
+    let finishing = async {
+        let (_, stderr_text, status) = tokio::join!(reading, draining, child.wait());
+        status.map(|status| (status, stderr_text))
+    };
+    let (status, stderr_text) = match tokio::time::timeout(CEILING, finishing).await {
+        Ok(result) => result.map_err(|err| CodingError::Start(err.to_string()))?,
+        Err(_) => {
             let _ = child.kill().await;
             return Err(CodingError::TooLong(CEILING.as_secs() / 60));
         }
-    }
-
-    let status = child.wait().await.map_err(|err| CodingError::Start(err.to_string()))?;
-    if !status.success() && outcome.said.trim().is_empty() && outcome.failed.is_none() {
+    };
+    if !status.success()
+        && outcome.said.trim().is_empty()
+        && (outcome.failed.is_none() || outcome.failed.as_deref() == Some(codex::INCOMPLETE))
+    {
         // Only when there is nothing to report. A harness that answered and
         // then exited non-zero has still done the work, and throwing its answer
         // away over the exit code is how an agent reports a finished change as
@@ -436,19 +491,8 @@ pub async fn run(
         // reported to the operator as `exit 1` with the sentence naming the
         // plan thrown away.
         let mut why = format!("exit {}", status.code().unwrap_or(-1));
-        if let Some(stderr) = stderr {
-            let mut text = String::new();
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                text.push_str(&line);
-                text.push('\n');
-                if text.len() > 2_000 {
-                    break;
-                }
-            }
-            if !text.trim().is_empty() {
-                why = format!("{why}: {}", text.trim());
-            }
+        if !stderr_text.trim().is_empty() {
+            why = format!("{why}: {}", stderr_text.trim());
         }
         return Err(CodingError::NoAnswer(why));
     }

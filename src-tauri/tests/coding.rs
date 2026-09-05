@@ -65,6 +65,7 @@ fn stand_ins() -> &'static Path {
         let dir = tempfile::tempdir().unwrap();
         write_stand_in(dir.path(), "pi", PI_SUCCESS);
         write_stand_in(dir.path(), "claude", CLAUDE_SUCCESS);
+        write_stand_in(dir.path(), "codex", CODEX_SUCCESS);
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{path}", dir.path().display()));
         dir
@@ -100,6 +101,41 @@ const PI_SUCCESS: &str = concat!(
     "\n",
     r#"{"type":"message_end","message":{"role":"assistant","model":"gpt-5.6","content":[{"type":"text","text":"Fixed the flaky test and pushed."}],"stopReason":"stop"}}"#,
 );
+
+const CODEX_SUCCESS: &str = concat!(
+    r#"{"type":"thread.started","thread_id":"codex-session"}"#,
+    "\n",
+    r#"{"type":"turn.started"}"#,
+    "\n",
+    r#"{"type":"item.completed","item":{"type":"command_execution","command":"npm test"}}"#,
+    "\n",
+    r#"{"type":"item.completed","item":{"type":"agent_message","text":"Fixed the flaky test and pushed."}}"#,
+    "\n",
+    r#"{"type":"turn.completed","usage":{"input_tokens":42,"output_tokens":10}}"#,
+);
+
+#[tokio::test]
+async fn codex_runs_in_the_repository_and_retains_its_own_session() {
+    stand_ins();
+    let repo = a_repository("codex");
+    let mut progress = Vec::new();
+    let outcome =
+        coding::run(Which::Codex, repo.to_str().unwrap(), "fix it", None, |p| progress.push(p))
+            .await
+            .unwrap();
+    assert_eq!(outcome.said, "Fixed the flaky test and pushed.");
+    assert_eq!(outcome.tool_calls, 1);
+    assert_eq!(outcome.session_id, "codex-session");
+    assert!(outcome.failed.is_none());
+    assert!(outcome.cost.is_none());
+    let argv = argv_at(&repo);
+    assert_eq!(argv[0], "exec");
+    assert!(argv.iter().any(|arg| arg.contains("Commit early and often")));
+    assert!(argv.iter().any(|arg| arg.contains("fix it")));
+    assert!(!argv.contains(&"--model".into()));
+    assert_eq!(progress.len(), 2);
+    let _ = std::fs::remove_dir_all(repo);
+}
 
 const CLAUDE_SUCCESS: &str = concat!(
     r#"{"type":"system","subtype":"init","model":"claude-opus-5"}"#,

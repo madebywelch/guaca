@@ -81,10 +81,24 @@ function HarnessChoice({
         ))}
       </div>
       <p className="field__hint">
-        The program that writes the code here, run on this machine with its own sign-in. Guaca never
-        pays for it, so a job's spend is not in this app's usage. Switch when the plan behind one of
-        them runs out: a subscription is spent by the program it was issued to, and no amount of
-        configuring the other one reaches it.
+        Runs on the backend with its own model settings and sign-in. Coding usage is billed
+        separately from Guaca turns. Sign in under the same user that runs the backend.
+        {machine?.find((row) => row.harness === chosen)?.signIn && (
+          <span>
+            {" "}
+            {machine.find((row) => row.harness === chosen)?.signedIn === true
+              ? "The CLI reports signed in."
+              : "Check the CLI sign-in on the backend."}{" "}
+            <code>{machine.find((row) => row.harness === chosen)?.signIn}</code>.
+          </span>
+        )}
+        {chosen === "codex" && (
+          <span>
+            {" "}
+            Codex jobs can be stopped, but cannot receive corrections or use the push-approval gate
+            yet.
+          </span>
+        )}
         {missing.map((row) => (
           <span key={row.harness}>
             {" "}
@@ -136,7 +150,7 @@ function GateChoice({
       <input
         type="checkbox"
         checked={chosen === "askBeforePushing"}
-        disabled={disabled || !reachable}
+        disabled={disabled || (!reachable && chosen !== "askBeforePushing")}
         onChange={(event) => onChoose(event.target.checked ? "askBeforePushing" : "open")}
       />
       <span>

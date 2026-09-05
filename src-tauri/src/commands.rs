@@ -146,11 +146,6 @@ pub struct AppState {
     /// by remote rather than by directory. Under the data directory on both
     /// hosts; the desktop simply never offers the form.
     pub repos: PathBuf,
-    /// Whether the environment this workspace runs in can pay for a Claude
-    /// Code job with an API key. What un-withholds the harness on a server:
-    /// the plan argument is about a credential on the operator's machine, and
-    /// `ANTHROPIC_API_KEY` in the daemon's environment is neither.
-    pub claude_key: bool,
     /// The workspace token, on a host that has one. What a screen ticket is
     /// derived from: a computer's live screen is reached through the daemon
     /// at an address noVNC has to be able to resolve its own files against,
@@ -293,6 +288,7 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             // A precondition the operator can fix from the rail, so it says so
             // rather than reading as something that broke.
             RuntimeError::NoRepository(_)
+            | RuntimeError::CodingGateUnavailable
             | RuntimeError::RepositoryBusy { .. }
             | RuntimeError::NoWorkTree { .. } => CommandError::new("badRequest", err.to_string()),
             // A `shell` failure is answered to the model inside its turn and
@@ -869,6 +865,8 @@ pub struct HarnessOnMachine {
     /// with the operator's own laptop, and nothing on screen explains it.
     /// `None` is the ordinary case and draws exactly what it always drew.
     pub withheld: Option<String>,
+    pub signed_in: Option<bool>,
+    pub sign_in: &'static str,
 }
 
 /// Which coding harnesses are on this machine, and how to get the ones that are
@@ -883,32 +881,22 @@ pub struct HarnessOnMachine {
 /// Every harness comes back, installed or not, and they are asked concurrently:
 /// each is a process spawn, and asked in series a panel waits once per harness.
 pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> {
-    let here = state.deployment.capabilities();
+    let _ = state;
     let asked = Harness::ALL.map(|harness| async move {
-        let withheld = match harness {
-            // The plan argument is about a credential on the operator's own
-            // machine. A key in this workspace's environment is neither, and
-            // Claude Code spends it instead, so the row is offered.
-            Harness::Claude if !state.claude_key => here.require(Absent::ClaudeCodeHarness).err(),
-            _ => None,
+        let (installed, version, bridged) = match crate::coding::presence(harness).await {
+            crate::coding::Presence::Missing => (false, String::new(), false),
+            crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
         };
-        // Not probed when it is withheld. The probe is a process spawn whose
-        // answer could not change anything, and "installed, and not offered"
-        // is a sentence that invites an operator to go and fix the install.
-        let (installed, version, bridged) = match withheld {
-            Some(_) => (false, String::new(), false),
-            None => match crate::coding::presence(harness).await {
-                crate::coding::Presence::Missing => (false, String::new(), false),
-                crate::coding::Presence::Installed { version, bridged } => (true, version, bridged),
-            },
-        };
+        let signed_in = if installed { crate::coding::signed_in(harness).await } else { None };
         HarnessOnMachine {
             harness,
             installed,
             version,
             bridged,
             install: crate::coding::install(harness),
-            withheld: withheld.map(|absent| absent.sentence().to_string()),
+            withheld: None,
+            signed_in,
+            sign_in: crate::coding::sign_in(harness),
         }
     });
     Ok(futures_util::future::join_all(asked).await.into_iter().collect())

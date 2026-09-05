@@ -58,7 +58,6 @@ fn main() {
         bind,
         token,
         web: std::env::var_os("GUACA_WEB").map(PathBuf::from),
-        claude_key: std::env::var("ANTHROPIC_API_KEY").is_ok_and(|key| !key.trim().is_empty()),
         origin: std::env::var("GUACA_ORIGIN")
             .ok()
             .map(|o| o.trim().to_string())

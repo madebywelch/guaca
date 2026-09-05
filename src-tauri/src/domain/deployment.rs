@@ -59,8 +59,8 @@ impl Deployment {
             Deployment::Server => Capabilities {
                 local_directories: true,
                 loopback_endpoints: true,
-                claude_provider: false,
-                claude_code_harness: false,
+                claude_provider: true,
+                claude_code_harness: true,
                 local_files: false,
             },
         }
@@ -86,18 +86,10 @@ pub struct Capabilities {
     /// An address on the backend's network. Localhost names the backend;
     /// host.docker.internal can reach the container host.
     pub loopback_endpoints: bool,
-    /// Whether a turn may be paid for by a Claude plan.
-    ///
-    /// `Provider::Claude` works by *being the program*: `claude` runs on the
-    /// operator's machine, signed in where they signed in, so the credential
-    /// never leaves the program it was issued to. There is no version of that
-    /// which involves shipping the credential to a box.
+    /// Whether the backend may run the official Claude CLI for turns.
+    /// Authentication belongs to that CLI, under the operator's backend user.
     pub claude_provider: bool,
-    /// Whether Claude Code may be the harness that writes the code.
-    ///
-    /// The same fact one level down, and it is about the subscription rather
-    /// than the program: Claude Code driven by an API key is a different
-    /// credential and is not what this flag is about.
+    /// Whether the backend may run Claude Code for repository jobs.
     pub claude_code_harness: bool,
     /// Whether a file may be named by a path on the operator's disk, and a
     /// saved copy land in their downloads folder.
@@ -247,7 +239,10 @@ mod tests {
         ] {
             assert_eq!(desktop.require(what), Ok(()), "a desktop has {what:?}");
             let expected = match what {
-                Absent::LocalDirectories | Absent::LoopbackEndpoints => Ok(()),
+                Absent::LocalDirectories
+                | Absent::LoopbackEndpoints
+                | Absent::ClaudeCodeHarness
+                | Absent::ClaudeProvider => Ok(()),
                 _ => Err(what),
             };
             assert_eq!(server.require(what), expected);

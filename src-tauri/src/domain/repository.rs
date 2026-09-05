@@ -112,6 +112,8 @@ pub enum Harness {
     Pi,
     /// Claude Code, run headless in the repository.
     Claude,
+    /// The official Codex CLI, with its own backend sign-in.
+    Codex,
 }
 
 impl Harness {
@@ -121,6 +123,7 @@ impl Harness {
         match self {
             Harness::Pi => "pi",
             Harness::Claude => "claude",
+            Harness::Codex => "codex",
         }
     }
 
@@ -129,11 +132,12 @@ impl Harness {
         match self {
             Harness::Pi => "pi",
             Harness::Claude => "Claude Code",
+            Harness::Codex => "Codex",
         }
     }
 
     /// Every one this build knows, in the order the panel offers them.
-    pub const ALL: [Harness; 2] = [Harness::Pi, Harness::Claude];
+    pub const ALL: [Harness; 3] = [Harness::Codex, Harness::Claude, Harness::Pi];
 
     /// What a stored row means.
     ///
@@ -147,6 +151,7 @@ impl Harness {
     pub fn parse(raw: &str) -> Harness {
         match raw {
             "claude" => Harness::Claude,
+            "codex" => Harness::Codex,
             _ => Harness::Pi,
         }
     }

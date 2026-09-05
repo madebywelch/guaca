@@ -71,9 +71,10 @@ RUN apt-get update \
  && chown guaca:guaca /var/lib/guaca
 # Pin harness releases. Jobs use their own credentials, configured explicitly
 # in the container, and never inherit a desktop's subscription files.
+ARG CODEX_VERSION=0.153.3
 ARG PI_VERSION=0.84.4
 ARG CLAUDE_CODE_VERSION=2.1.260
-RUN npm install --global --ignore-scripts pnpm@10.33.0 "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+RUN npm install --global --ignore-scripts pnpm@10.33.0 "@openai/codex@${CODEX_VERSION}" "@earendil-works/pi-coding-agent@${PI_VERSION}" \
  && npm cache clean --force \
  && curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
  && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \

@@ -591,6 +591,8 @@ enum Asker {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
+    #[error("Codex jobs do not yet support Guaca’s push-approval gate. Choose Claude Code, or explicitly turn off Ask me before pushing in the repository settings")]
+    CodingGateUnavailable,
     /// Asked to code with nowhere to do it.
     ///
     /// Reachable even though the tool is not offered without a repository: an
@@ -2176,6 +2178,10 @@ impl Runtime {
             .agent_repository(card.id)?
             .ok_or_else(|| RuntimeError::NoRepository(card.name.clone()))?;
 
+        if repository.harness == Harness::Codex && repository.gate == Gate::AskBeforePushing {
+            return Err(RuntimeError::CodingGateUnavailable);
+        }
+
         // Which directory this job will run in, decided before the lock because
         // the lock is on the directory. Pure: `bench_path` is two ids joined to
         // a root, so the answer is knowable here without touching the disk,
@@ -2242,6 +2248,7 @@ impl Runtime {
                     agent: card.id,
                     mailbox: match repository.harness {
                         Harness::Claude => Mailbox::Starting,
+                        Harness::Codex => Mailbox::Unreachable("Codex jobs can be stopped, but this runner cannot receive corrections while working"),
                         Harness::Pi => Mailbox::Unreachable(
                             "pi has no way to be reached while it is working. A repository set \
                              to Claude Code can be sent one",
@@ -2345,7 +2352,7 @@ impl Runtime {
             // working job, so none of them is an error.
             let (signals, mut heard) = tokio::sync::mpsc::channel(32);
             let session = match harness {
-                Harness::Pi => None,
+                Harness::Pi | Harness::Codex => None,
                 Harness::Claude => match crate::coding::presence(harness).await {
                     crate::coding::Presence::Installed { bridged: true, .. } => {
                         runtime.inner.bridge.open(signals, gate, working.clone().into()).await
