@@ -716,3 +716,14 @@ the wrapper for a connected repository; personal-token and SSH repositories
 retain their existing configuration. The push gate is unchanged: authentication
 answers whether GitHub permits an operation, and the gate answers whether the
 operator allowed this job to perform it.
+
+
+## Commit attribution is independent of access
+
+The repository's Git identity supplies the human author and committer defaults
+for all harnesses. The remote clone form and Git access panel let the operator
+set that name and email. GitHub App authentication does not replace it with a
+bot identity. Missing backend identity requires operator configuration before
+committing; Guaca never guesses the installation owner's identity. See
+[GitHub access](GITHUB.md#commit-authorship) for contribution attribution and
+the separate identity GitHub shows on App-created pull requests.

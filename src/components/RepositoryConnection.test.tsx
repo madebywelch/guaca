@@ -8,16 +8,18 @@ const connection = {
   acceptsToken: true,
   managedCredential: false,
 };
-const { read, save, remove, check, app } = vi.hoisted(() => ({
+const { read, save, remove, check, app, author } = vi.hoisted(() => ({
   read: vi.fn(),
   save: vi.fn(),
   remove: vi.fn(),
   check: vi.fn(),
   app: vi.fn(),
+  author: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ({
   api: {
     repositoryConnection: read,
+    setRepositoryAuthor: author,
     setRepositoryGithub: app,
     setRepositoryCredential: save,
     clearRepositoryCredential: remove,
@@ -81,4 +83,44 @@ it("connects and disconnects App access without asking for or displaying a key",
   expect(screen.queryByLabelText("Repository access token")).toBeNull();
   fireEvent.click(screen.getByText("Disconnect GitHub App"));
   await waitFor(() => expect(remove).toHaveBeenCalledWith("repo-1"));
+});
+
+it("updates a legacy commit author independently of App access", async () => {
+  read.mockResolvedValue({
+    ...connection,
+    githubApp: true,
+    author: { name: "guaca", email: "guaca@localhost" },
+  });
+  const identity = { name: "Engineer", email: "123+engineer@users.noreply.github.com" };
+  author.mockResolvedValue({ ...connection, githubApp: true, author: identity });
+  render(<RepositoryConnection id="repo-1" />);
+  fireEvent.click(screen.getByText("Git access"));
+  expect(await screen.findByText(/Set your identity before/)).toBeTruthy();
+  fireEvent.change(screen.getByLabelText("Commit author name"), {
+    target: { value: identity.name },
+  });
+  fireEvent.change(screen.getByLabelText("Commit author email"), {
+    target: { value: identity.email },
+  });
+  fireEvent.click(screen.getByText("Save commit author"));
+  expect(await screen.findByText(/Commit author saved/)).toBeTruthy();
+  expect(author).toHaveBeenCalledWith("repo-1", identity);
+  expect(screen.getByText("Disconnect GitHub App")).toBeTruthy();
+  expect(app).not.toHaveBeenCalled();
+  expect(remove).not.toHaveBeenCalled();
+});
+
+it("shows a failed author save without reporting success", async () => {
+  author.mockRejectedValue(new Error("Could not save this repository's commit identity"));
+  render(<RepositoryConnection id="repo-1" />);
+  fireEvent.click(screen.getByText("Git access"));
+  fireEvent.change(await screen.findByLabelText("Commit author name"), {
+    target: { value: "Engineer" },
+  });
+  fireEvent.change(screen.getByLabelText("Commit author email"), {
+    target: { value: "engineer@example.com" },
+  });
+  fireEvent.click(screen.getByText("Save commit author"));
+  expect((await screen.findByRole("alert")).textContent).toContain("Could not save");
+  expect(screen.queryByText(/Commit author saved/)).toBeNull();
 });

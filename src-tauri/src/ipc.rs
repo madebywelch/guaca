@@ -238,6 +238,7 @@ surface! {
     create_repository(draft: RepositoryDraft) -> Repository,
     update_repository(id: RepositoryId, name: String, note: String, harness: Harness, gate: Gate, bench: Bench) -> Repository,
     coding_harnesses() -> Vec<HarnessOnMachine>,
+    set_repository_author(id: RepositoryId, author: crate::domain::repository::GitIdentity) -> crate::repo::auth::Connection,
     repository_connection(id: RepositoryId) -> crate::repo::auth::Connection,
     create_github_repository(draft: RepositoryDraft) -> Repository,
     set_repository_github(id: RepositoryId) -> crate::repo::auth::Connection,

@@ -387,6 +387,14 @@ impl Repository {
     }
 }
 
+/// The operator's commit attribution, independent of Git authentication.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentity {
+    pub name: String,
+    pub email: String,
+}
+
 /// What an operator submits. Cleaned before it reaches the store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -431,6 +439,9 @@ pub struct RepositoryDraft {
     /// HTTP username required by some Git services. Never a password.
     #[serde(default)]
     pub username: Option<String>,
+    /// Applied to new clones only. Existing directories keep their Git configuration.
+    #[serde(default)]
+    pub author: Option<GitIdentity>,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -659,6 +670,7 @@ mod tests {
             remote: None,
             credential: None,
             username: None,
+            author: None,
         }
     }
 

@@ -282,15 +282,17 @@ code that already existed: the same worktrees, the same `shell` and `code`
 doors, the same push gate, against a clone whose work comes back as branches
 and pushes rather than as a tree the operator is sitting in.
 
-The clone carries three local config lines, each for a failure that would
-otherwise be silent. A `credential.helper` pointing at a file beside the
+The clone carries explicit Git configuration. A `credential.helper` points at a file beside the
 settings, so a fetch or a push from any process standing in the tree (a
 job's harness included) finds the token without the token ever entering
 `.git/config` or a URL; the file is git's own credential-store format, mode
 0600, named for the clone's directory, and it goes when the repository does.
-And an identity, `guaca <guaca@localhost>`, because a box has no
-operator-level git config and a harness that cannot commit reports a broken
-repository rather than a missing name.
+The operator supplies their commit name and email when linking a remote, or
+under **Git access** afterward. Leaving both blank inherits the backend's Git
+configuration. `user.useConfigOnly=true` prevents Git from inventing a container
+identity when that configuration is absent. Existing directories keep their
+identity; older clones using `guaca <guaca@localhost>` can update it under Git
+access. Changes apply to future commits and do not rewrite history.
 
 A token goes with an https remote and is refused for an ssh one, which is
 reached with a key the box holds. Unlinking a clone removes it, clone and

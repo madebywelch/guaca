@@ -587,6 +587,12 @@ it("links through the configured GitHub App while preserving the selected harnes
     });
     fireEvent.click(screen.getByLabelText("Use the GitHub App configured on this backend"));
     fireEvent.click(screen.getByLabelText("Coding harness: Codex"));
+    fireEvent.change(screen.getByLabelText("Commit author name"), {
+      target: { value: "Engineer" },
+    });
+    fireEvent.change(screen.getByLabelText("Commit author email"), {
+      target: { value: "engineer@example.com" },
+    });
     fireEvent.click(screen.getByText("Link"));
     await waitFor(() =>
       expect(createGithubRepository).toHaveBeenCalledWith(
@@ -595,6 +601,7 @@ it("links through the configured GitHub App while preserving the selected harnes
           remote: "https://github.com/team/project.git",
           harness: "codex",
           credential: undefined,
+          author: { name: "Engineer", email: "engineer@example.com" },
         }),
       ),
     );

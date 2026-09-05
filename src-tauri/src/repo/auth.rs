@@ -4,6 +4,7 @@
 use std::{path::Path, process::Stdio, time::Duration};
 
 use super::RepoError;
+use crate::domain::repository::GitIdentity;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,6 +15,7 @@ pub struct Connection {
     pub accepts_token: bool,
     pub github_app: bool,
     pub github_available: bool,
+    pub author: GitIdentity,
 }
 
 fn error(message: &str) -> RepoError {
@@ -137,11 +139,60 @@ fn shown(remote: Option<String>) -> Option<String> {
     })
 }
 
+/// Validate both fields before touching Git config. Identity is public commit
+/// metadata, not a credential, and is never inferred from the installation owner.
+pub fn validate_identity(author: &GitIdentity) -> Result<(), RepoError> {
+    let name = author.name.trim();
+    let email = author.email.trim();
+    if name.is_empty()
+        || name.len() > 256
+        || name.chars().any(|c| c.is_control() || matches!(c, '<' | '>'))
+        || email.len() > 254
+        || email.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '<' | '>'))
+        || !email.split_once('@').is_some_and(|(local, host)| {
+            !local.is_empty() && !host.is_empty() && !host.contains('@')
+        })
+    {
+        return Err(error("Enter your commit name and email address. Use an email linked to your Git account or its noreply address"));
+    }
+    Ok(())
+}
+
+pub async fn identity(path: &str) -> Result<GitIdentity, RepoError> {
+    async fn value(path: &str, key: &str) -> Result<String, RepoError> {
+        let result = git(path, &["config", "--get", key]).await?;
+        match result.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&result.stdout).trim().into()),
+            Some(1) => Ok(String::new()),
+            _ => Err(error("Could not read this repository's commit identity")),
+        }
+    }
+    Ok(GitIdentity {
+        name: value(path, "user.name").await?,
+        email: value(path, "user.email").await?,
+    })
+}
+
+pub async fn set_identity(path: &str, author: &GitIdentity) -> Result<(), RepoError> {
+    validate_identity(author)?;
+    for (key, value) in [
+        ("user.name", author.name.trim()),
+        ("user.email", author.email.trim()),
+        ("user.useConfigOnly", "true"),
+    ] {
+        if !git(path, &["config", "--local", "--replace-all", key, value]).await?.status.success() {
+            return Err(error("Could not save this repository's commit identity. Check backend filesystem permissions"));
+        }
+    }
+    Ok(())
+}
+
 pub async fn connection(path: &str, file: &Path) -> Result<Connection, RepoError> {
     let remote = origin(path, false).await?;
     let push_remote = origin(path, true).await?;
     let accepts_token = remote.as_deref().is_some_and(|r| https_remote(r).is_ok());
     Ok(Connection {
+        author: identity(path).await?,
         remote: shown(remote.clone()),
         push_remote: shown(push_remote),
         github_app: match super::github::attached(path).await {

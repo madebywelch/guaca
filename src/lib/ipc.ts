@@ -223,6 +223,8 @@ export const api = {
    * than the person choosing.
    */
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
+  setRepositoryAuthor: (id: RepositoryId, author: { name: string; email: string }) =>
+    invoke<RepositoryConnection>("set_repository_author", { id, author }),
   repositoryConnection: (id: RepositoryId) =>
     invoke<RepositoryConnection>("repository_connection", { id }),
   setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>

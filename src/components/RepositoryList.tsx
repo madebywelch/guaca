@@ -15,6 +15,7 @@ import {
   type RepositoryDraft,
   type RepositoryId,
 } from "../lib/types";
+import { GitAuthor } from "./GitAuthor";
 import { RepositoryConnection } from "./RepositoryConnection";
 
 interface Props {
@@ -391,6 +392,7 @@ export function RepositoryList({ groupId, crew }: Props) {
     ).then((ok) => ok && reset());
 
   /** The clone form's own two fields; everything else is shared with `draft`. */
+  const [author, setAuthor] = useState({ name: "", email: "" });
   const [cloning, setCloning] = useState({ remote: "", credential: "", username: "" });
 
   const addClone = () =>
@@ -400,6 +402,7 @@ export function RepositoryList({ groupId, crew }: Props) {
         ...draft,
         path: "",
         remote: cloning.remote.trim(),
+        author: author.name.trim() || author.email.trim() ? author : undefined,
         credential: githubApp ? undefined : cloning.credential.trim() || undefined,
         username: cloning.username.trim() || undefined,
       } satisfies RepositoryDraft),
@@ -407,6 +410,7 @@ export function RepositoryList({ groupId, crew }: Props) {
       if (ok) {
         reset();
         setCloning({ remote: "", credential: "", username: "" });
+        setAuthor({ name: "", email: "" });
       }
     });
 
@@ -661,6 +665,15 @@ export function RepositoryList({ groupId, crew }: Props) {
             disabled={busy !== null}
             onChoose={(gate) => setDraft({ ...draft, gate })}
           />
+          {!directory && (
+            <>
+              <GitAuthor author={author} disabled={busy !== null} onChange={setAuthor} />
+              <p className="field__hint">
+                Leave both blank to use the backend's Git identity. If none is configured, set it
+                here or under Git access before committing.
+              </p>
+            </>
+          )}
           {!directory && (
             <label className="field field--row">
               <input

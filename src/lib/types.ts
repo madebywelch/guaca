@@ -491,6 +491,11 @@ export interface RepoStatus {
  * is the canonical path git agreed to and not always the one that was typed.
  * A blank `name` takes the directory's own.
  */
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
 export interface RepositoryDraft {
   groupId: GroupId;
   name: string;
@@ -506,6 +511,7 @@ export interface RepositoryDraft {
    *  the clone, and never read back out. */
   credential?: string;
   username?: string;
+  author?: GitIdentity;
 }
 
 export type PluginId = string;
@@ -1479,6 +1485,7 @@ export interface WorkingNote {
 }
 
 export interface RepositoryConnection {
+  author?: GitIdentity;
   remote: string | null;
   pushRemote: string | null;
   managedCredential: boolean;

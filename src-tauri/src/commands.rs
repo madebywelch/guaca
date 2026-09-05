@@ -749,6 +749,9 @@ async fn create_repository_with_auth(
     github: bool,
 ) -> Reply<Repository> {
     let mut clean = draft.clean()?;
+    if let Some(author) = &draft.author {
+        crate::repo::auth::validate_identity(author)?;
+    }
     if github
         && (clean.remote.is_none()
             || draft.credential.as_deref().is_some_and(|s| !s.trim().is_empty()))
@@ -786,6 +789,9 @@ async fn create_repository_with_auth(
         };
         let cloned = async {
             let path = crate::repo::clone_with_helper(&remote, &into, helper.as_deref()).await?;
+            if let Some(author) = &draft.author {
+                crate::repo::auth::set_identity(&path, author).await?;
+            }
             if github {
                 crate::repo::github::attach(&path, &github_file).await?;
             }
@@ -1024,6 +1030,21 @@ pub async fn repository_connection(
         .store()
         .get_repository(id)?
         .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
+        .await?)
+}
+
+pub async fn set_repository_author(
+    state: &AppState,
+    id: RepositoryId,
+    author: crate::domain::repository::GitIdentity,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    crate::repo::auth::set_identity(&repository.path, &author).await?;
     Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
         .await?)
 }

@@ -98,9 +98,8 @@ fn urlencode(raw: &str) -> String {
 /// credential helper points at the file `keep_credential` wrote, so a fetch or
 /// a push from any process standing in this tree (a job's harness included)
 /// finds the token without the token ever entering `.git/config` or a URL. The
-/// identity is set because a box has no operator-level git config, and a
-/// harness that cannot commit reports a broken repository rather than a
-/// missing name.
+/// identity is configured separately by the operator. Git must not guess one
+/// from the container username or hostname.
 pub async fn clone_remote(
     remote: &str,
     into: &std::path::Path,
@@ -133,14 +132,7 @@ pub async fn clone_with_helper(
             .arg("--config")
             .arg("credential.useHttpPath=true");
     }
-    command
-        .arg("--config")
-        .arg("user.name=guaca")
-        .arg("--config")
-        .arg("user.email=guaca@localhost")
-        .arg("--")
-        .arg(remote)
-        .arg(into);
+    command.arg("--config").arg("user.useConfigOnly=true").arg("--").arg(remote).arg(into);
 
     command
         .env("GIT_TERMINAL_PROMPT", "0")
@@ -1364,7 +1356,8 @@ mod tests {
         assert!(config.contains("credential"), "the helper is set for every later push: {config}");
         assert!(config.contains(&credential.display().to_string()), "{config}");
         assert!(!config.contains("tok%2F"), "the token itself never enters the tree: {config}");
-        assert!(config.contains("name = guaca"), "a box has no operator git identity: {config}");
+        assert!(config.contains("useConfigOnly = true"), "Git must not guess an author: {config}");
+        assert!(!config.contains("name = guaca"), "do not replace the operator identity: {config}");
 
         let _ = tokio::fs::remove_dir_all(&scratch).await;
     }

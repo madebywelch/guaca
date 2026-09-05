@@ -5,11 +5,13 @@ import {
   errorMessage,
   type RepositoryId,
 } from "../lib/types";
+import { GitAuthor } from "./GitAuthor";
 
 /** Git access belongs to the repository, independently of the coding harness. */
 export function RepositoryConnection({ id }: { id: RepositoryId }) {
   const [open, setOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
+  const [author, setAuthor] = useState({ name: "", email: "" });
   const [username, setUsername] = useState("");
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -39,7 +41,12 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
         onClick={() => {
           setOpen(!open);
           setToken("");
-          if (!open) void run(async () => setConnection(await api.repositoryConnection(id)));
+          if (!open)
+            void run(async () => {
+              const next = await api.repositoryConnection(id);
+              setConnection(next);
+              setAuthor(next.author ?? { name: "", email: "" });
+            });
         }}
       >
         Git access
@@ -48,6 +55,29 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
         <>
           {connection && (
             <>
+              <GitAuthor author={author} disabled={busy} onChange={setAuthor} />
+              {(!connection.author?.name ||
+                !connection.author?.email ||
+                connection.author.email === "guaca@localhost") && (
+                <p className="field__hint">
+                  Set your identity before asking an engineer to commit code.
+                </p>
+              )}
+              <button
+                type="button"
+                className="btn btn--small"
+                disabled={busy || !author.name.trim() || !author.email.trim()}
+                onClick={() =>
+                  void run(async () => {
+                    const next = await api.setRepositoryAuthor(id, author);
+                    setConnection(next);
+                    setAuthor(next.author ?? author);
+                    setChecked("Commit author saved. Existing commits are unchanged.");
+                  })
+                }
+              >
+                Save commit author
+              </button>
               <p className="field__hint">Origin: {connection.remote ?? "No origin configured"}</p>
               {connection.pushRemote !== connection.remote && (
                 <p className="field__hint">
@@ -171,7 +201,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
           )}
           {busy && (
             <p className="field__hint" role="status">
-              Checking Git access…
+              Updating Git settings…
             </p>
           )}
           {checked && (
