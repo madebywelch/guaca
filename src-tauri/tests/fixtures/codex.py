@@ -66,8 +66,8 @@ for raw in sys.stdin:
         elif Path(".codex_reject_steer").exists():
             send({"id": request["id"], "error": {"code": -32600, "message": "Correction rejected by fixture"}})
         else:
-            reply(request, {"turnId": turn})
             Path(".steered").write_text(request["params"]["input"][0]["text"])
+            reply(request, {"turnId": turn})
             if not gated:
                 finish()
     elif request.get("id") == 90:
