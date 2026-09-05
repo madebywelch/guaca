@@ -89,12 +89,13 @@ export function HostChoice({
       </p>
     );
 
-  const connect = async () => {
+  const connect = async (update = false) => {
     setBusy(true);
     setError("");
     try {
       let connection: Remote;
-      if (mode === "local") connection = await localHost.start();
+      if (mode === "local")
+        connection = update ? await localHost.update() : await localHost.start();
       else {
         const url = new URL(origin.trim());
         if (url.username || url.password || url.search || url.hash || url.pathname !== "/")
@@ -159,10 +160,20 @@ export function HostChoice({
               <strong>Docker</strong>
               <p role="status">{docker?.message ?? "Checking Docker…"}</p>
               {docker?.updateAvailable && (
-                <p className="field__hint">
-                  This host is running an earlier backend. Connecting keeps its current version and
-                  running jobs.
-                </p>
+                <div className="field">
+                  <p className="field__hint">
+                    A host update is ready. Updating interrupts current jobs and restarts the host.
+                    Guaca keeps a local data backup first.
+                  </p>
+                  <button
+                    type="button"
+                    className="btn btn--small"
+                    disabled={busy}
+                    onClick={() => void connect(true)}
+                  >
+                    Back up and update host
+                  </button>
+                </div>
               )}
               <div className="access__row">
                 {docker?.state === "missing" ? (

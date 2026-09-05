@@ -586,3 +586,25 @@ access remains an explicit alternative for other accounts or Git services.
 GitHub user authorization follows the clone under Git access; it supplies human
 commit and pull-request attribution. Optional names, instructions and manual
 commit metadata are under More options.
+
+## Updating the local host
+
+The desktop compares the managed container's image reference with the one
+built into the application. It offers **Back up and update host** when they
+differ. Updating is explicit because it interrupts jobs. The manager downloads
+the image first, stops the container, copies the whole volume to a new backup
+volume, and only then replaces the container. The running port and token are
+preserved. A failed backup cancels the upgrade. A failure after the new binary
+has touched the database leaves the backup available; it never starts an old
+binary against a potentially migrated database. Backup volume names begin
+with the container name followed by `-backup-` and are kept until the operator
+removes them. This is a recovery backup, not an automatic migration between
+hosts.
+
+`./scripts/release-candidate.sh` runs the gates, builds and exercises a local
+image, and builds its matching native candidate without publishing anything.
+For distribution, first publish a multi-architecture backend image and verify
+it can be pulled without registry credentials. Run the candidate script with
+`GUACA_BACKEND_IMAGE=...@sha256:...` to pin the app to that image. macOS signing
+and notarization remain release prerequisites for a public download. Test on a
+clean Mac and on the remote host before merging or publishing the release.

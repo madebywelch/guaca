@@ -39,7 +39,7 @@
       "icons/icon.ico"
     ],
     "category": "Productivity",
-    "shortDescription": "Local multi-agent chat",
-    "longDescription": "Guaca is a local-first Slack-like surface for talking to LLM agents and letting those agents talk to each other."
+    "shortDescription": "Desktop multi-agent workspace",
+    "longDescription": "Guaca is a desktop interface for agents running in Docker on your Mac or on a remote host."
   }
 }

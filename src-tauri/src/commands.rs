@@ -3073,7 +3073,9 @@ pub async fn import_group(
             runtime.files(),
         )
         .map_err(|e| CommandError::new("import", e))?;
-        for agent in runtime.store().list_agents()?.into_iter().filter(|a| a.group_id == id) {
+        for agent in runtime.store().list_agents()?.into_iter().filter(|a| {
+            a.group_id == id && a.lifecycle != crate::domain::agent::Lifecycle::Terminated
+        }) {
             runtime.start_agent(agent.id);
         }
         runtime.emit(UiEvent::AgentsChanged);

@@ -7,6 +7,7 @@ export interface DockerStatus {
 }
 export const localHost = {
   status: () => invokeLocal<DockerStatus>("local_host_status"),
+  update: () => invokeLocal<Remote>("local_host_update"),
   start: () => invokeLocal<Remote>("local_host_start"),
   openDocker: () => invokeLocal<void>("open_docker"),
 };

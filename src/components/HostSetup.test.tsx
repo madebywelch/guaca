@@ -1,16 +1,17 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { status, start, probe, activate, persist, restart } = vi.hoisted(() => ({
+const { status, start, update, probe, activate, persist, restart } = vi.hoisted(() => ({
   status: vi.fn(),
   start: vi.fn(),
+  update: vi.fn(),
   probe: vi.fn(),
   activate: vi.fn(),
   persist: vi.fn(),
   restart: vi.fn(),
 }));
 vi.mock("../lib/host", () => ({
-  localHost: { status, start, openDocker: vi.fn() },
+  localHost: { status, start, update, openDocker: vi.fn() },
   hostMode: () => "remote",
   rememberMode: vi.fn(),
 }));
@@ -103,5 +104,16 @@ describe("desktop host setup", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(persist).toHaveBeenCalledWith({ origin: "https://vps.example", token: "private" });
+  });
+  it("makes an update explicit and reports that jobs will be interrupted", async () => {
+    status.mockResolvedValue({ state: "running", message: "Ready", updateAvailable: true });
+    update.mockResolvedValue({ origin: "http://127.0.0.1:54321", token: "private" });
+    render(<HostChoice />);
+    const button = await screen.findByRole("button", { name: "Back up and update host" });
+    expect(screen.getByText(/Updating interrupts current jobs/)).toBeTruthy();
+    fireEvent.click(button);
+    await waitFor(() => expect(restart).toHaveBeenCalled());
+    expect(update).toHaveBeenCalledOnce();
+    expect(start).not.toHaveBeenCalled();
   });
 });

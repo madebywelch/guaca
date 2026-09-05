@@ -209,23 +209,19 @@ pub fn export(
 }
 
 fn collect_files(value: &Value, digests: &mut HashSet<String>) {
-    match value {
-        Value::Object(map) => {
-            if let Some(digest) = map.get("digest").and_then(Value::as_str) {
-                digests.insert(digest.to_string());
-            }
-            for v in map.values() {
-                collect_files(v, digests);
-            }
-        }
-        Value::Array(list) => {
-            for v in list {
-                collect_files(v, digests);
+    // Only attachment parts address this store. A tool's arguments may contain
+    // an unrelated hash under the same key and must not make export fail.
+    if let Some(parts) = value.as_array() {
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) == Some("file") {
+                if let Some(digest) = part.get("digest").and_then(Value::as_str) {
+                    digests.insert(digest.to_string());
+                }
             }
         }
-        _ => {}
     }
 }
+
 fn text<'a>(row: &'a Row, key: &str) -> Result<&'a str> {
     row.get(key).and_then(Value::as_str).ok_or_else(|| format!("The group file is missing {key}."))
 }
@@ -275,6 +271,16 @@ fn validate_row(table: &str, row: &Row) -> Result<()> {
         for key in ["from_kind", "to_kind"] {
             if !["agent", "operator", "system"].contains(&text(row, key)?) {
                 return Err("A conversation has an unknown participant.".into());
+            }
+        }
+    }
+    if table == "messages" {
+        if crate::domain::envelope::Trust::parse(text(row, "trust")?).is_none() {
+            return Err("A conversation has an unknown trust level.".into());
+        }
+        for (kind, agent) in [("from_kind", "from_agent"), ("to_kind", "to_agent")] {
+            if text(row, kind)? == "agent" {
+                text(row, agent)?;
             }
         }
     }

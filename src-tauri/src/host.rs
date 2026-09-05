@@ -144,11 +144,72 @@ impl LocalHost {
 
     pub async fn start(&self) -> Result<Connection, String> {
         let _lock = self.lock.lock().await;
+        self.start_unlocked(None).await
+    }
+
+    async fn image_ready(&self) -> Result<(), String> {
+        if docker(&["image", "inspect", &self.image], 15).await.is_err() {
+            docker(&["pull", &self.image], 900).await.map_err(|_| "The Guaca host could not be downloaded. Check your connection and try again. Source installs can build it with scripts/install.sh.".to_string())?;
+        }
+        Ok(())
+    }
+
+    /// Update is explicit: download before interrupting work, then preserve a
+    /// complete stopped-volume backup before the new binary can migrate it.
+    pub async fn update(&self) -> Result<Connection, String> {
+        let _lock = self.lock.lock().await;
+        self.available().await?;
+        let Some(old) = self.inspect().await? else {
+            return self.start_unlocked(None).await;
+        };
+        self.image_ready().await?;
+        let port = published_port(&old).ok();
+        docker(&["stop", &self.name], 60).await?;
+        let backup = format!("{}-backup-{}", self.name, uuid::Uuid::new_v4());
+        let volume = format!("{}-data", self.name);
+        let saved = docker(
+            &[
+                "run",
+                "--rm",
+                "--user",
+                "0",
+                "--entrypoint",
+                "cp",
+                "--mount",
+                &format!("type=volume,src={volume},dst=/source,readonly"),
+                "--mount",
+                &format!("type=volume,src={backup},dst=/backup"),
+                &self.image,
+                "-a",
+                "/source/.",
+                "/backup/",
+            ],
+            600,
+        )
+        .await;
+        if saved.is_err() {
+            // The new image has not seen the live volume, so this rollback is safe.
+            return match docker(&["start", &self.name], 60).await {
+                Ok(_) => Err("The host backup could not be completed. The update was canceled and the previous host was restarted.".into()),
+                Err(_) => Err("The host backup could not be completed. The update was canceled, but Docker could not restart the previous host. Your data is preserved; check Docker and try again.".into()),
+            };
+        }
+        tracing::info!(container = %self.name, %backup, image = %self.image, "updating local host after volume backup");
+        docker(&["rm", &self.name], 30).await?;
+        self.start_unlocked(port).await.map_err(|error| {
+            format!(
+                "The updated host could not start. Your backup is Docker volume {backup}. {error}"
+            )
+        })
+    }
+
+    async fn start_unlocked(&self, port: Option<u16>) -> Result<Connection, String> {
         self.available().await?;
         if self.inspect().await?.is_none() {
-            if docker(&["image", "inspect", &self.image], 15).await.is_err() {
-                docker(&["pull", &self.image], 900).await.map_err(|_| "The Guaca host could not be downloaded. Check your connection and try again. Source installs can build it with scripts/install.sh.".to_string())?;
-            }
+            self.image_ready().await?;
+            let binding = port
+                .map(|p| format!("127.0.0.1:{p}:8787"))
+                .unwrap_or_else(|| "127.0.0.1::8787".into());
             let volume = format!("{}-data", self.name);
             docker(
                 &[
@@ -164,7 +225,7 @@ impl LocalHost {
                     "--stop-timeout",
                     "30",
                     "--publish",
-                    "127.0.0.1::8787",
+                    &binding,
                     "--mount",
                     &format!("type=volume,src={volume},dst=/var/lib/guaca"),
                     "--add-host",
@@ -257,6 +318,53 @@ mod tests {
             .await
             .unwrap();
         assert!(reply["ok"].as_array().unwrap().iter().any(|g| g["name"] == "Persistent test"));
+        let updated = host.update().await.unwrap();
+        assert_eq!(updated.origin, resumed.origin);
+        assert_eq!(updated.token, resumed.token);
+        let groups: Value = http
+            .post(format!("{}/v1/call", updated.origin))
+            .bearer_auth(&updated.token)
+            .json(&serde_json::json!({"name":"list_groups","args":{}}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(groups["ok"].as_array().unwrap().iter().any(|g| g["name"] == "Persistent test"));
+        let backups = docker(
+            &[
+                "volume",
+                "ls",
+                "--filter",
+                &format!("name={container}-backup-"),
+                "--format",
+                "{{.Name}}",
+            ],
+            15,
+        )
+        .await
+        .unwrap();
+        assert_eq!(backups.lines().count(), 1);
+        for backup in backups.lines() {
+            let result = docker(
+                &[
+                    "run",
+                    "--rm",
+                    "--entrypoint",
+                    "test",
+                    "--mount",
+                    &format!("type=volume,src={backup},dst=/saved,readonly"),
+                    &image,
+                    "-s",
+                    "/saved/data/guac.db",
+                ],
+                30,
+            )
+            .await;
+            assert!(result.is_ok(), "backup contains the database");
+            docker(&["volume", "rm", backup], 30).await.unwrap();
+        }
         docker(&["rm", "-f", &container], 45).await.unwrap();
         docker(&["volume", "rm", &format!("{container}-data")], 30).await.unwrap();
     }

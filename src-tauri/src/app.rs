@@ -13,6 +13,10 @@ async fn local_host_start(state: tauri::State<'_, LocalHost>) -> Result<Connecti
     state.start().await
 }
 #[tauri::command]
+async fn local_host_update(state: tauri::State<'_, LocalHost>) -> Result<Connection, String> {
+    state.update().await
+}
+#[tauri::command]
 async fn open_docker() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -78,6 +82,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             local_host_status,
             local_host_start,
+            local_host_update,
             open_docker,
             forward_files,
             report_presence,
