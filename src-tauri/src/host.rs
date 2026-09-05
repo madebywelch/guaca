@@ -27,6 +27,14 @@ pub struct Status {
     pub update_available: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExistingHost {
+    pub name: String,
+    pub label: String,
+    pub origin: String,
+}
+
 pub struct LocalHost {
     name: String,
     image: String,
@@ -115,6 +123,56 @@ impl LocalHost {
             return Err("Guaca needs Docker's Linux containers. Switch Docker to Linux containers and check again.".into());
         }
         Ok(())
+    }
+
+    pub async fn existing(&self) -> Result<Vec<ExistingHost>, String> {
+        self.available().await?;
+        let names = docker(
+            &[
+                "container",
+                "ls",
+                "--filter",
+                "label=com.docker.compose.service=guacad",
+                "--format",
+                "{{.Names}}",
+            ],
+            15,
+        )
+        .await?;
+        let mut hosts = Vec::new();
+        for name in names.lines() {
+            let raw = docker(&["container", "inspect", name], 15).await?;
+            let values: Vec<Value> =
+                serde_json::from_str(&raw).map_err(|_| "Docker returned an unreadable host.")?;
+            if let Some(value) = values.first() {
+                if let Ok(port) = published_port(value) {
+                    hosts.push(ExistingHost {
+                        name: name.into(),
+                        label: value["Config"]["Labels"]["com.docker.compose.project"]
+                            .as_str()
+                            .unwrap_or(name)
+                            .into(),
+                        origin: format!("http://127.0.0.1:{port}"),
+                    });
+                }
+            }
+        }
+        Ok(hosts)
+    }
+
+    pub async fn connect_existing(&self, name: &str) -> Result<Connection, String> {
+        let host = self
+            .existing()
+            .await?
+            .into_iter()
+            .find(|h| h.name == name)
+            .ok_or("That local Guaca host is no longer available.")?;
+        // No caller-supplied path or command can reach Docker through this API.
+        let token = docker(&["exec", &host.name, "cat", "/var/lib/guaca/config/token"], 15).await?;
+        if token.is_empty() {
+            return Err("This host has no saved access key. Connect with its address and key under Remote host.".into());
+        }
+        Ok(Connection { origin: host.origin, token })
     }
 
     pub async fn status(&self) -> Status {

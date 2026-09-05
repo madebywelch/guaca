@@ -1,5 +1,11 @@
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { type DockerStatus, hostMode, localHost, rememberMode } from "../lib/host";
+import {
+  type DockerStatus,
+  type ExistingHost,
+  hostMode,
+  localHost,
+  rememberMode,
+} from "../lib/host";
 import {
   activateRemote,
   attached,
@@ -68,11 +74,13 @@ export function HostChoice({
   const [origin, setOrigin] = useState(attached()?.origin ?? "");
   const [token, setToken] = useState("");
   const [docker, setDocker] = useState<DockerStatus | null>(null);
+  const [existing, setExisting] = useState<ExistingHost[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(initialError);
   const refresh = useCallback(async () => {
     try {
       setDocker(await localHost.status());
+      setExisting(await localHost.existing().catch(() => []));
     } catch (cause) {
       setDocker({ state: "unavailable", message: errorMessage(cause), updateAvailable: false });
     }
@@ -80,6 +88,27 @@ export function HostChoice({
   useEffect(() => {
     if (desktop && mode === "local") void refresh();
   }, [mode, refresh]);
+
+  const connectExisting = async (name: string) => {
+    setBusy(true);
+    setError("");
+    try {
+      const connection = await localHost.connect(name);
+      await probe(connection);
+      rememberMode("remote");
+      if (onConnected) {
+        activateRemote(connection);
+        onConnected();
+      } else {
+        setRemote(connection);
+        restart();
+      }
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   if (!desktop)
     return (
@@ -155,6 +184,26 @@ export function HostChoice({
             Runs privately in Docker on this Mac. Agents keep working when you close Guaca, but
             pause when your Mac sleeps.
           </p>
+          {existing.length > 0 && (
+            <section className="field" aria-label="Existing local hosts">
+              <span className="field__label">Already running on this Mac</span>
+              <p className="field__hint">
+                Use an existing host to keep working with its groups. These hosts are managed
+                outside this app.
+              </p>
+              {existing.map((host) => (
+                <button
+                  key={host.name}
+                  className="btn btn--small"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void connectExisting(host.name)}
+                >
+                  Use {host.label} ({host.origin})
+                </button>
+              ))}
+            </section>
+          )}
           <section className="preset preset--plain" aria-label="Docker status">
             <div className="preset__text">
               <strong>Docker</strong>

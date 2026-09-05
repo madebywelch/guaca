@@ -17,6 +17,19 @@ async fn local_host_update(state: tauri::State<'_, LocalHost>) -> Result<Connect
     state.update().await
 }
 #[tauri::command]
+async fn local_hosts(
+    state: tauri::State<'_, LocalHost>,
+) -> Result<Vec<crate::host::ExistingHost>, String> {
+    state.existing().await
+}
+#[tauri::command]
+async fn connect_local_host(
+    state: tauri::State<'_, LocalHost>,
+    name: String,
+) -> Result<Connection, String> {
+    state.connect_existing(&name).await
+}
+#[tauri::command]
 async fn open_docker() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -83,6 +96,8 @@ pub fn run() {
             local_host_status,
             local_host_start,
             local_host_update,
+            local_hosts,
+            connect_local_host,
             open_docker,
             forward_files,
             report_presence,

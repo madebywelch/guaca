@@ -5,7 +5,14 @@ export interface DockerStatus {
   message: string;
   updateAvailable: boolean;
 }
+export interface ExistingHost {
+  name: string;
+  label: string;
+  origin: string;
+}
 export const localHost = {
+  existing: () => invokeLocal<ExistingHost[]>("local_hosts"),
+  connect: (name: string) => invokeLocal<Remote>("connect_local_host", { name }),
   status: () => invokeLocal<DockerStatus>("local_host_status"),
   update: () => invokeLocal<Remote>("local_host_update"),
   start: () => invokeLocal<Remote>("local_host_start"),

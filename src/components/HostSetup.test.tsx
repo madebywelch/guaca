@@ -1,17 +1,21 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { status, start, update, probe, activate, persist, restart } = vi.hoisted(() => ({
-  status: vi.fn(),
-  start: vi.fn(),
-  update: vi.fn(),
-  probe: vi.fn(),
-  activate: vi.fn(),
-  persist: vi.fn(),
-  restart: vi.fn(),
-}));
+const { status, start, update, existing, connect, probe, activate, persist, restart } = vi.hoisted(
+  () => ({
+    existing: vi.fn(),
+    connect: vi.fn(),
+    status: vi.fn(),
+    start: vi.fn(),
+    update: vi.fn(),
+    probe: vi.fn(),
+    activate: vi.fn(),
+    persist: vi.fn(),
+    restart: vi.fn(),
+  }),
+);
 vi.mock("../lib/host", () => ({
-  localHost: { status, start, update, openDocker: vi.fn() },
+  localHost: { status, start, update, existing, connect, openDocker: vi.fn() },
   hostMode: () => "remote",
   rememberMode: vi.fn(),
 }));
@@ -30,6 +34,7 @@ import { HostChoice, HostSetup } from "./HostSetup";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  existing.mockResolvedValue([]);
   status.mockResolvedValue({ state: "ready", message: "Docker is ready.", updateAvailable: false });
   probe.mockResolvedValue({});
 });
@@ -47,6 +52,20 @@ describe("desktop host setup", () => {
     await screen.findByText("Workspace mounted");
     expect(probe).toHaveBeenCalledWith({ origin: "http://127.0.0.1:54321", token: "private" });
     expect(activate).toHaveBeenCalled();
+  });
+  it("connects an existing local workspace without creating another host", async () => {
+    existing.mockResolvedValue([
+      { name: "existing-guacad-1", label: "My workspace", origin: "http://127.0.0.1:8788" },
+    ]);
+    const connection = { origin: "http://127.0.0.1:8788", token: "private" };
+    connect.mockResolvedValue(connection);
+    render(<HostChoice />);
+    fireEvent.click(await screen.findByRole("button", { name: /Use My workspace/ }));
+    await waitFor(() => expect(restart).toHaveBeenCalled());
+    expect(connect).toHaveBeenCalledWith("existing-guacad-1");
+    expect(probe).toHaveBeenCalledWith(connection);
+    expect(persist).toHaveBeenCalledWith(connection);
+    expect(start).not.toHaveBeenCalled();
   });
   it("keeps setup open when the host fails", async () => {
     start.mockRejectedValue("The host could not be downloaded.");
