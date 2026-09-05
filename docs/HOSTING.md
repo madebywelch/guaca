@@ -19,20 +19,29 @@ Tauri remains an optional Cargo feature. Build the backend with
 `Deployment::Desktop` remains for library compatibility and tests, not as an
 alternative startup mode in the downloadable application.
 
-## Two, not three
+## Portable hosts now, managed compute spaces next
 
-An operator chooses between three things: run it here, run it on a box they
-rent, or let guaca.ai hand them one. The runtime only ever sees two, because
-the difference between the last two is who pressed the button at the provider.
-`Deployment` is `Desktop` or `Server`, and there is no third variant.
+This change delivers the native desktop client, local Docker setup, explicit
+remote-host connections, and group export/import. Both local Docker and a VPS
+run the same server runtime. `Deployment::Desktop` remains for compatibility;
+managed hosting does not need another runtime variant.
 
-That is what makes bring-your-own-box free rather than a second product. A
-managed box and an operator's own box run the same binary, hold the same state
-and refuse the same things, and nothing below `Deployment` can tell them apart
-or has any business trying. Whoever provisioned it is a fact about the bill,
-and the bill is not the runtime's subject. If a change needs a third variant,
-something below that line has started caring who paid, and that is the thing
-to undo.
+The next phase is a managed Guaca product with persistent compute spaces.
+The user signs in, creates or selects a space, and the app discovers its
+connection. Provisioning, ownership, billing, and workspace discovery belong
+to the managed service. They are not implemented by this change.
+
+`guaca.bot` remains the central identity and integration service for providers
+such as Google, serving Gmail, Calendar, and Drive tools. Its account and
+provider grants must be separate from the lifecycle and address of a compute
+space. The intended authorization boundary is described in
+[The account](ACCOUNT.md#managed-compute-is-the-next-phase).
+
+Self-hosting remains supported without a Guaca account unless an integration
+requires it. Explicit host addresses are part of that option. SSH tunnels and
+Tailscale can support testing or private deployments; a particular Tailnet
+hostname is not part of the managed product's sign-in contract. Managed users
+should not configure host addresses, Docker, or callback URLs.
 
 ## One list, three readers
 
@@ -160,11 +169,11 @@ shape, same sentences.
 
 ## A sign-in comes back through the origin the browser used
 
-Every OAuth flow in the app lands its redirect on a loopback port bound
-before the redirect is named, which is the argument `oauth.rs` opens with. A
-box has no browser at the machine and no port a remote browser could reach,
-so on a server the redirect is a route, `/v1/oauth/callback`, on the origin
-the operator's browser reached the workspace at.
+Account sign-in and OAuth-enabled MCP plugins use authorization code with
+PKCE. The original embedded runtime bound a loopback port before naming the
+redirect. The server runtime uses `/v1/oauth/callback` on the origin through
+which the operator reaches the workspace. ChatGPT and GitHub device sign-ins
+do not redirect to this route.
 
 `Landing` is the seam. `Loopback` binds the port; `Served` files the flow
 under its `state` in a map the daemon holds, and names the route on the
@@ -191,14 +200,16 @@ window opened from an event rather than a click is one a browser may refuse
 and a sign-in that opened nothing looks exactly like one that hung. The banner
 goes when the flow behind it ends, either way.
 
-Two things this does not settle. A vendor that only accepts loopback or
-`https` redirect URIs for a self-registered client refuses a box reached over
-plain `http`; behind a tunnel the redirect is `https` and this does not
-arise. And the guaca.bot account registered its client with a loopback
-redirect: the served redirect has to be registered there too before an
-account sign-in from a box completes. `tests/account.rs` drives the flow
-against a scripted server that accepts it; the live service is a change on
-the other side of that wire.
+Plugin sign-in registers its callback dynamically, subject to the vendor's
+redirect rules. HTTPS reverse proxies provide an HTTPS callback; an SSH port
+forward provides the local HTTP callback described below.
+
+Account sign-in uses the fixed `guaca-desktop` client at guaca.bot. Its current
+registrations allow the loopback paths, not arbitrary remote hostnames. A
+reachable `/v1/oauth/callback` route does not itself authorize that URL with
+guaca.bot. The service must accept it before sign-in can complete.
+`tests/account.rs` checks the served flow against a scripted service; it does
+not establish acceptance of a production hostname.
 
 ## The desktop app can show a box, and the menu bar follows
 
@@ -322,11 +333,23 @@ runtime, every command, the transcript, the desk, the flow board, the
 schedule, the compost and the plugins that were signed in before the move.
 What it does not have yet:
 
-- **Account sign-in from a VPS.** The operator's exact HTTPS callback must be
-  registered with the account service. Local Docker callbacks use
+- **Account sign-in at an unregistered remote hostname.** Settings → Account
+  cannot complete sign-in when guaca.bot rejects the host's callback, typically
+  with `invalid_redirect`. This also prevents connecting account-backed Google
+  tools there; conversations, coding, and device-code sign-ins remain usable.
+  The exact HTTPS callback must be accepted by the account service. Local
+  Docker callbacks use
   `http://127.0.0.1:<port>/v1/oauth/callback`; guaca-bot migration 0005 registers
   that path with native loopback port matching. A browser using `localhost`
-  returns to `127.0.0.1` for OAuth. Arbitrary remote hosts are not accepted.
+  returns to `127.0.0.1` for OAuth. A VPS reached through a local SSH forward
+  can use that same registered pattern while the tunnel is open, provided
+  `GUACA_ORIGIN` does not override it with another origin. VPS hosting alone
+  does not make the callback fail.
+- **Managed compute spaces.** Provisioning, billing, ownership, automatic
+  connection discovery, and account-to-workspace authorization are next-phase
+  work. Registering individual VPS or Tailnet callbacks is not the planned
+  managed onboarding flow. Google provider callbacks stay at guaca.bot;
+  changing a compute host must not require changing those registrations.
 
 ## Connecting a desktop to a VPS over SSH
 

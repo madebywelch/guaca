@@ -2,7 +2,7 @@
 
 > I built this for myself. It's useful, and maybe it will be for you too.
 
-A local desktop app where you talk to LLM agents and those agents talk to each
+A native desktop app where you talk to LLM agents and those agents talk to each
 other. Slack-shaped: a rail of agents on the left, a conversation on the right,
 and an activity view showing every message they send between themselves.
 
@@ -13,8 +13,14 @@ message, and they think at once rather than in turn. You watch it happen: who is
 typing, who wrote to whom, what the group has spent so far. When they are done
 you get one answer, not a transcript to wade through.
 
-Everything runs on your machine. The only thing that leaves is what you and your
-agents type, sent to whichever provider you point it at.
+The desktop connects to a backend running in Docker on your Mac or on a remote
+host you operate. That host keeps your workspace and runs your agents when the
+app closes. A local host still needs the Mac to stay awake. Model and tool
+requests go to the providers you configure.
+
+Managed Guaca compute spaces are planned as the next phase. Provisioning,
+billing, and automatic workspace discovery are not part of this change;
+self-hosting remains supported. See [Hosting](docs/HOSTING.md).
 
 ## The crew
 
@@ -389,17 +395,21 @@ system prompt says what a signed-in agent must stop short of. See **Credit**.
 
 ## The account
 
-Optional, and an install that never signs in never contacts it. Everything above
-works with no account at all.
+Optional for local and self-hosted workspaces, except when using account-backed
+integrations. `guaca.bot` provides the registered OAuth identity for Google
+and serves Gmail, Calendar, and Drive tools. Google credentials stay with that
+service; a workspace accesses the tools using its Guaca account authorization.
+Model-provider and GitHub repository sign-ins are separate.
 
-It exists for one thing: a hosted OAuth client. Signing an agent's own browser
-in is the better answer wherever it works, and it stops working at exactly the
-services that will only issue programmatic access to a registered application.
-Gmail is the one everybody hits. Guaca cannot be that application, because its
-client secret would ship inside a download anybody can read. `guaca.bot` can:
-it holds the client and the refresh token, and hands this machine a short-lived
-access token. That is where the Google plugin's tools come from, and it is read
-on a turn that calls one of them and nowhere else. `docs/ACCOUNT.md`.
+**Current remote-host limitation:** Settings → Account cannot complete sign-in
+at a hostname whose callback guaca.bot has not accepted. Local Docker and a VPS
+reached through an open local SSH tunnel can use the registered loopback
+callback. An arbitrary HTTPS or Tailnet hostname cannot. This affects account
+sign-in and connecting Google tools, not the rest of the runtime.
+
+Managed account-to-workspace connections are next-phase work, outside this
+change. [The account](docs/ACCOUNT.md) describes the current flow and intended
+separation between central integrations and compute spaces.
 
 ## The menu bar
 
@@ -477,17 +487,18 @@ subsystem, listing the changes that looked obviously right and were not.
 
 ## Status
 
-A working app that its author uses, not a product. It is macOS-first: the paths
-above are macOS paths, and nothing else has been tried. Expect rough edges,
-particularly around sandboxes, which are the newest part.
+The desktop client is macOS-first. The container backend has also been tested
+on a Linux VPS. This change establishes portable execution and explicit host
+connections; the managed Guaca service is follow-up work. See
+[Hosting](docs/HOSTING.md#what-is-not-built) for current limitations.
 
 ## Credit
 
 **Inspired by Grokbot, and not a clone of it.** The shape came from there:
 agents you talk to that also talk to each other, in a room you can watch.
 Everything under that shape is this repo's own work, sharing no code, no assets
-and no service with it. Guaca runs on your machine, on whichever provider you
-point it at.
+and no service with it. Guaca runs on the host you choose, with the model
+providers you configure.
 
 Its message layer is derived from the four agent interoperability protocols
 (MCP, ACP, A2A, ANP) and from the survey comparing them, *A survey of agent
