@@ -700,65 +700,88 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   />
                 )}
 
-                <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
-                  Or any OpenAI-compatible endpoint. The ones below are spelled correctly; choosing
-                  one fills in the two fields under it, and anything else can be typed in.
-                </p>
+                {provider === "compatible" ? (
+                  <>
+                    <p className="settings__lede" style={{ marginTop: "1.4rem" }}>
+                      Or any OpenAI-compatible endpoint. The ones below are spelled correctly;
+                      choosing one fills in the two fields under it, and anything else can be typed
+                      in.
+                    </p>
 
-                <ProviderPresets
-                  baseUrl={baseUrl}
-                  active={provider === "compatible"}
-                  keySet={Boolean(settings?.apiKeySet)}
-                  loopback={capabilities.loopbackEndpoints}
-                  onChoose={choose}
-                />
+                    <ProviderPresets
+                      baseUrl={baseUrl}
+                      active={true}
+                      keySet={Boolean(settings?.apiKeySet)}
+                      loopback={capabilities.loopbackEndpoints}
+                      onChoose={choose}
+                    />
 
-                <label className="field" style={{ marginTop: "1.1rem" }}>
-                  <span className="field__label">Inference endpoint</span>
-                  <input
-                    className="input input--mono"
-                    value={baseUrl}
-                    placeholder="https://openrouter.ai/api/v1"
-                    onChange={(event) => setBaseUrl(event.target.value)}
-                  />
-                  <span className="field__hint">
-                    Any OpenAI-compatible base URL. Point it at a local server to run without a
-                    network.
-                  </span>
-                </label>
+                    <label className="field" style={{ marginTop: "1.1rem" }}>
+                      <span className="field__label">Inference endpoint</span>
+                      <input
+                        className="input input--mono"
+                        value={baseUrl}
+                        placeholder="https://openrouter.ai/api/v1"
+                        onChange={(event) => setBaseUrl(event.target.value)}
+                      />
+                      <span className="field__hint">
+                        Any OpenAI-compatible base URL. Point it at a local server to run without a
+                        network.
+                      </span>
+                    </label>
 
-                <label className="field">
-                  <span className="field__label">API key</span>
-                  <input
-                    className="input input--mono"
-                    type="password"
-                    value={apiKey}
-                    placeholder={
-                      settings?.apiKeySet ? `Stored ${settings.apiKeyHint}` : "sk-or-v1-…"
-                    }
-                    autoComplete="off"
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                  <span className="field__hint">
-                    Stored on this machine in a file only your user account can read, and never sent
-                    to the webview. Leave blank to keep the current key. A server on this machine
-                    usually wants none.
-                  </span>
-                </label>
+                    <label className="field">
+                      <span className="field__label">API key</span>
+                      <input
+                        className="input input--mono"
+                        type="password"
+                        value={apiKey}
+                        placeholder={
+                          settings?.apiKeySet ? `Stored ${settings.apiKeyHint}` : "sk-or-v1-…"
+                        }
+                        autoComplete="off"
+                        onChange={(event) => setApiKey(event.target.value)}
+                      />
+                      <span className="field__hint">
+                        Stored on this machine in a file only your user account can read, and never
+                        sent to the webview. Leave blank to keep the current key. A server on this
+                        machine usually wants none.
+                      </span>
+                    </label>
 
-                <label className="field">
-                  <span className="field__label">Default model</span>
-                  <input
-                    className="input input--mono"
-                    value={model}
-                    placeholder="anthropic/claude-sonnet-4.5"
-                    onChange={(event) => setModel(event.target.value)}
-                  />
-                  <span className="field__hint">
-                    The default model for any group that does not name one, and any agent that does
-                    not name one.
-                  </span>
-                </label>
+                    <label className="field">
+                      <span className="field__label">Default model</span>
+                      <input
+                        className="input input--mono"
+                        value={model}
+                        placeholder="anthropic/claude-sonnet-4.5"
+                        onChange={(event) => setModel(event.target.value)}
+                      />
+                      <span className="field__hint">
+                        The default model for any group that does not name one, and any agent that
+                        does not name one.
+                      </span>
+                    </label>
+                  </>
+                ) : (
+                  <div className="preset preset--plain">
+                    <span className="preset__text">
+                      <span className="preset__name">API provider</span>
+                      <span className="preset__url">
+                        OpenRouter, local models, or any OpenAI-compatible endpoint
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn--small"
+                      aria-label="Use an API provider"
+                      disabled={busy}
+                      onClick={() => setProvider("compatible")}
+                    >
+                      Use it
+                    </button>
+                  </div>
+                )}
 
                 <label className="field">
                   <span className="field__label">Give up on a call after</span>
