@@ -105,8 +105,8 @@ pub enum StoreError {
     GroupNotFound(GroupId),
     #[error("{name:?} still has {agents} agent(s); move or delete them before deleting the group")]
     GroupNotEmpty { name: String, agents: u32 },
-    #[error("every agent has to be in a group, so the first one cannot be deleted")]
-    CannotDeleteDefaultGroup,
+    #[error("at least one group must remain, so the last group cannot be deleted")]
+    CannotDeleteLastGroup,
     #[error("no routine with id {0}")]
     RoutineNotFound(RoutineId),
     #[error("no connector with id {0}")]
@@ -144,20 +144,39 @@ fn bootstrap_lock() -> &'static parking_lot::Mutex<()> {
     LOCK.get_or_init(|| parking_lot::Mutex::new(()))
 }
 
-/// The group an agent lands in when nothing says otherwise. Parsed from the
-/// migration's pinned constant so the two can never drift apart.
+/// The group created by the migration, before any operator edits.
+#[cfg(test)]
 fn default_group_id() -> GroupId {
     migrations::DEFAULT_GROUP_ID.parse().expect("the pinned default group id is a valid uuid")
+}
+
+/// The oldest surviving group, in the same order as the group list. Excluding
+/// the group being deleted keeps retained transcripts attached to a real crew.
+fn fallback_group(
+    conn: &rusqlite::Connection,
+    excluding: Option<GroupId>,
+) -> Result<GroupId, StoreError> {
+    let id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM groups WHERE (?1 IS NULL OR id <> ?1)
+         ORDER BY created_at, rowid LIMIT 1",
+            params![excluding.map(|id| id.to_string())],
+            |row| row.get(0),
+        )
+        .optional()?;
+    id.ok_or(StoreError::CannotDeleteLastGroup)?
+        .parse()
+        .map_err(|e| StoreError::Corrupt(format!("invalid group id: {e}")))
 }
 
 /// A fresh card from a validated draft. Everything an agent goes on to acquire
 /// (a machine, its tokens, a pin) starts empty: those are things it did, not
 /// things anybody wrote down.
-fn new_card(draft: &CleanDraft, rail_order: i32) -> AgentCard {
+fn new_card(draft: &CleanDraft, rail_order: i32, fallback: GroupId) -> AgentCard {
     let now = now_ms();
     AgentCard {
         id: AgentId::new(),
-        group_id: draft.group_id.unwrap_or_else(default_group_id),
+        group_id: draft.group_id.unwrap_or(fallback),
         name: draft.name.clone(),
         avatar: draft.avatar.clone(),
         color: draft.color.clone(),
@@ -313,9 +332,11 @@ impl Store {
     // ---- agents ----------------------------------------------------------
 
     pub fn create_agent(&self, draft: &CleanDraft) -> Result<AgentCard, StoreError> {
-        let conn = self.conn()?;
-        let card = new_card(draft, bottom_of_rail(&conn)?);
-        insert_agent(&conn, &card)?;
+        let mut conn = self.conn()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let card = new_card(draft, bottom_of_rail(&tx)?, fallback_group(&tx, None)?);
+        insert_agent(&tx, &card)?;
+        tx.commit()?;
         Ok(card)
     }
 
@@ -329,16 +350,17 @@ impl Store {
     /// workspace they did not ask for and no list of what landed.
     pub fn create_agents(&self, drafts: &[CleanDraft]) -> Result<Vec<AgentCard>, StoreError> {
         let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // One read, then consecutive slots. Asking for the bottom once per
         // agent would give a whole crew the same answer, because none of them
         // is written until the transaction commits, and the rail would then
         // order them by the tiebreak rather than by the order they were picked.
         let first = bottom_of_rail(&tx)?;
+        let fallback = fallback_group(&tx, None)?;
         let cards: Vec<AgentCard> = drafts
             .iter()
             .enumerate()
-            .map(|(offset, draft)| new_card(draft, first.saturating_add(offset as i32)))
+            .map(|(offset, draft)| new_card(draft, first.saturating_add(offset as i32), fallback))
             .collect();
         for card in &cards {
             insert_agent(&tx, card)?;
@@ -3158,8 +3180,7 @@ impl Store {
     }
 
     /// The refusals that do not depend on the group being empty: it has to
-    /// exist, and the default group has to stay, because every agent has to be
-    /// in one.
+    /// exist, and at least one other group has to remain.
     ///
     /// Separate from `delete_group` so disbanding a crew can refuse before it
     /// starts destroying machines. A disband that killed a group's computers
@@ -3167,9 +3188,8 @@ impl Store {
     /// spent the irreversible half of the work on a call that fails.
     pub fn group_for_removal(&self, id: GroupId) -> Result<Group, StoreError> {
         let group = self.get_group(id)?.ok_or(StoreError::GroupNotFound(id))?;
-        if id == default_group_id() {
-            return Err(StoreError::CannotDeleteDefaultGroup);
-        }
+        let conn = self.conn()?;
+        fallback_group(&conn, Some(id))?;
         Ok(group)
     }
 
@@ -3182,61 +3202,73 @@ impl Store {
     ///
     /// Deleted agents are a different matter. They are kept only so their
     /// transcripts still render, and they cannot be reached or act, so they are
-    /// moved to the default group rather than holding a group open forever.
+    /// moved to the oldest surviving group rather than holding a group open forever.
     /// Counting them was why deleting every agent in a group still reported
     /// three agents in it.
     pub fn delete_group(&self, id: GroupId) -> Result<(), StoreError> {
-        let group = self.group_for_removal(id)?;
-        if group.agent_count > 0 {
-            return Err(StoreError::GroupNotEmpty { name: group.name, agents: group.agent_count });
+        let mut conn = self.conn()?;
+        // Hold the write lock from the last-group check through cleanup. Two
+        // deletions must not each count the other group and leave none.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (name, agents): (String, u32) = tx
+            .query_row(
+                "SELECT name, (SELECT count(*) FROM agents
+                WHERE group_id=?1 AND lifecycle <> 'terminated') FROM groups WHERE id=?1",
+                params![id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?
+            .ok_or(StoreError::GroupNotFound(id))?;
+        let fallback = fallback_group(&tx, Some(id))?;
+        if agents > 0 {
+            return Err(StoreError::GroupNotEmpty { name, agents });
         }
 
-        let default = default_group_id();
-        let conn = self.conn()?;
-        conn.execute(
+        tx.execute(
             "UPDATE agents SET group_id=?2 WHERE group_id=?1",
-            params![id.to_string(), default.to_string()],
+            params![id.to_string(), fallback.to_string()],
         )?;
         // The group's accounts go with it. They are scoped to it, so moving
         // them would hand another crew credentials nobody gave it, and leaving
         // them would fail the foreign key on the row below.
-        conn.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM connectors WHERE group_id=?1", params![id.to_string()])?;
         // And the directories it was working in. Guaca's record of them only:
         // nothing on the operator's disk is touched by disbanding a crew. Who
         // was named on one goes first, or the foreign key refuses the line after
         // it, which is the same ordering the plugin tables below need.
-        conn.execute(
+        tx.execute(
             "UPDATE agents SET repository_id=NULL WHERE repository_id IN
                  (SELECT id FROM repositories WHERE group_id=?1)",
             params![id.to_string()],
         )?;
-        conn.execute("DELETE FROM repositories WHERE group_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM repositories WHERE group_id=?1", params![id.to_string()])?;
         // And its plugins, for both of those reasons and one more: the row
         // holds a grant against the operator's own Neon or Cloudflare account,
         // and a disbanded crew is not a reason to keep one. Whoever was named
         // on one goes first, along with whatever was switched off on it, or the
         // foreign key refuses the line below.
-        conn.execute(
+        tx.execute(
             "DELETE FROM plugin_agents WHERE plugin_id IN
                  (SELECT id FROM plugins WHERE group_id=?1)",
             params![id.to_string()],
         )?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM plugin_tool_access WHERE plugin_id IN
                  (SELECT id FROM plugins WHERE group_id=?1)",
             params![id.to_string()],
         )?;
-        conn.execute(
+        tx.execute(
             "DELETE FROM plugin_tool_agents WHERE plugin_id IN
                  (SELECT id FROM plugins WHERE group_id=?1)",
             params![id.to_string()],
         )?;
-        conn.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM plugins WHERE group_id=?1", params![id.to_string()])?;
         // And its calendar. Nothing outside the crew reads it, so there is
         // nobody left for the dates to be true for; leaving them would fail the
         // foreign key on the line below in any case.
-        conn.execute("DELETE FROM occasions WHERE group_id=?1", params![id.to_string()])?;
-        conn.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM occasions WHERE group_id=?1", params![id.to_string()])?;
+        tx.execute("DELETE FROM groups WHERE id=?1", params![id.to_string()])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -5171,6 +5203,86 @@ mod tests {
     }
 
     #[test]
+    fn deleting_everyone_keeps_other_crews_and_uses_a_surviving_group() {
+        let f = fixture();
+        let everyone = default_group_id();
+        let mut groups = Vec::new();
+        for name in ["Research", "Writing", "Planning"] {
+            let group = f
+                .store
+                .create_group(&CleanGroup { name: name.into(), ..Default::default() })
+                .unwrap();
+            let mut d = draft(name);
+            d.group_id = Some(group.id);
+            f.store.create_agent(&d).unwrap();
+            groups.push(group);
+        }
+        let gone = f.store.create_agent(&draft("Former resident")).unwrap();
+        f.store.discard_agent(gone.id, now_ms()).unwrap();
+
+        f.store.delete_group(everyone).expect("Everyone can go while another group remains");
+        assert_eq!(f.store.list_groups().unwrap().len(), 3);
+        for group in &groups {
+            assert_eq!(f.store.get_group(group.id).unwrap().unwrap().agent_count, 1);
+        }
+        let fallback = groups[0].id;
+        assert_eq!(f.store.get_agent(gone.id).unwrap().unwrap().group_id, fallback);
+        assert_eq!(f.store.restore_agent(gone.id, &gone.name).unwrap().group_id, fallback);
+        assert_eq!(f.store.create_agent(&draft("New resident")).unwrap().group_id, fallback);
+        let batch = f.store.create_agents(&[draft("One"), draft("Two")]).unwrap();
+        assert!(batch.iter().all(|card| card.group_id == fallback));
+    }
+
+    #[test]
+    fn the_last_group_is_protected_even_after_everyone_is_deleted() {
+        let f = fixture();
+        let everyone = default_group_id();
+        assert!(matches!(f.store.delete_group(everyone), Err(StoreError::CannotDeleteLastGroup)));
+        let group = f
+            .store
+            .create_group(&CleanGroup { name: "Research".into(), ..Default::default() })
+            .unwrap();
+        f.store.delete_group(everyone).unwrap();
+        assert!(matches!(
+            f.store.group_for_removal(group.id),
+            Err(StoreError::CannotDeleteLastGroup)
+        ));
+        assert!(matches!(f.store.delete_group(group.id), Err(StoreError::CannotDeleteLastGroup)));
+        assert!(matches!(f.store.delete_group(everyone), Err(StoreError::GroupNotFound(_))));
+        assert_eq!(f.store.list_groups().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn concurrent_deletions_leave_one_group() {
+        let f = fixture();
+        let group = f
+            .store
+            .create_group(&CleanGroup { name: "Research".into(), ..Default::default() })
+            .unwrap();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                f.store.delete_group(default_group_id())
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                f.store.delete_group(group.id)
+            });
+            let outcomes = [first.join().unwrap(), second.join().unwrap()];
+            assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+            assert_eq!(
+                outcomes
+                    .iter()
+                    .filter(|result| matches!(result, Err(StoreError::CannotDeleteLastGroup)))
+                    .count(),
+                1
+            );
+        });
+        assert_eq!(f.store.list_groups().unwrap().len(), 1);
+    }
+
+    #[test]
     fn a_group_emptied_by_deleting_its_agents_can_then_be_deleted() {
         // The bug this covers: deleting every agent in a group left it
         // reporting three agents and refusing to go, because the rows are kept
@@ -5880,7 +5992,7 @@ mod tests {
     fn a_disband_is_told_the_group_cannot_go_before_it_takes_anything() {
         // The failure path this covers: a disband kills every computer and
         // browser in a crew and only then asks whether the group itself may be
-        // deleted. The first group may not, and the operator would be left with
+        // deleted. The last group may not, and the operator would be left with
         // the machines gone, the agents gone and the group still there.
         let f = fixture();
         let default = default_group_id();
@@ -5890,7 +6002,7 @@ mod tests {
 
         assert!(matches!(
             f.store.group_for_removal(default),
-            Err(StoreError::CannotDeleteDefaultGroup)
+            Err(StoreError::CannotDeleteLastGroup)
         ));
 
         // The same question answered for a group that can go, while it is still
@@ -5902,6 +6014,7 @@ mod tests {
         let mut d = draft("Scholar");
         d.group_id = Some(group.id);
         f.store.create_agent(&d).unwrap();
+        assert!(f.store.group_for_removal(default).is_ok());
         assert!(f.store.group_for_removal(group.id).is_ok());
         assert!(
             matches!(f.store.delete_group(group.id), Err(StoreError::GroupNotEmpty { .. })),

@@ -63,8 +63,6 @@ function agent(name: string, discardedAt: number | null): AgentCard {
   };
 }
 
-const onClose = vi.fn();
-
 function open(agents: AgentCard[]) {
   useStore.setState({
     agents,
@@ -74,7 +72,7 @@ function open(agents: AgentCard[]) {
     selected: null,
     select,
   });
-  return render(<Compost onClose={onClose} />);
+  return render(<Compost />);
 }
 
 /** Deleted this many days ago. */
@@ -101,7 +99,7 @@ describe("the compost", () => {
     const { container } = open([thrownOut("Scribe", 2), thrownOut("Paralegal", 4)]);
 
     expect(
-      [...container.querySelectorAll(".dialog__lede")].filter((node) =>
+      [...container.querySelectorAll(".settings__lede")].filter((node) =>
         /memory, their working notes, their schedule and their sign-ins/i.test(
           node.textContent ?? "",
         ),
@@ -142,12 +140,9 @@ describe("the compost", () => {
     expect(screen.getByRole("button", { name: /put back/i })).toBeTruthy();
   });
 
-  it("closes itself once there is nobody left in it", () => {
-    // Emptying it is the one reason to be here, and finishing is the answer.
-    // A panel that stays open drawing nothing is one the operator has to
-    // dismiss for no reason.
+  it("shows an empty state without closing settings", () => {
     open([]);
-    expect(onClose).toHaveBeenCalled();
+    expect(screen.getByText("No deleted agents.")).toBeTruthy();
   });
 
   it("draws the wait the runtime actually enforces", () => {

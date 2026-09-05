@@ -39,6 +39,7 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { Compost } from "./Compost";
 import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
 import { HostChoice } from "./HostSetup";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
@@ -60,6 +61,7 @@ const SECTIONS = [
   "appearance",
   "notifications",
   "shortcuts",
+  "compost",
   "about",
 ] as const;
 
@@ -75,6 +77,7 @@ const SECTION_LABELS: Record<Section, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   shortcuts: "Shortcuts",
+  compost: "Compost",
   about: "About",
 };
 
@@ -1242,6 +1245,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
             )}
 
             {section === "workspace" && <WorkspacePane />}
+            {section === "compost" && <Compost />}
 
             {section === "about" && (
               <>

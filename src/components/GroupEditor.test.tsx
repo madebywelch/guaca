@@ -487,11 +487,11 @@ describe("deleting a group", () => {
   });
 
   it("leaves the dialog open on a refusal, with the reason from the runtime", async () => {
-    // The first group cannot be deleted, because every agent has to be in one.
+    // The last group cannot be deleted.
     // A dialog that closed on that would look like it had worked.
     disbandGroup.mockRejectedValueOnce({
       kind: "groupNotEmpty",
-      message: "every agent has to be in a group, so the first one cannot be deleted",
+      message: "at least one group must remain, so the last group cannot be deleted",
     });
     open(aGroup({ id: KITCHEN, name: "Research", agentCount: 2 }));
     fireEvent.click(button("Delete"));

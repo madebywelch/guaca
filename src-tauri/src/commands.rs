@@ -269,7 +269,7 @@ impl From<crate::db::StoreError> for CommandError {
             }
             // Its own kind: the UI can offer to move the agents, which it
             // cannot do for a generic storage failure.
-            StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteDefaultGroup => {
+            StoreError::GroupNotEmpty { .. } | StoreError::CannotDeleteLastGroup => {
                 CommandError::new("groupNotEmpty", err.to_string())
             }
             other => CommandError::new("storage", other.to_string()),
@@ -1918,7 +1918,7 @@ pub async fn delete_group(state: &AppState, id: GroupId) -> Reply<()> {
 /// different rule about history.
 ///
 /// The compost is a hold on one agent, and a disband takes the place it would
-/// come back to. `delete_group` files whoever is left under the default group,
+/// come back to. `delete_group` files whoever is left under a surviving group,
 /// so a composted crew would be offered a restore into a crew that no longer
 /// exists, holding a sign-in belonging to a group whose credentials went with
 /// it. The confirmation names the count for that reason: this is the
