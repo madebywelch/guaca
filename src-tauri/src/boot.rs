@@ -84,6 +84,19 @@ pub async fn open(
     std::fs::create_dir_all(&paths.config)
         .map_err(|err| format!("{}: {err}", paths.config.display()))?;
 
+    // One process owns the actors, not just the database. SQLite permits two
+    // writers, but two schedulers would perform the same appointment twice.
+    let lease = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(paths.data.join("workspace.lock"))
+        .map_err(|err| format!("could not open the workspace lock: {err}"))?;
+    lease
+        .try_lock()
+        .map_err(|err| format!("this workspace is already running or cannot be locked: {err}"))?;
+
     let db_path = paths.db();
     let config_path = paths.config_file();
     // Memories as plain markdown, attachments by content hash, and one git
@@ -107,6 +120,13 @@ pub async fn open(
         Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
     }
 
+    let interrupted = store
+        .recover_interrupted_runs()
+        .map_err(|err| format!("could not recover interrupted conversations: {err}"))?;
+    if interrupted > 0 {
+        tracing::warn!(interrupted, "conversations interrupted by restart are ready for review");
+    }
+
     let app_config =
         config::load(&config_path).map_err(|err| format!("could not read the settings: {err}"))?;
     // The ChatGPT sign-in, beside the settings rather than inside them.
@@ -126,6 +146,8 @@ pub async fn open(
         disk,
         sink,
     );
+
+    runtime.hold_workspace_lease(lease);
 
     let started = runtime.start_all().map_err(|err| format!("could not start the crew: {err}"))?;
     // Agents keep their own appointments.

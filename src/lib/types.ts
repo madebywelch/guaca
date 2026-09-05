@@ -20,7 +20,7 @@ export type Lifecycle = "active" | "paused" | "terminated";
  */
 export type BrowserConsent = "open" | "askBeforeActing";
 export type Trust = "operator" | "peer" | "system";
-export type NoticeKind = "guardStop" | "upstreamError" | "lifecycle";
+export type NoticeKind = "guardStop" | "upstreamError" | "interrupted" | "lifecycle";
 
 export type Participant = { kind: "human" } | { kind: "agent"; id: AgentId } | { kind: "system" };
 

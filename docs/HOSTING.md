@@ -441,3 +441,29 @@ read. A new snapshot removes obsolete streams and restores Stop for live runs.
 Thinking and past live tool chips are not replayed; completed tool records
 remain in the transcript. Live reply snapshots hold at most 512 KiB per turn;
 the completed message remains authoritative for larger replies.
+
+## A restart preserves work and asks before repeating it
+
+Closing or disconnecting a client never stops the daemon's actors, schedules,
+or coding jobs. Restarting the daemon is different: process state and an
+external tool's unrecorded result cannot be recovered reliably.
+
+Every accepted conversation now records its first delivery in `pending_runs`,
+in the same SQLite transaction as the message. Settlement removes that entry;
+an operator stop also removes it without releasing the in-memory bookings.
+Startup converts remaining entries into durable interruption notices, once,
+before starting actors. Each notice links the original message to **Try again**.
+Completed messages, attachments, memories, working notes and repository files
+remain on the volume. Pending approvals expire because their waiting turns no
+longer exist. No interrupted tool action or approval is automatically replayed.
+
+This is a deliberate recovery policy: an external action can succeed just
+before the process dies, so automatic replay could send or push twice. Review
+the conversation before retrying. Retry starts a new run with the original
+request and the normal limits. This journal does not checkpoint a model's
+thinking or resume a coding subprocess. Back up the volume before deploying;
+SQLite migrations are forward-only.
+
+A workspace also holds a process lock for its runtime's lifetime. A second
+host pointed at the same data directory refuses to start, rather than running
+a second scheduler or treating the first process's work as interrupted.

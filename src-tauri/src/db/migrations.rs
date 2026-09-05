@@ -1407,6 +1407,17 @@ CREATE INDEX messages_author_time
 ALTER TABLE repositories ADD COLUMN remote TEXT;
 "#,
     ),
+    (
+        49,
+        r#"
+-- A conversation accepted but not yet settled. The first delivery is the
+-- operator's recovery point; no side effect is automatically repeated.
+CREATE TABLE pending_runs (
+    run_id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -720,6 +720,7 @@ struct Runs {
 }
 
 struct Inner {
+    workspace_lease: Mutex<Option<std::fs::File>>,
     /// Explicit rather than relying on an ambient tokio context: Tauri's setup
     /// hook runs on the main thread outside any runtime, so `tokio::spawn`
     /// would panic there.
@@ -895,6 +896,7 @@ impl Runtime {
         let OnDisk { workspace, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
+                workspace_lease: Mutex::new(None),
                 handle,
                 store,
                 llm,
@@ -1003,6 +1005,10 @@ impl Runtime {
 
     pub fn webhook_port(&self) -> u16 {
         self.inner.webhook_port.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn hold_workspace_lease(&self, lease: std::fs::File) {
+        *self.inner.workspace_lease.lock() = Some(lease);
     }
 
     pub fn store(&self) -> &Store {
@@ -1462,7 +1468,19 @@ impl Runtime {
     /// the moment it is sent, even if the recipient is busy for the next
     /// thirty seconds.
     fn deliver(&self, envelope: Envelope) -> Result<(), RuntimeError> {
-        self.inner.store.append(&envelope)?;
+        if matches!(envelope.to, Participant::Agent { .. }) {
+            // Serialize acceptance with settlement: a finishing turn cannot
+            // erase a new delivery's recovery point between write and booking.
+            let mut runs = self.inner.runs.lock();
+            if runs.stopped.contains(&envelope.run_id) {
+                self.inner.store.append(&envelope)?;
+            } else {
+                self.inner.store.append_delivery(&envelope)?;
+            }
+            *runs.outstanding.entry(envelope.run_id).or_insert(0) += 1;
+        } else {
+            self.inner.store.append(&envelope)?;
+        }
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
 
         if let Participant::Agent { id } = envelope.to {
@@ -1476,7 +1494,6 @@ impl Runtime {
             // read, answered and released by a turn that finishes before the
             // booking lands, which settles the run twice.
             let run = envelope.run_id;
-            self.track_inflight(run, 1);
 
             let queued = {
                 let inboxes = self.inner.inboxes.lock();
@@ -2700,6 +2717,9 @@ impl Runtime {
                 *entry = entry.saturating_sub((-delta) as usize);
             }
             if *entry == 0 {
+                if let Err(err) = self.inner.store.settle_run(run) {
+                    tracing::error!(%err, %run, "could not settle the recovery journal");
+                }
                 runs.outstanding.remove(&run);
                 runs.stopped.remove(&run);
                 runs.refused.remove(&run);
@@ -2883,6 +2903,9 @@ impl Runtime {
                 return false;
             }
             runs.stopped.insert(run);
+            if let Err(err) = self.inner.store.settle_run(run) {
+                tracing::error!(%err, %run, "could not mark the stopped conversation in the recovery journal");
+            }
         }
 
         self.release_parked(run);
