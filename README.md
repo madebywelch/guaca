@@ -49,14 +49,45 @@ require Docker on your Mac.
 Managed Guaca compute spaces are planned for a later release. Local and
 self-hosted workspaces are available now.
 
-## Go deeper
+## Credits
 
-[Hosting and setup](docs/HOSTING.md) ·
-[Plugins](docs/PLUGINS.md) ·
-[Coding](docs/CODING.md) ·
-[Architecture](docs/ARCHITECTURE.md)
+**Inspired by Grokbot, and not a clone of it.** The shape came from there:
+agents you talk to that also talk to each other, in a room you can watch.
+Everything under that shape is this repo's own work, sharing no code, no assets
+and no service with it. Guaca runs on the host you choose, with the model
+providers you configure.
 
-For development, run `pnpm install` and `pnpm app`. Run `./scripts/ci.sh` for the
-project checks.
+Its message layer is derived from the four agent interoperability protocols
+(MCP, ACP, A2A, ANP) and from the survey comparing them, *A survey of agent
+interoperability protocols* by Abul Ehtesham, Aditi Singh, Gaurav Kumar Gupta
+and Saket Kumar ([arXiv 2505.02279](https://arxiv.org/abs/2505.02279)). A2A in
+particular gave the Agent Card, discovery as a first-class operation, and card
+versioning.
+
+Connectors have two kinds rather than one because of *Beyond Browsing: API-Based
+Web Agents* by Yueqi Song, Frank Xu, Shuyan Zhou and Graham Neubig
+([arXiv 2410.16464](https://arxiv.org/abs/2410.16464)). Putting API-calling and
+browsing agents on the same WebArena tasks, they found APIs beat browsing, and a
+hybrid that could choose beat both, by 24.0 points absolute over browsing alone.
+The design that follows is not "an API when there is one, a browser otherwise":
+it is telling one agent about both and letting it pick, which is what the
+prompt's **What you can reach** section is for.
+
+The security half comes from *BrowseSafe: Understanding and Preventing Prompt
+Injection Within AI Browser Agents* by Kaiyuan Zhang, Mark Tenenholtz, Kyle
+Polley, Jerry Ma, Denis Yarats and Ninghui Li
+([arXiv 2511.20597](https://arxiv.org/abs/2511.20597)). Its useful move is to
+benchmark injections that drive real-world *actions* rather than text output,
+which is exactly what a signed-in session turns a web page into: the payload no
+longer has to talk an agent into obtaining access, because it already has the
+operator's. Guaca takes the architectural half of their defense-in-depth
+argument: page content is labeled at the point it enters the turn, plugin OAuth
+credentials stay in the backend, and the signed-in agent is told where to stop.
+Neither paper's authors endorse any of this.
+
+Plugin marks are [Simple Icons](https://simpleicons.org), CC0 1.0. Trademarks
+belong to their owners.
+
+## License
 
 [GNU AGPL v3](LICENSE)
