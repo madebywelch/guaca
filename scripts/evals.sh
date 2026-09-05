@@ -10,8 +10,8 @@
 #   ./scripts/evals.sh              every live scenario
 #   ./scripts/evals.sh delegation   just the ones whose name matches
 #
-# The model, endpoint and key come from the app's own settings file, so what is
-# measured here is what the operator is actually running.
+# Defaults come from the app's settings. GUACA_TEST_MODEL and, for OpenRouter,
+# OPENROUTER_API_KEY override this test process without editing those settings.
 
 set -euo pipefail
 
@@ -27,10 +27,13 @@ fi
 # The model belonging to whichever provider is chosen. Printing the endpoint's
 # model while a subscription is paying names one the run will never call.
 read_model='
-import json, sys
+import json, os, sys
 i = json.load(open(sys.argv[1]))["inference"]
 chatgpt = i.get("provider") == "chatgpt"
-print(i.get("subscriptionModel") if chatgpt else i["defaultModel"], end="")
+model = i.get("subscriptionModel") if chatgpt else i["defaultModel"]
+if i.get("provider", "compatible") == "compatible":
+    model = os.environ.get("GUACA_TEST_MODEL", "").strip() or model
+print(model, end="")
 print(" (ChatGPT subscription)" if chatgpt else "")
 '
 model=$(python3 -c "$read_model" "$CONFIG")
@@ -45,4 +48,4 @@ echo
 # One thread, because several crews thinking at once against the same endpoint
 # makes the timings meaningless and the output interleave.
 cargo test --manifest-path src-tauri/Cargo.toml --test evals \
-  "live::${1:-}" -- --ignored --nocapture --test-threads=1
+  "${1:-live::}" -- --ignored --nocapture --test-threads=1

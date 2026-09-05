@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use guac_lib::config::AppConfig;
+use guac_lib::config::{AppConfig, Provider};
 use guac_lib::db::Store;
 use guac_lib::domain::agent::CleanDraft;
 use guac_lib::domain::approval::Decision;
@@ -77,14 +77,71 @@ impl LiveAgent {
 
 /// The operator's own settings, or nothing when no key has been pasted.
 ///
-/// The model, endpoint and key come from the app's settings file rather than
-/// from the test, so what a live scenario measures is what the operator is
-/// actually running.
+/// Defaults come from the app's settings. Shell overrides select a test model
+/// on compatible endpoints and a fresh key on OpenRouter without saving either.
 pub fn configured() -> Option<AppConfig> {
     let path = dirs_config()?;
     let raw = std::fs::read_to_string(path).ok()?;
-    let config: AppConfig = serde_json::from_str(&raw).ok()?;
+    let mut config: AppConfig = serde_json::from_str(&raw).ok()?;
+    use_openrouter_key(&mut config, std::env::var("OPENROUTER_API_KEY").ok().as_deref());
+    if config.inference.provider == Provider::Compatible {
+        if let Some(model) = std::env::var("GUACA_TEST_MODEL")
+            .ok()
+            .map(|model| model.trim().to_owned())
+            .filter(|model| !model.is_empty())
+        {
+            config.inference.default_model = model;
+        }
+    }
     (!config.inference.api_key.trim().is_empty()).then_some(config)
+}
+
+fn use_openrouter_key(config: &mut AppConfig, key: Option<&str>) {
+    // A shell credential for OpenRouter must never replace a local endpoint's
+    // key or travel to another provider configured in the app.
+    let openrouter = reqwest::Url::parse(&config.inference.base_url)
+        .is_ok_and(|url| url.origin().ascii_serialization() == "https://openrouter.ai");
+    if config.inference.provider == Provider::Compatible && openrouter {
+        if let Some(key) = key.map(str::trim).filter(|key| !key.is_empty()) {
+            config.inference.api_key = key.to_owned();
+        }
+    }
+}
+
+#[test]
+fn a_shell_key_overrides_only_the_openrouter_origin() {
+    for (endpoint, expected) in [
+        ("https://openrouter.ai/api/v1", "shell-key"),
+        ("https://openrouter.ai:443/api/v1", "shell-key"),
+        ("http://openrouter.ai/api/v1", "saved-key"),
+        ("https://openrouter.ai:8443/api/v1", "saved-key"),
+        ("https://openrouter.ai.example.com/api/v1", "saved-key"),
+        ("http://localhost:1234/v1", "saved-key"),
+        ("invalid", "saved-key"),
+    ] {
+        let mut config = AppConfig::default();
+        config.inference.base_url = endpoint.into();
+        config.inference.api_key = "saved-key".into();
+        use_openrouter_key(&mut config, Some(" shell-key "));
+        assert_eq!(config.inference.api_key, expected, "{endpoint}");
+    }
+}
+
+#[test]
+fn an_absent_shell_key_or_subscription_keeps_the_saved_key() {
+    for (provider, key) in [
+        (Provider::Compatible, None),
+        (Provider::Compatible, Some("  ")),
+        (Provider::Chatgpt, Some("shell-key")),
+        (Provider::Claude, Some("shell-key")),
+    ] {
+        let mut config = AppConfig::default();
+        config.inference.provider = provider;
+        config.inference.base_url = "https://openrouter.ai/api/v1".into();
+        config.inference.api_key = "saved-key".into();
+        use_openrouter_key(&mut config, key);
+        assert_eq!(config.inference.api_key, "saved-key");
+    }
 }
 
 fn dirs_config() -> Option<std::path::PathBuf> {

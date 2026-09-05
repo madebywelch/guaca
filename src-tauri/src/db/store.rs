@@ -3328,6 +3328,52 @@ impl Store {
         Ok(out)
     }
 
+    /// What an agent has read and written, oldest first, for its next turn.
+    ///
+    /// Incoming messages newer than the batch stay in the inbox. Its own
+    /// completed work stays visible even if it was written after that batch
+    /// queued, including replies filed in a peer's channel. Reading only this
+    /// agent's channel made it forget every automatic answer it sent a peer.
+    ///
+    /// Bound each indexed read before merging ids, then load only the newest
+    /// `limit` bodies. A backlog cannot displace earlier context, and a long
+    /// conversation cannot turn a small prompt into a scan of every message.
+    pub fn agent_history(
+        &self,
+        agent: AgentId,
+        through: i64,
+        limit: u32,
+    ) -> Result<Vec<Envelope>, StoreError> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "WITH visible AS (
+                 SELECT id, created_at FROM (
+                     SELECT id, created_at FROM messages
+                      WHERE channel_id=?1 AND created_at<=?2
+                      ORDER BY created_at DESC, id DESC LIMIT ?3
+                 )
+                 UNION
+                 SELECT id, created_at FROM (
+                     SELECT id, created_at FROM messages
+                      WHERE from_kind='agent' AND from_agent=?1
+                      ORDER BY created_at DESC, id DESC LIMIT ?3
+                 )
+             ), recent AS (
+                 SELECT id FROM visible ORDER BY created_at DESC, id DESC LIMIT ?3
+             )
+             SELECT id,run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
+               FROM messages JOIN recent USING (id)
+              ORDER BY created_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map(params![agent.to_string(), through, limit], row_to_envelope)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row??);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
     /// What two agents said to each other, oldest first.
     ///
     /// Read from the messages rather than assembled from either channel, and
@@ -6196,6 +6242,66 @@ mod tests {
         f.store.append(&envelope(Participant::Human, agent(chef.id), "directly", later)).unwrap();
         assert!(f.store.operator_addressed(later, chef.id).unwrap());
         assert!(!f.store.operator_addressed(later, manager.id).unwrap());
+    }
+
+    #[test]
+    fn agent_history_keeps_its_own_answers_without_reading_another_agents_private_work() {
+        let f = fixture();
+        let writer = f.store.create_agent(&draft("Writer")).unwrap().id;
+        let peer = f.store.create_agent(&draft("Peer")).unwrap().id;
+        let other = f.store.create_agent(&draft("Other")).unwrap().id;
+        let agent = |id| Participant::Agent { id };
+        let run = RunId::new();
+        let exchanges = [
+            (agent(writer), Participant::Human, "Earlier report"),
+            (agent(peer), agent(writer), "Queued question"),
+            (agent(writer), agent(peer), "My previous answer"),
+            (agent(writer), Participant::Human, "Work finished after the question queued"),
+            (agent(peer), Participant::System, "Private working notes"),
+            (agent(peer), agent(other), "Somebody else's conversation"),
+            (agent(peer), agent(writer), "Later incoming message"),
+        ];
+        for (i, (from, to, text)) in exchanges.into_iter().enumerate() {
+            let mut message = envelope(from, to, text, run);
+            message.created_at = i as i64;
+            f.store.append(&message).unwrap();
+        }
+
+        let history = f.store.agent_history(writer, 1, 40).unwrap();
+        let texts: Vec<_> = history.iter().map(Envelope::plain_text).collect();
+        assert_eq!(texts, exchanges[..4].iter().map(|(_, _, text)| *text).collect::<Vec<_>>());
+        assert_eq!(history[2].to, agent(peer), "the outgoing answer keeps its recipient");
+        assert_eq!(history.len(), 4, "a message in both windows is included only once");
+
+        let newest = f.store.agent_history(writer, 1, 2).unwrap();
+        assert_eq!(
+            newest.iter().map(|message| message.id).collect::<Vec<_>>(),
+            history[2..].iter().map(|message| message.id).collect::<Vec<_>>()
+        );
+        assert!(f.store.agent_history(writer, 1, 0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn agent_history_filters_a_backlog_before_applying_its_limit() {
+        let f = fixture();
+        let writer = f.store.create_agent(&draft("Writer")).unwrap().id;
+        let run = RunId::new();
+        for i in 0..100 {
+            let mut message = envelope(
+                Participant::Human,
+                Participant::Agent { id: writer },
+                &format!("message {i}"),
+                run,
+            );
+            message.created_at = i;
+            f.store.append(&message).unwrap();
+        }
+        let history = f.store.agent_history(writer, 1, 2).unwrap();
+        assert_eq!(
+            history.iter().map(Envelope::plain_text).collect::<Vec<_>>(),
+            vec!["message 0", "message 1"],
+            "newer queued messages must not displace the context this turn can read"
+        );
     }
 
     #[test]

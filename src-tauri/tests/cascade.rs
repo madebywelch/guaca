@@ -35,6 +35,80 @@ use harness::*;
 
 // ---- tests ---------------------------------------------------------------
 
+#[tokio::test]
+async fn a_peer_remembers_the_answer_it_sent_on_its_previous_turn() {
+    let remembered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed = remembered.clone();
+    let stub = serve(move |body| {
+        if speaker(body) == "Chef" {
+            if anyone_said(body, "Approve your previous quote") {
+                let has_quote = body["messages"].as_array().unwrap().iter().any(|message| {
+                    message["role"] == "assistant"
+                        && message["content"].as_str().is_some_and(|text| text.contains("$137"))
+                });
+                observed.store(has_quote, Ordering::SeqCst);
+                return Script::Say("Approval recorded.".into());
+            }
+            return Script::Say("My quote is $137.".into());
+        }
+        if has_tool_result(body) || reading_peer_replies(body) {
+            return Script::Say("Recorded.".into());
+        }
+        Script::Instruct {
+            recipients: vec!["Chef".into()],
+            text: if anyone_said(body, "Approve the quote") {
+                "Approve your previous quote."
+            } else {
+                "Quote the menu."
+            }
+            .into(),
+        }
+    })
+    .await;
+
+    let h = harness(&stub, &["Manager", "Chef"], GuardLimits::default());
+    let first = h.runtime.send_from_human(h.id("Manager"), "Get a quote.").unwrap();
+    h.settle(first).await;
+    let second = h.runtime.send_from_human(h.id("Manager"), "Approve the quote.").unwrap();
+    h.settle(second).await;
+
+    assert!(
+        remembered.load(Ordering::SeqCst),
+        "Chef lost its own answer because it was filed in Manager's channel:\n{}",
+        h.transcript()
+    );
+}
+
+#[tokio::test]
+async fn an_exhausted_turn_leaves_new_work_its_own_budget() {
+    let hook = Arc::new(std::sync::OnceLock::new());
+    let followup = Arc::new(std::sync::OnceLock::new());
+    let armed: Arc<std::sync::OnceLock<(Runtime, guac_lib::domain::ids::AgentId)>> = hook.clone();
+    let sent = followup.clone();
+    let stub = serve(move |body| {
+        if anyone_said(body, "Check the new numbers") {
+            return Script::Say("New numbers checked.".into());
+        }
+        let (runtime, writer) = armed.get().unwrap();
+        sent.set(runtime.send_from_human(*writer, "Check the new numbers.").unwrap()).unwrap();
+        Script::Directory
+    })
+    .await;
+
+    let h =
+        harness(&stub, &["Writer"], GuardLimits { max_steps_per_run: 1, ..GuardLimits::default() });
+    let _ = hook.set((h.runtime.clone(), h.id("Writer")));
+    let first = h.runtime.send_from_human(h.id("Writer"), "Check the directory.").unwrap();
+    h.settle(first).await;
+    h.settle(*followup.get().unwrap()).await;
+
+    assert_eq!(stub.calls.load(Ordering::SeqCst), 2, "each run has one call to spend");
+    assert!(
+        h.channel_texts("Writer").iter().any(|text| text == "New numbers checked."),
+        "the exhausted turn consumed fresh work without showing it to the model"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn manager_introduces_itself_to_every_other_agent() {
     // The scenario from the brief, start to finish.

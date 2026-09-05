@@ -48,6 +48,14 @@ query, `pair_messages`, read from the messages themselves in both directions.
 Anything assembled from one channel's rows would be missing messages nobody
 could account for.
 
+The model reads `agent_history`, not the channel either. Its history includes
+what it wrote to peers, so a follow-up can refer to the answer it already sent.
+Incoming messages newer than the batch stay out until intake reaches them;
+completed work written by this agent stays in, even if the batch queued before
+that work finished. Each half is an indexed, bounded read, merged by message id
+before loading the newest forty bodies. The incoming cutoff is applied before
+the limit, so a backlog cannot evict the context needed to answer its first item.
+
 What a channel shows of peer traffic is therefore a summary, and a deliberately
 lossy one. `transcriptRows` collapses a burst (a fan-out, and the answers
 landing milliseconds apart) into one centered line per peer, counting what that
@@ -207,12 +215,15 @@ Measured on a real crew: forty-five minutes, forty-five model calls, twenty-two
 documents rewritten and thirty-one working notes, with three finished jobs and
 one operator correction stacked in an inbox nobody was free to read.
 
-`Runtime::take_in` runs at the top of every round, before the budget claims the
+`Runtime::take_in` runs at the top of every round, after the budget claims the
 step, and folds whatever has arrived into the conversation as one labeled user
 turn. `prompt::render_incoming` does the labeling, the same function the batch
 goes through, because a model that can tell `[OPERATOR]` from `[SYSTEM]` at the
 start of a turn has to be able to tell them apart in the middle of one, and a
 second way to write that label is a second thing for the injection tests to miss.
+Claiming first matters: an exhausted turn cannot show another message to the
+model. Consuming it would release its run without doing its work. Left queued,
+the message keeps its own turn and budget.
 
 **What arrives is context, and never a change of address.** Not the reply mode,
 not the reply target, not the channel the placeholder is already open in, not

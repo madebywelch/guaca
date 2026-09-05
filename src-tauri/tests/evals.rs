@@ -1208,6 +1208,11 @@ mod live {
         }
         assert!(settled, "run did not settle in {secs}s. messages so far:\n{}", h.transcript());
         let eval = read(&h, run, &names);
+        if !eval.faults.is_empty() {
+            // The conversation omits notices. Include them on failure so an
+            // upstream error is distinguishable from a model choosing silence.
+            eprintln!("Runtime transcript:\n{}", h.transcript());
+        }
         Some((h, eval))
     }
 
