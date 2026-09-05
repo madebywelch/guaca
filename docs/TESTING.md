@@ -6,6 +6,12 @@ for them. This file is the rest: one per subsystem with a wire, a process or a
 provider behind it, most of them holding an `#[ignore]`d half that asks the live
 thing whether what this build believes about it is still true.
 
+Live model tests accept `OPENROUTER_API_KEY` from the shell when the configured
+endpoint is `https://openrouter.ai`. It overrides the saved key in the test
+process only; the app's settings and other providers are unchanged.
+`GUACA_TEST_MODEL` likewise selects a model for tests on a compatible endpoint,
+so a retired model can be replaced for a run without editing the app's settings.
+
 None of the three can be pointed at a whole team, because a real model given a
 real instruction does something slightly different every time and one run of it
 proves nothing either way. `tests/crew.rs` is that question: eight roles, one
