@@ -596,3 +596,42 @@ uses the operator's configured default model. It steers an active turn, checks
 and commits the revised file, then denies a push to a disposable local bare
 repository and verifies that no remote ref changed. No external Git service
 is contacted.
+
+
+## Installing after the hosting changes
+
+`./scripts/install.sh` still builds the macOS Tauri application, installs
+`/Applications/Guaca.app`, and preserves its existing settings and workspace.
+It fast-forwards the currently checked-out branch from origin when possible;
+it does not switch branches. `--no-pull` builds the checkout as it stands.
+`--launch` opens the installed application. The script neither starts Docker
+nor migrates the desktop workspace into a container.
+
+A fresh desktop installation runs its Rust backend locally. A desktop already
+configured to connect to a remote workspace keeps that preference. In Settings,
+the operator can connect the desktop client to a separately running backend.
+The backend may be a container on the same computer or an always-on VPS, and
+its web client can also be opened directly in a browser. Starting that backend
+is explicit: `docker compose up -d --build`. Its named volume is a separate
+workspace until the operator follows the migration procedure above. A laptop
+container still sleeps with the laptop; keeping jobs running requires an
+always-on machine.
+
+## Upgrading databases from the hosting branch
+
+Main used migrations 45–47 for browser consent, the calendar and the author
+message index. Earlier hosting builds used 45 for repository remotes and 46
+for the interrupted-run journal. The combined build retains main's history and
+assigns the hosting additions to 48 and 49. It recognizes the old hosting
+schema, fills the missing main additions under the migration write lock, and
+preserves existing URLs and pending runs while advancing their new slots.
+Tests cover fresh databases and upgrades from both histories, including a
+second startup. Back up before upgrading; never run either older branch on an
+upgraded database.
+
+Main's calendar and browser-consent commands are available on both transports.
+Hosted event routines receive POSTs at `/events/service/topic` on the backend's
+public origin. The routine panel prints that address and its dedicated webhook
+secret. That secret cannot call the workspace API, and the workspace token
+cannot post a routine event. Desktop installs retain the existing loopback
+receiver.

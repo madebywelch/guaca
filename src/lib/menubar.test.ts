@@ -18,6 +18,7 @@ function agent(name: string, over: Partial<AgentCard> = {}): AgentCard {
     browserId: null,
     hasComputer: false,
     hasBrowser: false,
+    browserConsent: "open",
     repositoryId: null,
     name,
     avatar: "avocado",

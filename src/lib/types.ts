@@ -1342,6 +1342,7 @@ export interface RoutineRun {
  */
 export interface WebhookAddress {
   port: number;
+  url?: string | null;
   secret: string;
 }
 

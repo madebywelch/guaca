@@ -202,6 +202,10 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
         .route("/health", get(health))
         .route("/v1/call", post(call))
         .route("/v1/events", get(events_socket))
+        .route(
+            "/events/:service/:topic",
+            post(routine_event).layer(DefaultBodyLimit::max(crate::webhook::MOST_BODY_BYTES)),
+        )
         // `:name` rather than `{name}`: axum 0.7 routes with matchit 0.7, where
         // braces are a literal path segment. Spelled the newer way this compiles,
         // registers a route nothing can match, and every preview draws nothing.
@@ -823,6 +827,43 @@ async fn file(
 /// Constant time, because a comparison that returns early on the first wrong
 /// byte is one an attacker can walk a character at a time. Cheap enough that
 /// there is no argument for the fast version.
+/// Routine webhooks have their own credential; it grants no workspace API access.
+async fn routine_event(
+    State(serving): State<Serving>,
+    Path((service, topic)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Response {
+    let secret = serving.state.runtime.config().webhook.secret;
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "));
+    if secret.is_empty() || !bearer.is_some_and(|token| same(token, &secret)) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"error":"Use the routine webhook secret"})))
+            .into_response();
+    }
+    let Some(event) = crate::domain::routine::EventTrigger::parse(&format!("{service}/{topic}"))
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    match serving.state.runtime.deliver_event(
+        &event,
+        (!body.is_empty()).then(|| String::from_utf8_lossy(&body).into_owned()),
+    ) {
+        Ok(delivery) => {
+            let status =
+                if delivery.listening == 0 { StatusCode::NOT_FOUND } else { StatusCode::OK };
+            (status, Json(delivery)).into_response()
+        }
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error":"Could not deliver the routine event"})),
+        )
+            .into_response(),
+    }
+}
+
 fn authorized(
     serving: &Serving,
     headers: &HeaderMap,

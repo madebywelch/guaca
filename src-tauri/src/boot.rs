@@ -127,8 +127,14 @@ pub async fn open(
         tracing::warn!(interrupted, "conversations interrupted by restart are ready for review");
     }
 
-    let app_config =
+    let mut app_config =
         config::load(&config_path).map_err(|err| format!("could not read the settings: {err}"))?;
+    // Hosted webhooks arrive through the daemon's public listener. Persist the
+    // same dedicated secret the desktop receiver uses, not the workspace token.
+    if crate::webhook::prepare(&mut app_config.webhook) {
+        config::save(&config_path, &app_config)
+            .map_err(|err| format!("could not save webhook settings: {err}"))?;
+    }
     // The ChatGPT sign-in, beside the settings rather than inside them.
     // `subscription.rs` says why: the two files have different writers and one
     // of them writes in the background.

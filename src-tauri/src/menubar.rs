@@ -888,6 +888,7 @@ mod tests {
         let mut roster = HashMap::new();
         roster.insert(agent, Member { name: "Chef".into(), crew });
         let presence = Presence {
+            on_machine: HashMap::new(),
             roster,
             crews: vec![Crew { id: crew, name: "Kitchen".into() }],
             activity: HashMap::from([(agent, Activity::Queued { depth: 2 })]),

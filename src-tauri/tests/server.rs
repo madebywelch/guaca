@@ -612,3 +612,55 @@ async fn a_model_address_belongs_to_the_backend_network() {
         assert!(body["ok"]["id"].is_string(), "{body}");
     }
 }
+
+#[tokio::test]
+async fn main_calendar_and_webhook_commands_work_on_the_remote_backend() {
+    let (addr, _dir) = workspace().await;
+    let (_, groups) = call(addr, "list_groups", json!({})).await;
+    let group = groups["ok"][0]["id"].as_str().unwrap();
+    let (_, created) = call(
+        addr,
+        "create_occasion",
+        json!({"draft": {
+            "groupId": group, "title": "Remote calendar", "startsAt": "2026-09-05T15:00:00Z"
+        }}),
+    )
+    .await;
+    assert!(created["ok"]["id"].is_string(), "{created}");
+    let id = created["ok"]["id"].clone();
+    let (_, calendar) =
+        call(addr, "calendar", json!({"from":0,"until":4102444800000_i64,"groupId":group})).await;
+    assert_eq!(calendar["ok"].as_array().unwrap().len(), 1, "{calendar}");
+    let (_, deleted) = call(addr, "delete_occasion", json!({"id":id})).await;
+    assert!(deleted.get("ok").is_some(), "{deleted}");
+    let (_, address) = call(addr, "webhook_address", json!({})).await;
+    assert_eq!(address["ok"]["url"], format!("http://{addr}/events"));
+    let secret = address["ok"]["secret"].as_str().unwrap();
+    assert!(!secret.is_empty() && secret != TOKEN);
+    let client = reqwest::Client::new();
+    let url = format!("http://{addr}/events/test/event");
+    assert_eq!(client.post(&url).bearer_auth(TOKEN).send().await.unwrap().status(), 401);
+    assert_eq!(client.post(&url).bearer_auth(secret).send().await.unwrap().status(), 404);
+    assert_eq!(
+        client
+            .post(&url)
+            .bearer_auth(secret)
+            .body(vec![b'x'; 65537])
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        413
+    );
+    assert_eq!(
+        client
+            .post(format!("http://{addr}/v1/call"))
+            .bearer_auth(secret)
+            .json(&json!({"name":"list_groups"}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        401
+    );
+}

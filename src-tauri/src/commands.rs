@@ -598,7 +598,7 @@ pub async fn give_agent_browser(state: &AppState, id: AgentId) -> Reply<()> {
 /// different question and outlives every browser made under it. See
 /// [`crate::domain::agent::Consent`], which is where the argument for deciding
 /// this per agent lives.
-pub fn set_agent_browser_consent(
+pub async fn set_agent_browser_consent(
     state: &AppState,
     id: AgentId,
     consent: Consent,
@@ -1677,7 +1677,7 @@ const MAX_OCCASIONS: u32 = 500;
 /// the one read in the app that deliberately crosses the wall between crews. It
 /// is theirs to cross: the wall stands between crews so an agent cannot move
 /// another crew's meeting, not between the operator and a workspace they own.
-pub fn calendar(
+pub async fn calendar(
     state: &AppState,
     from: i64,
     until: i64,
@@ -1725,7 +1725,7 @@ impl OccasionDraft {
     }
 }
 
-pub fn create_occasion(state: &AppState, draft: OccasionDraft) -> Reply<Occasion> {
+pub async fn create_occasion(state: &AppState, draft: OccasionDraft) -> Reply<Occasion> {
     let clean = draft.checked()?;
     let occasion = state.runtime.store().create_occasion(&clean)?;
     // The crew's agents read this at the top of every turn, and the panel may
@@ -1737,7 +1737,7 @@ pub fn create_occasion(state: &AppState, draft: OccasionDraft) -> Reply<Occasion
 /// Rewrites one. The crew it is on is taken from the row rather than from the
 /// draft: moving an occasion between crews is not an edit, and there is no
 /// surface that offers it.
-pub fn update_occasion(
+pub async fn update_occasion(
     state: &AppState,
     id: OccasionId,
     draft: OccasionDraft,
@@ -1758,7 +1758,7 @@ pub fn update_occasion(
     Ok(occasion)
 }
 
-pub fn delete_occasion(state: &AppState, id: OccasionId) -> Reply<()> {
+pub async fn delete_occasion(state: &AppState, id: OccasionId) -> Reply<()> {
     // Read before the delete, because the event names the crew whose calendar
     // moved and afterward there is nothing left to ask.
     let Some(existing) = state.runtime.store().any_occasion(id)? else {
@@ -2635,9 +2635,10 @@ pub async fn test_routine(state: &AppState, id: RoutineId) -> Reply<RunId> {
 ///
 /// A port of zero is a receiver that is not up, and the panel says so rather
 /// than printing an address nothing answers.
-pub fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
+pub async fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
     Ok(WebhookAddress {
         port: state.runtime.webhook_port(),
+        url: state.reach.origin().map(|origin| format!("{}/events", origin.trim_end_matches('/'))),
         secret: state.runtime.config().webhook.secret,
     })
 }
@@ -2646,6 +2647,7 @@ pub fn webhook_address(state: &AppState) -> Reply<WebhookAddress> {
 #[serde(rename_all = "camelCase")]
 pub struct WebhookAddress {
     pub port: u16,
+    pub url: Option<String>,
     pub secret: String,
 }
 

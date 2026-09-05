@@ -211,7 +211,7 @@ macro_rules! surface {
 }
 
 surface! {
-    set_agent_browser_consent(id: AgentId, consent: crate::domain::agent::Consent) -> AgentCard,
+    set_agent_browser_consent(id: AgentId, consent: crate::domain::agent::Consent) -> (),
     calendar(from: i64, until: i64, group_id: Option<GroupId>) -> Vec<crate::domain::occasion::Occasion>,
     create_occasion(draft: crate::commands::OccasionDraft) -> crate::domain::occasion::Occasion,
     update_occasion(id: crate::domain::ids::OccasionId, draft: crate::commands::OccasionDraft) -> crate::domain::occasion::Occasion,

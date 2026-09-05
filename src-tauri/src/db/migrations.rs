@@ -1475,6 +1475,22 @@ pub fn run(conn: &mut Connection) -> Result<i32, MigrationError> {
     applied
 }
 
+fn has_remote(conn: &Connection) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('repositories') WHERE name='remote')",
+        [],
+        |row| row.get(0),
+    )
+}
+
+fn has_table(conn: &Connection, name: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [name],
+        |row| row.get(0),
+    )
+}
+
 fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
     loop {
         // `Immediate` takes the write lock at BEGIN rather than at first write,
@@ -1488,12 +1504,34 @@ fn apply(conn: &mut Connection, target: i32) -> Result<i32, MigrationError> {
             return Err(MigrationError::FromTheFuture { found: current, supported: target });
         }
 
+        // Before the hosting branch met main, 45 meant repositories.remote
+        // and 46 meant pending_runs. Repair that known lineage under the same
+        // write lock without decreasing user_version or editing main's SQL.
+        if matches!(current, 45 | 46) && has_remote(&tx)? {
+            let consent: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('agents') WHERE name='browser_consent')",
+                [], |row| row.get(0),
+            )?;
+            if !consent {
+                tx.execute_batch(MIGRATIONS.iter().find(|(v, _)| *v == 45).unwrap().1)?;
+            }
+            if current == 46 && !has_table(&tx, "occasions")? {
+                tx.execute_batch(MIGRATIONS.iter().find(|(v, _)| *v == 46).unwrap().1)?;
+            }
+        }
+
         let Some((version, sql)) = MIGRATIONS.iter().find(|(v, _)| *v > current) else {
             break;
         };
 
-        tx.execute_batch(sql)
-            .map_err(|source| MigrationError::Failed { version: *version, source })?;
+        // These two additions already exist on the old hosting lineage.
+        // Advancing their new slots must preserve its repository URLs and journal.
+        let already_present = (*version == 48 && has_remote(&tx)?)
+            || (*version == 49 && has_table(&tx, "pending_runs")?);
+        if !already_present {
+            tx.execute_batch(sql)
+                .map_err(|source| MigrationError::Failed { version: *version, source })?;
+        }
         // `user_version` does not accept a bound parameter.
         tx.pragma_update(None, "user_version", *version)?;
         tx.commit()?;
@@ -1509,6 +1547,88 @@ mod tests {
 
     fn memory() -> Connection {
         Connection::open_in_memory().unwrap()
+    }
+
+    #[test]
+    fn desktop_and_hosting_lineages_upgrade_without_losing_data() {
+        for (version, hosting) in
+            [(44, false), (45, false), (46, false), (47, false), (45, true), (46, true)]
+        {
+            let mut conn = memory();
+            for (v, sql) in
+                MIGRATIONS.iter().take_while(|(v, _)| *v <= if hosting { 44 } else { version })
+            {
+                conn.execute_batch(sql).unwrap();
+                conn.pragma_update(None, "user_version", *v).unwrap();
+            }
+            if hosting {
+                conn.execute_batch("ALTER TABLE repositories ADD COLUMN remote TEXT;").unwrap();
+                if version == 46 {
+                    conn.execute_batch("CREATE TABLE pending_runs (run_id TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE);").unwrap();
+                    conn.execute("INSERT INTO messages (id,run_id,channel_id,from_kind,to_kind,parts,trust,hop,expects_reply,created_at) VALUES ('original-message','unfinished','channel','operator','system','[]','operator',0,0,0)", []).unwrap();
+                    conn.execute(
+                        "INSERT INTO pending_runs VALUES ('unfinished', 'original-message')",
+                        [],
+                    )
+                    .unwrap();
+                }
+                conn.pragma_update(None, "user_version", version).unwrap();
+            }
+            conn.execute("INSERT INTO repositories (id,group_id,name,path,note,created_at,updated_at) VALUES ('repo',?1,'Code','/repo','keep me',1,1)", [DEFAULT_GROUP_ID]).unwrap();
+            if hosting {
+                conn.execute(
+                    "UPDATE repositories SET remote='https://github.com/person/code.git'",
+                    [],
+                )
+                .unwrap();
+            }
+            if has_table(&conn, "occasions").unwrap() {
+                conn.execute("INSERT INTO occasions (id,group_id,title,starts_at,created_at,updated_at) VALUES ('meeting',?1,'Preserve my calendar',1,1,1)", [DEFAULT_GROUP_ID]).unwrap();
+            }
+            run(&mut conn).unwrap();
+            run(&mut conn).unwrap();
+            assert!(conn
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .query([])
+                .unwrap()
+                .next()
+                .unwrap()
+                .is_none());
+            assert_eq!(
+                conn.query_row("SELECT note FROM repositories WHERE id='repo'", [], |r| r
+                    .get::<_, String>(0))
+                    .unwrap(),
+                "keep me"
+            );
+            let remote: Option<String> = conn
+                .query_row("SELECT remote FROM repositories WHERE id='repo'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(remote.as_deref(), hosting.then_some("https://github.com/person/code.git"));
+            assert!(has_table(&conn, "occasions").unwrap());
+            assert!(has_table(&conn, "pending_runs").unwrap());
+            conn.prepare("SELECT browser_consent FROM agents").unwrap();
+            if !hosting && version >= 46 {
+                assert_eq!(
+                    conn.query_row("SELECT title FROM occasions WHERE id='meeting'", [], |r| {
+                        r.get::<_, String>(0)
+                    })
+                    .unwrap(),
+                    "Preserve my calendar"
+                );
+            }
+            if hosting && version == 46 {
+                assert_eq!(
+                    conn.query_row(
+                        "SELECT message_id FROM pending_runs WHERE run_id='unfinished'",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                    "original-message"
+                );
+            }
+        }
     }
 
     #[test]
