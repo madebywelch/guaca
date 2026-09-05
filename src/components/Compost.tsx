@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { COMPOST_DAYS, composted, goingSoon, timeLeft } from "../lib/compost";
@@ -6,18 +6,10 @@ import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import { type AgentCard, type AgentId, errorMessage } from "../lib/types";
 
-interface Props {
-  onClose: () => void;
-}
-
 /**
  * Where deleted agents go, and what it takes to get one back.
  *
- * The counterpart of the cafeteria, and drawn like one on purpose: the two
- * surfaces are hiring and letting go, and an operator who has used one should
- * recognize the other. Everything else about them is opposite. The cafeteria is
- * a menu of agents nobody has met; this is a list of agents somebody worked
- * with, each with a clock on it.
+ * A pane in app settings, with one decision and one clock per deleted agent.
  *
  * What a delete actually costs is said once, in the head, and not on every row.
  * It is the whole argument for the panel existing — a deleted agent used to
@@ -32,7 +24,7 @@ interface Props {
  * asymmetry the agent menu draws. This is the only surface in the app that
  * destroys a memory on a button, so the button says so before it does it.
  */
-export function Compost({ onClose }: Props) {
+export function Compost() {
   const agents = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const select = useStore((s) => s.select);
@@ -41,42 +33,21 @@ export function Compost({ onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<AgentId | null>(null);
   const [confirming, setConfirming] = useState<AgentId | null>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
 
   // Read once, when the panel opens. A clock that ticks would redraw every row
   // to move a number that changes once a day, and nothing here is worth
   // watching happen: the sweep runs hourly and the panel is open for seconds.
   const [now] = useState(() => Date.now());
 
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const rows = useMemo(() => composted(agents), [agents]);
-
-  // Closed when the last one is dealt with, rather than left drawing an empty
-  // panel the operator has to dismiss. Emptying the compost is the one reason
-  // to be here, and finishing it is the answer.
-  useEffect(() => {
-    if (rows.length === 0) onClose();
-  }, [rows.length, onClose]);
 
   /**
    * One row's button, whichever it was.
    *
    * The roster is re-read here rather than left to the runtime's own event,
    * because both of these change which rows this panel draws and one of them
-   * closes it. Returns `null` when the call was refused, so a caller with
-   * something to do afterwards does not do it on a failure the operator is
-   * currently reading.
+   * selects the restored agent. Returns `null` when the call was refused, so
+   * a caller does not act on a failure the operator is currently reading.
    */
   const act = async <T,>(agent: AgentCard, run: () => Promise<T>): Promise<T | null> => {
     setBusy(agent.id);
@@ -97,11 +68,9 @@ export function Compost({ onClose }: Props) {
   const restore = async (agent: AgentCard) => {
     const back = await act(agent, () => api.restoreAgent(agent.id));
     if (!back) return;
-    // Opening it is what makes the click look like it did something: the agent
-    // comes back paused, so nothing it does will draw attention to itself, and
-    // the name may have been settled on the way in.
+    // Show its channel when settings closes. Keep this pane open so restoring
+    // an agent does not discard settings edits waiting to be saved.
     await select(back.id);
-    onClose();
   };
 
   const row = (agent: AgentCard) => {
@@ -180,42 +149,25 @@ export function Compost({ onClose }: Props) {
   };
 
   return (
-    <div className="scrim">
-      <button type="button" className="scrim__close" aria-label="Close dialog" onClick={onClose} />
-      <div
-        className="dialog dialog--compost"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Compost"
-        tabIndex={-1}
-        ref={panelRef}
-      >
-        <div className="compost__head">
-          <h2 className="dialog__title">Compost</h2>
-          {/* The number comes from the constant the runtime enforces rather
-              than from this sentence, because this sentence is a promise about
-              when somebody's memory is deleted. */}
-          <p className="dialog__lede" style={{ margin: 0 }}>
-            Deleted agents wait {COMPOST_DAYS} days here, still holding everything they knew: their
-            memory, their working notes, their schedule and their sign-ins. Put one back and it
-            returns paused. Leave it and all of that goes with it.
-          </p>
-        </div>
+    <>
+      <h3 className="settings__title">Compost</h3>
+      <p className="settings__lede">
+        Deleted agents wait {COMPOST_DAYS} days here, still holding everything they knew: their
+        memory, their working notes, their schedule and their sign-ins. Put one back and it returns
+        paused. Leave it and all of that goes with it.
+      </p>
 
+      {rows.length === 0 ? (
+        <p className="settings__lede">No deleted agents.</p>
+      ) : (
         <ul className="compost__list">{rows.map(row)}</ul>
+      )}
 
-        {error && (
-          <div className="banner banner--error" style={{ margin: "0 1.35rem" }}>
-            <span>{error}</span>
-          </div>
-        )}
-
-        <div className="compost__foot">
-          <button type="button" className="btn" onClick={onClose}>
-            Close
-          </button>
+      {error && (
+        <div className="banner banner--error">
+          <span>{error}</span>
         </div>
-      </div>
-    </div>
+      )}
+    </>
   );
 }

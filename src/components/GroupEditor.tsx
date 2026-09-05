@@ -294,9 +294,8 @@ export function GroupEditor({ group, onClose }: Props) {
       await refreshAgents();
       onClose();
     } catch (caught) {
-      // The remaining failure is the first group, which cannot go because every
-      // agent has to be in one. The message from Rust says so, and is shown as
-      // written.
+      // The last group must remain. Show the runtime's refusal without losing
+      // the operator's edits.
       setStatus({ tone: "error", text: errorMessage(caught) });
       setBusy(false);
     }

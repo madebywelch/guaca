@@ -1082,14 +1082,17 @@ survives its author here for the same reason it does there. What is gone is
 everything the agent held privately, which is its memory, its schedule, its
 sign-ins and any standing permission the operator gave it.
 
-The refusal that remains is the first group, which cannot be deleted because
-every agent has to be in one. `Store::group_for_removal` asks that question
-separately from the emptiness check, and the command asks it *first*: a disband
+The refusal that remains is the last group: at least one must exist. Everyone
+can be deleted once another group exists. `Store::group_for_removal` asks that
+question separately from the emptiness check, and the command asks it *first*: a disband
 that killed four computers and then found the group could not go would have
 spent the irreversible half of the work on a call that fails. Terminated agents
-are not in the crew it takes. Their machines are already destroyed, and handing
-one back would mean a second kill against a sandbox that is not there, which the
-operator would be shown as the failure of the disband.
+are not in the crew it takes. Their existing deletion lifecycle is unchanged.
+
+New agents without an explicit group, and retained agents from a deleted group,
+use the oldest surviving group in the same order as the group list. Group
+cleanup and the last-group check share one immediate transaction, so concurrent
+deletions cannot each count the other group and leave none.
 
 ## A group's settings are the app's, with the crew's answer on top
 
@@ -1374,8 +1377,8 @@ privately.
 
 **A disband does not use the compost.** Deleting a group takes the place a
 restore would come back to: `delete_group` files whatever is left under the
-default group, so a composted crew would be offered a restore into a crew that
-no longer exists, holding sign-ins belonging to a group whose credentials went
+oldest surviving group, so a composted crew would be offered a restore into a
+crew that no longer exists, holding sign-ins belonging to a group whose credentials went
 with it. A disband purges each agent outright and its confirmation names the
 count, which is what makes it the irreversible one on screen as well as in the
 code. See *Deleting a group deletes the crew* above.
@@ -1387,20 +1390,12 @@ second. It also makes provider calls when it finds something, which a schedule
 sweep should never wait behind. Swept once before the first wait, so an app left
 closed for a month empties on the next launch rather than an hour into it.
 
-The panel is the cafeteria's shape at the cafeteria's opposite end, and the two
-being alike is deliberate: one is hiring and one is letting go. Where the
-cafeteria is a grid of tiles to browse, this is a list of decisions, each with
-its clock and each saying what is still inside the agent — its memory, its
-working notes, its schedule, its sign-ins. That sentence is the reason the panel
-exists. None of it is visible at the moment somebody presses delete, and this is
-the one screen where they are deciding whether they meant it.
-
-The rail's footer draws the compost only while there is something in it. That is
-what keeps the footer two rows for an operator who has never deleted anybody,
-and it is also how the feature is discovered: the row turns up at the moment it
-has a reason to, which is the moment somebody has just deleted an agent and
-might want it back. The count is on the row because whether there is anything in
-there at all is the question it is read for.
+Compost is a pane in app settings. It is available even when empty and stays
+out of the navigation rail. Each deleted agent has a countdown and controls to
+restore it or delete it permanently. The pane says once what is still held:
+memory, working notes, schedule and sign-ins. An empty list says there are no
+deleted agents. Restoring selects the agent's channel and keeps settings open,
+so staged settings edits survive while the operator works through the list.
 
 `COMPOST_DAYS` lives in `domain/agent.rs` and `Compost.test.tsx` reads it out of
 the Rust rather than restating it. The panel draws a countdown to the moment an

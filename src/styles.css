@@ -905,17 +905,6 @@ input[type="file"]::file-selector-button {
    the rail is wide, so it took the group name's space on one line and a whole
    row of its own on two. It lives behind the gear, with the endpoint. */
 
-/* How many are in the compost, on the row that opens it. The one number in the
-   rail that is read from across the room, which is why it is beside the word
-   rather than only inside the panel. */
-.rail__count {
-  margin-left: auto;
-  font-family: var(--font-mono);
-  font-size: var(--type-fine);
-  letter-spacing: var(--track-caps-wide);
-  color: var(--rail-muted);
-}
-
 .rail__gear {
   background: none;
   border: 0;
@@ -6727,51 +6716,17 @@ input[type="file"]:disabled {
   margin-left: auto;
 }
 
-/* ==========================================================================
-   Compost
-
-   The cafeteria's shape, at the cafeteria's opposite end: a panel that owns its
-   height, a head and a foot pinned to it, one scrolling half. The two surfaces
-   are hiring and letting go, and somebody who has used one should recognize the
-   other on sight.
-
-   A list rather than a grid, and that is the difference that matters. The
-   cafeteria is a menu to browse, so its tiles are equals laid out in rows; this
-   is a queue of decisions, each with a clock on it, and a row that runs the
-   width of the panel is one that has room to say what is still inside the agent
-   before it asks whether to throw it away.
-   ========================================================================== */
-
-.dialog--compost:focus,
-.dialog--compost:focus-visible {
-  outline: none;
-}
-
-.dialog.dialog--compost {
-  width: min(38rem, 100%);
-  display: flex;
-  flex-direction: column;
-  max-height: calc(100vh - 3rem);
-  padding: 0;
-}
-
-.compost__head {
-  padding: var(--space-7) var(--space-7) var(--space-6);
-  border-bottom: 1px solid var(--edge);
-  flex: none;
-}
+/* Deleted agents in app settings. */
 
 .compost__list {
-  overflow-y: auto;
-  flex: 1;
   list-style: none;
   margin: 0;
-  padding: var(--space-4) var(--space-7);
+  padding: 0;
 }
 
 .compost__row {
   display: grid;
-  grid-template-columns: 2.6rem 1fr auto;
+  grid-template-columns: 2.6rem minmax(0, 1fr);
   align-items: center;
   gap: var(--space-5);
   padding: var(--space-5) 0;
@@ -6826,18 +6781,11 @@ input[type="file"]:disabled {
 }
 
 .compost__actions {
+  grid-column: 2;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-3);
-  flex: none;
-}
-
-.compost__foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-4);
-  padding: var(--space-6) var(--space-7);
-  border-top: 1px solid var(--edge);
   flex: none;
 }
 
@@ -6845,7 +6793,7 @@ input[type="file"]:disabled {
    The calendar
 
    Guaca's own, and the one surface in the app that draws every crew at once.
-   Built like the compost and the cafeteria — a panel owning its own height,
+   Built like the cafeteria — a panel owning its own height,
    with a head and a foot pinned to it and one scrolling half — because it is
    the same kind of thing: somewhere you go, look at the whole workspace, and
    come back from.

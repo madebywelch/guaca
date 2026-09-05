@@ -285,8 +285,8 @@ pub struct DirectoryEntry {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDraft {
-    /// Absent means "leave it where it is" on update, and "the default group"
-    /// on create. The UI omits it entirely until a second group exists.
+    /// Absent means "leave it where it is" on update, and "the oldest surviving
+    /// group" on create.
     #[serde(default)]
     pub group_id: Option<GroupId>,
     pub name: String,
