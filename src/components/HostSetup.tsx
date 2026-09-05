@@ -70,7 +70,9 @@ export function HostChoice({
   initialError?: string;
   onConnected?: () => void;
 }) {
-  const [mode, setMode] = useState<"local" | "remote">(attached() ? hostMode() : "local");
+  const [mode, setMode] = useState<"local" | "remote">(
+    attached() && hostMode() === "remote" ? "remote" : "local",
+  );
   const [origin, setOrigin] = useState(attached()?.origin ?? "");
   const [token, setToken] = useState("");
   const [docker, setDocker] = useState<DockerStatus | null>(null);
@@ -95,7 +97,7 @@ export function HostChoice({
     try {
       const connection = await localHost.connect(name);
       await probe(connection);
-      rememberMode("remote");
+      rememberMode("existing");
       if (onConnected) {
         activateRemote(connection);
         onConnected();

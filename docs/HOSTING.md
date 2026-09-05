@@ -327,11 +327,46 @@ What it does not have yet:
   `http://127.0.0.1:<port>/v1/oauth/callback`; guaca-bot migration 0005 registers
   that path with native loopback port matching. A browser using `localhost`
   returns to `127.0.0.1` for OAuth. Arbitrary remote hosts are not accepted.
-- **The page that says how to put a tunnel in front of a box.** The image
-  and the unit file exist; what to put in front of them on a rented machine
-  is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a
-  default that binds every interface is one operator's firewall away from a
-  public workspace.
+
+## Connecting a desktop to a VPS over SSH
+
+A VPS can be tested without a domain or a public HTTP port. Install Docker,
+Compose and Buildx on the server, check out the desired Guaca revision, and
+run `GUACA_COMMIT=$(git rev-parse --short=7 HEAD) docker compose up -d --build --wait`.
+The supplied Compose file publishes only `127.0.0.1:8787`. Docker restarts the
+service after a host reboot; the named volume holds the workspace. Keep the
+same Compose project name when updating so it reuses that volume.
+
+On the Mac, open a tunnel, substituting the SSH key and host:
+
+```sh
+ssh -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 -o IdentitiesOnly=yes -i ~/.ssh/your_key \
+  -L 127.0.0.1:18787:127.0.0.1:8787 root@your-host
+```
+
+In **Settings → Workspace → Remote host**, enter `http://127.0.0.1:18787`.
+Retrieve the access key on the server with
+`docker compose exec -T guacad cat /var/lib/guaca/config/token`, then paste it
+into the app's Access key field. Treat that value as a password. HTTP here
+crosses only loopback interfaces; SSH encrypts the network connection. The
+backend runs on the VPS even though the client uses a loopback address.
+
+Closing the tunnel disconnects the interface and prevents browser callbacks
+from arriving. It does not stop the VPS, its schedules or coding jobs. Reopen
+the tunnel at the same local port and the app reconnects. This is an operator
+setup for testing or private access; the desktop does not manage SSH tunnels.
+A normal HTTPS deployment uses a TLS reverse proxy on the server and the
+host's HTTPS address in the app. Register its exact account callback before
+using the optional Guaca-account sign-in. WebSocket proxying must remain
+enabled, and proxy logs must omit query strings because the event socket
+carries an access token there.
+
+The GitHub App broker uses the same optional Compose overlay as a local host.
+Create new broker state on the VPS and authorize the user there. Mount the
+App private key only into the broker. Provider CLI sign-ins also belong to the
+backend user on this server, independently of sign-ins on the Mac. See
+[GitHub App access](GITHUB.md) and **Coding inside the container** below.
 
 ## Browser isolation and desktop access
 

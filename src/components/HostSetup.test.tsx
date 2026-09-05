@@ -1,27 +1,41 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { status, start, update, existing, connect, probe, activate, persist, restart } = vi.hoisted(
-  () => ({
-    existing: vi.fn(),
-    connect: vi.fn(),
-    status: vi.fn(),
-    start: vi.fn(),
-    update: vi.fn(),
-    probe: vi.fn(),
-    activate: vi.fn(),
-    persist: vi.fn(),
-    restart: vi.fn(),
-  }),
-);
+const {
+  status,
+  start,
+  update,
+  existing,
+  connect,
+  probe,
+  activate,
+  persist,
+  restart,
+  savedMode,
+  mode,
+  current,
+} = vi.hoisted(() => ({
+  mode: vi.fn(),
+  current: vi.fn(),
+  savedMode: vi.fn(),
+  existing: vi.fn(),
+  connect: vi.fn(),
+  status: vi.fn(),
+  start: vi.fn(),
+  update: vi.fn(),
+  probe: vi.fn(),
+  activate: vi.fn(),
+  persist: vi.fn(),
+  restart: vi.fn(),
+}));
 vi.mock("../lib/host", () => ({
   localHost: { status, start, update, existing, connect, openDocker: vi.fn() },
-  hostMode: () => "remote",
-  rememberMode: vi.fn(),
+  hostMode: mode,
+  rememberMode: savedMode,
 }));
 vi.mock("../lib/transport", () => ({
   desktop: true,
-  attached: () => null,
+  attached: current,
   activateRemote: activate,
   setRemote: persist,
   restart,
@@ -34,6 +48,8 @@ import { HostChoice, HostSetup } from "./HostSetup";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mode.mockReturnValue("remote");
+  current.mockReturnValue(null);
   existing.mockResolvedValue([]);
   status.mockResolvedValue({ state: "ready", message: "Docker is ready.", updateAvailable: false });
   probe.mockResolvedValue({});
@@ -63,9 +79,27 @@ describe("desktop host setup", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Use My workspace/ }));
     await waitFor(() => expect(restart).toHaveBeenCalled());
     expect(connect).toHaveBeenCalledWith("existing-guacad-1");
+    expect(savedMode).toHaveBeenCalledWith("existing");
     expect(probe).toHaveBeenCalledWith(connection);
     expect(persist).toHaveBeenCalledWith(connection);
     expect(start).not.toHaveBeenCalled();
+  });
+  it("shows an existing local host as local without starting a managed container", async () => {
+    mode.mockReturnValue("existing");
+    current.mockReturnValue({ origin: "http://127.0.0.1:8788", token: "private" });
+    const setup = render(
+      <HostSetup>
+        <div>Workspace mounted</div>
+      </HostSetup>,
+    );
+    await screen.findByText("Workspace mounted");
+    expect(start).not.toHaveBeenCalled();
+    setup.unmount();
+    render(<HostChoice />);
+    await screen.findByText("Docker is ready.");
+    expect(screen.getByRole("button", { name: "On this Mac" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
   it("keeps setup open when the host fails", async () => {
     start.mockRejectedValue("The host could not be downloaded.");

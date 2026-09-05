@@ -19,9 +19,11 @@ export const localHost = {
   openDocker: () => invokeLocal<void>("open_docker"),
 };
 const MODE = "guaca.workspace.hostMode";
-export function hostMode(): "local" | "remote" {
-  return localStorage.getItem(MODE) === "local" ? "local" : "remote";
+type HostMode = "local" | "existing" | "remote";
+export function hostMode(): HostMode {
+  const saved = localStorage.getItem(MODE);
+  return saved === "local" || saved === "existing" ? saved : "remote";
 }
-export function rememberMode(mode: "local" | "remote") {
+export function rememberMode(mode: HostMode) {
   localStorage.setItem(MODE, mode);
 }
