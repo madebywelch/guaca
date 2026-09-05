@@ -269,7 +269,7 @@ fn validate_row(table: &str, row: &Row) -> Result<()> {
         serde_json::from_str::<Vec<crate::domain::envelope::Part>>(text(row, "parts")?)
             .map_err(|_| "A conversation contains unreadable content.")?;
         for key in ["from_kind", "to_kind"] {
-            if !["agent", "operator", "system"].contains(&text(row, key)?) {
+            if !["agent", "human", "system"].contains(&text(row, key)?) {
                 return Err("A conversation has an unknown participant.".into());
             }
         }
@@ -512,6 +512,10 @@ pub fn reconnect(store: &Store, group: GroupId) -> Result<Vec<Reconnect>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::{
+        envelope::{Envelope, Intent, Part, Participant, Trust},
+        ids::{MessageId, RunId},
+    };
     struct Fixture {
         _dir: tempfile::TempDir,
         store: Store,
@@ -533,9 +537,22 @@ mod tests {
             conn.execute("INSERT INTO agents (id,group_id,name,avatar,color,model,system_prompt,skills,lifecycle,created_at,updated_at,sandbox_id,sandbox_envd_token,has_computer) VALUES (?1,?2,'Engineer','avocado','#ffffff','small','Write carefully','[]','active',1,1,'rented-machine','machine-secret',1)", params![agent.to_string(),group.to_string()]).unwrap();
             workspace.write(agent, "Engineer", "Remember the tests.").unwrap();
             let attached = files.put("hello.md", b"hello").unwrap();
-            let parts = serde_json::to_string(&vec![crate::domain::envelope::Part::File(attached)])
+            store
+                .append(&Envelope {
+                    id: MessageId::new(),
+                    run_id: RunId::new(),
+                    channel_id: agent,
+                    from: Participant::Human,
+                    to: Participant::Agent { id: agent },
+                    parts: vec![Part::File(attached)],
+                    trust: Trust::Operator,
+                    hop: 0,
+                    expects_reply: true,
+                    intent: Intent::Work,
+                    cause: None,
+                    created_at: 1,
+                })
                 .unwrap();
-            conn.execute("INSERT INTO messages (id,run_id,channel_id,from_kind,to_kind,to_agent,parts,trust,created_at) VALUES (?1,?2,?3,'operator','agent',?3,?4,'operator',1)", params![uuid::Uuid::new_v4().to_string(),uuid::Uuid::new_v4().to_string(),agent.to_string(),parts]).unwrap();
             conn.execute("INSERT INTO routines (id,agent_id,what,fires,created_at,active) VALUES (?1,?2,'Check tests','once',1,1)", params![uuid::Uuid::new_v4().to_string(),agent.to_string()]).unwrap();
             conn.execute("INSERT INTO occasions (id,group_id,agent_id,title,starts_at,created_at,updated_at) VALUES (?1,?2,?3,'Review',1000,1,1)", params![uuid::Uuid::new_v4().to_string(),group.to_string(),agent.to_string()]).unwrap();
             conn.execute("INSERT INTO repositories (id,group_id,name,path,harness,created_at,updated_at) VALUES (?1,?2,'Code','/old/code','codex',1,1)",params![uuid::Uuid::new_v4().to_string(),group.to_string()]).unwrap();
@@ -611,6 +628,73 @@ mod tests {
         );
         assert_eq!(reconnect(&f.store, imported).unwrap().len(), 1);
         assert!(!f.store.get_group(imported).unwrap().unwrap().api_key_set);
+    }
+    #[test]
+    fn invalid_participants_are_refused_without_partial_groups() {
+        let f = Fixture::new();
+        let before = f.store.list_groups().unwrap().len();
+        for field in ["from_kind", "to_kind"] {
+            for kind in ["operator", "unknown", ""] {
+                let mut archive = f.export();
+                archive.tables.get_mut("messages").unwrap()[0].insert(field.into(), kind.into());
+                assert_eq!(
+                    f.import(archive).unwrap_err(),
+                    "A conversation has an unknown participant."
+                );
+                assert_eq!(f.store.list_groups().unwrap().len(), before);
+            }
+        }
+    }
+    #[test]
+    fn every_participant_round_trips_through_the_store() {
+        let source = Fixture::new();
+        let human = source.store.channel_messages(source.agent, 10).unwrap().remove(0);
+        let agent = Participant::Agent { id: source.agent };
+        for (index, (from, to, trust)) in [
+            (agent, Participant::Human, Trust::Peer),
+            (agent, Participant::System, Trust::Peer),
+            (Participant::System, agent, Trust::System),
+            (agent, agent, Trust::Peer),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            source
+                .store
+                .append(&Envelope {
+                    id: MessageId::new(),
+                    from,
+                    to,
+                    trust,
+                    cause: Some(human.id),
+                    created_at: index as i64 + 2,
+                    ..human.clone()
+                })
+                .unwrap();
+        }
+        let target = Fixture::new();
+        let archive =
+            serde_json::from_slice(&serde_json::to_vec(&source.export()).unwrap()).unwrap();
+        let group = target.import(archive).unwrap();
+        let copied =
+            target.store.list_agents().unwrap().into_iter().find(|a| a.group_id == group).unwrap();
+        let original = source.store.channel_messages(source.agent, 10).unwrap();
+        let restored = target.store.channel_messages(copied.id, 10).unwrap();
+        assert_eq!(restored.len(), original.len());
+        for (old, new) in original.iter().zip(&restored) {
+            let remap = |p: Participant| match p {
+                Participant::Agent { .. } => Participant::Agent { id: copied.id },
+                p => p,
+            };
+            assert_eq!(new.from, remap(old.from));
+            assert_eq!(new.to, remap(old.to));
+            assert_eq!(new.trust, old.trust);
+            assert_eq!(new.parts, old.parts);
+            assert_ne!(new.id, old.id);
+            assert_ne!(new.run_id, old.run_id);
+            assert_eq!(new.run_id, restored[0].run_id);
+            assert_eq!(new.cause, old.cause.map(|_| restored[0].id));
+        }
     }
     #[test]
     fn unknown_fields_and_cross_group_references_are_refused_without_partial_groups() {
