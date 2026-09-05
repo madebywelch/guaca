@@ -80,6 +80,11 @@ RUN npm install --global --ignore-scripts pnpm@10.33.0 "@openai/codex@${CODEX_VE
  && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \
  && install -m 755 /root/.local/bin/claude /usr/local/bin/claude \
  && rm -rf /root/.local /tmp/install-claude.sh
+# Codex and Claude may launch login shells, which reset the PATH injected by
+# the runtime. Keep the repository-aware gh launcher on their normal PATH.
+# It delegates to the packaged CLI outside an App-linked repository.
+COPY deploy/github/github_app.py /usr/local/lib/guaca/github-helper.py
+COPY --chmod=755 deploy/github/gh /usr/local/bin/gh
 ENV DISABLE_AUTOUPDATER=1
 COPY --from=daemon /app/src-tauri/target/release/guacad /usr/local/bin/guacad
 COPY --from=web /app/dist /usr/share/guaca/web

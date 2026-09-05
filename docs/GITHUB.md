@@ -61,6 +61,12 @@ exactly that repository. Installation tokens remain in the broker's memory;
 Git receives one through its credential-helper pipe. `gh` receives a user
 token in its own process environment. Neither is stored in Git remote URLs.
 
+The container installs a repository-aware `gh` launcher in `/usr/local/bin`.
+Login shells started by a coding harness reset `PATH`, so a directory prepended
+only to the harness environment cannot reliably reach the credential helper.
+The launcher uses the same repository connection and user-token checks, then
+executes `/usr/bin/gh`. Outside an App-linked repository it delegates unchanged.
+
 The Git helper obtains credentials on demand. The `gh` wrapper does the same
 for each invocation, including from a linked agent worktree. Cached tokens are
 replaced five minutes before expiry. A Git rejection invalidates the cached

@@ -90,6 +90,8 @@ def main():
             assert call("repository_github_user", {"id": repo["id"]})["status"] == "signedOut"
             unsigned = docker("exec", "-w", repo["path"], runtime, "python3", helper, "gh", "api", "repos/" + name, "--jq", ".full_name", check=False)
             assert unsigned.returncode != 0, "gh must not fall back to the bot before user authorization"
+            login = docker("exec", "-w", repo["path"], runtime, "/bin/bash", "-lc", "gh api user", check=False)
+            assert login.returncode != 0 and "GitHub user access is unavailable" in login.stderr, "login shells must use the App helper and require user authorization"
             docker("exec", runtime, "test", "!", "-e", "/run/secrets/github_private_key")
             mounts = json.loads(docker("inspect", runtime, "--format", "{{json .Mounts}}").stdout)
             assert all("private-key" not in m["Source"] and "private_key" not in m["Destination"] for m in mounts)

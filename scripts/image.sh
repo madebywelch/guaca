@@ -75,6 +75,10 @@ curl -fsS "${BASE}/" | grep -q '<div id="root">' || fail "the page is not served
 docker exec "${NAME}" ssh -V >/dev/null 2>&1 || fail "SSH client is not in the image"
 docker exec "${NAME}" git --version >/dev/null || fail "git is not in the image"
 docker exec "${NAME}" gh --version >/dev/null || fail "gh is not in the image"
+[ "$(docker exec "${NAME}" /bin/bash -lc 'command -v gh')" = "/usr/local/bin/gh" ] \
+  || fail "a login shell bypassed the repository-aware GitHub launcher"
+docker exec "${NAME}" /bin/bash -lc 'gh --version' >/dev/null \
+  || fail "the GitHub launcher failed outside a linked repository"
 docker exec "${NAME}" codex --version >/dev/null || fail "codex is not in the image"
 [ "$(docker exec "${NAME}" printenv HOME)" = "/var/lib/guaca" ] || fail "CLI home is not persistent"
 docker exec "${NAME}" claude --version >/dev/null || fail "claude is not in the image"
