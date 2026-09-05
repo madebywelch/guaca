@@ -915,6 +915,53 @@ describe("the Workspace pane", () => {
   });
 });
 
+describe("provider-specific configuration", () => {
+  it.each(["chatgpt", "claude"] as const)(
+    "hides API configuration while %s is selected and preserves edits across switches",
+    async (provider) => {
+      subscriptionStatus.mockResolvedValue(signedIn());
+      open(stored({ provider }), DEFAULT_PREFS, "provider");
+      const subscriptionButton =
+        provider === "chatgpt" ? "Use the ChatGPT subscription" : "Use the Claude subscription";
+
+      expect(screen.queryByLabelText(/^Inference endpoint/)).toBeNull();
+      expect(screen.queryByLabelText(/^API key/)).toBeNull();
+      expect(screen.queryByLabelText(/^Default model/)).toBeNull();
+      expect(screen.queryByText("OpenRouter", { selector: ".preset__name" })).toBeNull();
+      expect(field(/^Give up on a call after/)).toBeTruthy();
+      expect(probe()).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Use an API provider" }));
+      expect(field(/^Inference endpoint/).value).toBe("https://openrouter.ai/api/v1");
+      expect(field(/^Default model/).value).toBe("anthropic/claude-sonnet-4.5");
+      expect(field(/^API key/).placeholder).toBe("Stored …9f2c");
+      type(/^Inference endpoint/, "https://gateway.example/v1");
+      type(/^Default model/, "custom-model");
+      type(/^API key/, "replacement-key");
+
+      await waitFor(() => {
+        expect(
+          (screen.getByRole("button", { name: subscriptionButton }) as HTMLButtonElement).disabled,
+        ).toBe(false);
+      });
+      fireEvent.click(screen.getByRole("button", { name: subscriptionButton }));
+      expect(screen.queryByLabelText(/^Inference endpoint/)).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Use an API provider" }));
+      expect(field(/^Inference endpoint/).value).toBe("https://gateway.example/v1");
+      expect(field(/^Default model/).value).toBe("custom-model");
+      expect(field(/^API key/).value).toBe("replacement-key");
+      fireEvent.click(save());
+      await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+      expect(sentPatch()).toMatchObject({
+        provider: "compatible",
+        baseUrl: "https://gateway.example/v1",
+        defaultModel: "custom-model",
+        apiKey: "replacement-key",
+      });
+    },
+  );
+});
+
 /**
  * The ChatGPT subscription.
  *
@@ -1112,6 +1159,7 @@ describe("the ChatGPT subscription", () => {
     pane("Provider");
     await waitFor(() => expect(row().textContent).toContain("In use"));
 
+    fireEvent.click(button("Use an API provider"));
     const label = screen.getByText("Groq", { selector: ".preset__name" });
     fireEvent.click(label.closest("button") as HTMLButtonElement);
 
