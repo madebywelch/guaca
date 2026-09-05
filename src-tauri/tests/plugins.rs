@@ -1098,6 +1098,7 @@ mod account_backed {
             &endpoint,
             plugins::Credential::Account(plugins::AccountUse { token: ACCOUNT, connection: "" }),
             &Headers::none(),
+            &guac_lib::oauth::Landing::Loopback,
             |_| Ok(()),
         )
         .await

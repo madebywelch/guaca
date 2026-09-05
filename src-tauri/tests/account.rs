@@ -626,7 +626,7 @@ async fn a_refused_refresh_is_reported_as_itself_rather_than_as_a_missing_sign_i
     let stub =
         serve(Script { expires_in: Some(1), refuse_refresh: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &guac_lib::oauth::Landing::Loopback).await.unwrap();
 
     let failed = account.connectors().await.expect_err("the renewal was refused");
 
@@ -651,7 +651,7 @@ async fn one_renewal_serves_everybody_who_wanted_a_token_at_once() {
     // an account nobody is signed in to.
     let stub = serve(Script { expires_in: Some(1), slow_refresh: true, ..Script::default() }).await;
     let account = Account::open_at(scratch(), &stub.origin);
-    account.sign_in(browse).await.unwrap();
+    account.sign_in(browse, &guac_lib::oauth::Landing::Loopback).await.unwrap();
 
     let (first, second) = tokio::join!(account.access(), account.access());
 
