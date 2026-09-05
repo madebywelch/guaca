@@ -707,3 +707,12 @@ Guaca offers setup instructions and reads only sign-in status, never credential
 files. No model call is needed to check either CLI. This does not introduce a
 Guaca Claude.ai login flow or authorize a managed service to route consumer
 subscriptions. See the provider's current terms before offering such a service.
+
+## A GitHub App authenticates both repository doors
+
+[GitHub App access](GITHUB.md) supplies repository-scoped, renewable credentials
+through Git's helper and a `gh` wrapper. Both coding harnesses and `shell` get
+the wrapper for a connected repository; personal-token and SSH repositories
+retain their existing configuration. The push gate is unchanged: authentication
+answers whether GitHub permits an operation, and the gate answers whether the
+operator allowed this job to perform it.

@@ -1,0 +1,10 @@
+{
+  "clientId": "YOUR_GITHUB_APP_CLIENT_ID",
+  "installationId": 123456,
+  "repositories": ["your-account/your-repository"],
+  "privateKeyFile": "/run/secrets/github_private_key",
+  "tokenFile": "/run/github-client/token",
+  "initializeToken": true,
+  "tokenUid": 1000,
+  "listen": "0.0.0.0:8791"
+}

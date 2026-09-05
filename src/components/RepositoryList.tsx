@@ -699,7 +699,9 @@ export function RepositoryList({ groupId, crew }: Props) {
           <p className="field__hint">
             {directory
               ? "The full path on the machine running Guaca, which has to be the root of a git repository. For a container, use the path inside its mounted volume. Git is the undo: it is the reason an agent can be turned loose in there at all. The note is read by every agent that has it, on every turn."
-              : "The workspace clones it into a directory of its own and works there; the work comes back as branches and pushes. A token is kept beside the settings, never in the clone. The note is read by every agent that has it, on every turn."}
+              : githubApp
+                ? "The workspace clones through its configured GitHub App. Git and pull-request commands obtain short-lived credentials automatically."
+                : "The workspace clones it into a directory of its own and works there; the work comes back as branches and pushes. A token is kept beside the settings, never in the clone. The note is read by every agent that has it, on every turn."}
           </p>
         </div>
       ) : (

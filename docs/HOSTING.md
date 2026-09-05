@@ -110,11 +110,9 @@ one that does not.
 
 `Capabilities` is read by the command boundary and by the frontend. Repository
 paths and local model endpoints are available in both hosts, interpreted on
-the backend. File paths on the client and desktop subscription credentials
-remain unavailable on the server. The Claude provider row explains that
-limitation. `coding_harnesses` separately checks installed programs and offers
-Claude Code on a server with `ANTHROPIC_API_KEY`; its row explains the required
-credential when absent.
+the backend. File paths and credentials on the client do not transfer to the server.
+`coding_harnesses` checks installed programs and their own sign-in status.
+Claude Code can use its backend CLI sign-in or a configured API credential.
 
 ## A browser is admitted by a token, and the token arrives by fragment
 
@@ -513,6 +511,11 @@ protection and server hooks can only decide an actual update. A separate push
 URL is shown explicitly; an origin token does not grant access to that other
 address. Git access does not sign in `gh` for pull-request API operations;
 configure `gh auth login` or `GH_TOKEN` separately if jobs need those.
+
+Alternatively, [connect a GitHub App](GITHUB.md). Its credential service
+authenticates both Git and `gh`, renews installation tokens automatically, and
+keeps the PEM out of the coding container. Self-hosters supply their own App;
+no Guaca account is required.
 
 Codex jobs support worktrees, streamed progress, completion, cancellation,
 acknowledged corrections and Guaca push approvals through the official

@@ -45,6 +45,7 @@ RUN mkdir -p src/bin \
  && cargo build --release --no-default-features --features server --bin guacad \
  && rm -rf src build.rs target/release/deps/guac* target/release/deps/libguac*
 COPY src-tauri/ ./
+COPY deploy/github/github_app.py /app/deploy/github/github_app.py
 ARG GUACA_COMMIT
 ENV GUACA_COMMIT=$GUACA_COMMIT
 RUN cargo build --release --no-default-features --features server --bin guacad
@@ -56,7 +57,7 @@ FROM node:22-bookworm-slim
 # remote-linked repository is cloned, fetched and pushed with, and `claude` is
 # a coding harness. Authentication is configured under the backend user.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git python3 build-essential ripgrep \
+ && apt-get install -y --no-install-recommends ca-certificates curl git openssh-client python3 build-essential ripgrep \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \

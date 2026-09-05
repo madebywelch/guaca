@@ -1,0 +1,32 @@
+# Optional self-hosted GitHub App credentials. No Guaca account required.
+# docker compose -f docker-compose.yml -f docker-compose.github.yml up -d --build
+services:
+  guacad:
+    environment:
+      GUACA_GITHUB_BROKER: http://github-credentials:8791
+      GUACA_GITHUB_BROKER_TOKEN_FILE: /run/github-client/token
+    volumes:
+      - github-client:/run/github-client:ro
+    depends_on:
+      github-credentials:
+        condition: service_healthy
+  github-credentials:
+    build: ./deploy/github
+    restart: unless-stopped
+    init: true
+    read_only: true
+    volumes:
+      - github-client:/run/github-client
+    secrets:
+      - github_config
+      - github_private_key
+    # No published port; no repository, runtime data, or Docker socket mounts.
+    security_opt:
+      - no-new-privileges:true
+secrets:
+  github_config:
+    file: ${GUACA_GITHUB_CONFIG_FILE:?Set the path to your GitHub App broker configuration}
+  github_private_key:
+    file: ${GUACA_GITHUB_PRIVATE_KEY_FILE:?Set the path to your GitHub App PEM file}
+volumes:
+  github-client:
