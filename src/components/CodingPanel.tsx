@@ -44,7 +44,8 @@ export function CodingPanel({ agent }: Props) {
   const repositories = useStore((s) => s.repositories);
   const floor = useRef<HTMLDivElement>(null);
   const [correction, setCorrection] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   // Armed before it fires, like the two destructive items in `AgentMenu`. This
   // ends forty minutes of work that cannot be resumed, and the confirmation is
@@ -68,8 +69,9 @@ export function CodingPanel({ agent }: Props) {
 
   const send = async () => {
     const message = correction.trim();
-    if (!message) return;
-    setBusy(true);
+    if (!message || sending || stopping) return;
+    setSending(true);
+    setNote("Sending correction…");
     try {
       await api.messageCodingJob(agent, message);
       setCorrection("");
@@ -80,18 +82,18 @@ export function CodingPanel({ agent }: Props) {
     } catch (err) {
       setNote(errorMessage(err));
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   };
 
   const stop = async () => {
-    setBusy(true);
+    setStopping(true);
     try {
       await api.stopCodingJob(agent);
     } catch (err) {
       setNote(errorMessage(err));
     } finally {
-      setBusy(false);
+      setStopping(false);
       setConfirming(false);
     }
   };
@@ -106,7 +108,7 @@ export function CodingPanel({ agent }: Props) {
             <button
               type="button"
               className="btn btn--small btn--danger"
-              disabled={busy}
+              disabled={stopping}
               onClick={() => void stop()}
             >
               Stop it
@@ -114,6 +116,7 @@ export function CodingPanel({ agent }: Props) {
             <button
               type="button"
               className="btn btn--small btn--ghost"
+              disabled={stopping}
               onClick={() => setConfirming(false)}
             >
               Keep going
@@ -123,7 +126,7 @@ export function CodingPanel({ agent }: Props) {
           <button
             type="button"
             className="btn btn--small btn--ghost"
-            disabled={busy}
+            disabled={stopping}
             onClick={() => setConfirming(true)}
           >
             Stop
@@ -174,7 +177,7 @@ export function CodingPanel({ agent }: Props) {
           className="input input--slim"
           placeholder="change course: use the other endpoint, stop after the tests…"
           value={correction}
-          disabled={busy}
+          disabled={sending || stopping}
           aria-label="Send a correction to the running coding job"
           onChange={(event) => {
             setCorrection(event.target.value);
@@ -187,7 +190,7 @@ export function CodingPanel({ agent }: Props) {
         <button
           type="button"
           className="btn btn--small"
-          disabled={busy || !correction.trim()}
+          disabled={sending || stopping || !correction.trim()}
           onClick={() => void send()}
         >
           Send

@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
+import { hosted, openExternal } from "./transport";
 
 /**
  * How much of a running coding job's work is kept on screen.
@@ -20,6 +21,15 @@ import { type DropTarget, landsBefore, railOrder } from "./rail";
  * transcript is the message the job delivers when it ends.
  */
 const CODING_TAIL = 40;
+
+/** A desktop's answer, which is every capability there is. */
+const EVERYTHING: Capabilities = {
+  localDirectories: true,
+  loopbackEndpoints: true,
+  claudeProvider: true,
+  claudeCodeHarness: true,
+  localFiles: true,
+};
 
 import { keepThought } from "./reasoning";
 import type { LiveCall } from "./trail";
@@ -30,6 +40,7 @@ import type {
   Approval,
   ApprovalId,
   ApprovalState,
+  Capabilities,
   CodingLine,
   Decision,
   Envelope,
@@ -89,7 +100,7 @@ export interface Placement {
   pinned?: boolean;
 }
 
-interface State {
+export interface State {
   agents: AgentCard[];
   groups: Group[];
   /**
@@ -135,6 +146,16 @@ interface State {
   /** Newest message timestamp per agent. Drives the sidebar order. */
   lastActive: Record<AgentId, number>;
   settings: Settings | null;
+  /**
+   * What this workspace can do, read once when the window opens.
+   *
+   * Everything on a desktop, and the desktop's answer is also what is assumed
+   * until the read lands: a panel drawn before it can offer nothing a desktop
+   * would not, and nothing draws before `ready` anyway. On a server the five
+   * flags are what stand between an operator and a control that fails only
+   * after they have filled it in.
+   */
+  capabilities: Capabilities;
   /** Local preferences. See `lib/prefs`: the runtime never reads these. */
   prefs: Prefs;
   /**
@@ -302,8 +323,27 @@ interface State {
 
   /** Non-blocking surface for the last thing that went wrong. */
   banner: { tone: "error" | "info" | "ok"; text: string } | null;
+  /**
+   * A sign-in page the runtime asked this browser to open, while the flow
+   * behind it is still waiting.
+   *
+   * Only a hosted workspace sets it: a desktop opens its own browser. Drawn as
+   * a link as well as opened, because a window opened from an event rather
+   * than a click is one a browser may refuse, and a sign-in that opened
+   * nothing looks exactly like one that hung.
+   */
+  handoff: string | null;
+  /**
+   * Model calls since this window opened, summed.
+   *
+   * The one number with nowhere else to be read from, and the menu bar's
+   * "this session" row when the window is showing a box: the box's runtime
+   * cannot know when this window opened.
+   */
+  sessionSpend: Tokens;
 
   bootstrap: () => Promise<void>;
+  resynchronize: () => Promise<void>;
   refreshAgents: () => Promise<void>;
   /**
    * Asks git, and `gh`, what the linked repositories are doing.
@@ -377,6 +417,7 @@ interface State {
   applyEvent: (event: UiEvent) => void;
   dismissPulse: (id: number) => void;
   setBanner: (banner: State["banner"]) => void;
+  setHandoff: (url: string | null) => void;
   setSettings: (settings: Settings) => void;
   /**
    * Merges a change into the local preferences and writes them back.
@@ -468,6 +509,7 @@ export const useStore = create<State>((set, get) => ({
   activity: {},
   lastActive: {},
   settings: null,
+  capabilities: EVERYTHING,
   prefs: loadPrefs(),
   activeRun: {},
   usage: {},
@@ -490,6 +532,8 @@ export const useStore = create<State>((set, get) => ({
   memoryVersion: {},
   workingNotesVersion: {},
   banner: null,
+  handoff: null,
+  sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
 
   async bootstrap() {
     const [
@@ -499,6 +543,7 @@ export const useStore = create<State>((set, get) => ({
       activity,
       lastActive,
       settings,
+      capabilities,
       usage,
       approvals,
       pending,
@@ -507,9 +552,10 @@ export const useStore = create<State>((set, get) => ({
       api.listAgents(),
       api.listGroups(),
       api.listRepositories(),
-      api.agentActivity(),
+      hosted ? Promise.resolve(null) : api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
+      api.capabilities(),
       api.usageSummary(),
       api.approvalStates(),
       // A turn parked before the window was opened is still parked. The desk
@@ -525,9 +571,10 @@ export const useStore = create<State>((set, get) => ({
       agents,
       groups,
       repositories,
-      activity,
+      ...(activity ? { activity } : {}),
       lastActive,
       settings,
+      capabilities,
       usage: byGroup(usage),
       approvals,
       pending,
@@ -539,6 +586,28 @@ export const useStore = create<State>((set, get) => ({
     if (!current && live.length > 0) {
       await get().select(live[0]!.id);
     }
+  },
+
+  async resynchronize() {
+    await get().bootstrap();
+    const { selected, agents } = get();
+    const live = agents.filter((a) => a.lifecycle !== "terminated");
+    const next = live.some((a) => a.id === selected) ? selected : (live[0]?.id ?? null);
+    set((state) => ({
+      selected: next,
+      railGroup: state.groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
+      routineVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.routineVersion[a.id] ?? 0) + 1]),
+      ),
+      memoryVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.memoryVersion[a.id] ?? 0) + 1]),
+      ),
+      workingNotesVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.workingNotesVersion[a.id] ?? 0) + 1]),
+      ),
+    }));
+    if (next) await get().loadChannel(next);
+    await get().refreshRepoStatuses();
   },
 
   async refreshRepoStatuses() {
@@ -696,8 +765,15 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadChannel(key, through) {
+    const before = new Set((get().messages[key] ?? []).map((m) => m.id));
     const messages = await api.channelMessages(key, 300, through);
-    set((state) => ({ messages: { ...state.messages, [key]: messages } }));
+    set((state) => {
+      let merged = messages;
+      for (const arrived of state.messages[key] ?? []) {
+        if (!before.has(arrived.id)) merged = insert(merged, arrived) ?? merged;
+      }
+      return { messages: { ...state.messages, [key]: merged } };
+    });
   },
 
   /**
@@ -788,6 +864,30 @@ export const useStore = create<State>((set, get) => ({
     switch (event.type) {
       case "agentsChanged": {
         void get().refreshAgents();
+        break;
+      }
+
+      case "liveSnapshot": {
+        set({
+          activity: event.activity,
+          streams: event.streams,
+          activeRun: Object.fromEntries(
+            Object.values(event.streams).map((s) => [s.agentId, s.runId]),
+          ),
+          building: event.building,
+          coding: {},
+          reasoning: {},
+          trail: {},
+          pulse: {},
+          pulses: [],
+          handoff: null,
+        });
+        break;
+      }
+
+      case "openUrl": {
+        set({ handoff: event.url });
+        void openExternal(event.url);
         break;
       }
 
@@ -1023,7 +1123,17 @@ export const useStore = create<State>((set, get) => ({
           };
           const cutoff = Date.now() - PULSE_WINDOW_MS;
           const recent = (state.pulse[event.groupId] ?? []).filter((p) => p.at >= cutoff);
+          const session = state.sessionSpend;
           return {
+            sessionSpend: {
+              prompt: session.prompt + event.prompt,
+              completion: session.completion + event.completion,
+              cost:
+                event.cost === null && session.cost === null
+                  ? null
+                  : (session.cost ?? 0) + (event.cost ?? 0),
+              calls: session.calls + 1,
+            },
             usage: {
               ...state.usage,
               [event.groupId]: {
@@ -1192,6 +1302,10 @@ export const useStore = create<State>((set, get) => ({
 
   setBanner(banner) {
     set({ banner });
+  },
+
+  setHandoff(handoff) {
+    set({ handoff });
   },
 
   setSettings(settings) {

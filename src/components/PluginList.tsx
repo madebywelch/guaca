@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, openExternal } from "../lib/ipc";
 import { hostOf, markFor, reportLine } from "../lib/plugins";
+import { useStore } from "../lib/store";
 import {
   type AccountConnection,
   type AgentCard,
@@ -418,6 +419,9 @@ export function PluginList({ groupId, crew }: Props) {
       setError(errorMessage(caught));
     } finally {
       setBusy(null);
+      // A sign-in page the host asked the browser to open is stale the moment
+      // the flow behind it has ended, either way.
+      useStore.getState().setHandoff(null);
     }
   };
 

@@ -17,7 +17,7 @@ use crate::domain::approval::{
     Approval, ApprovalState, DetailField, ProtectedAction, Request, QUESTION,
 };
 use crate::domain::connector::{CleanConnector, Connector};
-use crate::domain::envelope::{Envelope, Intent, Part, Participant, Trust};
+use crate::domain::envelope::{Envelope, Intent, NoticeKind, Part, Participant, Trust};
 use crate::domain::escalation::{Escalation, Raised};
 use crate::domain::group::{CleanGroup, Group, GroupInference, GroupLimits, InferenceOverrides};
 use crate::domain::ids::{
@@ -1898,8 +1898,8 @@ impl Store {
 
         conn.execute(
             "INSERT INTO repositories \
-             (id,group_id,name,path,note,harness,gate,bench,created_at,updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)",
+             (id,group_id,name,path,note,harness,gate,bench,remote,created_at,updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",
             params![
                 id.to_string(),
                 clean.group_id.to_string(),
@@ -1912,6 +1912,7 @@ impl Store {
                 // which is `shared` and exists only to backfill rows migration
                 // 44 found already there.
                 clean.bench.as_str(),
+                clean.remote,
                 now,
             ],
         )
@@ -3243,6 +3244,10 @@ impl Store {
 
     pub fn append(&self, envelope: &Envelope) -> Result<(), StoreError> {
         let conn = self.conn()?;
+        Self::insert_message(&conn, envelope)
+    }
+
+    fn insert_message(conn: &rusqlite::Connection, envelope: &Envelope) -> Result<(), StoreError> {
         let (from_kind, from_agent) = participant_columns(envelope.from);
         let (to_kind, to_agent) = participant_columns(envelope.to);
         let parts = serde_json::to_string(&envelope.parts)
@@ -3269,6 +3274,67 @@ impl Store {
             ],
         )?;
         Ok(())
+    }
+
+    /// Acceptance and its recovery point are one commit. A crash between this
+    /// write and enqueueing must still leave work the operator can find.
+    pub fn append_delivery(&self, envelope: &Envelope) -> Result<(), StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        Self::insert_message(&tx, envelope)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO pending_runs (run_id,message_id) VALUES (?1,?2)",
+            params![envelope.run_id.to_string(), envelope.id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn settle_run(&self, run: RunId) -> Result<(), StoreError> {
+        self.conn()?.execute("DELETE FROM pending_runs WHERE run_id=?1", [run.to_string()])?;
+        Ok(())
+    }
+
+    /// Called before actors start. Recording each interruption and clearing
+    /// the journal are atomic, so repeated boots cannot duplicate notices.
+    pub fn recover_interrupted_runs(&self) -> Result<usize, StoreError> {
+        let mut conn = self.conn()?;
+        let tx = conn.transaction()?;
+        let pending = {
+            let mut stmt = tx.prepare(
+                "SELECT id,m.run_id,channel_id,from_kind,from_agent,to_kind,to_agent,parts,trust,hop,expects_reply,intent,cause,created_at
+                 FROM messages m JOIN pending_runs p ON p.message_id=m.id ORDER BY created_at,id",
+            )?;
+            let rows = stmt.query_map([], row_to_envelope)?;
+            let mut pending = Vec::new();
+            for row in rows {
+                pending.push(row??);
+            }
+            pending
+        };
+        for original in &pending {
+            let notice = Envelope {
+                id: MessageId::new(),
+                run_id: original.run_id,
+                channel_id: original.channel_id,
+                from: Participant::System,
+                to: original.to,
+                parts: vec![Part::Notice {
+                    kind: NoticeKind::Interrupted,
+                    text: "The backend restarted before this conversation finished. Previous messages and files are preserved. Review any actions already taken before retrying; an external action may have completed without its result being recorded.".into(),
+                }],
+                trust: Trust::System,
+                hop: 0,
+                expects_reply: false,
+                intent: Intent::Courtesy,
+                cause: Some(original.id),
+                created_at: now_ms(),
+            };
+            Self::insert_message(&tx, &notice)?;
+        }
+        tx.execute("DELETE FROM pending_runs", [])?;
+        tx.commit()?;
+        Ok(pending.len())
     }
 
     /// The newest `limit` messages in a channel, returned oldest-first for
@@ -4228,7 +4294,7 @@ pub enum PluginReach {
 }
 
 const REPOSITORY_COLUMNS: &str =
-    "SELECT id,group_id,name,path,note,harness,gate,bench,created_at,updated_at FROM \
+    "SELECT id,group_id,name,path,note,harness,gate,bench,remote,created_at,updated_at FROM \
      repositories";
 
 /// A unique-index failure here is one directory linked twice, and the operator
@@ -4260,8 +4326,9 @@ fn row_to_repository(row: &Row<'_>) -> RowResult<Repository> {
             harness: Harness::parse(&row.get::<_, String>(5)?),
             gate: Gate::parse(&row.get::<_, String>(6)?),
             bench: Bench::parse(&row.get::<_, String>(7)?),
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
+            remote: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })())
 }
@@ -4589,6 +4656,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn interrupted_work_survives_reopening_and_is_reported_exactly_once() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Worker")).unwrap();
+        let original = envelope(
+            Participant::Human,
+            Participant::Agent { id: agent.id },
+            "do work",
+            RunId::new(),
+        );
+        f.store.append_delivery(&original).unwrap();
+        // Another delivery in this conversation must not replace its origin.
+        let mut followup = original.clone();
+        followup.id = MessageId::new();
+        f.store.append_delivery(&followup).unwrap();
+        let reopened = Store::open(&f._dir.path().join("guac.db")).unwrap();
+        assert_eq!(reopened.recover_interrupted_runs().unwrap(), 1);
+        assert_eq!(reopened.recover_interrupted_runs().unwrap(), 0);
+        let messages = reopened.channel_messages(agent.id, 20).unwrap();
+        let notice = messages.iter().find(|m| m.cause == Some(original.id)).unwrap();
+        assert!(matches!(notice.parts[0], Part::Notice { kind: NoticeKind::Interrupted, .. }));
+        assert!(!notice.expects_reply);
+        assert_eq!(messages.len(), 3);
+    }
+
+    #[test]
+    fn settled_work_and_failed_acceptance_do_not_reappear_after_restart() {
+        let f = fixture();
+        let agent = f.store.create_agent(&draft("Worker")).unwrap();
+        let original = envelope(
+            Participant::Human,
+            Participant::Agent { id: agent.id },
+            "do work",
+            RunId::new(),
+        );
+        f.store.append_delivery(&original).unwrap();
+        f.store.settle_run(original.run_id).unwrap();
+        assert!(
+            f.store.append_delivery(&original).is_err(),
+            "duplicate acceptance fails atomically"
+        );
+        assert_eq!(f.store.recover_interrupted_runs().unwrap(), 0);
+        assert_eq!(f.store.channel_messages(agent.id, 20).unwrap().len(), 1);
+    }
+
     /// A peer-to-peer message that gives the recipient something to do, which
     /// is the only kind `outstanding_asks` counts.
     fn work(from: AgentId, to: AgentId, text: &str) -> Envelope {
@@ -4620,6 +4732,7 @@ mod tests {
             note: String::new(),
             harness: Harness::default(),
             bench: Bench::default(),
+            remote: None,
         }
     }
 

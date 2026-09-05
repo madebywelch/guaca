@@ -65,6 +65,10 @@ fn stand_ins() -> &'static Path {
         let dir = tempfile::tempdir().unwrap();
         write_stand_in(dir.path(), "pi", PI_SUCCESS);
         write_stand_in(dir.path(), "claude", CLAUDE_SUCCESS);
+        let codex = dir.path().join("codex");
+        std::fs::write(&codex, include_str!("fixtures/codex.py")).unwrap();
+        std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", format!("{}:{path}", dir.path().display()));
         dir
@@ -82,6 +86,7 @@ fn write_stand_in(dir: &Path, name: &str, canned: &str) {
          if [ \"$1\" = '--version' ]; then echo 'stand-in'; exit 0; fi\n\
          : > {ARGV}\n\
          for arg in \"$@\"; do printf '%s\\n<<>>\\n' \"$arg\" >> {ARGV}; done\n\
+         if [ -f .noisy ]; then dd if=/dev/zero bs=1024 count=256 >&2 2>/dev/null; fi\n\
          if [ -f {LINGER} ]; then sleep \"$(cat {LINGER})\"; fi\n\
          if [ -f {SAY} ]; then cat {SAY}; fi\n\
          if [ -f {EXIT} ]; then exit \"$(cat {EXIT})\"; fi\n\
@@ -95,11 +100,51 @@ fn write_stand_in(dir: &Path, name: &str, canned: &str) {
     std::fs::set_permissions(&at, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 }
 
+#[tokio::test]
+async fn a_noisy_harness_cannot_fill_stderr_and_deadlock() {
+    stand_ins();
+    let repo = a_repository("noisy");
+    std::fs::write(repo.join(".noisy"), "").unwrap();
+    let done = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        coding::run(Which::Codex, repo.to_str().unwrap(), "work", None, |_| {}),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(done.failed.is_none());
+    let _ = std::fs::remove_dir_all(repo);
+}
+
 const PI_SUCCESS: &str = concat!(
     r#"{"type":"tool_execution_start","toolName":"bash","args":{"command":"npm test"}}"#,
     "\n",
     r#"{"type":"message_end","message":{"role":"assistant","model":"gpt-5.6","content":[{"type":"text","text":"Fixed the flaky test and pushed."}],"stopReason":"stop"}}"#,
 );
+
+#[tokio::test]
+async fn codex_runs_in_the_repository_and_retains_its_own_session() {
+    stand_ins();
+    let repo = a_repository("codex");
+    let mut progress = Vec::new();
+    let outcome =
+        coding::run(Which::Codex, repo.to_str().unwrap(), "fix it", None, |p| progress.push(p))
+            .await
+            .unwrap();
+    assert_eq!(outcome.said, "Fixed the flaky test and pushed.");
+    assert_eq!(outcome.tool_calls, 1);
+    assert_eq!(outcome.session_id, "codex-session");
+    assert!(outcome.failed.is_none());
+    assert!(outcome.cost.is_none());
+    let argv = argv_at(&repo);
+    assert_eq!(argv[0], "app-server");
+    let requests = std::fs::read_to_string(repo.join(".rpc.jsonl")).unwrap();
+    assert!(requests.contains("Commit early and often"));
+    assert!(requests.contains("fix it"));
+    assert!(!argv.contains(&"--model".into()));
+    assert_eq!(progress.len(), 2);
+    let _ = std::fs::remove_dir_all(repo);
+}
 
 const CLAUDE_SUCCESS: &str = concat!(
     r#"{"type":"system","subtype":"init","model":"claude-opus-5"}"#,
@@ -330,7 +375,205 @@ async fn a_version_nothing_can_read_runs_the_job_without_a_bridge() {
     ));
 }
 
+#[tokio::test]
+async fn codex_acknowledges_steering_and_rejects_completion_races() {
+    use guac_lib::coding::codex::{Control, Steer};
+    stand_ins();
+    for (mode, accepted) in
+        [("", true), (".codex_reject_steer", false), (".codex_finish_before_ack", false)]
+    {
+        let repo = a_repository(&format!("steer{mode}"));
+        std::fs::write(repo.join(".codex_hold"), "").unwrap();
+        if !mode.is_empty() {
+            std::fs::write(repo.join(mode), "").unwrap();
+        }
+        let path = repo.to_string_lossy().to_string();
+        let (sender, steering) = tokio::sync::mpsc::channel(8);
+        let (signals, _) = tokio::sync::mpsc::channel(8);
+        let job = tokio::spawn(async move {
+            coding::run_with_control(
+                Which::Codex,
+                &path,
+                "work",
+                None,
+                Some(Control { gate: Gate::Open, steering, signals }),
+                |_| {},
+            )
+            .await
+        });
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        sender.send(Steer { message: "Fix the tests first".into(), reply }).await.unwrap();
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(5), answer).await.unwrap().unwrap();
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+        if mode == ".codex_reject_steer" {
+            assert!(!job.is_finished(), "a rejected correction must not stop an active job");
+            job.abort();
+            let _ = job.await;
+        } else {
+            let out = job.await.unwrap().unwrap();
+            assert!(out.failed.is_none());
+        }
+        let log = std::fs::read_to_string(repo.join(".rpc.jsonl")).unwrap();
+        let messages: Vec<serde_json::Value> =
+            log.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(
+            messages.iter().filter(|m| m["method"] == "turn/start").count(),
+            1,
+            "steering never starts a replacement turn"
+        );
+        let request = messages.iter().find(|m| m["method"] == "turn/steer").unwrap();
+        assert_eq!(request["params"]["expectedTurnId"], "codex-turn");
+        assert_eq!(request["params"]["threadId"], "codex-session");
+        let _ = std::fs::remove_dir_all(repo);
+    }
+}
+
+#[tokio::test]
+async fn codex_keeps_steering_while_the_repository_gate_is_waiting() {
+    use guac_lib::coding::codex::{Control, Steer};
+    stand_ins();
+    for allow in [true, false] {
+        let repo = a_repository(&format!("codex-gate-{allow}"));
+        std::fs::write(repo.join(".codex_gate"), "").unwrap();
+        std::fs::write(repo.join(".codex_command"), "./ship.sh").unwrap();
+        std::fs::write(repo.join("ship.sh"), "#!/bin/sh\ngit push origin HEAD\n").unwrap();
+        let path = repo.to_string_lossy().to_string();
+        let (sender, steering) = tokio::sync::mpsc::channel(8);
+        let (signals, mut heard) = tokio::sync::mpsc::channel(8);
+        let job = tokio::spawn(async move {
+            coding::run_with_control(
+                Which::Codex,
+                &path,
+                "work",
+                None,
+                Some(Control { gate: Gate::AskBeforePushing, steering, signals }),
+                |_| {},
+            )
+            .await
+        });
+        let signal = tokio::time::timeout(std::time::Duration::from_secs(5), heard.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        let coding::Signal::Permission { line, reply: decision, .. } = signal else {
+            panic!("wrong signal")
+        };
+        assert_eq!(line, "./ship.sh");
+        assert!(!job.is_finished());
+        assert!(!repo.join(".pushed").exists());
+        let (reply, answer) = tokio::sync::oneshot::channel();
+        sender
+            .send(Steer { message: "Check the tests before pushing".into(), reply })
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), answer)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(!repo.join(".pushed").exists(), "steering must not answer a pending approval");
+        decision.send(allow).unwrap();
+        job.await.unwrap().unwrap();
+        assert_eq!(repo.join(".pushed").exists(), allow);
+        assert_eq!(
+            std::fs::read_to_string(repo.join(".verdict")).unwrap(),
+            if allow { "accept" } else { "decline" }
+        );
+        let _ = std::fs::remove_dir_all(repo);
+    }
+}
+
+#[tokio::test]
+async fn codex_requires_its_selected_policy_and_reports_truncated_or_failed_turns() {
+    use guac_lib::coding::codex::Control;
+    stand_ins();
+    for mode in [".codex_bad_policy", ".codex_early", ".codex_failure"] {
+        let repo = a_repository(mode);
+        std::fs::write(repo.join(mode), "").unwrap();
+        let (_, steering) = tokio::sync::mpsc::channel(8);
+        let (signals, _) = tokio::sync::mpsc::channel(8);
+        let result = coding::run_with_control(
+            Which::Codex,
+            repo.to_str().unwrap(),
+            "work",
+            None,
+            Some(Control { gate: Gate::AskBeforePushing, steering, signals }),
+            |_| {},
+        )
+        .await;
+        if mode == ".codex_failure" {
+            assert_eq!(result.unwrap().failed.as_deref(), Some("fixture failed after editing"));
+        } else {
+            assert!(result.is_err(), "{result:?}");
+        }
+        if mode == ".codex_bad_policy" {
+            assert!(!std::fs::read_to_string(repo.join(".rpc.jsonl"))
+                .unwrap()
+                .contains("turn/start"));
+        }
+        let _ = std::fs::remove_dir_all(repo);
+    }
+}
+
 // ---- the whole path ------------------------------------------------------
+
+/// The public correction call reaches a Codex job while its push is parked
+/// on the operator's desk. A denied card settles the CLI request and job.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_operator_can_steer_codex_while_its_push_waits_for_a_decision() {
+    stand_ins();
+    let repo = a_repository("codex-runtime-steering");
+    std::fs::write(repo.join(".codex_gate"), "").unwrap();
+    let stub = serve(|body| {
+        if anyone_said(body, "has finished") {
+            Script::Say("The coding job returned.".into())
+        } else {
+            Script::Code("fix the flaky test".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    let engineer = h.agent_named("Engineer").unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: engineer.group_id,
+            name: "guaca".into(),
+            path: repo.to_string_lossy().into(),
+            note: String::new(),
+            harness: Which::Codex,
+            gate: Gate::AskBeforePushing,
+            remote: None,
+            bench: Bench::Shared,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+    let run = h.runtime.send_from_human(engineer.id, "fix the flaky test").unwrap();
+    h.settle(run).await;
+    let request = h.awaited_request().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        h.runtime.message_job(engineer.id, "use staging"),
+    )
+    .await
+    .expect("steering must not wait for the approval")
+    .unwrap();
+    h.wait_until("the correction is read", |_| repo.join(".steered").exists()).await;
+    assert_eq!(std::fs::read_to_string(repo.join(".steered")).unwrap(), "use staging");
+    assert!(!repo.join(".verdict").exists());
+    h.runtime.decide_approval(request, Decision::Deny).unwrap();
+    h.wait_until("the coding job returns", |h| {
+        h.channel_texts("Engineer").iter().any(|line| line.contains("coding job returned"))
+    })
+    .await;
+    assert_eq!(std::fs::read_to_string(repo.join(".verdict")).unwrap(), "decline");
+    assert!(!repo.join(".pushed").exists());
+    assert!(h.runtime.store().pending_approvals(10).unwrap().is_empty());
+    assert!(h.runtime.message_job(engineer.id, "too late").await.is_err());
+    let _ = std::fs::remove_dir_all(repo);
+}
 
 /// The agent that asked is told what the harness said, in its own channel.
 ///
@@ -341,58 +584,71 @@ async fn a_version_nothing_can_read_runs_the_job_without_a_bridge() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_is_told_what_the_harness_it_was_given_said() {
     stand_ins();
-    let repo = a_repository("end-to-end");
+    for which in Which::ALL {
+        let repo = a_repository(&format!("end-to-end-{}", which.as_str()));
 
-    // The second call is the agent reading the finished job back. Branching on
-    // what it was sent rather than on a counter: a turn can take more than one
-    // call, and a counter would make this depend on how many.
-    let stub = serve(|body| {
-        if anyone_said(body, "has finished") {
-            Script::Say("The coding agent fixed the flaky test and pushed.".into())
-        } else {
-            Script::Code("fix the flaky test".into())
-        }
-    })
-    .await;
-    let h = harness(&stub, &["Engineer"], GuardLimits::default());
-
-    let engineer = h.agent_named("Engineer").unwrap();
-    let linked = h
-        .runtime
-        .store()
-        .create_repository(&CleanRepository {
-            group_id: engineer.group_id,
-            name: "guaca".into(),
-            path: repo.to_string_lossy().to_string(),
-            note: String::new(),
-            harness: Which::Claude,
-            gate: Gate::Open,
-            // Pinned rather than defaulted. These tests are about the argument
-            // vector a harness is started with and the directory it is started
-            // in, and a worktree would put that directory somewhere the
-            // stand-in's recording is not. What the default does instead is
-            // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
-            bench: Bench::Shared,
+        // The second call is the agent reading the finished job back. Branching on
+        // what it was sent rather than on a counter: a turn can take more than one
+        // call, and a counter would make this depend on how many.
+        let stub = serve(|body| {
+            if anyone_said(body, "has finished") {
+                Script::Say("The coding agent fixed the flaky test and pushed.".into())
+            } else {
+                Script::Code("fix the flaky test".into())
+            }
         })
-        .unwrap();
-    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+        .await;
+        let h = harness(&stub, &["Engineer"], GuardLimits::default());
 
-    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
-    h.settle(run).await;
+        let engineer = h.agent_named("Engineer").unwrap();
+        let linked = h
+            .runtime
+            .store()
+            .create_repository(&CleanRepository {
+                group_id: engineer.group_id,
+                name: "guaca".into(),
+                path: repo.to_string_lossy().to_string(),
+                note: String::new(),
+                harness: which,
+                gate: Gate::Open,
+                // Pinned rather than defaulted. These tests are about the argument
+                // vector a harness is started with and the directory it is started
+                // in, and a worktree would put that directory somewhere the
+                // stand-in's recording is not. What the default does instead is
+                // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+                remote: None,
+                bench: Bench::Shared,
+            })
+            .unwrap();
+        h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
 
-    // The job outlives the turn that started it, which is the whole shape of
-    // this feature: the tool returns as soon as the process is up.
-    h.wait_until("the coding job is reported back", |h| {
-        h.channel_texts("Engineer").iter().any(|line| line.contains("fixed the flaky test"))
-    })
-    .await;
+        let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+        h.settle(run).await;
 
-    let argv = argv_at(&repo);
-    assert!(argv.contains(&"stream-json".to_string()), "the column was not read: {argv:?}");
-    // Contained rather than equal: the brief a job is started with carries the
-    // footing in front of it, which the test below is the test of.
-    assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
-    let _ = std::fs::remove_dir_all(&repo);
+        // The job outlives the turn that started it, which is the whole shape of
+        // this feature: the tool returns as soon as the process is up.
+        h.wait_until("the coding job is reported back", |h| {
+            h.channel_texts("Engineer").iter().any(|line| line.contains("fixed the flaky test"))
+        })
+        .await;
+
+        let argv = argv_at(&repo);
+        match which {
+            Which::Claude => assert!(argv.contains(&"stream-json".to_string())),
+            Which::Codex => assert_eq!(argv[0], "app-server"),
+            Which::Pi => assert!(argv.contains(&"--mode".to_string())),
+        }
+        // Contained rather than equal: the brief a job is started with carries the
+        // footing in front of it, which the test below is the test of.
+        if which == Which::Codex {
+            assert!(std::fs::read_to_string(repo.join(".rpc.jsonl"))
+                .unwrap()
+                .contains("fix the flaky test"));
+        } else {
+            assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
+        }
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
 
 /// The one announcement this app asks for, and the one thing that outlives the
@@ -433,6 +689,7 @@ async fn a_started_job_is_not_an_unbacked_promise() {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -490,6 +747,7 @@ async fn a_job_is_told_which_branch_it_is_standing_on() {
             note: "run ./scripts/ci.sh before you finish".into(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -541,6 +799,7 @@ fn put_in_a_repository(h: &Harness, agent: &str, repo: &Path, gate: Gate) {
             // directory only because the bench is pinned to it. The pair that
             // proves the two doors agree in a worktree is
             // `both_doors_into_a_repository_open_on_the_same_work_tree`.
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -886,6 +1145,7 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
             // in, and a worktree would put that directory somewhere the
             // stand-in's recording is not. What the default does instead is
             // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -907,7 +1167,10 @@ async fn a_job_going_the_wrong_way_can_be_stopped_and_the_agent_is_told() {
 
     // And the lane is free, so the next brief does not come back busy about a
     // job that is over.
-    h.runtime.message_job(engineer.id, "anything").expect_err("a stopped job is not a running one");
+    h.runtime
+        .message_job(engineer.id, "anything")
+        .await
+        .expect_err("a stopped job is not a running one");
 
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -936,6 +1199,7 @@ async fn stopping_a_job_that_is_already_over_says_so_rather_than_failing() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -977,6 +1241,7 @@ async fn a_harness_with_no_second_interface_says_so_instead_of_swallowing_it() {
             note: String::new(),
             harness: Which::Pi,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Shared,
         })
         .unwrap();
@@ -986,7 +1251,8 @@ async fn a_harness_with_no_second_interface_says_so_instead_of_swallowing_it() {
     h.settle(run).await;
     h.wait_until("the harness is up", |_| repo.join(ARGV).exists()).await;
 
-    let why = h.runtime.message_job(engineer.id, "use the other endpoint").unwrap_err().to_string();
+    let why =
+        h.runtime.message_job(engineer.id, "use the other endpoint").await.unwrap_err().to_string();
     assert!(why.contains("pi"), "{why}");
     // The way out is named, because an operator cannot guess it from a message
     // about a harness.
@@ -1208,6 +1474,7 @@ fn put_in_a_bench(h: &Harness, agents: &[&str], repo: &Path) {
             note: String::new(),
             harness: Which::Claude,
             gate: Gate::Open,
+            remote: None,
             bench: Bench::Own,
         })
         .unwrap();

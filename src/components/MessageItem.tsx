@@ -289,7 +289,7 @@ function ChatBubble({
             // Only where there is something to send again: the notice records
             // which message the turn was answering when the call failed.
             onRetry={
-              part.kind === "upstreamError" && message.cause
+              (part.kind === "upstreamError" || part.kind === "interrupted") && message.cause
                 ? () => onRetry(message.channelId, message.cause as MessageId)
                 : undefined
             }

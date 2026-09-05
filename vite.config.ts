@@ -19,6 +19,10 @@ const host = process.env.TAURI_DEV_HOST;
  * it started on, which is the commit the bundle behind it was built from.
  */
 function builtOn(): string {
+  // An image build has no `.git` in its context and is told the commit
+  // instead, so the page's About and the daemon's /health say the same thing.
+  const told = process.env.GUACA_COMMIT?.trim();
+  if (told) return told;
   const git = (...args: string[]) =>
     execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
   try {

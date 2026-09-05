@@ -34,10 +34,7 @@ use tokio::sync::Notify;
 
 use crate::domain::approval::Decision;
 use crate::domain::ids::{AgentId, GroupId};
-use crate::domain::usage::Tokens;
-use crate::menubar::{self, Command, Crew, Glyph, Look, Member, Presence, Row, Update};
-use crate::runtime::events::UiEvent;
-use crate::runtime::Runtime;
+use crate::menubar::{self, Command, Glyph, Look, Presence, Row, Update};
 
 /// The strip's own id, so `app.rs` can ask whether it is there.
 ///
@@ -54,6 +51,21 @@ pub const TRAY_ID: &str = "guac.menubar";
 /// channel, and folding the two together would put a case in the transcript's
 /// event handling for something the runtime never emits.
 pub const REVEAL: &str = "guac://reveal";
+
+/// The channel a click goes down when the strip is showing a box.
+///
+/// The row was drawn from a presence the window handed over, so the act it
+/// stands for belongs to the box too, and the window is what holds a
+/// connection to the box. Local rows never come through here.
+pub const MENUBAR: &str = "guac://menubar";
+
+/// What a click on a fed strip asks the window to do.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum Ask {
+    StopAll,
+    Decide { approval: crate::domain::ids::ApprovalId, decision: crate::domain::approval::Decision },
+}
 
 /// Where the strip is asking the window to go.
 ///
@@ -77,10 +89,6 @@ pub enum Reveal {
 /// keeps that from being a menu rebuilt on the main thread ten times a second.
 const COALESCE: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// The most requests read at once. Well past what the menu shows, so the count
-/// of what did not fit is a real count.
-const APPROVAL_WINDOW: u32 = 50;
-
 /// A drawn menu, and the handles that can edit it without replacing it.
 struct Painted {
     menu: Menu<Wry>,
@@ -99,17 +107,14 @@ struct Drawn {
 
 pub struct Tray {
     app: AppHandle,
-    runtime: Runtime,
     icon: TrayIcon<Wry>,
-    /// Spent since the window opened.
-    ///
-    /// The one number with nowhere to be read from: "since this window opened"
-    /// is not a question the usage table is asked anywhere else, and adding a
-    /// timestamp filter to it would answer a different question after a
-    /// restart.
-    session: Mutex<Tokens>,
     drawn: Mutex<Drawn>,
     wake: Arc<Notify>,
+    /// A presence the window handed over, while it is showing a workspace
+    /// that is not this machine's. The strip follows the window: while this
+    /// is set the local runtime is not read, and every click on a row that
+    /// came from it is sent back to the window to act on.
+    fed: Mutex<Option<Presence>>,
 }
 
 impl Tray {
@@ -117,8 +122,8 @@ impl Tray {
     ///
     /// Called before the agents are started, so nothing that happens on the way
     /// up is missed.
-    pub fn install(app: &AppHandle, runtime: Runtime) -> tauri::Result<Arc<Self>> {
-        let presence = read(&runtime, Tokens::default());
+    pub fn install(app: &AppHandle) -> tauri::Result<Arc<Self>> {
+        let presence = Presence::default();
         let look = presence.look();
         let rows = presence.rows();
 
@@ -143,11 +148,10 @@ impl Tray {
 
         let tray = Arc::new(Self {
             app: app.clone(),
-            runtime,
             icon,
-            session: Mutex::new(Tokens::default()),
             drawn: Mutex::new(Drawn { rows, look, items: painted.items }),
             wake: Arc::new(Notify::new()),
+            fed: Mutex::new(None),
         });
 
         {
@@ -186,22 +190,14 @@ impl Tray {
         Ok(tray)
     }
 
-    /// Notices something the strip might have to say.
-    ///
-    /// Called from the event sink, which is on an agent's own task, so this does
-    /// no I/O and takes no menu lock: it counts the call and rings the bell.
-    pub fn observe(&self, event: &UiEvent) {
-        if let UiEvent::TokensUsed { prompt, completion, cost, .. } = event {
-            menubar::add_call(&mut self.session.lock(), *prompt, *completion, *cost);
-        }
-        if menubar::touches(event) {
-            self.wake.notify_one();
-        }
+    pub fn feed(&self, presence: Option<Presence>) {
+        *self.fed.lock() = presence;
+        self.wake.notify_one();
     }
 
     /// Reads the world and makes the strip agree with it.
     fn redraw(&self) {
-        let presence = read(&self.runtime, *self.session.lock());
+        let presence = self.fed.lock().clone().unwrap_or_default();
         let look = presence.look();
         let rows = presence.rows();
 
@@ -303,36 +299,16 @@ impl Tray {
             Command::Open => self.reveal(None),
             Command::Reveal(agent) => self.reveal(Some(Reveal::Agent { id: agent })),
             Command::Enter(crew) => self.reveal(Some(Reveal::Crew { id: crew })),
-            // Both of these touch SQLite, and this runs on the main thread
-            // inside the event loop. Off it: the operator's click should not be
-            // the frame the window drops.
-            Command::StopAll => {
-                let runtime = self.runtime.clone();
-                tauri::async_runtime::spawn(async move {
-                    let stopped = runtime.stop_everything();
-                    tracing::info!(stopped, "stopped every conversation from the menu bar");
-                });
-            }
-            Command::Decide(approval, decision) => {
-                let runtime = self.runtime.clone();
-                let wake = self.wake.clone();
-                tauri::async_runtime::spawn(async move {
-                    match runtime.decide_approval(approval, decision) {
-                        Ok(settled) => tracing::info!(
-                            %approval,
-                            state = settled.state.as_str(),
-                            "answered a permission request from the menu bar"
-                        ),
-                        // Answered in the window, or lapsed while the menu was
-                        // open. The row is stale rather than broken, and the
-                        // redraw is what takes it away.
-                        Err(err) => {
-                            tracing::debug!(%err, %approval, "that request was already settled");
-                            wake.notify_one();
-                        }
-                    }
-                });
-            }
+            Command::StopAll => self.ask(Ask::StopAll),
+            Command::Decide(approval, decision) => self.ask(Ask::Decide { approval, decision }),
+        }
+    }
+
+    /// Sends a click on a fed row to the window, which holds the connection
+    /// the act has to go over.
+    fn ask(&self, ask: Ask) {
+        if let Err(err) = self.app.emit(MENUBAR, ask) {
+            tracing::debug!(%err, "could not hand a menu bar click to the window");
         }
     }
 
@@ -367,76 +343,6 @@ impl Tray {
 /// The window, whatever it is called.
 fn window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next())
-}
-
-/// Everything the strip shows, read fresh.
-///
-/// A failed read is treated as nothing rather than propagated. The strip is the
-/// redundant copy of state the window already holds; a menu bar that says "no
-/// requests" because the disk hiccuped is wrong for 300 milliseconds, and one
-/// that took a turn down with it is wrong permanently.
-fn read(runtime: &Runtime, session: Tokens) -> Presence {
-    let store = runtime.store();
-
-    let roster = match store.list_agents() {
-        Ok(agents) => agents
-            .into_iter()
-            .map(|card| (card.id, Member { name: card.name, crew: card.group_id }))
-            .collect(),
-        Err(err) => {
-            tracing::debug!(%err, "could not read the roster for the menu bar");
-            Default::default()
-        }
-    };
-
-    // A read that failed is no crews, which is a menu that names none: the same
-    // strip this was before crews were on it, rather than one that guesses at
-    // where an agent is.
-    let crews = match store.list_groups() {
-        Ok(groups) => {
-            groups.into_iter().map(|group| Crew { id: group.id, name: group.name }).collect()
-        }
-        Err(err) => {
-            tracing::debug!(%err, "could not read the crews for the menu bar");
-            Vec::new()
-        }
-    };
-
-    let waiting = match store.pending_approvals(APPROVAL_WINDOW) {
-        Ok(waiting) => waiting,
-        Err(err) => {
-            tracing::debug!(%err, "could not read pending requests for the menu bar");
-            Vec::new()
-        }
-    };
-
-    let stuck = match store.open_escalations(APPROVAL_WINDOW) {
-        Ok(stuck) => stuck,
-        Err(err) => {
-            tracing::debug!(%err, "could not read open escalations for the menu bar");
-            Vec::new()
-        }
-    };
-
-    let all_time = match store.usage_by_group() {
-        Ok(groups) => menubar::sum(groups.into_values()),
-        Err(err) => {
-            tracing::debug!(%err, "could not read spend for the menu bar");
-            Tokens::default()
-        }
-    };
-
-    Presence {
-        roster,
-        crews,
-        activity: runtime.activity_snapshot(),
-        on_machine: runtime.machines_in_use(),
-        waiting,
-        stuck,
-        session,
-        all_time,
-        running: runtime.live_runs(),
-    }
 }
 
 /// The image for one state, and whether the platform may tint it.

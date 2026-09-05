@@ -59,7 +59,7 @@ describe("fileUrl", () => {
     // under different names are one set of bytes at one address.
     const stored = file("brief.pdf", "application/pdf");
     const url = fileUrl(stored);
-    expect(url).toContain("guacfile:");
+    expect(url).toContain("/v1/file/");
     expect(decodeURIComponent(url)).toContain(`${stored.digest}/brief.pdf`);
   });
 
@@ -145,5 +145,27 @@ describe("readFileText", () => {
     // A different length is a different read, since it can be cut differently.
     await readFileText(twice, 64);
     expect(fetched).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("where a frame points", () => {
+  // Both run as the desktop here: the setup file gives jsdom Tauri's bridge.
+  // The hosted spellings are one branch each and are read in `transport`'s
+  // own suite, which takes the bridge off first.
+  it("frames a page from the artifact origin on a desktop", async () => {
+    const { artifactUrl } = await import("./files");
+    expect(artifactUrl({ port: 4242, id: "abc" })).toBe(
+      `${window.location.origin}/v1/artifact/abc?token=`,
+    );
+  });
+
+  it("leaves an absolute screen address alone and resolves a relative one", async () => {
+    const { screenUrl } = await import("./files");
+    expect(screenUrl("http://127.0.0.1:5000/sbx/6080/viewer.html")).toBe(
+      "http://127.0.0.1:5000/sbx/6080/viewer.html",
+    );
+    expect(screenUrl("/v1/screen/t/sbx/6080/viewer.html?a=1")).toBe(
+      `${window.location.origin}/v1/screen/t/sbx/6080/viewer.html?a=1`,
+    );
   });
 });

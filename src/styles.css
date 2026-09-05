@@ -4720,6 +4720,35 @@ button {
   transition: background var(--tempo-tap) var(--ease), opacity var(--tempo-tap) var(--ease);
 }
 
+/* The other door into the same list, for a browser that has bytes rather
+   than paths. The send button's size and shape, the ground's colors: an
+   attach is a quiet act and a send is the loud one. */
+.composer__attach {
+  flex: none;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin-bottom: var(--space-1);
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--edge);
+  border-radius: 50%;
+  background: var(--ground);
+  color: var(--muted);
+  font-size: var(--type-ui);
+  line-height: var(--lead-flush);
+  transition: background var(--tempo-tap) var(--ease), color var(--tempo-tap) var(--ease);
+}
+
+.composer__attach:hover:not(:disabled) {
+  background: var(--sunken);
+  color: var(--text);
+}
+
+.composer__attach:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
 .composer__send:hover:not(:disabled) {
   background: color-mix(in oklab, var(--flesh) 86%, var(--text));
 }
@@ -5252,6 +5281,21 @@ button {
   margin: auto;
   text-align: center;
   padding: var(--space-8) var(--space-6);
+}
+
+/* Where a browser waits for its token: the whole viewport, with the form in
+   the middle of it, because there is nothing else on screen to be beside. */
+.threshold {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+}
+
+.threshold .field,
+.threshold .banner {
+  margin: 0 0 var(--space-5);
+  text-align: left;
 }
 
 .empty__title {
@@ -7468,4 +7512,22 @@ button {
 .about__facts {
   margin: var(--space-6) 0 0;
   text-align: left;
+}
+
+.host-setup {
+  max-width: 36rem;
+  width: 100%;
+  padding: var(--space-6);
+}
+
+.host-choice {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.workspace-settings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
 }

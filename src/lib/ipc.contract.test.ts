@@ -15,48 +15,83 @@ const read = (path: string) => readFileSync(resolve(root, path), "utf8");
 
 /** Command names the frontend calls. */
 function calledCommands(): Set<string> {
-  const source = read("src/lib/ipc.ts");
+  const source = read("src/lib/ipc.ts") + read("src/lib/host.ts") + read("src/lib/transfer.ts");
   // Matches up to the opening paren rather than the first `>`, so a nested
   // generic like `Record<AgentId, Activity>` does not cut the match short.
-  return new Set([...source.matchAll(/invoke<[^(]*\(\s*"([a-z_]+)"/g)].map((m) => m[1]!));
+  // Two doors, one surface: `invoke` reaches whichever host the page is in,
+  // and `invokeLocal` reaches the runtime in this process for the handful of
+  // things that are about this machine rather than the workspace.
+  return new Set([...source.matchAll(/invoke(?:Local)?<[^(]*\(\s*"([a-z_]+)"/g)].map((m) => m[1]!));
 }
 
-/** Command names registered with Tauri. */
+/**
+ * Command names registered with Tauri.
+ *
+ * The handler list names the generated wrappers rather than the commands
+ * themselves, because `surface!` is what writes them. It is still its own list
+ * and still has to be kept in step: the macro cannot register anything with
+ * Tauri on its own.
+ */
 function registeredCommands(): Set<string> {
   const source = read("src-tauri/src/app.rs");
   const block = source.match(/generate_handler!\[([\s\S]*?)\]/);
   if (!block) throw new Error("could not find generate_handler! in app.rs");
-  return new Set([...block[1]!.matchAll(/commands::([a-z_]+)/g)].map((m) => m[1]!));
+  return new Set([...block[1]!.matchAll(/\b([a-z_]+)\b/g)].map((m) => m[1]!));
 }
 
-/** Functions in commands.rs annotated as Tauri commands. */
+/**
+ * The command surface, which is one list in Rust serving two transports.
+ *
+ * `surface!` in ipc.rs generates the Tauri wrappers, the HTTP dispatch and the
+ * `NAMES` constant from this. It is the authority for what a build answers to,
+ * and it is why the desktop and a server cannot answer to different sets.
+ */
+function surfaceCommands(): Set<string> {
+  const source = read("src-tauri/src/ipc.rs");
+  const block = source.match(/\nsurface! \{([\s\S]*?)\n\}/);
+  if (!block) throw new Error("could not find the surface! list in ipc.rs");
+  return new Set([...block[1]!.matchAll(/^\s{4}([a-z_]+)\(/gm)].map((m) => m[1]!));
+}
+
+/** Functions in commands.rs that a transport can call. */
 function definedCommands(): Set<string> {
   const source = read("src-tauri/src/commands.rs");
   return new Set(
-    [...source.matchAll(/#\[tauri::command\][\s\S]{0,80}?fn\s+([a-z_]+)/g)].map((m) => m[1]!),
+    [...source.matchAll(/^pub async fn ([a-z_]+)\(\n?\s*_?state: &AppState/gm)].map((m) => m[1]!),
   );
 }
 
 describe("IPC contract", () => {
-  it("finds commands on both sides", () => {
+  it("finds commands on every side", () => {
     // If a regex stops matching, the rest of this file would pass vacuously.
     expect(calledCommands().size).toBeGreaterThan(5);
-    expect(registeredCommands().size).toBeGreaterThan(5);
+    expect(registeredCommands().size).toBeGreaterThan(2);
     expect(definedCommands().size).toBeGreaterThan(5);
+    expect(surfaceCommands().size).toBeGreaterThan(5);
+  });
+
+  it("keeps runtime construction out of the native client", () => {
+    const app = read("src-tauri/src/app.rs");
+    expect(app).not.toMatch(/Runtime::|Store::open|start_scheduler|start_all/);
+    expect(read("src/lib/transport.ts")).not.toContain("OVER_THE_BRIDGE");
+  });
+
+  it("implements every command on the surface", () => {
+    const missing = [...surfaceCommands()].filter((name) => !definedCommands().has(name));
+    expect(missing, "listed in surface! but not defined in commands.rs").toEqual([]);
   });
 
   it("registers every command the frontend calls", () => {
-    const missing = [...calledCommands()].filter((name) => !registeredCommands().has(name));
+    const missing = [...calledCommands()].filter(
+      (name) => !registeredCommands().has(name) && !surfaceCommands().has(name),
+    );
     expect(missing, "called from ipc.ts but not registered in app.rs").toEqual([]);
   });
 
-  it("defines every command it registers", () => {
-    const missing = [...registeredCommands()].filter((name) => !definedCommands().has(name));
-    expect(missing, "registered in app.rs but not defined in commands.rs").toEqual([]);
-  });
-
   it("registers every command it defines", () => {
-    const orphans = [...definedCommands()].filter((name) => !registeredCommands().has(name));
+    const orphans = [...definedCommands()].filter(
+      (name) => !registeredCommands().has(name) && !surfaceCommands().has(name),
+    );
     expect(orphans, "defined in commands.rs but never registered, so unreachable").toEqual([]);
   });
 
@@ -71,6 +106,8 @@ describe("IPC contract", () => {
     const source = read("src-tauri/src/commands.rs");
     // get_settings must hand back the redacted view, never AppConfig.
     expect(source).toMatch(/fn get_settings\([^)]*\)\s*->\s*Reply<RedactedConfig>/);
+    // And the surface must not be able to name it either.
+    expect(read("src-tauri/src/ipc.rs")).not.toMatch(/->\s*AppConfig,/);
     expect(source).not.toMatch(/->\s*Reply<AppConfig>/);
   });
 

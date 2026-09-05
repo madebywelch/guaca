@@ -53,6 +53,22 @@ machine instead. It authorizes nothing and stores nothing.
 cargo test --manifest-path src-tauri/Cargo.toml --test account -- --ignored
 ```
 
+`tests/server.rs` drives the daemon, which is the second host over the same
+library: a workspace opened under a temporary directory, bound to a free port,
+and spoken to over HTTP and the event socket with `reqwest`, entirely offline.
+It asks the questions only that host can fail: that the same commands answer
+over a POST as over Tauri's bridge, that a server refuses what it cannot do and
+says what to do instead, that a harness a box will not run is withheld with its
+reason rather than dropped from the list, that nothing but `/health` answers
+without the token, that an event reaches a client that is not a webview, and
+that a stored file is reachable by its digest. It is compiled only under the
+daemon step in `ci.sh`, because that is the only build without Tauri in it, and
+a break in it does not show anywhere else.
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server --test server
+```
+
 Another, `tests/plugins.rs`, does the same job for MCP: a scripted server that
 publishes the four metadata documents an OAuth sign-in needs, and one runtime
 turn that calls a plugin tool end to end. Its `deployments` module is a second

@@ -304,3 +304,13 @@ describe("routineTitle", () => {
     expect(routineTitle(routine("", "   "))).toBe("Untitled routine");
   });
 });
+
+it("uses the hosted backend URL for a routine webhook", () => {
+  const command = webhookLine(
+    { port: 0, url: "https://guaca.example/events", secret: "fixture" },
+    "stripe",
+    "invoice",
+  );
+  expect(command).toContain("https://guaca.example/events/stripe/invoice");
+  expect(command).not.toContain("127.0.0.1");
+});

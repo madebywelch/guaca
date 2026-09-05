@@ -354,6 +354,22 @@ describe("a failed turn", () => {
     );
   });
 
+  it("requires an explicit retry for work interrupted by a backend restart", () => {
+    retryTurn.mockClear();
+    const interrupted = failure("m-original");
+    interrupted.parts = [
+      {
+        type: "notice",
+        kind: "interrupted",
+        text: "The backend restarted. Review previous actions before retrying.",
+      },
+    ];
+    render(<MessageItem message={interrupted} lookups={lookups} continued={false} />);
+    expect(retryTurn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(retryTurn).toHaveBeenCalledWith("manager", "m-original");
+  });
+
   it("offers nothing when there is nothing to send again", () => {
     render(<MessageItem message={failure(null)} lookups={lookups} continued={false} />);
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();

@@ -477,18 +477,22 @@ export function RoutineDetail({ agentId, routineId, onBack }: Props) {
             Nothing on the clock: it fires each time this is posted to Guaca, and Test run delivers
             it now.
             {address?.port === 0 &&
+              !address.url &&
               " The receiver is not running this session, so nothing can post to it; the log says why."}
           </span>
         )}
-        {event && address && address.port !== 0 && parseTrigger(draft.trigger).kind === "event" && (
-          <>
-            <pre className="webhook">{webhookLine(address, event.service, event.topic)}</pre>
-            <span className="field__hint">
-              The body, if there is one, reaches the agent under the instruction as data. Guaca
-              calls nobody and polls nothing: whatever posts this is yours to wire.
-            </span>
-          </>
-        )}
+        {event &&
+          address &&
+          (address.port !== 0 || address.url) &&
+          parseTrigger(draft.trigger).kind === "event" && (
+            <>
+              <pre className="webhook">{webhookLine(address, event.service, event.topic)}</pre>
+              <span className="field__hint">
+                The body, if there is one, reaches the agent under the instruction as data. Guaca
+                calls nobody and polls nothing: whatever posts this is yours to wire.
+              </span>
+            </>
+          )}
         {routine?.active && !dirty && routine.nextRunAt !== null && (
           <span className="field__hint">
             Next in {relativeTime(now, routine.nextRunAt)}, on{" "}

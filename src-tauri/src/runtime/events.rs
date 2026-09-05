@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::approval::ApprovalState;
 use crate::domain::envelope::{Envelope, Part, Participant};
@@ -16,7 +16,7 @@ use crate::domain::ids::{
 };
 
 /// What an agent is doing right now, surfaced as the dot next to its name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "state")]
 pub enum Activity {
     Idle,
@@ -68,6 +68,15 @@ pub enum UiEvent {
     /// The agent roster changed. The UI refetches rather than patching, because
     /// the roster is small and a diff protocol here would be pure ceremony.
     AgentsChanged,
+
+    /// A sign-in needs the operator's browser, and on this host the only one
+    /// there is belongs to whoever is reading the page. A desktop opens the
+    /// system browser itself and never emits this; a server has nobody at the
+    /// machine, so the page is asked to open the URL and to show it as a link
+    /// in case the browser refuses a window nobody clicked for.
+    OpenUrl {
+        url: String,
+    },
 
     /// A complete message was persisted.
     MessageAppended {

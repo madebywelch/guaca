@@ -137,6 +137,11 @@ pub enum Credential<'a> {
 /// there is no authorization server, the 401 names no metadata, and asking
 /// first would be a round trip whose only outcome is a refusal Guaca already
 /// knows how to answer.
+// Eight, and every one is a different caller's decision: the store, the crew,
+// the kind, where it is dialed, what it is dialed with, what else goes on the
+// wire, where the browser lands, and how the browser is opened. A struct for
+// them would be a struct built at one call site and read at one.
+#[allow(clippy::too_many_arguments)]
 pub async fn connect(
     store: &Store,
     group: GroupId,
@@ -153,6 +158,9 @@ pub async fn connect(
     // read back off the row because this is the call that writes the row: a
     // reconnection is where they change.
     headers: &Headers,
+    // Where the browser comes back to. The host's decision, passed for the
+    // reason `open` is: this file knows the dance and not the machine.
+    landing: &oauth::Landing,
     open: impl FnOnce(&str) -> Result<(), String>,
 ) -> Result<Plugin, PluginError> {
     // An account-backed plugin never runs the browser dance. Its server is the
@@ -205,6 +213,7 @@ pub async fn connect(
                     endpoint,
                     challenge.as_deref(),
                     &oauth::Gate::on(endpoint, headers.wire()),
+                    landing,
                     open,
                     now_ms,
                 )

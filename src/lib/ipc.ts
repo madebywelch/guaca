@@ -1,19 +1,25 @@
+import type { GroupArchive, Reconnect } from "./transfer";
 /**
- * Typed wrappers over the Tauri command surface.
+ * Typed wrappers over the command surface.
  *
  * Every call the UI can make goes through here, so the set of things the
- * webview is able to do is one readable list. Tauri maps camelCase argument
- * keys onto the Rust snake_case parameters.
+ * frontend is able to do is one readable list. camelCase argument keys map onto
+ * the Rust snake_case parameters, in both hosts: `transport.ts` is what decides
+ * whether a call goes over Tauri's IPC or over HTTP to a box, and nothing in
+ * this file knows which.
  */
 
-import { invoke } from "@tauri-apps/api/core";
-import { listen, TauriEvent, type UnlistenFn } from "@tauri-apps/api/event";
 import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from "@tauri-apps/plugin-notification";
-import { openUrl } from "@tauri-apps/plugin-opener";
+  attached,
+  hosted,
+  invoke,
+  invokeLocal,
+  notify,
+  openExternal as reachBrowser,
+  subscribe,
+  type Unlisten,
+  upload,
+} from "./transport";
 
 import type {
   AccountConnectors,
@@ -29,6 +35,7 @@ import type {
   Bench,
   Browser,
   BrowserConsent,
+  Capabilities,
   CatalogKind,
   Computer,
   Connector,
@@ -40,6 +47,8 @@ import type {
   Escalation,
   EscalationId,
   Gate,
+  GithubUserSignin,
+  GithubUserStatus,
   Group,
   GroupDraft,
   GroupId,
@@ -48,6 +57,7 @@ import type {
   Harness,
   HarnessOnMachine,
   HeaderPair,
+  MenubarAsk,
   MessageId,
   Occasion,
   OccasionDraft,
@@ -56,10 +66,12 @@ import type {
   PluginAccess,
   PluginId,
   PluginOffer,
+  Presence,
   ProtectedAction,
   RankedModel,
   RepoStatus,
   Repository,
+  RepositoryConnection,
   RepositoryDraft,
   RepositoryId,
   Reveal,
@@ -80,6 +92,7 @@ import type {
   WebhookAddress,
   WorkingNote,
 } from "./types";
+import { errorMessage } from "./types";
 
 const EVENT_CHANNEL = "guac://event";
 
@@ -92,8 +105,13 @@ const EVENT_CHANNEL = "guac://event";
  * something the runtime never emits. Kept in step with `tray.rs`.
  */
 const REVEAL_CHANNEL = "guac://reveal";
+const MENUBAR_CHANNEL = "guac://menubar";
 
 export const api = {
+  exportGroup: (id: GroupId) => invoke<GroupArchive>("export_group", { id }),
+  importGroup: (archive: GroupArchive, name: string) =>
+    invoke<Group>("import_group", { archive, name }),
+  groupReconnect: (id: GroupId) => invoke<Reconnect[]>("group_reconnect", { id }),
   /** `null` when the agent has never been given a computer. */
   agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
 
@@ -181,6 +199,10 @@ export const api = {
    * Links a directory, after checking with git that it is the root of a work
    * tree. Nobody is given it here: that is `setRepositoryAccess`.
    */
+  createGithubRepository: (draft: RepositoryDraft) =>
+    invoke<Repository>("create_github_repository", { draft }),
+  setRepositoryGithub: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("set_repository_github", { id }),
   createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
 
   /**
@@ -207,7 +229,26 @@ export const api = {
    * cannot be, because the refusal would reach an agent minutes later rather
    * than the person choosing.
    */
+  githubAppAvailable: () => invoke<boolean>("github_app_available"),
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
+  setRepositoryAuthor: (id: RepositoryId, author: { name: string; email: string }) =>
+    invoke<RepositoryConnection>("set_repository_author", { id, author }),
+  beginRepositoryGithubSignin: (id: RepositoryId) =>
+    invoke<GithubUserSignin>("begin_repository_github_signin", { id }),
+  pollRepositoryGithubSignin: (id: RepositoryId, flowId: string) =>
+    invoke<GithubUserStatus>("poll_repository_github_signin", { id, flowId }),
+  repositoryGithubUser: (id: RepositoryId) =>
+    invoke<GithubUserStatus>("repository_github_user", { id }),
+  signOutRepositoryGithubUser: (id: RepositoryId) =>
+    invoke<GithubUserStatus>("sign_out_repository_github_user", { id }),
+  repositoryConnection: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("repository_connection", { id }),
+  setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>
+    invoke<RepositoryConnection>("set_repository_credential", { id, username, token }),
+  clearRepositoryCredential: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("clear_repository_credential", { id }),
+  checkRepositoryConnection: (id: RepositoryId) =>
+    invoke<string>("check_repository_connection", { id }),
 
   /**
    * Sends a correction into a coding job that is already running.
@@ -544,6 +585,44 @@ export const api = {
    */
   stageFiles: (paths: string[]) => invoke<Staged>("stage_files", { paths }),
 
+  /**
+   * Sends files from this machine's disk to the box this window is showing.
+   *
+   * A drop on the desktop app is a path, and a box has never seen this disk,
+   * so the runtime in this process reads the bytes and posts them to the box.
+   * Answered in the same shape as every other way a file arrives.
+   */
+  forwardFiles: (origin: string, token: string, paths: string[]) =>
+    invokeLocal<Staged>("forward_files", { origin, token, paths }),
+
+  /**
+   * Hands this machine's menu bar what the window is showing, when that is a
+   * box; `null` puts it back on this machine's own workspace.
+   */
+  reportPresence: (presence: Presence | null) => invokeLocal<void>("report_presence", { presence }),
+
+  /** Stops every conversation in the workspace. Says how many were running. */
+  stopEverything: () => invoke<number>("stop_everything"),
+
+  /**
+   * Takes documents a browser is holding into the store, one request each.
+   *
+   * The hosted counterpart of `stageFiles`, with the same answer shape: one
+   * file out of five failing does not refuse the other four, and the one that
+   * cannot go is named in the words the store used.
+   */
+  stageUploads: async (files: File[]): Promise<Staged> => {
+    const staged: Staged = { attached: [], refused: [] };
+    for (const file of files) {
+      try {
+        staged.attached.push(await upload<Attachment>(file));
+      } catch (error) {
+        staged.refused.push(errorMessage(error));
+      }
+    }
+    return staged;
+  },
+
   /** Copies a file out to the downloads folder, and says where it landed. */
   saveFile: (digest: string, name: string) => invoke<string>("save_file", { digest, name }),
 
@@ -554,7 +633,8 @@ export const api = {
    * inline inherits this document's content policy, and this document forbids
    * script. What the returned origin permits is `artifact.rs`'s argument.
    */
-  frameArtifact: (html: string) => invoke<{ port: number; id: string }>("frame_artifact", { html }),
+  frameArtifact: (html: string) =>
+    invoke<{ port: number; id: string; ticket: string | null }>("frame_artifact", { html }),
 
   /**
    * Sends what the operator typed, with the files they attached.
@@ -612,6 +692,15 @@ export const api = {
   deleteRoutine: (id: RoutineId) => invoke<void>("delete_routine", { id }),
   usageSummary: () => invoke<GroupUsage[]>("usage_summary"),
   usageForRuns: (runs: RunId[]) => invoke<RunUsage[]>("usage_for_runs", { runs }),
+
+  /**
+   * What this workspace can do, which is decided by where it runs.
+   *
+   * Asked once at startup. Every panel that could offer something a server
+   * cannot honor reads the answer, and the commands behind those panels refuse
+   * it again: a stale bundle draws controls this build no longer offers.
+   */
+  capabilities: () => invoke<Capabilities>("capabilities"),
 
   getSettings: () => invoke<Settings>("get_settings"),
 
@@ -689,7 +778,7 @@ export const api = {
  * navigate away from the app with no way back.
  */
 export function openExternal(url: string): Promise<void> {
-  return openUrl(url);
+  return reachBrowser(url);
 }
 
 /**
@@ -712,20 +801,22 @@ export function openExternal(url: string): Promise<void> {
  * transcript. This is the redundant copy, not the record.
  */
 export async function notifyOperator(title: string, body: string): Promise<boolean> {
-  try {
-    const granted = (await isPermissionGranted()) || (await requestPermission()) === "granted";
-    if (!granted) return false;
-
-    sendNotification({ title, body });
-    return true;
-  } catch {
-    return false;
-  }
+  return notify(title, body);
 }
 
-/** Subscribes to runtime events. Returns an unsubscribe function. */
-export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<UnlistenFn> {
-  return listen<UiEvent>(EVENT_CHANNEL, (message) => handler(message.payload));
+/**
+ * Subscribes to runtime events. Returns an unsubscribe function.
+ *
+ * `onReconnect` fires when a dropped connection comes back, and only a hosted
+ * workspace can produce one: the desktop's channel cannot fail without the
+ * process failing. What was missed while it was down is gone, exactly as it is
+ * while the desktop app is closed, so a caller refetches what it draws.
+ */
+export function onRuntimeEvent(
+  handler: (event: UiEvent) => void,
+  onReconnect?: () => void,
+): Promise<Unlisten> {
+  return subscribe(EVENT_CHANNEL, handler, onReconnect);
 }
 
 /**
@@ -736,8 +827,30 @@ export function onRuntimeEvent(handler: (event: UiEvent) => void): Promise<Unlis
  * from the strip does not come through here: that one is decided in Rust and
  * reaches the transcript as an ordinary settled event.
  */
-export function onRevealRequest(handler: (target: Reveal) => void): Promise<UnlistenFn> {
-  return listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload));
+export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unlisten> {
+  // The menu bar is the desktop's, and so is this channel. A browser has no
+  // strip to be asked from, and a subscription that never fires is cheaper
+  // than a caller that has to know which host it is in. A window showing a
+  // box still has its strip, and the strip still opens the window.
+  if (hosted && !attached()) return Promise.resolve(() => {});
+  return import("@tauri-apps/api/event").then((events) =>
+    events.listen<Reveal>(REVEAL_CHANNEL, (message) => handler(message.payload)),
+  );
+}
+
+/**
+ * A click on the menu bar, when the strip is showing a box.
+ *
+ * The row was drawn from what this window handed over, so the act belongs to
+ * the box, and this window is what holds a connection to it. A desktop that
+ * is showing its own workspace never receives one: the tray acts on the local
+ * runtime itself.
+ */
+export function onMenubarAsk(handler: (ask: MenubarAsk) => void): Promise<Unlisten> {
+  if (hosted && !attached()) return Promise.resolve(() => {});
+  return import("@tauri-apps/api/event").then((events) =>
+    events.listen<MenubarAsk>(MENUBAR_CHANNEL, (message) => handler(message.payload)),
+  );
 }
 
 /**
@@ -749,15 +862,68 @@ export function onRevealRequest(handler: (target: Reveal) => void): Promise<Unli
  * is what the drop target highlights on.
  */
 export async function onFileDrop(handlers: {
-  dropped: (paths: string[]) => void;
+  /** What the drop became, once the store has taken it. */
+  dropped: (staged: Promise<Staged>) => void;
   over: (inside: boolean) => void;
-}): Promise<UnlistenFn> {
-  const stops = await Promise.all([
-    listen(TauriEvent.DRAG_ENTER, () => handlers.over(true)),
-    listen(TauriEvent.DRAG_LEAVE, () => handlers.over(false)),
-    listen<{ paths: string[] }>(TauriEvent.DRAG_DROP, (message) => {
+}): Promise<Unlisten> {
+  // Paths are a desktop fact. Tauri hands over the path of a dropped file and
+  // the Rust side reads the bytes, which is the whole reason `dragDropEnabled`
+  // is on: a document never enters the renderer. A browser has no path to give
+  // and hands over bytes instead, which is a different mechanism and a
+  // different route; both end in the same store, and the caller sees one
+  // answer shape either way.
+  if (hosted) {
+    // Counted rather than toggled: a drag crosses every child element on the
+    // way through the window, and each crossing is an enter and a leave.
+    let depth = 0;
+    const enter = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      depth += 1;
+      handlers.over(true);
+    };
+    const over = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+    };
+    const leave = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes("Files")) return;
+      depth = Math.max(0, depth - 1);
+      if (depth === 0) handlers.over(false);
+    };
+    const drop = (event: DragEvent) => {
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length === 0) return;
+      event.preventDefault();
+      depth = 0;
       handlers.over(false);
-      handlers.dropped(message.payload.paths ?? []);
+      handlers.dropped(api.stageUploads(files));
+    };
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }
+
+  const events = await import("@tauri-apps/api/event");
+  const stops = await Promise.all([
+    events.listen(events.TauriEvent.DRAG_ENTER, () => handlers.over(true)),
+    events.listen(events.TauriEvent.DRAG_LEAVE, () => handlers.over(false)),
+    events.listen<{ paths: string[] }>(events.TauriEvent.DRAG_DROP, (message) => {
+      handlers.over(false);
+      const paths = message.payload.paths ?? [];
+      // A window showing a box: the path is on this disk and the store is on
+      // the box, so the runtime here reads and forwards.
+      const box = attached();
+      handlers.dropped(
+        box ? api.forwardFiles(box.origin, box.token, paths) : api.stageFiles(paths),
+      );
     }),
   ]);
   return () => {

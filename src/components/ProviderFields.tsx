@@ -10,8 +10,8 @@
  */
 
 import type { ReactNode } from "react";
-
 import { PROVIDERS, type Provider as Preset, providerFor, providerReady } from "../lib/providers";
+import { hosted } from "../lib/transport";
 
 interface PresetProps {
   /** The endpoint in the box, whatever it is. Decides which row reads as
@@ -22,6 +22,11 @@ interface PresetProps {
   active: boolean;
   /** Whether the key that belongs to the chosen endpoint is set. */
   keySet: boolean;
+  /**
+   * Whether the backend permits local model addresses. A hosted workspace
+   * resolves these on its own network, which the panel explains explicitly.
+   */
+  loopback: boolean;
   onChoose: (preset: Preset) => void;
 }
 
@@ -31,18 +36,26 @@ interface PresetProps {
  * A starting point, never a restriction: anything else is typed into the field
  * below, and choosing a row only fills it in.
  */
-export function ProviderPresets({ baseUrl, active, keySet, onChoose }: PresetProps) {
+export function ProviderPresets({ baseUrl, active, keySet, loopback, onChoose }: PresetProps) {
   const current = providerFor(baseUrl);
   return (
     <>
+      {hosted && (
+        <p className="field__hint">
+          Addresses are reached from the backend. In a container, localhost is the container; use
+          host.docker.internal for a model on the host.
+        </p>
+      )}
       {PROVIDERS.map((preset) => {
         const chosen = active && current?.id === preset.id;
+        const withheld = Boolean(preset.local) && !loopback;
         return (
           <button
             key={preset.id}
             type="button"
             className="preset"
             aria-current={chosen}
+            disabled={withheld}
             onClick={() => onChoose(preset)}
           >
             <span className="preset__text">
@@ -56,9 +69,13 @@ export function ProviderPresets({ baseUrl, active, keySet, onChoose }: PresetPro
                 key, is the same sentence repeated until it means nothing. Local
                 endpoints are the exception: wanting no key is a property of the
                 server, not of this setup. */}
-            {preset.local ? (
+            {withheld ? (
+              <span className="preset__state" data-ready="false">
+                Not from a server
+              </span>
+            ) : preset.local ? (
               <span className="preset__state" data-ready="true">
-                On this machine
+                {hosted ? "On the backend" : "On this machine"}
               </span>
             ) : (
               chosen && (

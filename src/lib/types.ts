@@ -20,7 +20,7 @@ export type Lifecycle = "active" | "paused" | "terminated";
  */
 export type BrowserConsent = "open" | "askBeforeActing";
 export type Trust = "operator" | "peer" | "system";
-export type NoticeKind = "guardStop" | "upstreamError" | "lifecycle";
+export type NoticeKind = "guardStop" | "upstreamError" | "interrupted" | "lifecycle";
 
 export type Participant = { kind: "human" } | { kind: "agent"; id: AgentId } | { kind: "system" };
 
@@ -330,7 +330,7 @@ export type RepositoryId = string;
  * whose one plan is spent needs the other program, not a different setting on
  * the same one.
  */
-export type Harness = "pi" | "claude";
+export type Harness = "pi" | "claude" | "codex";
 
 /**
  * Where a coding job in a repository actually runs.
@@ -393,14 +393,18 @@ export interface Repository {
   gate: Gate;
   /** Where a job here runs: a worktree of the agent's own, or this directory. */
   bench: Bench;
+  /** Where this was cloned from, for a repository the workspace cloned for
+   *  itself. Null is a directory the operator picked. */
+  remote: string | null;
   createdAt: number;
   updatedAt: number;
 }
 
 /** What an operator is shown for each, and what the panel offers in order. */
 export const HARNESSES: { readonly id: Harness; readonly label: string }[] = [
-  { id: "pi", label: "pi" },
+  { id: "codex", label: "Codex" },
   { id: "claude", label: "Claude Code" },
+  { id: "pi", label: "pi" },
 ];
 
 /**
@@ -439,6 +443,18 @@ export interface HarnessOnMachine {
    */
   bridged: boolean;
   install: string;
+  /**
+   * Why this workspace will not run it, when it will not.
+   *
+   * Present only where the harness is withheld by where the workspace runs,
+   * which today means Claude Code on a server: it spends a plan signed in to on
+   * the operator's own machine. Drawn as the row's reason rather than by
+   * dropping the row, because a harness that silently vanishes is a panel that
+   * disagrees with the operator's laptop and explains nothing.
+   */
+  withheld?: string | null;
+  signedIn?: boolean | null;
+  signIn?: string;
 }
 
 /**
@@ -475,14 +491,27 @@ export interface RepoStatus {
  * is the canonical path git agreed to and not always the one that was typed.
  * A blank `name` takes the directory's own.
  */
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
 export interface RepositoryDraft {
   groupId: GroupId;
   name: string;
+  /** Blank when `remote` is given: a clone's directory is the workspace's. */
   path: string;
   note: string;
   harness: Harness;
   gate: Gate;
   bench: Bench;
+  /** A remote to clone instead of a directory to link: how a box gets one. */
+  remote?: string;
+  /** A token for a private https remote. Kept beside the settings, never in
+   *  the clone, and never read back out. */
+  credential?: string;
+  username?: string;
+  author?: GitIdentity;
 }
 
 export type PluginId = string;
@@ -838,6 +867,36 @@ export interface RankedModel {
   completionPerMillion: number | null;
 }
 
+/**
+ * What this workspace can do, which is a property of where it runs.
+ *
+ * Five flags, and every one of them is something physically on the operator's
+ * machine rather than a feature nobody finished. A local workspace has all
+ * five; one running on a server has none, because a credential bound to a
+ * program, a working tree with uncommitted work in it, a model server on
+ * loopback and a file on a disk cannot be reached from an origin.
+ *
+ * Read once when the window opens. A deployment cannot change under a running
+ * app, so this is a constant that happens to arrive over IPC.
+ *
+ * The panels gate on it and the commands refuse anyway. That is not belt and
+ * braces: a webview on a stale bundle still draws the control it was built
+ * with, and the refusal is what turns that into a sentence instead of a
+ * failure.
+ */
+export interface Capabilities {
+  /** Whether a repository may be a directory the operator picked. */
+  localDirectories: boolean;
+  /** Whether inference may point at a model server on loopback. */
+  loopbackEndpoints: boolean;
+  /** Whether a turn may be paid for by a Claude plan. */
+  claudeProvider: boolean;
+  /** Whether Claude Code may be the harness that writes the code. */
+  claudeCodeHarness: boolean;
+  /** Whether a file may be named by a path on the operator's own disk. */
+  localFiles: boolean;
+}
+
 export interface Settings {
   /** What agents call you. Empty means they say "the operator". */
   operatorName: string;
@@ -968,7 +1027,17 @@ export interface DeviceCode {
 export type Reveal = { kind: "agent"; id: AgentId } | { kind: "crew"; id: GroupId };
 
 export type UiEvent =
+  | {
+      type: "liveSnapshot";
+      activity: Record<AgentId, Activity>;
+      streams: Record<
+        MessageId,
+        { channelId: AgentId; agentId: AgentId; runId: RunId; to: Participant; text: string }
+      >;
+      building: Record<AgentId, RepositoryId>;
+    }
   | { type: "agentsChanged" }
+  | { type: "openUrl"; url: string }
   | { type: "messageAppended"; message: Envelope }
   | {
       type: "streamStarted";
@@ -1273,6 +1342,7 @@ export interface RoutineRun {
  */
 export interface WebhookAddress {
   port: number;
+  url?: string | null;
   secret: string;
 }
 
@@ -1327,6 +1397,30 @@ export interface LinkHit {
   channelId: AgentId;
   createdAt: number;
 }
+
+/**
+ * What the menu bar draws, as the window hands it over.
+ *
+ * Mirrors `menubar::Presence` in Rust. The strip reads this machine's runtime
+ * when the window shows this machine's workspace, and reads this when the
+ * window shows a box: the window is the one thing holding the box's state.
+ */
+export interface Presence {
+  roster: Record<AgentId, { name: string; crew: GroupId }>;
+  crews: { id: GroupId; name: string }[];
+  activity: Record<AgentId, Activity>;
+  waiting: Approval[];
+  stuck: Escalation[];
+  /** Spent since this window opened. */
+  session: Tokens;
+  allTime: Tokens;
+  running: number;
+}
+
+/** A click on a menu bar row drawn from a box, handed back to the window. */
+export type MenubarAsk =
+  | { kind: "stopAll" }
+  | { kind: "decide"; approval: ApprovalId; decision: Decision };
 
 /** Structured error from a command. `kind` is safe to branch on. */
 export interface CommandError {
@@ -1389,4 +1483,28 @@ export function isInterAgent(envelope: Envelope): boolean {
 export interface WorkingNote {
   at: number;
   body: string;
+}
+
+export interface RepositoryConnection {
+  author?: GitIdentity;
+  remote: string | null;
+  pushRemote: string | null;
+  managedCredential: boolean;
+  githubApp?: boolean;
+  githubAvailable?: boolean;
+  acceptsToken: boolean;
+}
+
+export interface GithubUserSignin {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+}
+export interface GithubUserStatus {
+  status: "signedOut" | "pending" | "authorized";
+  login?: string | null;
+  author?: GitIdentity | null;
+  interval?: number | null;
 }

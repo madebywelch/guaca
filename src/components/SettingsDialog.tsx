@@ -39,6 +39,8 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
+import { HostChoice } from "./HostSetup";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -50,6 +52,7 @@ interface Props {
 
 const SECTIONS = [
   "general",
+  "workspace",
   "provider",
   "limits",
   "machines",
@@ -64,6 +67,7 @@ export type Section = (typeof SECTIONS)[number];
 
 const SECTION_LABELS: Record<Section, string> = {
   general: "General",
+  workspace: "Workspace",
   provider: "Provider",
   limits: "Limits",
   machines: "Machines",
@@ -115,6 +119,7 @@ const differs = (text: string, stored: number | undefined) =>
 export function SettingsDialog({ onClose, section: opening }: Props) {
   const settings = useStore((s) => s.settings);
   const setSettings = useStore((s) => s.setSettings);
+  const capabilities = useStore((s) => s.capabilities);
   const prefs = useStore((s) => s.prefs);
   const setPrefs = useStore((s) => s.setPrefs);
 
@@ -399,6 +404,9 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       setStatus({ tone: "error", text: errorMessage(error) });
     } finally {
       setLinking(false);
+      // A sign-in page the host asked the browser to open is stale the moment
+      // the flow behind it has ended, either way.
+      useStore.getState().setHandoff(null);
     }
   };
 
@@ -504,8 +512,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
         <div className="settings__head">
           <h2 className="dialog__title">Settings</h2>
           <p className="dialog__lede" style={{ margin: 0 }}>
-            Guaca runs entirely on this machine. The only thing it sends anywhere is what you and
-            your agents type, to the endpoint you choose.
+            Your host runs your agents. Choose where they work, how they connect, and how Guaca
+            appears on this device.
           </p>
         </div>
 
@@ -642,12 +650,18 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
                     <span className="preset__url">
-                      {claudeInstalled === false
-                        ? "Runs the claude program, which is not installed on this machine"
-                        : "Runs the claude program, and uses whatever it is signed in to and set to"}
+                      {!capabilities.claudeProvider
+                        ? "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it"
+                        : claudeInstalled === false
+                          ? "Runs the claude program, which is not installed on this machine"
+                          : "Runs the claude program, and uses whatever it is signed in to and set to"}
                     </span>
                   </span>
-                  {claudeInstalled === false ? (
+                  {!capabilities.claudeProvider ? (
+                    <span className="preset__state" data-ready="false">
+                      Not on a server
+                    </span>
+                  ) : claudeInstalled === false ? (
                     <span className="preset__state" data-ready="false">
                       Not installed
                     </span>
@@ -695,6 +709,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   baseUrl={baseUrl}
                   active={provider === "compatible"}
                   keySet={Boolean(settings?.apiKeySet)}
+                  loopback={capabilities.loopbackEndpoints}
                   onChoose={choose}
                 />
 
@@ -1211,6 +1226,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
               </>
             )}
 
+            {section === "workspace" && <WorkspacePane />}
+
             {section === "about" && (
               <>
                 <div className="about">
@@ -1280,6 +1297,30 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Which workspace this window shows: this machine's, or a box's.
+ *
+ * The desktop app is a window over exactly one workspace at a time. Pointed
+ * at a box it becomes a client of it, over the same HTTP a browser uses, and
+ * the menu bar follows. This machine's own runtime keeps running underneath
+ * and its crew keeps working, exactly as it does with the window closed; the
+ * pane says so, because a crew working out of sight is the one thing an
+ * operator would not guess.
+ *
+ * A change takes effect on reload rather than in place: which host the page
+ * is in was decided when it loaded, on purpose, so there is nothing that can
+ * be half-switched.
+ */
+function WorkspacePane() {
+  return (
+    <div className="workspace-settings">
+      <HostChoice />
+      <GroupTransfer />
+      <LegacyGroups />
     </div>
   );
 }
