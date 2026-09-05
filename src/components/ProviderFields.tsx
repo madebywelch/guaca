@@ -10,8 +10,8 @@
  */
 
 import type { ReactNode } from "react";
-
 import { PROVIDERS, type Provider as Preset, providerFor, providerReady } from "../lib/providers";
+import { hosted } from "../lib/transport";
 
 interface PresetProps {
   /** The endpoint in the box, whatever it is. Decides which row reads as
@@ -23,12 +23,8 @@ interface PresetProps {
   /** Whether the key that belongs to the chosen endpoint is set. */
   keySet: boolean;
   /**
-   * Whether a server on this machine can be reached at all.
-   *
-   * False on a hosted workspace, where "this machine" is a box somewhere else
-   * and `localhost` in the field is the box talking to itself. The row stays
-   * on the list and says so: a preset that vanishes on a server is a pane
-   * that disagrees with the operator's laptop and explains nothing.
+   * Whether the backend permits local model addresses. A hosted workspace
+   * resolves these on its own network, which the panel explains explicitly.
    */
   loopback: boolean;
   onChoose: (preset: Preset) => void;
@@ -44,6 +40,12 @@ export function ProviderPresets({ baseUrl, active, keySet, loopback, onChoose }:
   const current = providerFor(baseUrl);
   return (
     <>
+      {hosted && (
+        <p className="field__hint">
+          Addresses are reached from the backend. In a container, localhost is the container; use
+          host.docker.internal for a model on the host.
+        </p>
+      )}
       {PROVIDERS.map((preset) => {
         const chosen = active && current?.id === preset.id;
         const withheld = Boolean(preset.local) && !loopback;
@@ -73,7 +75,7 @@ export function ProviderPresets({ baseUrl, active, keySet, loopback, onChoose }:
               </span>
             ) : preset.local ? (
               <span className="preset__state" data-ready="true">
-                On this machine
+                {hosted ? "On the backend" : "On this machine"}
               </span>
             ) : (
               chosen && (

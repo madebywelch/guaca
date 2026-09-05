@@ -20,12 +20,9 @@
 //!
 //! ## What it decides, and where the decision is read
 //!
-//! Five capabilities, and every one of them is something that is *on the
-//! operator's machine* rather than something Guaca chose not to implement. A
-//! credential bound to the program it was issued to, a working tree with
-//! uncommitted work in it, a model server on loopback, and a file on a disk
-//! cannot be reached from an origin, and no amount of engineering here changes
-//! that.
+//! Resource paths and endpoint addresses are resolved by the backend. Both
+//! hosts can use their own directories and network; neither can read the
+//! other machine's files or credentials just because a client connects.
 //!
 //! The rule is that a refusal is drawn **in the panel, before anything is
 //! spent**, and never discovered at turn time. This is the same shape as a
@@ -60,8 +57,8 @@ impl Deployment {
                 local_files: true,
             },
             Deployment::Server => Capabilities {
-                local_directories: false,
-                loopback_endpoints: false,
+                local_directories: true,
+                loopback_endpoints: true,
                 claude_provider: false,
                 claude_code_harness: false,
                 local_files: false,
@@ -83,19 +80,11 @@ impl Deployment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
-    /// Whether a repository may be a directory the operator picked.
-    ///
-    /// On a server a repository would be a remote and a credential instead,
-    /// which is a different feature rather than this one degraded, and one
-    /// that is not built: `docs/CODING.md` is explicit that seeing the branch
-    /// you are on and the change you have not committed is the point of the
-    /// local version, and it does not survive the move.
+    /// A path on the backend, including explicitly mounted directories in a
+    /// container. Never resolved against the client's filesystem.
     pub local_directories: bool,
-    /// Whether inference may be pointed at a loopback address.
-    ///
-    /// LM Studio and Ollama are two clicks in Settings on a desktop. A server
-    /// cannot reach them, and a tunnel that let it would put "is your laptop
-    /// awake" back in front of exactly the turns that use it.
+    /// An address on the backend's network. Localhost names the backend;
+    /// host.docker.internal can reach the container host.
     pub loopback_endpoints: bool,
     /// Whether a turn may be paid for by a Claude plan.
     ///
@@ -193,7 +182,7 @@ impl Capabilities {
     }
 }
 
-/// Whether a URL is one only the machine it is typed on can reach.
+/// Whether a URL names the backend itself or its container host.
 ///
 /// Read before an endpoint is stored rather than when a turn fails against it,
 /// which is the difference between a sentence in a settings pane and a crew
@@ -225,8 +214,7 @@ pub fn is_loopback(url: &str) -> bool {
         || host == "::1"
         || host == "0.0.0.0"
         || is_loopback_v4(&host)
-        // What a machine calls itself from inside a container, which is the
-        // same mistake wearing a different hostname.
+        // The host as reached from inside a container.
         || host == "host.docker.internal"
 }
 
@@ -247,11 +235,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_desktop_can_do_everything_and_a_server_can_do_none_of_it() {
-        // Not a tautology: it is the assertion that the five are exactly the
-        // things that live on the operator's machine. A flag that is true in
-        // both places does not belong in this struct, and one that is false in
-        // both is a feature nobody built rather than a capability.
+    fn server_resources_are_available_but_client_credentials_and_files_are_not() {
         let desktop = Deployment::Desktop.capabilities();
         let server = Deployment::Server.capabilities();
         for what in [
@@ -262,7 +246,11 @@ mod tests {
             Absent::LocalFiles,
         ] {
             assert_eq!(desktop.require(what), Ok(()), "a desktop has {what:?}");
-            assert_eq!(server.require(what), Err(what), "a server does not have {what:?}");
+            let expected = match what {
+                Absent::LocalDirectories | Absent::LoopbackEndpoints => Ok(()),
+                _ => Err(what),
+            };
+            assert_eq!(server.require(what), expected);
         }
     }
 

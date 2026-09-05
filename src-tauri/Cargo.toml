@@ -4,13 +4,9 @@ version = "0.1.0"
 description = "Guac: a local, no-auth chat surface where you and your agents talk to each other."
 authors = ["madebywelch"]
 edition = "2021"
-# The floor the dependency tree already imposes, written down rather than
-# guessed at. Several crates in the lockfile pin 1.88 themselves and a large
-# number more are edition 2024, so an out-of-date toolchain gives up partway
-# through a download with an error about somebody else's crate. Declaring it
-# here moves that failure to the first line cargo reads, and keeps
-# `cargo update` inside the range that still builds.
-rust-version = "1.88"
+# Dependencies require 1.88; the workspace's process lock uses File::try_lock,
+# stabilized in 1.89. Declare the actual floor before Cargo downloads anything.
+rust-version = "1.89"
 
 [lib]
 name = "guac_lib"

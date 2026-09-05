@@ -20,6 +20,15 @@ services:
     environment:
       # Absent, the daemon generates one on first run and prints it.
       GUACA_TOKEN: ${GUACA_TOKEN:-}
+      # Coding harness credentials, separate from the model key in Settings.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+    # Docker Desktop supplies this name; host-gateway also supports Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    init: true
     restart: unless-stopped
     stop_grace_period: 30s
 

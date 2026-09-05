@@ -488,6 +488,31 @@ describe("RepositoryList", () => {
     }
   });
 
+  it("links a mounted directory by its backend path", async () => {
+    const previous = useStore.getState().capabilities;
+    useStore.setState({ capabilities: { ...previous, localFiles: false, localDirectories: true } });
+    try {
+      groupRepositories.mockResolvedValue([]);
+      createRepository.mockResolvedValue(repository({ path: "/workspace/project" }));
+      render(<RepositoryList groupId={GROUP} crew={CREW} />);
+      fireEvent.click(await screen.findByRole("button", { name: "Link a repository" }));
+      fireEvent.change(screen.getByLabelText("Repository source"), {
+        target: { value: "directory" },
+      });
+      fireEvent.change(screen.getByLabelText("Directory on backend"), {
+        target: { value: "/workspace/project" },
+      });
+      fireEvent.click(screen.getByText("Link"));
+      await waitFor(() =>
+        expect(createRepository).toHaveBeenCalledWith(
+          expect.objectContaining({ path: "/workspace/project" }),
+        ),
+      );
+    } finally {
+      useStore.setState({ capabilities: previous });
+    }
+  });
+
   it("disables neither when the machine could not be asked", async () => {
     // A check that could not run must not refuse to save the thing the operator
     // can see working in their own terminal. A job's own refusal already names

@@ -79,52 +79,41 @@ is closed rather than left drawing live buttons. On a desktop that is the rare
 case. On a server it stops being rare: a container is recycled, a host is
 drained, a deploy happens, and every one of those lands here.
 
-## Five capabilities, and none of them is a feature nobody finished
+## Resources belong to the backend
 
-A hosted workspace refuses five things, and every one of them is something
-that is *on the operator's machine* rather than something Guaca chose not to
-implement:
+A hosted workspace resolves repository paths and model addresses on the
+backend. It can clone a remote, use a mounted working directory, or call a
+model service reachable from its own network. The repository form names the
+choice explicitly. `localhost` means the backend; for a model on a Docker
+host, use `host.docker.internal` (the compose file supplies the Linux mapping).
+A model running on a sleeping laptop will still stop answering, even when
+Guaca itself runs on a VPS.
 
-- **A directory the operator picked.** A repository is a directory, and the
-  box's directories are not the operator's. `docs/CODING.md` is explicit that
-  seeing the branch you are on and the change you have not committed is the
-  point of the local version, and that does not survive the move.
-- **A model server on loopback.** LM Studio and Ollama are two clicks on a
-  desktop. `localhost` typed into a hosted workspace is the box talking to
-  itself, and a tunnel that let it reach the laptop would put "is your laptop
-  awake" back in front of exactly the turns that use it.
+These client-local capabilities remain unavailable:
+
 - **A Claude plan as the provider.** `Provider::Claude` works by being the
   program: `claude` runs where the operator signed in, so the credential never
   leaves the program it was issued to. There is no version of that which ships
   the credential to a box. `docs/PROTOCOL.md`.
-- **Claude Code as the harness.** The same fact one level down.
+- **A Claude plan for coding.** The desktop sign-in is not imported. Claude Code
+  is available on the server when `ANTHROPIC_API_KEY` is configured.
 - **A path on the operator's disk.** Attachments named by path, and a saved
   copy landing in the downloads folder. On a server both become the browser's
   own upload and download; the capability is gone and the ability to hand a
   document over is not.
 
-The list is meant to stay this short. A sixth flag has to be something that is
-physically on the operator's machine, not a thing somebody has not got round
-to. And each refusal names an alternative, because a refusal that only says no
+Each refusal names an alternative, because a refusal that only says no
 gets reworded and retried by a model and reported as a bug by a person:
 `every_refusal_says_what_to_do_instead` in `deployment.rs` fails the build on
-one that does not. The alternative has to be something that exists. The
-directories refusal once promised linking by remote, which is not built, and
-an operator sent to look for it found nothing.
+one that does not.
 
-`Capabilities` is a struct of flags rather than `matches!` calls scattered
-through the panels, and it is read in two places. The Rust side refuses in the
-command, before anything is spent: `save_file`, `create_repository`, and the
-settings patch that would store a loopback endpoint each call `require`. The
-frontend reads the same struct once at boot, into the store, and draws the
-refusal *on the row, before the field is filled in*. Withheld rather than
-hidden: a preset that vanishes on a server is a pane that disagrees with the
-operator's laptop and explains nothing, so LM Studio stays on the list saying
-"Not from a server", the Claude row says "Not on a server", and Claude Code's
-harness row carries the reason it is withheld instead of an install command
-that leads nowhere. `coding_harnesses` reports that reason from the box, which
-is the one capability read at a moment other than boot, because the row it
-lands on already asks the machine what is installed.
+`Capabilities` is read by the command boundary and by the frontend. Repository
+paths and local model endpoints are available in both hosts, interpreted on
+the backend. File paths on the client and desktop subscription credentials
+remain unavailable on the server. The Claude provider row explains that
+limitation. `coding_harnesses` separately checks installed programs and offers
+Claude Code on a server with `ANTHROPIC_API_KEY`; its row explains the required
+credential when absent.
 
 ## A browser is admitted by a token, and the token arrives by fragment
 
@@ -467,3 +456,67 @@ SQLite migrations are forward-only.
 A workspace also holds a process lock for its runtime's lifetime. A second
 host pointed at the same data directory refuses to start, rather than running
 a second scheduler or treating the first process's work as interrupted.
+
+
+## Coding inside the container
+
+The image includes pinned releases of both `pi` and Claude Code, plus Git,
+GitHub CLI, Node 22, pnpm, Python 3, a C/C++ build toolchain and ripgrep.
+`docker-compose.yml` explicitly forwards the optional `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `GH_TOKEN` environment variables.
+These configure the coding tools; the inference key entered in Guaca Settings
+is separate and is never silently reused by a harness.
+
+A container does not inherit the host's installed dependencies, login sessions,
+or unmounted files. For a working tree on the host, add a volume such as
+`./project:/workspace/project` and choose **Directory on backend** with
+`/workspace/project`. The directory must be writable by UID 1000. Agent
+worktrees live in Guaca's persistent volume. Do not mount the Docker socket.
+For projects requiring other toolchains (for example Rust, Go or Java), derive
+an image from `guacad` and install the versions the project needs. Keep those
+versions in the derived Dockerfile so the environment can be rebuilt.
+
+The compose service runs with an init process to reap child processes and uses
+a named volume for settings, credentials, SQLite, attachments, memories and
+repositories. A container on your laptop still sleeps with that laptop. Use
+this same image on an always-on host to keep agents working while it is shut.
+
+## Verifying the host boundary
+
+Run `./scripts/ci.sh` for desktop and daemon lint, builds and offline suites.
+`./scripts/image.sh` builds a container, checks both harnesses and the pinned
+package manager, then verifies settings and the token survive a restart on
+its temporary volume. The script removes its container and volume afterward.
+Rust 1.89 or newer is required; the container builds with 1.95.
+
+For a real browser check, build the frontend and daemon, then run:
+
+```sh
+pnpm build
+cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --features server --bin guacad
+GUACAD=src-tauri/target/debug/guacad CHROME_BIN=/path/to/chrome node scripts/hosting-browser.mjs
+```
+
+The browser check uses a fresh Chrome profile, a temporary workspace and an
+offline streaming model. It verifies partial-reply recovery, completion with
+no client, artifact isolation and answer delivery, and crash recovery without
+automatic replay. No account or provider credential is used. Chrome's macOS
+installation is the default when `CHROME_BIN` is absent. Live provider sign-ins
+and a real E2B desktop remain separate integration checks requiring accounts.
+
+## Moving an existing workspace
+
+Stop the original backend before taking a backup. Copy its data directory
+(the database together with any SQLite WAL files, attachments, memories and
+worktrees) into the new root's `data/`, and its configuration directory into
+`config/`. Keep an untouched backup: an older executable cannot open a database
+migrated by a newer one. For Docker, restore that root into the named volume
+and make it writable by UID 1000 before starting the service.
+
+Repository paths name the old machine until their directories are mounted at
+the same paths or linked again on the backend. Hosted provider credentials
+must be configured for the new environment; moving Guaca's files does not move
+the desktop keychain or a coding tool's sign-in. Keep the original workspace
+stopped after migration so its schedules do not run alongside the copy. The
+process lock prevents two hosts sharing one directory, not two independent
+copies. A browser connected to the new daemon starts no local backend.

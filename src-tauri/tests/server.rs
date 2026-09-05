@@ -98,10 +98,6 @@ async fn a_server_refuses_what_it_cannot_do_and_says_what_to_do_instead() {
     // refusal is what turns "the button did nothing" into a sentence, and each
     // has to name an alternative: a refusal that only says no gets retried.
     let refusals = [
-        (
-            "create_repository",
-            json!({ "draft": { "groupId": "00000000-0000-4000-8000-000000000001", "path": "/tmp" }}),
-        ),
         ("stage_files", json!({ "paths": ["/etc/hosts"] })),
         ("save_file", json!({ "digest": "0".repeat(64), "name": "notes.txt" })),
     ];
@@ -218,6 +214,21 @@ async fn a_repository_arrives_on_a_box_as_a_clone_of_a_remote() {
         "the clone lives in the workspace's own directory: {path}"
     );
     assert!(std::path::Path::new(&path).join("a.txt").exists(), "the clone has the history");
+
+    let (_, linked) = call(
+        addr,
+        "create_repository",
+        json!({ "draft": {
+            "groupId": "00000000-0000-4000-8000-000000000001", "path": seed.to_str().unwrap()
+        }}),
+    )
+    .await;
+    let linked_id = linked["ok"]["id"].as_str().expect("a backend directory can be linked");
+    call(addr, "delete_repository", json!({ "id": linked_id })).await;
+    assert!(
+        seed.join("a.txt").exists(),
+        "unlinking a mounted directory must never delete its contents"
+    );
 
     // Unlinking a clone removes it: it was the workspace's, not the operator's.
     let id = row["id"].as_str().unwrap();
@@ -577,4 +588,38 @@ async fn opaque_and_unrelated_origins_cannot_read_the_workspace() {
         .unwrap();
     assert_eq!(response.status(), 401);
     assert_eq!(response.headers()["access-control-allow-origin"], "tauri://localhost");
+}
+
+#[tokio::test]
+async fn two_hosts_cannot_run_the_same_workspace() {
+    let (_addr, dir) = workspace().await;
+    let second = guac_lib::server::bind(guac_lib::server::Settings {
+        root: dir.path().to_path_buf(),
+        bind: "127.0.0.1:0".parse().unwrap(),
+        token: TOKEN.into(),
+        web: None,
+        claude_key: false,
+        origin: None,
+    })
+    .await;
+    match second {
+        Err(error) => assert!(error.contains("already running"), "{error}"),
+        Ok(_) => panic!("a second host started the same actors"),
+    }
+}
+
+#[tokio::test]
+async fn a_model_address_belongs_to_the_backend_network() {
+    let (addr, _dir) = workspace().await;
+    for endpoint in ["http://127.0.0.1:11434/v1", "http://host.docker.internal:1234/v1"] {
+        let (_, body) = call(
+            addr,
+            "create_group",
+            json!({ "draft": {
+                "name": endpoint, "inference": { "provider": "compatible", "baseUrl": endpoint }
+            }}),
+        )
+        .await;
+        assert!(body["ok"]["id"].is_string(), "{body}");
+    }
 }

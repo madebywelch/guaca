@@ -229,7 +229,7 @@ impl From<Absent> for CommandError {
 ///
 /// Both checks are about the operator's own machine rather than about a feature
 /// being unfinished. A `claude` signed in on a laptop cannot be reached from a
-/// box, and neither can a model server on loopback.
+/// box. Addresses, including loopback, refer to the backend network.
 fn honorable(
     here: Capabilities,
     provider: Option<config::Provider>,
@@ -769,9 +769,8 @@ pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Repl
                 }
             };
     } else {
-        // Before the path is even cleaned. On a server there is no directory
-        // for the operator to have picked, and verifying one would answer with
-        // git's complaint about a path rather than with the reason.
+        // A path belongs to the backend. In a container this is a mounted
+        // directory, never a path interpreted on the client.
         state.deployment.capabilities().require(Absent::LocalDirectories)?;
 
         clean.path = crate::repo::verify(&clean.path).await?;

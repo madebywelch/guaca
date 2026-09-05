@@ -50,14 +50,14 @@ ENV GUACA_COMMIT=$GUACA_COMMIT
 RUN cargo build --release --no-default-features --features server --bin guacad
 
 # ---- what runs --------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM node:22-bookworm-slim
 # `curl` is the health check. TLS roots are for the model endpoints, the
 # sandboxes and the plugins the daemon calls out to. `git` and `gh` are what a
 # remote-linked repository is cloned, fetched and pushed with, and `claude` is
 # the coding harness, which spends ANTHROPIC_API_KEY when the operator sets it
 # (a plan cannot be signed in to here, and is not offered).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git \
+ && apt-get install -y --no-install-recommends ca-certificates curl git python3 build-essential ripgrep \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
       -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
@@ -65,13 +65,20 @@ RUN apt-get update \
  && apt-get update \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/* \
- && useradd --system --uid 1000 --home-dir /var/lib/guaca --create-home guaca
-# Claude Code's own installer, then the binary moved where every user finds it.
-# The updater is off: a container's version is its image's version, and a
-# binary that replaced itself would vanish on the next start anyway.
-RUN curl -fsSL https://claude.ai/install.sh | bash \
+ && groupmod --new-name guaca node \
+ && usermod --login guaca --home /var/lib/guaca node \
+ && mkdir -p /var/lib/guaca \
+ && chown guaca:guaca /var/lib/guaca
+# Pin harness releases. Jobs use their own credentials, configured explicitly
+# in the container, and never inherit a desktop's subscription files.
+ARG PI_VERSION=0.84.4
+ARG CLAUDE_CODE_VERSION=2.1.260
+RUN npm install --global --ignore-scripts pnpm@10.33.0 "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+ && npm cache clean --force \
+ && curl -fsSL https://claude.ai/install.sh -o /tmp/install-claude.sh \
+ && bash /tmp/install-claude.sh "${CLAUDE_CODE_VERSION}" \
  && install -m 755 /root/.local/bin/claude /usr/local/bin/claude \
- && rm -rf /root/.local
+ && rm -rf /root/.local /tmp/install-claude.sh
 ENV DISABLE_AUTOUPDATER=1
 COPY --from=daemon /app/src-tauri/target/release/guacad /usr/local/bin/guacad
 COPY --from=web /app/dist /usr/share/guaca/web

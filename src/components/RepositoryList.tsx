@@ -285,6 +285,10 @@ export function RepositoryList({ groupId, crew }: Props) {
   const capabilities = useStore((s) => s.capabilities);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [source, setSource] = useState<"directory" | "remote">(
+    capabilities.localFiles ? "directory" : "remote",
+  );
+  const directory = source === "directory" && capabilities.localDirectories;
   const [draft, setDraft] = useState<Omit<RepositoryDraft, "groupId">>({
     path: "",
     name: "",
@@ -551,14 +555,33 @@ export function RepositoryList({ groupId, crew }: Props) {
 
       {adding ? (
         <div className="access__item">
+          {capabilities.localDirectories && (
+            <label className="field">
+              <span className="field__label">Repository source</span>
+              <select
+                className="input"
+                aria-label="Repository source"
+                value={source}
+                onChange={(event) => setSource(event.target.value as "directory" | "remote")}
+              >
+                <option value="remote">Clone a remote</option>
+                <option value="directory">Directory on backend</option>
+              </select>
+            </label>
+          )}
           {/* A directory where there is one to pick; a remote where there is
               not. The clone lands in a directory of the workspace's own, so
               the operator names nothing about where. */}
           <div className="access__row">
-            {capabilities.localDirectories ? (
+            {directory ? (
               <input
                 className="input input--mono"
-                placeholder="/Users/you/dev/your-project"
+                placeholder={
+                  capabilities.localFiles
+                    ? "/Users/you/dev/your-project"
+                    : "/workspace/your-project"
+                }
+                aria-label="Directory on backend"
                 ref={pathRef}
                 value={draft.path}
                 onChange={(event) => setDraft({ ...draft, path: event.target.value })}
@@ -582,11 +605,8 @@ export function RepositoryList({ groupId, crew }: Props) {
             <button
               type="button"
               className="btn btn--small btn--primary"
-              disabled={
-                busy !== null ||
-                (capabilities.localDirectories ? !draft.path.trim() : !cloning.remote.trim())
-              }
-              onClick={capabilities.localDirectories ? add : addClone}
+              disabled={busy !== null || (directory ? !draft.path.trim() : !cloning.remote.trim())}
+              onClick={directory ? add : addClone}
             >
               Link
             </button>
@@ -624,7 +644,7 @@ export function RepositoryList({ groupId, crew }: Props) {
             disabled={busy !== null}
             onChoose={(gate) => setDraft({ ...draft, gate })}
           />
-          {!capabilities.localDirectories && (
+          {!directory && (
             <div className="access__row">
               <input
                 className="input input--slim"
@@ -639,8 +659,8 @@ export function RepositoryList({ groupId, crew }: Props) {
             </div>
           )}
           <p className="field__hint">
-            {capabilities.localDirectories
-              ? "The full path to the directory, which has to be the root of a git repository. Git is the undo: it is the reason an agent can be turned loose in there at all. The note is read by every agent that has it, on every turn."
+            {directory
+              ? "The full path on the machine running Guaca, which has to be the root of a git repository. For a container, use the path inside its mounted volume. Git is the undo: it is the reason an agent can be turned loose in there at all. The note is read by every agent that has it, on every turn."
               : "The workspace clones it into a directory of its own and works there; the work comes back as branches and pushes. A token is kept beside the settings, never in the clone. The note is read by every agent that has it, on every turn."}
           </p>
         </div>
