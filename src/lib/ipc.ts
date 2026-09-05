@@ -68,6 +68,7 @@ import type {
   RankedModel,
   RepoStatus,
   Repository,
+  RepositoryConnection,
   RepositoryDraft,
   RepositoryId,
   Reveal,
@@ -218,6 +219,14 @@ export const api = {
    * than the person choosing.
    */
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
+  repositoryConnection: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("repository_connection", { id }),
+  setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>
+    invoke<RepositoryConnection>("set_repository_credential", { id, username, token }),
+  clearRepositoryCredential: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("clear_repository_credential", { id }),
+  checkRepositoryConnection: (id: RepositoryId) =>
+    invoke<string>("check_repository_connection", { id }),
 
   /**
    * Sends a correction into a coding job that is already running.

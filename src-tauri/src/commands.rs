@@ -747,7 +747,13 @@ pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Repl
         let credential_file = match credential {
             Some(token) => {
                 let file = credentials_dir(state).join(&stamp);
-                crate::repo::keep_credential(&file, &remote, token).await?;
+                crate::repo::auth::keep(
+                    &file,
+                    &remote,
+                    draft.username.as_deref().unwrap_or("git"),
+                    token,
+                )
+                .await?;
                 Some(file)
             }
             None => None,
@@ -939,6 +945,9 @@ pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> 
     // clone and a credential were this workspace's to remove.
     let repository = state.runtime.store().get_repository(id)?;
     state.runtime.unlink_repository(id).await?;
+    if let Some(repository) = &repository {
+        let _ = tokio::fs::remove_file(repository_credential(state, repository)).await;
+    }
 
     // A clone the workspace made is the workspace's to remove, and the
     // credential file goes with it. A linked directory is the operator's and
@@ -961,6 +970,75 @@ pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> 
     }
     state.runtime.emit(UiEvent::AgentsChanged);
     Ok(())
+}
+
+/// A managed clone retains the credential path older builds gave it; a linked
+/// directory uses the repository id. No caller can choose an arbitrary file.
+fn repository_credential(state: &AppState, repository: &Repository) -> PathBuf {
+    let repos = std::fs::canonicalize(&state.repos).unwrap_or_else(|_| state.repos.clone());
+    if repository.remote.is_some()
+        && std::path::Path::new(&repository.path).parent() == Some(repos.as_path())
+    {
+        if let Some(stamp) = std::path::Path::new(&repository.path).file_name() {
+            return credentials_dir(state).join(stamp);
+        }
+    }
+    credentials_dir(state).join(repository.id.to_string())
+}
+
+pub async fn repository_connection(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
+        .await?)
+}
+
+pub async fn set_repository_credential(
+    state: &AppState,
+    id: RepositoryId,
+    username: String,
+    token: String,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::auth::set(
+        &repository.path,
+        &repository_credential(state, &repository),
+        &username,
+        &token,
+    )
+    .await?)
+}
+
+pub async fn clear_repository_credential(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::auth::clear(&repository.path, &repository_credential(state, &repository))
+        .await?)
+}
+
+pub async fn check_repository_connection(state: &AppState, id: RepositoryId) -> Reply<String> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::auth::check(&repository.path).await?)
 }
 
 /// Where a clone's token lives: beside the settings, named for the clone's

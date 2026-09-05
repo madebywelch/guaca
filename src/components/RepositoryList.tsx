@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { api } from "../lib/ipc";
 import { useStore } from "../lib/store";
 import {
@@ -16,6 +15,7 @@ import {
   type RepositoryDraft,
   type RepositoryId,
 } from "../lib/types";
+import { RepositoryConnection } from "./RepositoryConnection";
 
 interface Props {
   groupId: GroupId;
@@ -382,6 +382,7 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
+    setCloning({ remote: "", credential: "", username: "" });
     setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open", bench: "own" });
   };
 
@@ -391,7 +392,7 @@ export function RepositoryList({ groupId, crew }: Props) {
     ).then((ok) => ok && reset());
 
   /** The clone form's own two fields; everything else is shared with `draft`. */
-  const [cloning, setCloning] = useState({ remote: "", credential: "" });
+  const [cloning, setCloning] = useState({ remote: "", credential: "", username: "" });
 
   const addClone = () =>
     void run("add", () =>
@@ -401,11 +402,12 @@ export function RepositoryList({ groupId, crew }: Props) {
         path: "",
         remote: cloning.remote.trim(),
         credential: cloning.credential.trim() || undefined,
+        username: cloning.username.trim() || undefined,
       } satisfies RepositoryDraft),
     ).then((ok) => {
       if (ok) {
         reset();
-        setCloning({ remote: "", credential: "" });
+        setCloning({ remote: "", credential: "", username: "" });
       }
     });
 
@@ -553,6 +555,8 @@ export function RepositoryList({ groupId, crew }: Props) {
             repository.note && <p className="field__hint">{repository.note}</p>
           )}
 
+          <RepositoryConnection id={repository.id} />
+
           {/* The harness is on the row and not only behind Edit, because the
               question it answers is asked about the list: which of these
               directories is running on the plan that has stopped paying. */}
@@ -660,6 +664,14 @@ export function RepositoryList({ groupId, crew }: Props) {
           />
           {!directory && (
             <div className="access__row">
+              <input
+                className="input input--slim"
+                aria-label="Git username"
+                autoComplete="off"
+                placeholder="Git username (optional)"
+                value={cloning.username}
+                onChange={(event) => setCloning({ ...cloning, username: event.target.value })}
+              />
               <input
                 className="input input--slim"
                 type="password"

@@ -26,10 +26,14 @@
 //! is the first of the three and the cheapest, and it must never be described
 //! as the boundary.
 
+pub mod auth;
+
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum RepoError {
+    #[error("{0}")]
+    Connection(String),
     #[error("`{0}` is not a directory on this machine; pick one that exists")]
     NotADirectory(String),
     #[error(
@@ -56,11 +60,6 @@ pub enum RepoError {
          it, and that the token (if the repository is private) is right"
     )]
     CloneFailed { remote: String, detail: String },
-    #[error(
-        "a token goes with an https remote. `{0}` is reached with a key, so give this machine \
-         the key instead and leave the token out"
-    )]
-    CredentialNeedsHttps(String),
 }
 
 /// Writes the credential a clone will present, and says where it landed.
@@ -68,52 +67,14 @@ pub enum RepoError {
 /// git's own `credential-store` format, in a file only this user can read,
 /// beside the settings rather than inside the clone: an agent works in that
 /// tree and its `.git/config` names the file, but the file is not in any
-/// directory a job is pointed at. The username is a placeholder because every
-/// forge this app has met reads only the password when it is a token.
+/// directory a job is pointed at. The legacy API uses `git` as username; the
+/// connection panel lets the operator provide the service-specific username.
 pub async fn keep_credential(
     file: &std::path::Path,
     remote: &str,
     token: &str,
 ) -> Result<(), RepoError> {
-    let host = remote
-        .strip_prefix("https://")
-        .or_else(|| remote.strip_prefix("http://"))
-        .and_then(|rest| rest.split('/').next())
-        .filter(|host| !host.is_empty())
-        .ok_or_else(|| RepoError::CredentialNeedsHttps(remote.to_string()))?;
-    let scheme = if remote.starts_with("http://") { "http" } else { "https" };
-
-    if let Some(parent) = file.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|err| RepoError::Unreadable {
-            path: display(parent),
-            reason: err.to_string(),
-        })?;
-    }
-    let line = format!("{scheme}://git:{}@{host}\n", urlencode(token.trim()));
-    // Mode set before the bytes exist, not after: a credential readable for a
-    // moment on a shared box is readable.
-    #[cfg(unix)]
-    {
-        use tokio::io::AsyncWriteExt;
-        let mut open = tokio::fs::OpenOptions::new();
-        open.write(true).create(true).truncate(true).mode(0o600);
-        let mut out = open.open(file).await.map_err(|err| RepoError::Unreadable {
-            path: display(file),
-            reason: err.to_string(),
-        })?;
-        out.write_all(line.as_bytes()).await.map_err(|err| RepoError::Unreadable {
-            path: display(file),
-            reason: err.to_string(),
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        tokio::fs::write(file, line).await.map_err(|err| RepoError::Unreadable {
-            path: display(file),
-            reason: err.to_string(),
-        })?;
-    }
-    Ok(())
+    auth::keep(file, remote, "git", token).await
 }
 
 /// The characters a token cannot carry into a URL.
@@ -154,7 +115,13 @@ pub async fn clone_remote(
     let mut command = tokio::process::Command::new("git");
     command.arg("clone");
     if let Some(file) = credential_file {
-        command.arg("--config").arg(format!("credential.helper=store --file={}", file.display()));
+        command
+            .arg("--config")
+            .arg("credential.helper=")
+            .arg("--config")
+            .arg(format!("credential.helper={}", auth::helper(file)))
+            .arg("--config")
+            .arg("credential.useHttpPath=true");
     }
     command
         .arg("--config")
@@ -165,10 +132,19 @@ pub async fn clone_remote(
         .arg(remote)
         .arg(into);
 
-    let done = command.output().await.map_err(|err| match err.kind() {
-        std::io::ErrorKind::NotFound => RepoError::GitMissing,
-        _ => RepoError::Unreadable { path: display(into), reason: err.to_string() },
-    })?;
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "")
+        .env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oConnectTimeout=10")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let done = tokio::time::timeout(std::time::Duration::from_secs(300), command.output())
+        .await
+        .map_err(|_| RepoError::Connection("Clone timed out after five minutes".into()))?
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => RepoError::GitMissing,
+            _ => RepoError::Unreadable { path: display(into), reason: err.to_string() },
+        })?;
     if !done.status.success() {
         // The clone's own words, last line first: git puts the reason there
         // and the progress above it.
@@ -1356,7 +1332,7 @@ mod tests {
 
         // Only this user reads it, and the token is URL-safe inside it.
         let written = tokio::fs::read_to_string(&credential).await.unwrap();
-        assert_eq!(written, "https://git:tok%2F1%202@forge.example\n");
+        assert_eq!(written, "https://git:tok%2F1%202@forge.example/x/y.git\n");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

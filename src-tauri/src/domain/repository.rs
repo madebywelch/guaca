@@ -428,6 +428,9 @@ pub struct RepositoryDraft {
     /// never stored on the row and never read back out.
     #[serde(default)]
     pub credential: Option<String>,
+    /// HTTP username required by some Git services. Never a password.
+    #[serde(default)]
+    pub username: Option<String>,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -523,6 +526,8 @@ pub enum RepositoryError {
          address is one this workspace can clone"
     )]
     NotARemote(String),
+    #[error("Paste a repository URL without credentials, query or fragment; enter the access token in its separate field")]
+    EmbeddedCredential,
 }
 
 /// The spellings of a remote this app will clone.
@@ -557,6 +562,17 @@ impl RepositoryDraft {
             }
             if !plausible_remote(remote) {
                 return Err(RepositoryError::NotARemote(remote.to_string()));
+            }
+            if remote.starts_with("https://") || remote.starts_with("http://") {
+                let url =
+                    reqwest::Url::parse(remote).map_err(|_| RepositoryError::EmbeddedCredential)?;
+                if !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                {
+                    return Err(RepositoryError::EmbeddedCredential);
+                }
             }
             let edit = RepositoryEdit {
                 name: match self.name.trim() {
@@ -642,6 +658,7 @@ mod tests {
             bench: Bench::default(),
             remote: None,
             credential: None,
+            username: None,
         }
     }
 

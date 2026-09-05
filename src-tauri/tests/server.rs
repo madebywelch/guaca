@@ -193,6 +193,33 @@ async fn a_repository_arrives_on_a_box_as_a_clone_of_a_remote() {
         "unlinking a mounted directory must never delete its contents"
     );
 
+    // Repository creation, engineer assignment and harness changes are the
+    // same public commands used by a remote browser. A switch preserves both
+    // the path and the grant, even when the gate is still enabled.
+    let (_, engineer) = call(addr, "create_agent", json!({"draft": {
+        "name":"Engineer", "avatar":"avocado", "color":"#7ab55c", "model":"", "systemPrompt":"Test"
+    }})).await;
+    let engineer_id = engineer["ok"]["id"].as_str().unwrap();
+    let (_, assigned) =
+        call(addr, "set_agent_repository", json!({"id":engineer_id,"repositoryId":row["id"]}))
+            .await;
+    assert_eq!(assigned["ok"]["repositoryId"], row["id"]);
+    for harness in ["codex", "claude", "pi"] {
+        let (_, edited) = call(addr, "update_repository", json!({"id":row["id"],"name":"Code", "note":"Test", "harness":harness,"gate":"askBeforePushing","bench":"own"})).await;
+        assert_eq!(edited["ok"]["harness"], harness);
+        assert_eq!(edited["ok"]["path"], path);
+        assert_eq!(edited["ok"]["gate"], "askBeforePushing");
+        let (_, agents) = call(addr, "list_agents", json!({})).await;
+        assert!(agents["ok"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["id"] == engineer_id && a["repositoryId"] == row["id"]));
+    }
+    let (_, connection) = call(addr, "repository_connection", json!({"id":row["id"]})).await;
+    assert_eq!(connection["ok"]["remote"], remote);
+    assert_eq!(connection["ok"]["managedCredential"], false);
+
     // Unlinking a clone removes it: it was the workspace's, not the operator's.
     let id = row["id"].as_str().unwrap();
     let (status, body) = call(addr, "delete_repository", json!({ "id": id })).await;

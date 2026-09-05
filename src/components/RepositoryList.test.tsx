@@ -543,3 +543,33 @@ describe("RepositoryList", () => {
     await waitFor(() => expect(deleteRepository).toHaveBeenCalledWith("r1"));
   });
 });
+
+it("offers Codex and preserves assignments and the gate when switching harness", async () => {
+  groupRepositories.mockResolvedValue([repository({ gate: "askBeforePushing" })]);
+  codingHarnesses.mockResolvedValue([
+    {
+      harness: "codex",
+      installed: true,
+      version: "codex-cli 0.153.3",
+      bridged: false,
+      install: "npm install -g @openai/codex",
+    },
+  ]);
+  render(<RepositoryList groupId={GROUP} crew={CREW} />);
+  fireEvent.click(await screen.findByText("Edit"));
+  fireEvent.click(await screen.findByLabelText("Coding harness: Codex"));
+  await waitFor(() =>
+    expect(updateRepository).toHaveBeenCalledWith(
+      "r1",
+      "guaca",
+      "",
+      "codex",
+      "askBeforePushing",
+      "own",
+    ),
+  );
+  expect(setAgentRepository).not.toHaveBeenCalled();
+  expect(
+    await screen.findByText(/cannot receive corrections or use the push-approval gate/),
+  ).not.toBeNull();
+});

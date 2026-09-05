@@ -505,6 +505,7 @@ export interface RepositoryDraft {
   /** A token for a private https remote. Kept beside the settings, never in
    *  the clone, and never read back out. */
   credential?: string;
+  username?: string;
 }
 
 export type PluginId = string;
@@ -1475,4 +1476,11 @@ export function isInterAgent(envelope: Envelope): boolean {
 export interface WorkingNote {
   at: number;
   body: string;
+}
+
+export interface RepositoryConnection {
+  remote: string | null;
+  pushRemote: string | null;
+  managedCredential: boolean;
+  acceptsToken: boolean;
 }
