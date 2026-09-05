@@ -29,6 +29,7 @@ import {
 } from "../lib/types";
 import { CredentialList } from "./CredentialList";
 import { GroupActivity } from "./GroupActivity";
+import { GroupTransfer } from "./GroupTransfer";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
@@ -39,7 +40,15 @@ interface Props {
   onClose: () => void;
 }
 
-const SECTIONS = ["general", "provider", "limits", "plugins", "repositories", "activity"] as const;
+const SECTIONS = [
+  "general",
+  "provider",
+  "limits",
+  "plugins",
+  "repositories",
+  "activity",
+  "transfer",
+] as const;
 
 type Section = (typeof SECTIONS)[number];
 
@@ -50,6 +59,7 @@ const SECTION_LABELS: Record<Section, string> = {
   plugins: "Plugins",
   repositories: "Repositories",
   activity: "Activity",
+  transfer: "Import / export",
 };
 
 /**
@@ -70,6 +80,7 @@ const asNumber = (text: string) => (text.trim() ? Number(text) : null);
 export function GroupEditor({ group, onClose }: Props) {
   const refreshAgents = useStore((s) => s.refreshAgents);
   const settings = useStore((s) => s.settings);
+  const capabilities = useStore((s) => s.capabilities);
   const agents = useStore((s) => s.agents);
 
   const [section, setSection] = useState<Section>("general");
@@ -376,6 +387,7 @@ export function GroupEditor({ group, onClose }: Props) {
               section === "activity" ? "settings__pane settings__pane--board" : "settings__pane"
             }
           >
+            {section === "transfer" && <GroupTransfer group={group} />}
             {section === "general" && (
               <>
                 <h3 className="settings__title">General</h3>
@@ -508,10 +520,16 @@ export function GroupEditor({ group, onClose }: Props) {
                   <span className="preset__text">
                     <span className="preset__name">Claude subscription</span>
                     <span className="preset__url">
-                      Runs the claude program, on whatever it is signed in to
+                      {capabilities.claudeProvider
+                        ? "Runs the claude program, on whatever it is signed in to"
+                        : "Runs the claude program where you signed in, which is your own machine, so a server cannot offer it"}
                     </span>
                   </span>
-                  {onClaude ? (
+                  {!capabilities.claudeProvider ? (
+                    <span className="preset__state" data-ready="false">
+                      Not on a server
+                    </span>
+                  ) : onClaude ? (
                     <span className="preset__state" data-ready="true">
                       In use
                     </span>
@@ -547,6 +565,7 @@ export function GroupEditor({ group, onClose }: Props) {
                   baseUrl={baseUrl || (settings?.baseUrl ?? "")}
                   active={onEndpoint}
                   keySet={Boolean(group?.apiKeySet || settings?.apiKeySet)}
+                  loopback={capabilities.loopbackEndpoints}
                   onChoose={choose}
                 />
 
@@ -677,10 +696,8 @@ export function GroupEditor({ group, onClose }: Props) {
               <>
                 <h3 className="settings__title">Repositories</h3>
                 <p className="settings__lede">
-                  The directories on this machine this crew may write code in, and which program
-                  does the writing in each. Linking one gives it to nobody: you hand it to an agent
-                  from that agent&rsquo;s own panel, one at a time, and an agent you hire later does
-                  not inherit it.
+                  Add a codebase for this crew, then assign it to an agent in that agent’s profile.
+                  Repositories and coding tools run on the connected backend.
                 </p>
                 <RepositoryList groupId={group.id} crew={members} />
               </>

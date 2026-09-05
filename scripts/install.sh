@@ -117,6 +117,16 @@ step "Building"
 note "from $COMMIT"
 
 pnpm install --frozen-lockfile
+# Source installs build the matching host once when Docker is available.
+# Remote-only installations do not require Docker on the client machine.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  step "Building the local host"
+  export GUACA_BACKEND_IMAGE="guacad:$(git rev-parse --short=12 HEAD)"
+  docker build --build-arg "GUACA_COMMIT=$COMMIT" -t "$GUACA_BACKEND_IMAGE" .
+else
+  note "Docker is not ready; installing the desktop client for a remote host."
+  note "For a local source build, start Docker and run this installer again."
+fi
 pnpm tauri build --bundles app
 
 [ -d "$BUILT" ] || fail "the build produced no bundle at $BUILT."

@@ -536,6 +536,7 @@ struct Running {
 /// reachable have opposite answers for the operator: one is worth waiting a
 /// second for, and the other is a fact about the repository that no amount of
 /// waiting changes.
+#[derive(Clone)]
 enum Mailbox {
     /// The process is up and the bridge has not answered yet. Momentary.
     Starting,
@@ -544,6 +545,8 @@ enum Mailbox {
     Unreachable(&'static str),
     /// Post here.
     At(String),
+    /// The app-server accepts and acknowledges each correction.
+    Codex(tokio::sync::mpsc::Sender<crate::coding::codex::Steer>),
 }
 
 /// How often the schedule is swept for routines that have come due.
@@ -720,6 +723,7 @@ struct Runs {
 }
 
 struct Inner {
+    workspace_lease: Mutex<Option<std::fs::File>>,
     /// Explicit rather than relying on an ambient tokio context: Tauri's setup
     /// hook runs on the main thread outside any runtime, so `tokio::spawn`
     /// would panic there.
@@ -895,6 +899,7 @@ impl Runtime {
         let OnDisk { workspace, files, benches } = disk;
         Self {
             inner: Arc::new(Inner {
+                workspace_lease: Mutex::new(None),
                 handle,
                 store,
                 llm,
@@ -1003,6 +1008,10 @@ impl Runtime {
 
     pub fn webhook_port(&self) -> u16 {
         self.inner.webhook_port.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn hold_workspace_lease(&self, lease: std::fs::File) {
+        *self.inner.workspace_lease.lock() = Some(lease);
     }
 
     pub fn store(&self) -> &Store {
@@ -1462,7 +1471,19 @@ impl Runtime {
     /// the moment it is sent, even if the recipient is busy for the next
     /// thirty seconds.
     fn deliver(&self, envelope: Envelope) -> Result<(), RuntimeError> {
-        self.inner.store.append(&envelope)?;
+        if matches!(envelope.to, Participant::Agent { .. }) {
+            // Serialize acceptance with settlement: a finishing turn cannot
+            // erase a new delivery's recovery point between write and booking.
+            let mut runs = self.inner.runs.lock();
+            if runs.stopped.contains(&envelope.run_id) {
+                self.inner.store.append(&envelope)?;
+            } else {
+                self.inner.store.append_delivery(&envelope)?;
+            }
+            *runs.outstanding.entry(envelope.run_id).or_insert(0) += 1;
+        } else {
+            self.inner.store.append(&envelope)?;
+        }
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
 
         if let Participant::Agent { id } = envelope.to {
@@ -1476,7 +1497,6 @@ impl Runtime {
             // read, answered and released by a turn that finishes before the
             // booking lands, which settles the run twice.
             let run = envelope.run_id;
-            self.track_inflight(run, 1);
 
             let queued = {
                 let inboxes = self.inner.inboxes.lock();
@@ -2224,7 +2244,7 @@ impl Runtime {
                 Running {
                     agent: card.id,
                     mailbox: match repository.harness {
-                        Harness::Claude => Mailbox::Starting,
+                        Harness::Claude | Harness::Codex => Mailbox::Starting,
                         Harness::Pi => Mailbox::Unreachable(
                             "pi has no way to be reached while it is working. A repository set \
                              to Claude Code can be sent one",
@@ -2327,8 +2347,17 @@ impl Runtime {
             // on, or a bridge that could not start. Every one of them is a
             // working job, so none of them is an error.
             let (signals, mut heard) = tokio::sync::mpsc::channel(32);
+            let control = if harness == Harness::Codex {
+                let (sender, steering) = tokio::sync::mpsc::channel(8);
+                if let Some(job) = runtime.inner.coding.lock().get_mut(&directory) {
+                    job.mailbox = Mailbox::Codex(sender);
+                }
+                Some(crate::coding::codex::Control { gate, steering, signals: signals.clone() })
+            } else {
+                None
+            };
             let session = match harness {
-                Harness::Pi => None,
+                Harness::Pi | Harness::Codex => None,
                 Harness::Claude => match crate::coding::presence(harness).await {
                     crate::coding::Presence::Installed { bridged: true, .. } => {
                         runtime.inner.bridge.open(signals, gate, working.clone().into()).await
@@ -2361,8 +2390,13 @@ impl Runtime {
             let wiring = session.as_ref().map(|session| session.wiring().clone());
 
             let watcher = runtime.clone();
-            let running =
-                crate::coding::run(harness, &working, &brief, wiring.as_ref(), move |progress| {
+            let running = crate::coding::run_with_control(
+                harness,
+                &working,
+                &brief,
+                wiring.as_ref(),
+                control,
+                move |progress| {
                     let (tool, detail) = match progress {
                         crate::coding::Progress::Using { tool, detail } => (tool, detail),
                         crate::coding::Progress::Said(said) => (String::new(), said),
@@ -2373,7 +2407,8 @@ impl Runtime {
                         tool,
                         detail,
                     });
-                });
+                },
+            );
 
             // What the job says about itself through its own tools, drained
             // beside the process rather than after it: a progress note is worth
@@ -2502,10 +2537,9 @@ impl Runtime {
                 let why = done.failed.unwrap_or_default();
                 operator_should_know = Some(why.clone());
                 format!(
-                    "The coding agent in {repository} could not run: {why}. Nothing changed and \
-                     this is not something you can fix or retry: it is the coding harness \
-                     itself, on the operator's machine. Say plainly what you asked for and that \
-                     the harness could not run, and name the reason above."
+                    "The coding agent in {repository} could not finish: {why}. Partial changes may \
+                     remain in its worktree. Say plainly what you asked for and what failed; \
+                     do not claim the work finished or that nothing changed."
                 )
             }
             Ok(done) if done.tool_calls == 0 && done.said.trim().is_empty() => format!(
@@ -2700,6 +2734,9 @@ impl Runtime {
                 *entry = entry.saturating_sub((-delta) as usize);
             }
             if *entry == 0 {
+                if let Err(err) = self.inner.store.settle_run(run) {
+                    tracing::error!(%err, %run, "could not settle the recovery journal");
+                }
                 runs.outstanding.remove(&run);
                 runs.stopped.remove(&run);
                 runs.refused.remove(&run);
@@ -2883,6 +2920,9 @@ impl Runtime {
                 return false;
             }
             runs.stopped.insert(run);
+            if let Err(err) = self.inner.store.settle_run(run) {
+                tracing::error!(%err, %run, "could not mark the stopped conversation in the recovery journal");
+            }
         }
 
         self.release_parked(run);
@@ -3231,9 +3271,8 @@ impl Runtime {
 
     /// Sends a correction into a coding job that is already running.
     ///
-    /// Staged rather than delivered: the job reads it at its next tool
-    /// boundary, or when it tries to finish, whichever comes first.
-    /// `coding/bridge.rs` owns both halves of that.
+    /// Claude reads a staged correction at its next hook boundary. Codex
+    /// acknowledges native steering before this call reports success.
     ///
     /// Addressed by the agent running the job rather than by the repository it
     /// is in. Those were the same address while a repository had one work tree;
@@ -3243,27 +3282,43 @@ impl Runtime {
     /// most one work tree in it. It is also the address the panel already used:
     /// `CodingPanel` had to search the map by agent to find the repository to
     /// send to.
-    pub fn message_job(&self, agent: AgentId, message: &str) -> Result<(), RuntimeError> {
-        let token = {
+    pub async fn message_job(&self, agent: AgentId, message: &str) -> Result<(), RuntimeError> {
+        let mailbox = {
             let coding = self.inner.coding.lock();
-            let job =
-                coding.values().find(|job| job.agent == agent).ok_or(RuntimeError::NoJobRunning)?;
-            match &job.mailbox {
-                Mailbox::At(token) => token.clone(),
-                Mailbox::Starting => return Err(RuntimeError::JobStillStarting),
-                Mailbox::Unreachable(why) => {
-                    return Err(RuntimeError::JobUnreachable(why.to_string()))
+            coding
+                .values()
+                .find(|job| job.agent == agent)
+                .ok_or(RuntimeError::NoJobRunning)?
+                .mailbox
+                .clone()
+        };
+        match mailbox {
+            Mailbox::Starting => Err(RuntimeError::JobStillStarting),
+            Mailbox::Unreachable(why) => Err(RuntimeError::JobUnreachable(why.into())),
+            Mailbox::At(token) => {
+                if self.inner.bridge.post(&token, message) {
+                    Ok(())
+                } else {
+                    Err(RuntimeError::NoJobRunning)
                 }
             }
-        };
-
-        // The bridge is the authority on whether the job is still there, and it
-        // can have ended between the read above and here. Reported rather than
-        // swallowed: a box that accepts a correction into a process that is not
-        // there to read it is worse than one that says so.
-        match self.inner.bridge.post(&token, message) {
-            true => Ok(()),
-            false => Err(RuntimeError::NoJobRunning),
+            Mailbox::Codex(sender) => {
+                let message: String = message.trim().chars().take(2000).collect();
+                if message.is_empty() {
+                    return Err(RuntimeError::JobUnreachable("Enter a correction to send".into()));
+                }
+                let (reply, accepted) = tokio::sync::oneshot::channel();
+                sender.try_send(crate::coding::codex::Steer { message, reply }).map_err(|err| {
+                    match err {
+                        tokio::sync::mpsc::error::TrySendError::Closed(_) => RuntimeError::NoJobRunning,
+                        tokio::sync::mpsc::error::TrySendError::Full(_) => RuntimeError::JobUnreachable("The correction queue is full. Wait for Codex to accept the pending instructions.".into()),
+                    }
+                })?;
+                accepted
+                    .await
+                    .map_err(|_| RuntimeError::NoJobRunning)?
+                    .map_err(RuntimeError::JobUnreachable)
+            }
         }
     }
 

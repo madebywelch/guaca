@@ -112,6 +112,8 @@ pub enum Harness {
     Pi,
     /// Claude Code, run headless in the repository.
     Claude,
+    /// The official Codex CLI, with its own backend sign-in.
+    Codex,
 }
 
 impl Harness {
@@ -121,6 +123,7 @@ impl Harness {
         match self {
             Harness::Pi => "pi",
             Harness::Claude => "claude",
+            Harness::Codex => "codex",
         }
     }
 
@@ -129,11 +132,12 @@ impl Harness {
         match self {
             Harness::Pi => "pi",
             Harness::Claude => "Claude Code",
+            Harness::Codex => "Codex",
         }
     }
 
     /// Every one this build knows, in the order the panel offers them.
-    pub const ALL: [Harness; 2] = [Harness::Pi, Harness::Claude];
+    pub const ALL: [Harness; 3] = [Harness::Codex, Harness::Claude, Harness::Pi];
 
     /// What a stored row means.
     ///
@@ -147,6 +151,7 @@ impl Harness {
     pub fn parse(raw: &str) -> Harness {
         match raw {
             "claude" => Harness::Claude,
+            "codex" => Harness::Codex,
             _ => Harness::Pi,
         }
     }
@@ -358,6 +363,11 @@ pub struct Repository {
     /// Where a job here actually runs: the linked directory, or a worktree of
     /// the working agent's own.
     pub bench: Bench,
+    /// Where this was cloned from, for a repository the workspace cloned for
+    /// itself. `None` is a directory the operator picked, which is what every
+    /// desktop repository is. The credential a clone may hold is not on this
+    /// type and never will be: this type crosses IPC.
+    pub remote: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -377,6 +387,14 @@ impl Repository {
     }
 }
 
+/// The operator's commit attribution, independent of Git authentication.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitIdentity {
+    pub name: String,
+    pub email: String,
+}
+
 /// What an operator submits. Cleaned before it reaches the store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -385,6 +403,9 @@ pub struct RepositoryDraft {
     /// Blank takes the directory's own name.
     #[serde(default)]
     pub name: String,
+    /// Blank when `remote` is given: a clone's directory is the workspace's
+    /// to choose.
+    #[serde(default)]
     pub path: String,
     #[serde(default)]
     pub note: String,
@@ -404,6 +425,23 @@ pub struct RepositoryDraft {
     /// migration 44 backfills every one of them.
     #[serde(default)]
     pub bench: Bench,
+    /// A remote to clone, instead of a directory to link. The other way a
+    /// repository begins, and the only way on a box: the workspace clones it
+    /// into a directory of its own and works there. Exactly one of this and
+    /// `path` is given.
+    #[serde(default)]
+    pub remote: Option<String>,
+    /// A token for that remote, for a private repository over https. Read by
+    /// the command that clones and written to a file beside the settings;
+    /// never stored on the row and never read back out.
+    #[serde(default)]
+    pub credential: Option<String>,
+    /// HTTP username required by some Git services. Never a password.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Applied to new clones only. Existing directories keep their Git configuration.
+    #[serde(default)]
+    pub author: Option<GitIdentity>,
 }
 
 /// A draft that has passed everything checkable without touching the disk.
@@ -416,6 +454,7 @@ pub struct CleanRepository {
     pub harness: Harness,
     pub gate: Gate,
     pub bench: Bench,
+    pub remote: Option<String>,
 }
 
 /// What an operator may change about a repository that is already linked.
@@ -488,6 +527,30 @@ pub enum RepositoryError {
          every turn, so keep it to the one thing you would say out loud"
     )]
     NoteTooLong,
+    #[error(
+        "give a directory or a remote, not both: a linked directory is already a clone of \
+         wherever it came from"
+    )]
+    TwoSources,
+    #[error(
+        "`{0}` does not look like a git remote. An https URL, an ssh address or a `git@` \
+         address is one this workspace can clone"
+    )]
+    NotARemote(String),
+    #[error("Paste a repository URL without credentials, query or fragment; enter the access token in its separate field")]
+    EmbeddedCredential,
+}
+
+/// The spellings of a remote this app will clone.
+///
+/// `git@` and `ssh://` are keys the box holds; `file://` is what every offline
+/// test clones from. Anything else typed here is more likely a path or a web
+/// page than a remote, and the refusal beats a clone error written for a
+/// machine.
+pub fn plausible_remote(remote: &str) -> bool {
+    ["https://", "http://", "ssh://", "git@", "file://"]
+        .iter()
+        .any(|scheme| remote.starts_with(scheme))
 }
 
 impl RepositoryDraft {
@@ -498,6 +561,60 @@ impl RepositoryDraft {
     /// the store is on the path, and it can only hold if the same directory
     /// spells the same way every time.
     pub fn clean(&self) -> Result<CleanRepository, RepositoryError> {
+        // A remote instead of a path: the workspace clones it and the clone's
+        // directory becomes the path, so there is nothing to check about one
+        // here beyond its spelling and its name.
+        if let Some(remote) = self.remote.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+            if !self.path.trim().is_empty() {
+                return Err(RepositoryError::TwoSources);
+            }
+            if remote.len() > MAX_PATH_LEN {
+                return Err(RepositoryError::PathTooLong);
+            }
+            if !plausible_remote(remote) {
+                return Err(RepositoryError::NotARemote(remote.to_string()));
+            }
+            if remote.starts_with("https://") || remote.starts_with("http://") {
+                let url =
+                    reqwest::Url::parse(remote).map_err(|_| RepositoryError::EmbeddedCredential)?;
+                if !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                {
+                    return Err(RepositoryError::EmbeddedCredential);
+                }
+            }
+            let edit = RepositoryEdit {
+                name: match self.name.trim() {
+                    // The repository's own name, as every host spells it last.
+                    "" => remote
+                        .trim_end_matches('/')
+                        .trim_end_matches(".git")
+                        .rsplit(['/', ':'])
+                        .next()
+                        .unwrap_or(remote)
+                        .to_string(),
+                    given => given.to_string(),
+                },
+                note: self.note.clone(),
+                harness: self.harness,
+                gate: self.gate,
+                bench: self.bench,
+            }
+            .clean()?;
+            return Ok(CleanRepository {
+                group_id: self.group_id,
+                name: edit.name,
+                path: String::new(),
+                note: edit.note,
+                harness: edit.harness,
+                gate: edit.gate,
+                bench: edit.bench,
+                remote: Some(remote.to_string()),
+            });
+        }
+
         let path = self.path.trim().trim_end_matches('/');
         if path.is_empty() {
             return Err(RepositoryError::NoPath);
@@ -532,6 +649,7 @@ impl RepositoryDraft {
             harness: edit.harness,
             gate: edit.gate,
             bench: edit.bench,
+            remote: None,
         })
     }
 }
@@ -549,6 +667,51 @@ mod tests {
             note: String::new(),
             harness: Harness::default(),
             bench: Bench::default(),
+            remote: None,
+            credential: None,
+            username: None,
+            author: None,
+        }
+    }
+
+    fn remote_draft(remote: &str) -> RepositoryDraft {
+        RepositoryDraft { remote: Some(remote.to_string()), ..draft("") }
+    }
+
+    #[test]
+    fn a_remote_is_cleaned_to_a_clone_with_the_repositorys_own_name() {
+        for (remote, name) in [
+            ("https://github.com/madebywelch/guaca.git", "guaca"),
+            ("https://github.com/madebywelch/guaca", "guaca"),
+            ("git@github.com:madebywelch/guaca.git", "guaca"),
+            ("file:///tmp/bare/guaca.git", "guaca"),
+        ] {
+            let clean = remote_draft(remote).clean().unwrap();
+            assert_eq!(clean.name, name, "{remote}");
+            assert_eq!(clean.remote.as_deref(), Some(remote));
+            // The clone's directory is the command's to choose, not the draft's.
+            assert_eq!(clean.path, "");
+        }
+    }
+
+    #[test]
+    fn a_remote_and_a_directory_together_are_refused() {
+        let both = RepositoryDraft {
+            remote: Some("https://github.com/x/y".into()),
+            ..draft("/dev/guaca")
+        };
+        assert_eq!(both.clean().unwrap_err(), RepositoryError::TwoSources);
+    }
+
+    #[test]
+    fn a_web_page_is_not_a_remote() {
+        // The likeliest paste after a real remote is the repository's web
+        // address with the scheme dropped, or a bare path.
+        for wrong in ["github.com/x/y", "/tmp/somewhere", "y.git"] {
+            assert!(
+                matches!(remote_draft(wrong).clean(), Err(RepositoryError::NotARemote(_))),
+                "{wrong}"
+            );
         }
     }
 
@@ -653,6 +816,7 @@ mod tests {
             path: "/dev/guaca".into(),
             note: "run ./scripts/ci.sh before you finish".into(),
             harness: Harness::Pi,
+            remote: None,
             created_at: 0,
             updated_at: 0,
         };

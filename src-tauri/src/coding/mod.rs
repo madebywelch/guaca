@@ -1,8 +1,8 @@
 //! Running a coding harness against a linked repository.
 //!
 //! Guaca does not write code. It starts something that does, in a directory the
-//! operator linked, and reads what comes back. There are two of those things,
-//! `pi` and Claude Code, and the operator installs and signs in to whichever of
+//! operator linked, and reads what comes back. Codex, Claude Code and `pi` each
+//! own their model settings and credentials. The operator installs and signs in to whichever of
 //! them they use.
 //!
 //! ## Why a harness and not tools
@@ -19,29 +19,29 @@
 //! So the harness keeps its own loop, its own context and its own budget, and
 //! Guaca spends one tool round starting it.
 //!
-//! ## Why there are two, and why they are not one with a setting
+//! ## Why each harness is a program rather than a provider setting
 //!
 //! Because a subscription is spent by the program it was issued to. The
 //! argument is in [`Harness`], and it is the reason this module is a dispatch
 //! rather than a provider flag on a single command line.
 //!
 //! What they share is the shape of a job: one process, in one directory, whose
-//! stdout is a stream of JSON objects, one per line, that ends. So there is one
-//! process lifecycle here, with two of everything that genuinely differs, which
-//! is the argument vector and the fold from an event to an [`Outcome`]. The two
-//! submodules are those two things and nothing else.
+//! stdout is a stream of JSON objects, one per line. Pi and Claude share the
+//! process lifecycle below, with their own arguments and event readers. Codex
+//! owns a bidirectional app-server session in [`codex`], ending its process
+//! after the active turn completes. All three return the same [`Outcome`].
 //!
 //! ## Why the credentials are not ours
 //!
-//! Both harnesses read their own auth: `pi` from `~/.pi/agent/auth.json` or the
-//! environment, Claude Code from its own sign-in. Each is already signed in or
+//! The harnesses read their own auth: `pi` from `~/.pi/agent/auth.json` or the
+//! environment, Codex and Claude Code from their own sign-ins. Each is already signed in or
 //! it is not, and Guaca passing a key would put the operator's Guaca key on a
 //! second bill under a second provider for work they are already paying for.
 //! The consequence is stated rather than hidden: a job's spend does not appear
 //! in this app's usage table, because this app did not spend it. What the job
 //! reports back is what the harness says it cost.
 //!
-//! ## A job is reachable while it runs, on one of the two
+//! ## Claude Code and Codex jobs are reachable while they run
 //!
 //! `code` returns as soon as the process is up, which is what keeps the agent
 //! that asked from reading as `Thinking` for the length of a change to a
@@ -56,7 +56,9 @@
 //! produced. `pi` has no equivalent and gets none of it, which is a difference
 //! between the harnesses rather than a gap: everything the bridge adds is an
 //! improvement on a job that already worked without it, so every part of it
-//! fails open.
+//! fails open on the existing adapters. Codex uses its native `turn/steer` and
+//! approval callbacks instead of hooks. It verifies the requested approval
+//! policy before starting a gated turn and acknowledges each correction.
 //!
 //! ## What is not here
 //!
@@ -80,9 +82,10 @@
 
 pub mod bridge;
 pub mod claude_code;
+pub mod codex;
 pub mod pi;
 
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 
 use crate::domain::repository::Harness;
 
@@ -218,9 +221,9 @@ pub enum Progress {
 
 /// Folds one event from a harness's stream into the outcome.
 ///
-/// A function pointer rather than a trait, because a harness is exactly two
-/// functions and a trait for two would be a vocabulary nobody needs. The
-/// watcher is `dyn` so the type is nameable.
+/// Pi and Claude share this reader shape. Codex handles requests and replies
+/// as well as events in its own driver. The watcher is `dyn` so the type is
+/// nameable.
 type Fold = fn(&mut Outcome, &serde_json::Value, &mut dyn FnMut(Progress));
 
 /// The program, by name. Found on `PATH` rather than configured: an operator
@@ -230,6 +233,7 @@ fn binary(harness: Harness) -> &'static str {
     match harness {
         Harness::Pi => pi::BINARY,
         Harness::Claude => claude_code::BINARY,
+        Harness::Codex => codex::BINARY,
     }
 }
 
@@ -243,6 +247,7 @@ pub fn install(harness: Harness) -> &'static str {
     match harness {
         Harness::Pi => pi::INSTALL,
         Harness::Claude => claude_code::INSTALL,
+        Harness::Codex => codex::INSTALL,
     }
 }
 
@@ -294,21 +299,59 @@ impl Presence {
 /// check for that, it cannot go stale between the question and the answer, and
 /// a refusal built on this one would refuse jobs that work.
 pub async fn presence(harness: Harness) -> Presence {
-    let asked = tokio::process::Command::new(binary(harness))
+    let mut command = tokio::process::Command::new(binary(harness));
+    command
         .arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
-        .await;
-
-    let Ok(asked) = asked else { return Presence::Missing };
+        .kill_on_drop(true);
+    let Ok(Ok(asked)) =
+        tokio::time::timeout(std::time::Duration::from_secs(5), command.output()).await
+    else {
+        return Presence::Missing;
+    };
     if !asked.status.success() {
         return Presence::Missing;
     }
 
     let version = String::from_utf8_lossy(&asked.stdout).trim().to_string();
-    let bridged = harness == Harness::Claude && at_least(&version, BRIDGE_FLOOR);
+    let bridged = match harness {
+        Harness::Claude => at_least(&version, BRIDGE_FLOOR),
+        Harness::Codex => at_least(&version, (0, 153)),
+        Harness::Pi => false,
+    };
     Presence::Installed { version, bridged }
+}
+
+/// Commands are run by the operator on the backend, under the daemon's user.
+/// Guaca never opens a consumer OAuth flow or reads a CLI credential file.
+pub fn sign_in(harness: Harness) -> &'static str {
+    match harness {
+        Harness::Codex => "codex login --device-auth",
+        Harness::Claude => "claude auth login",
+        Harness::Pi => "pi",
+    }
+}
+
+/// A CLI's own local status check, never a model call. Only the boolean crosses
+/// IPC: even status output may contain an account name or an API key prefix.
+pub async fn signed_in(harness: Harness) -> Option<bool> {
+    let args: &[&str] = match harness {
+        Harness::Codex => &["login", "status"],
+        Harness::Claude => &["auth", "status", "--json"],
+        Harness::Pi => return None,
+    };
+    let mut command = tokio::process::Command::new(binary(harness));
+    command.args(args).kill_on_drop(true).stderr(std::process::Stdio::null());
+    let asked = tokio::time::timeout(std::time::Duration::from_secs(5), command.output())
+        .await
+        .ok()?
+        .ok()?;
+    if harness == Harness::Claude {
+        serde_json::from_slice::<serde_json::Value>(&asked.stdout).ok()?["loggedIn"].as_bool()
+    } else {
+        Some(asked.status.success())
+    }
 }
 
 /// Whether a `--version` line names a release at or past a floor.
@@ -334,7 +377,7 @@ fn at_least(version: &str, floor: (u32, u32)) -> bool {
 
 /// Runs one task to completion in one repository.
 ///
-/// Neither harness is asked for a session-less run. A session on disk is what
+/// No harness is asked for a session-less run. A session on disk is what
 /// lets the operator open the same work in their own terminal (`pi -c`,
 /// `claude -c`), which is the difference between a harness the app runs and a
 /// black box.
@@ -347,16 +390,33 @@ pub async fn run(
     repository: &str,
     task: &str,
     wiring: Option<&Wiring>,
+    watching: impl FnMut(Progress),
+) -> Result<Outcome, CodingError> {
+    run_with_control(harness, repository, task, wiring, None, watching).await
+}
+
+pub async fn run_with_control(
+    harness: Harness,
+    repository: &str,
+    task: &str,
+    wiring: Option<&Wiring>,
+    control: Option<codex::Control>,
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
+    if harness == Harness::Codex {
+        return codex::run(repository, task, control, watching).await;
+    }
     let (args, fold): (Vec<String>, Fold) = match harness {
         // `pi` has no hooks and no second interface, so the wiring is not
         // offered to it rather than being offered and ignored.
         Harness::Pi => (pi::argv(task), pi::absorb),
+        Harness::Codex => unreachable!("Codex owns a bidirectional protocol"),
         Harness::Claude => (claude_code::argv(task, wiring), claude_code::absorb),
     };
 
-    let mut child = tokio::process::Command::new(binary(harness))
+    let mut command = tokio::process::Command::new(binary(harness));
+    crate::repo::github::environment(repository, &mut command).await;
+    let mut child = command
         .current_dir(repository)
         .args(&args)
         .stdin(std::process::Stdio::null())
@@ -375,7 +435,7 @@ pub async fn run(
         })?;
 
     let stdout = child.stdout.take().ok_or_else(|| CodingError::Start("no output".into()))?;
-    let stderr = child.stderr.take();
+    let stderr = child.stderr.take().ok_or_else(|| CodingError::Start("no stderr".into()))?;
     let mut lines = BufReader::new(stdout).lines();
     // The session is set from what was asked for rather than read back off the
     // stream, which is the point of choosing it: a job killed at the ceiling
@@ -410,19 +470,21 @@ pub async fn run(
         }
     };
 
-    // Stopping is the caller aborting the task this runs in, which drops the
-    // child, which `kill_on_drop` turns into a killed process. A cancellation
-    // token beside that would be a second way to stop one thing, and the two
-    // would have to agree about which had happened.
-    tokio::select! {
-        _ = reading => {}
-        _ = tokio::time::sleep(CEILING) => {
+    // Drain both pipes concurrently, retaining only a bounded stderr prefix.
+    // Waiting for stdout before reading stderr deadlocks a noisy CLI once the
+    // stderr pipe fills. The ceiling also includes waiting for process exit.
+    let draining = drain_stderr(stderr);
+    let finishing = async {
+        let (_, stderr_text, status) = tokio::join!(reading, draining, child.wait());
+        status.map(|status| (status, stderr_text))
+    };
+    let (status, stderr_text) = match tokio::time::timeout(CEILING, finishing).await {
+        Ok(result) => result.map_err(|err| CodingError::Start(err.to_string()))?,
+        Err(_) => {
             let _ = child.kill().await;
             return Err(CodingError::TooLong(CEILING.as_secs() / 60));
         }
-    }
-
-    let status = child.wait().await.map_err(|err| CodingError::Start(err.to_string()))?;
+    };
     if !status.success() && outcome.said.trim().is_empty() && outcome.failed.is_none() {
         // Only when there is nothing to report. A harness that answered and
         // then exited non-zero has still done the work, and throwing its answer
@@ -436,24 +498,28 @@ pub async fn run(
         // reported to the operator as `exit 1` with the sentence naming the
         // plan thrown away.
         let mut why = format!("exit {}", status.code().unwrap_or(-1));
-        if let Some(stderr) = stderr {
-            let mut text = String::new();
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                text.push_str(&line);
-                text.push('\n');
-                if text.len() > 2_000 {
-                    break;
-                }
-            }
-            if !text.trim().is_empty() {
-                why = format!("{why}: {}", text.trim());
-            }
+        if !stderr_text.trim().is_empty() {
+            why = format!("{why}: {}", stderr_text.trim());
         }
         return Err(CodingError::NoAnswer(why));
     }
 
     Ok(outcome)
+}
+
+/// Drain to EOF while keeping only a diagnostic prefix. Both protocols must
+/// read stderr beside stdout or a full pipe can deadlock the coding process.
+pub(super) async fn drain_stderr(mut stderr: tokio::process::ChildStderr) -> String {
+    let mut kept = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while let Ok(n) = stderr.read(&mut chunk).await {
+        if n == 0 {
+            break;
+        }
+        let take = n.min(2000usize.saturating_sub(kept.len()));
+        kept.extend_from_slice(&chunk[..take]);
+    }
+    String::from_utf8_lossy(&kept).into_owned()
 }
 
 /// The first line of something a harness wrote, and nothing after it.

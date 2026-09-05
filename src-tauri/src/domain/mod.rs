@@ -2,6 +2,7 @@ pub mod agent;
 pub mod approval;
 pub mod attachment;
 pub mod connector;
+pub mod deployment;
 pub mod envelope;
 pub mod escalation;
 pub mod group;

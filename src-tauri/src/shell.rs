@@ -175,7 +175,9 @@ pub async fn run(directory: &str, line: &str, patience: Duration) -> Result<Ran,
         return Err(ShellError::Gone(directory.to_string()));
     }
 
-    let mut child = tokio::process::Command::new(SHELL)
+    let mut command_process = tokio::process::Command::new(SHELL);
+    crate::repo::github::environment(directory, &mut command_process).await;
+    let mut child = command_process
         .arg("-c")
         .arg(line)
         .current_dir(directory)

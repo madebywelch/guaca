@@ -1110,6 +1110,8 @@ reproducibility. The reproducibility that matters for this project is in CI,
 where the Rust core, the frontend, and the test suites build in a clean
 environment. That is where the container belongs.
 
+The daemon is a service, and is the exception: `docs/HOSTING.md`.
+
 ## The blank-window failure, and why it can't recur silently
 
 The first release bundle opened to a solid green window with no elements.

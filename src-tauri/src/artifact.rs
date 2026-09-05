@@ -97,7 +97,7 @@ pub const ARTIFACT_CSP: &str = "default-src 'none'; \
      font-src data:; \
      form-action 'none'; \
      base-uri 'none'; \
-     frame-ancestors 'self'; \
+     frame-ancestors 'self' tauri://localhost http://tauri.localhost https://tauri.localhost http://localhost:1420 http://127.0.0.1:1420; \
      sandbox allow-scripts";
 
 /// How many documents are kept at once.
@@ -224,18 +224,16 @@ async fn serve(mut client: TcpStream, artifacts: Artifacts) -> std::io::Result<(
         return answer(&mut client, "400 Bad Request", "text/plain", "Not an artifact address.")
             .await;
     };
-    let Some(page) = artifacts.get(&id) else {
-        // Said rather than dropped. A frame given nothing draws a blank
-        // rectangle, which reads exactly like a page that rendered nothing.
-        return answer(
-            &mut client,
-            "404 Not Found",
-            "text/plain",
-            "This page is no longer held. Scroll back to it to draw it again.",
-        )
-        .await;
+    // Said rather than dropped, whichever way it goes: a frame given nothing
+    // draws a blank rectangle, which reads exactly like a page that rendered
+    // nothing.
+    let (status, content_type, body) = page_for(&artifacts, &id);
+    let status = match status {
+        200 => "200 OK",
+        404 => "404 Not Found",
+        _ => "400 Bad Request",
     };
-    answer(&mut client, "200 OK", "text/html; charset=utf-8", &wrap(&page)).await
+    answer(&mut client, status, content_type, &body).await
 }
 
 /// The id a request line asks for, if it asks for one at all.
@@ -343,6 +341,36 @@ async fn read_head(client: &mut TcpStream) -> std::io::Result<Vec<u8>> {
         head.push(byte[0]);
     }
     Ok(head)
+}
+
+/// What a request for `id` is answered with: status, content type, body.
+///
+/// The loopback server and the daemon's route both answer from this, so a
+/// page reached either way is the same page with the same refusals.
+pub fn page_for(artifacts: &Artifacts, id: &str) -> (u16, &'static str, String) {
+    let shaped = id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit());
+    if !shaped {
+        return (400, "text/plain", "Not an artifact address.".into());
+    }
+    match artifacts.get(&id.to_ascii_lowercase()) {
+        Some(page) => (200, "text/html; charset=utf-8", wrap(&page)),
+        None => (
+            404,
+            "text/plain",
+            "This page is no longer held. Scroll back to it to draw it again.".into(),
+        ),
+    }
+}
+
+/// Every header a page is served under, whichever server serves it.
+pub fn response_headers(content_type: &'static str) -> [(&'static str, &'static str); 5] {
+    [
+        ("content-type", content_type),
+        ("content-security-policy", ARTIFACT_CSP),
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "no-referrer"),
+        ("cache-control", "no-store"),
+    ]
 }
 
 async fn answer(

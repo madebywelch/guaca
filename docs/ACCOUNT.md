@@ -1,29 +1,26 @@
 # The account
 
-Guaca runs on your machine, with your keys, and an account changes none of that.
-This file is about the one thing it does change, why that thing cannot be done
-locally, and what had to be true before it was worth building at all.
+Guaca's runtime runs on the host the operator chooses. Its optional central
+account at `guaca.bot` connects providers that require a registered OAuth
+application, including Google for Gmail, Calendar, and Drive. This file covers
+that integration service today and the boundary it must keep when managed
+compute spaces are added in the next phase.
 
-## Nobody has to sign in
+## Self-hosting does not require an account
 
-The app is fully usable with no account, and the code is arranged so that stays
-true rather than so it reads well in a README:
+Local Docker and independently hosted workspaces can run conversations,
+repositories, coding harnesses, and schedules without a Guaca account. The
+Google plugin does require the account: its tools use the grant held at
+guaca.bot. Model-provider sign-ins and GitHub repository authorization are
+separate from that account.
 
-- `Account` is a field on `AppState` that nothing else in the app depends on.
-  No turn, no prompt, no tool, no guard reads it. Deleting the module would
-  remove one Settings pane and break nothing else.
-- Both reads happen when the Account pane is opened, not at startup. An install
-  that never opens that pane never sends `guaca.bot` a request, ever.
-- The pane's first sentence says it is optional. That is not marketing copy; it
-  is the answer to the question an operator is actually asking when they find a
-  sign-in inside a local app.
-
-If a change makes any of those three false, it is a change to what Guaca is, and
-it needs arguing on those terms rather than landing as a refactor.
+A future managed compute space will require an account to establish ownership
+and discover its connection. That requirement belongs to the managed service;
+it must not become a prerequisite for starting the self-hosted runtime.
 
 ## What an account is for
 
-One thing: a hosted OAuth client.
+Today, the account provides a hosted OAuth client and account-backed tools.
 
 Guaca's answer to reaching an operator's accounts is normally to sign a browser
 in on the agent's own computer. Where that works it is the better answer — the
@@ -34,32 +31,46 @@ Gmail is the example everybody hits.
 
 Guaca cannot be that application. Its client secret would ship inside a download
 anybody can read, which is not a secret, and no amount of local cleverness
-changes that. A hosted origin can be, and `guaca.bot` is: it holds the client,
-holds the refresh token, and hands a paired machine a short-lived access token.
-The refresh token never reaches this machine, which is the whole reason storing
-it there beats storing it here.
+changes that. A hosted origin can be, and `guaca.bot` is: it holds the client
+and Google refresh tokens, and serves Google tools through its MCP endpoint.
+The workspace authenticates with its Guaca account token; it does not receive
+the Google credentials. Google authorization returns to guaca.bot regardless
+of where the workspace runs.
 
-Everything else that has ever been proposed for an account — agents that run in
-the cloud, managed provider keys — is a separate argument that has not been had.
-Nothing in this file or in `account.rs` assumes them.
+## Current sign-in uses authorization code with PKCE
 
-## Signing in is authorization code with PKCE, on a loopback port
-
-This is the third OAuth flow in the app and the second of its kind:
+Account sign-in and provider authorization are distinct flows. The current
+account flow returns to the workspace through `oauth::Landing`:
 
 | | Flow | Why |
 |---|---|---|
 | `subscription.rs` | Device code | OpenAI operates the client; the device flow is what they publish |
-| `oauth.rs` | Code + PKCE, loopback | MCP mandates it, and vendors issue a client on the spot |
-| `account.rs` | Code + PKCE, loopback | RFC 8252, and the asset is somebody's mail |
+| `oauth.rs` | Code + PKCE, served callback or legacy loopback | MCP clients register the callback when connecting |
+| `account.rs` | Code + PKCE, served callback or legacy loopback | Fixed public client at guaca.bot; accepted callbacks must be registered |
 
-`subscription.rs` argues against a loopback redirect: a fixed port may already
+The original embedded runtime used a loopback listener. `subscription.rs`
+argues against a loopback redirect: a fixed port may already
 belong to something else, and a URL scheme is claimed by whichever build
 registered last. Both objections are about a port or a scheme **chosen in
 advance**. `oauth.rs` answers them by binding `127.0.0.1:0` *before* naming the
 redirect, so the port is one the operating system has already handed out and
 nothing can take it in between. This module is that answer pointed at one known
-server.
+server. The desktop now connects to a server runtime, which receives the
+callback at `<workspace-origin>/v1/oauth/callback` instead. The browser follows
+that redirect; its machine must be able to reach the workspace.
+
+The fixed `guaca-desktop` registration accepts the legacy loopback callback
+and, through guaca-bot migration 0005, the loopback `/v1/oauth/callback` path
+with varying ports. This supports local Docker and a VPS accessed through a
+local SSH port forward. It does not accept arbitrary HTTPS or Tailnet hosts.
+At an unregistered host, Settings → Account sign-in is refused, typically
+with `invalid_redirect`. This is a callback-registration limitation, not a
+failure of the VPS runtime. The served route is already implemented.
+
+Google's callback to guaca.bot is unaffected by changing the workspace URL.
+The callback requiring acceptance here is the separate return from guaca.bot
+to the workspace. This host-dependent account flow is current behavior, not
+the intended managed onboarding contract.
 
 ### Why not the device grant, given one was already built
 
@@ -85,10 +96,11 @@ service drops the device table.
 ### The dance
 
 1. `GET https://guaca.bot/.well-known/oauth-authorization-server` (RFC 8414).
-2. Bind `127.0.0.1:0`. Only now is the redirect URI known.
+2. Open the served callback for the workspace origin (or bind `127.0.0.1:0`
+   for the legacy embedded runtime). Only now is the redirect URI known.
 3. Open the operator's browser at the authorization endpoint, with a PKCE
    challenge and a state.
-4. Catch the redirect on that port. Check the issuer and the state before
+4. Receive the redirect. Check the issuer and the state before
    writing a success page, so a mismatch is never told it worked.
 5. `POST` the code and the verifier to the token endpoint.
 6. Spend the token once, on `/api/connectors`, before anything is written.
@@ -105,10 +117,10 @@ open registration endpoint on a database whose job is holding other people's
 refresh tokens, and a consent screen naming an application a stranger asserted.
 The fixed client is the smaller surface and the more honest screen.
 
-**The redirect URI is registered with no port.** RFC 8252 §7.3 has the
+**Loopback redirect URIs are registered with no port.** RFC 8252 §7.3 has the
 authorization server compare a loopback redirect on scheme, host, path and query
 while ignoring the port. That is what makes "bind first, then ask" possible at
-all, and it is the one thing the service must not stop honoring.
+all. That port exception does not allow arbitrary remote origins.
 
 ### The issuer is read, never assumed
 
@@ -230,8 +242,27 @@ were needed to fix it and only one of them was in the app:
 
 `docs/PLUGINS.md`, *A crew chooses which identity it uses*, has the app half.
 
-## What is not built yet
+## Managed compute is the next phase
 
-Cloud-run agents and managed provider keys, both of which were named as reasons
-an account might exist and neither of which has been argued. Nothing in this
-module assumes them.
+The product direction is managed Guaca compute spaces alongside continued
+self-hosting. The user signs in, creates or selects a persistent space, and
+the desktop discovers its connection. The managed service handles ownership,
+provisioning, lifecycle, and billing. This backend-isolation change implements
+none of those operations.
+
+For account-backed integrations, the central account holds the user's provider
+grants. A compute space receives explicitly authorized access to the relevant tools, with the existing
+group and agent permissions still applying. Moving or replacing a space must
+not require changing Google's callback or reconnecting Google just because
+the compute address changed. Account-to-workspace authorization, revocation,
+and the desktop sign-in handoff need their own design and implementation.
+
+These provider callbacks remain at stable guaca.bot endpoints. Managed onboarding
+must not require users to register a VPS or Tailnet callback, enter an access
+token, or configure a host address. Self-hosters retain explicit host setup
+and can choose whether to use the central integration service.
+
+This is follow-up work, outside the current pull request. No managed billing,
+provisioning, provider-key service, or per-host callback registration is added
+here. See [Hosting](HOSTING.md#portable-hosts-now-managed-compute-spaces-next)
+for the current deployment boundary and account-sign-in limitation.

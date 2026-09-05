@@ -1,0 +1,6 @@
+#!/bin/sh
+# Login shells replace PATH, so the container installs this beside other CLIs.
+# Always name the packaged binary explicitly: the caller may have found this
+# launcher while resolving GUACA_GH_BINARY. Never recurse through it.
+export GUACA_GH_BINARY=/usr/bin/gh
+exec python3 /usr/local/lib/guaca/github-helper.py gh "$@"

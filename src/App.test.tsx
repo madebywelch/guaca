@@ -12,6 +12,7 @@ import { aGroup } from "./test-fixtures";
  * fails here instead of in a release bundle.
  */
 
+const listGroups = vi.fn(async () => [aGroup({ agentCount: 3 })]);
 const listAgents = vi.fn<() => Promise<AgentCard[]>>(async () => []);
 const agentLastActive = vi.fn<() => Promise<Record<string, number>>>(async () => ({}));
 const agentActivity = vi.fn<() => Promise<Record<string, unknown>>>(async () => ({}));
@@ -50,7 +51,7 @@ vi.mock("./lib/ipc", () => ({
     // The shared fixture rather than a hand-built object: this one had drifted
     // into a mixture of a group and the app's settings, with a group's own
     // `inference` block missing entirely, and nothing typechecks a mock.
-    listGroups: async () => [aGroup({ agentCount: 3 })],
+    listGroups: () => listGroups(),
     listRepositories: async () => [],
     agentActivity: () => agentActivity(),
     usageSummary: async () => [],
@@ -59,6 +60,14 @@ vi.mock("./lib/ipc", () => ({
     openEscalations: async () => [],
     agentLastActive: () => agentLastActive(),
     getSettings: () => getSettings(),
+    reportPresence: async () => {},
+    capabilities: async () => ({
+      localDirectories: true,
+      loopbackEndpoints: true,
+      claudeProvider: true,
+      claudeCodeHarness: true,
+      localFiles: true,
+    }),
     channelMessages: async () => [],
     activityFeed: async () => [],
     agentRoutines: () => agentRoutines(),
@@ -72,8 +81,12 @@ vi.mock("./lib/ipc", () => ({
       throw new Error("not used");
     },
   },
-  onRuntimeEvent: async () => () => {},
+  onRuntimeEvent: vi.fn(async (callback) => {
+    callback({ type: "liveSnapshot", activity: await agentActivity(), streams: {}, building: {} });
+    return () => {};
+  }),
   onRevealRequest: async () => () => {},
+  onMenubarAsk: async () => () => {},
   onFileDrop: async () => () => {},
 }));
 
@@ -129,6 +142,7 @@ function railNames(): (string | null)[] {
 beforeEach(() => {
   vi.clearAllMocks();
   listAgents.mockResolvedValue([]);
+  listGroups.mockResolvedValue([aGroup({ agentCount: 3 })]);
   agentLastActive.mockResolvedValue({});
   agentActivity.mockResolvedValue({});
   useStore.setState({
@@ -242,6 +256,31 @@ describe("App", () => {
       },
     });
     render(<App />);
+    expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
+  });
+
+  it.each([
+    { provider: "compatible" as const, apiKeySet: true },
+    { provider: "chatgpt" as const, apiKeySet: false },
+  ])("uses the selected group's provider and credentials: %j", async ({ provider, apiKeySet }) => {
+    getSettings.mockResolvedValue({
+      ...(await getSettings()),
+      provider: "compatible",
+      apiKeySet: false,
+    });
+    const paid = aGroup({ apiKeySet });
+    paid.inference.provider = provider;
+    const unpaid = aGroup({ id: "other-group", name: "Other", apiKeySet: false });
+    listGroups.mockResolvedValue([paid, unpaid]);
+    listAgents.mockResolvedValue([
+      agent("Manager"),
+      { ...agent("Other agent"), groupId: unpaid.id },
+    ]);
+    render(<App />);
+    await waitFor(() => expect(screen.getByText("Manager")).toBeTruthy());
+    fireEvent.click(railRow("Manager"));
+    await waitFor(() => expect(screen.queryByText(/Add an API key/i)).toBeNull());
+    fireEvent.click(railRow("Other agent"));
     expect(await screen.findByText(/Add an API key/i)).toBeTruthy();
   });
 
@@ -402,4 +441,16 @@ describe("failure surfacing", () => {
     expect(screen.getByText(/render exploded/)).toBeTruthy();
     spy.mockRestore();
   });
+});
+
+it("refreshes the roster when the event connection returns", async () => {
+  const { onRuntimeEvent } = await import("./lib/ipc");
+  render(<App />);
+  await screen.findByRole("navigation", { name: /agents/i });
+  const before = listAgents.mock.calls.length;
+  const calls = vi.mocked(onRuntimeEvent).mock.calls;
+  const reconnect = calls[calls.length - 1]?.[1];
+  expect(reconnect).toBeTypeOf("function");
+  reconnect?.();
+  await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
 });

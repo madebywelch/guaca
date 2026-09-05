@@ -173,6 +173,7 @@ vi.mock("../lib/ipc", () => ({
 
 const { SettingsDialog } = await import("./SettingsDialog");
 const { useStore } = await import("../lib/store");
+const transport = await import("../lib/transport");
 const { DEFAULT_PREFS, NOTIFY_KINDS } = await import("../lib/prefs");
 const { BINDINGS, SURFACES } = await import("../lib/keybinds");
 const { PROVIDERS } = await import("../lib/providers");
@@ -791,8 +792,46 @@ describe("the provider presets", () => {
     pane("Provider");
     // An empty key field beside a warning about a missing key is the state an
     // operator running a local model will try to fix forever.
-    expect(preset("LM Studio").textContent).toContain("On this machine");
+    expect(preset("LM Studio").textContent).toContain("On the backend");
     expect(preset("OpenRouter").textContent).toContain("Needs a key");
+  });
+
+  it("withholds the rows a server cannot offer, and says why on each", () => {
+    // Withheld rather than hidden. A row that vanishes on a server is a pane
+    // that disagrees with the operator's laptop and explains nothing, and a
+    // control that fails only after the field is filled in is worse.
+    useStore.setState({
+      capabilities: {
+        localDirectories: false,
+        loopbackEndpoints: false,
+        claudeProvider: false,
+        claudeCodeHarness: false,
+        localFiles: false,
+      },
+    });
+    try {
+      open();
+      pane("Provider");
+
+      expect(preset("LM Studio").textContent).toContain("Not from a server");
+      expect((preset("LM Studio") as HTMLButtonElement).disabled).toBe(true);
+      expect(preset("Ollama").textContent).toContain("Not from a server");
+      // The ones a server can reach are untouched.
+      expect((preset("OpenRouter") as HTMLButtonElement).disabled).toBe(false);
+
+      expect(screen.getByText("Not on a server")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Use the Claude subscription" })).toBeNull();
+    } finally {
+      useStore.setState({
+        capabilities: {
+          localDirectories: true,
+          loopbackEndpoints: true,
+          claudeProvider: true,
+          claudeCodeHarness: true,
+          localFiles: true,
+        },
+      });
+    }
   });
 
   it("says a key is stored once one is", () => {
@@ -815,7 +854,64 @@ describe("the provider presets", () => {
       expect(preset(name).textContent, name).not.toContain("Needs a key");
     }
     // And a local one still says what is true of the server itself.
-    expect(preset("Ollama").textContent).toContain("On this machine");
+    expect(preset("Ollama").textContent).toContain("On the backend");
+  });
+});
+
+/**
+ * The Workspace pane: pointing this window at a box.
+ *
+ * Runs as the desktop showing its own workspace, which is the only state the
+ * pane offers a choice in. What matters is the order: nothing is stored until
+ * the box has answered to the token, and the page reloads only after it is.
+ */
+describe("the Workspace pane", () => {
+  beforeEach(() => {
+    window.localStorage.removeItem("guaca.workspace.remote");
+    vi.restoreAllMocks();
+  });
+
+  it("stores the box only once it has answered, and then reloads", async () => {
+    const probed = vi
+      .spyOn(transport, "probe")
+      .mockResolvedValue({ build: "abc1234", capabilities: {} });
+    const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
+    open();
+    pane("Workspace");
+
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    const button = screen.getByRole("button", { name: "Connect to host" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    fireEvent.change(field(/^Host address/), { target: { value: "https://box.example:8787/" } });
+    fireEvent.change(field(/^Access key/), { target: { value: " t0k3n " } });
+    expect(button.disabled).toBe(false);
+    expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();
+
+    fireEvent.click(button);
+    await waitFor(() => expect(restarted).toHaveBeenCalled());
+    expect(probed).toHaveBeenCalledWith({ origin: "https://box.example:8787", token: "t0k3n" });
+    expect(JSON.parse(window.localStorage.getItem("guaca.workspace.remote")!)).toEqual({
+      origin: "https://box.example:8787",
+      token: "t0k3n",
+    });
+  });
+
+  it("stores nothing when the box refuses, and says why", async () => {
+    vi.spyOn(transport, "probe").mockRejectedValue({
+      kind: "unauthorized",
+      message: "this workspace needs the token it printed",
+    });
+    const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
+    open();
+    pane("Workspace");
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    fireEvent.change(field(/^Host address/), { target: { value: "https://box.example" } });
+    fireEvent.change(field(/^Access key/), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
+
+    await screen.findByText(/needs the token it printed/);
+    expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();
+    expect(restarted).not.toHaveBeenCalled();
   });
 });
 

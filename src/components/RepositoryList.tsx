@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-
 import { api } from "../lib/ipc";
+import { useStore } from "../lib/store";
 import {
   type AgentCard,
   BENCHES,
@@ -15,6 +15,8 @@ import {
   type RepositoryDraft,
   type RepositoryId,
 } from "../lib/types";
+import { GitAuthor } from "./GitAuthor";
+import { RepositoryConnection } from "./RepositoryConnection";
 
 interface Props {
   groupId: GroupId;
@@ -52,9 +54,15 @@ function HarnessChoice({
 }) {
   // Null is the check still running, and it must not disable both. The refusal
   // a job gives already names the install command.
-  const has = (harness: Harness) =>
-    machine === null || (machine.find((row) => row.harness === harness)?.installed ?? true);
-  const missing = machine?.filter((row) => !row.installed) ?? [];
+  const has = (harness: Harness) => {
+    const row = machine?.find((known) => known.harness === harness);
+    return row === undefined || (row.installed && !row.withheld);
+  };
+  const missing = machine?.filter((row) => !row.installed && !row.withheld) ?? [];
+  // Withheld by where the workspace runs rather than absent from the machine,
+  // and the row says which: an install command for a program a server will
+  // not run is an instruction that leads nowhere.
+  const withheld = machine?.filter((row) => Boolean(row.withheld)) ?? [];
 
   return (
     <>
@@ -74,14 +82,28 @@ function HarnessChoice({
         ))}
       </div>
       <p className="field__hint">
-        The program that writes the code here, run on this machine with its own sign-in. Guaca never
-        pays for it, so a job's spend is not in this app's usage. Switch when the plan behind one of
-        them runs out: a subscription is spent by the program it was issued to, and no amount of
-        configuring the other one reaches it.
+        The coding tool runs on the connected backend and uses its own account and model settings.
+        {machine?.find((row) => row.harness === chosen)?.signedIn === false && (
+          <span>
+            {" "}
+            {labelOf(chosen)} needs to be signed in on that backend before it can write code. Your
+            Guaca chat sign-in does not sign in the coding tool.
+          </span>
+        )}
+        {chosen === "codex" &&
+          machine?.find((row) => row.harness === chosen)?.bridged === false && (
+            <span> Update Codex to version 0.153 or newer for corrections and push approvals.</span>
+          )}
         {missing.map((row) => (
           <span key={row.harness}>
             {" "}
             {labelOf(row.harness)} is not installed: <code>{row.install}</code>.
+          </span>
+        ))}
+        {withheld.map((row) => (
+          <span key={row.harness}>
+            {" "}
+            {labelOf(row.harness)}: {row.withheld}.
           </span>
         ))}
       </p>
@@ -123,18 +145,14 @@ function GateChoice({
       <input
         type="checkbox"
         checked={chosen === "askBeforePushing"}
-        disabled={disabled || !reachable}
+        disabled={disabled || (!reachable && chosen !== "askBeforePushing")}
         onChange={(event) => onChoose(event.target.checked ? "askBeforePushing" : "open")}
       />
       <span>
         <span className="field__label">Ask me before pushing</span>
         <span className="field__hint">
-          A push, a pull request, a merge or a release waits on your desk first. Everything else a
-          job does is what the directory and git already cover. It is not a sandbox: the program
-          runs as you, with your credentials, and a job that wanted to get around this could. What
-          it buys is that the ordinary push is one you see first. Leave it off for a repository
-          nobody is watching: a job is told nobody will answer a question, and one waiting on you is
-          one that runs out its own clock.
+          Ask for approval before a push, pull request, merge or release. Other commands run with
+          the repository access available on the backend. This is an approval step, not a sandbox.
           {!reachable && (
             <>
               {" "}
@@ -269,8 +287,15 @@ function worksIn(repository: Repository, crew: AgentCard[]): string {
  * reported to an agent forty minutes later.
  */
 export function RepositoryList({ groupId, crew }: Props) {
+  const capabilities = useStore((s) => s.capabilities);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [githubAvailable, setGithubAvailable] = useState<boolean | null>(null);
+  const [access, setAccess] = useState<"automatic" | "github" | "token">("automatic");
+  const [source, setSource] = useState<"directory" | "remote">(
+    capabilities.localFiles ? "directory" : "remote",
+  );
+  const directory = source === "directory" && capabilities.localDirectories;
   const [draft, setDraft] = useState<Omit<RepositoryDraft, "groupId">>({
     path: "",
     name: "",
@@ -333,6 +358,15 @@ export function RepositoryList({ groupId, crew }: Props) {
       .catch(() => setMachine(null));
   }, []);
 
+  useEffect(() => {
+    api
+      .githubAppAvailable()
+      .then(setGithubAvailable)
+      .catch(() => {
+        setGithubAvailable(false);
+      });
+  }, []);
+
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
     setError(null);
@@ -350,6 +384,8 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
+    setAccess("automatic");
+    setCloning({ remote: "", credential: "", username: "" });
     setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open", bench: "own" });
   };
 
@@ -357,6 +393,32 @@ export function RepositoryList({ groupId, crew }: Props) {
     void run("add", () =>
       api.createRepository({ groupId, ...draft } satisfies RepositoryDraft),
     ).then((ok) => ok && reset());
+
+  /** The clone form's own two fields; everything else is shared with `draft`. */
+  const [author, setAuthor] = useState({ name: "", email: "" });
+  const [cloning, setCloning] = useState({ remote: "", credential: "", username: "" });
+
+  const githubRemote = /^https:\/\/github\.com\//i.test(cloning.remote.trim());
+  const githubApp = githubRemote && githubAvailable === true && access !== "token";
+
+  const addClone = () =>
+    void run("add", () =>
+      (githubApp ? api.createGithubRepository : api.createRepository)({
+        groupId,
+        ...draft,
+        path: "",
+        remote: cloning.remote.trim(),
+        author: author.name.trim() || author.email.trim() ? author : undefined,
+        credential: githubApp ? undefined : cloning.credential.trim() || undefined,
+        username: cloning.username.trim() || undefined,
+      } satisfies RepositoryDraft),
+    ).then((ok) => {
+      if (ok) {
+        reset();
+        setCloning({ remote: "", credential: "", username: "" });
+        setAuthor({ name: "", email: "" });
+      }
+    });
 
   if (repositories === null) return <p className="field__hint">Loading repositories…</p>;
 
@@ -366,7 +428,7 @@ export function RepositoryList({ groupId, crew }: Props) {
         <div className="access__item" key={repository.id}>
           <div className="access__row">
             <strong className="access__name">{repository.name}</strong>
-            <span className="access__where">{repository.path}</span>
+            <span className="access__where">{repository.remote ?? repository.path}</span>
             <button
               type="button"
               className="btn btn--small btn--ghost"
@@ -502,6 +564,8 @@ export function RepositoryList({ groupId, crew }: Props) {
             repository.note && <p className="field__hint">{repository.note}</p>
           )}
 
+          <RepositoryConnection id={repository.id} />
+
           {/* The harness is on the row and not only behind Edit, because the
               question it answers is asked about the list: which of these
               directories is running on the plan that has stopped paying. */}
@@ -518,52 +582,121 @@ export function RepositoryList({ groupId, crew }: Props) {
 
       {adding ? (
         <div className="access__item">
-          <div className="access__row">
+          {capabilities.localDirectories && (
+            <label className="field">
+              <span className="field__label">Repository source</span>
+              <select
+                className="input"
+                aria-label="Repository source"
+                value={source}
+                onChange={(event) => {
+                  setSource(event.target.value as "directory" | "remote");
+                  setError(null);
+                }}
+              >
+                <option value="remote">Clone from GitHub or another Git service</option>
+                <option value="directory">Use a folder on the backend</option>
+              </select>
+            </label>
+          )}
+          <label className="field">
+            <span className="field__label">
+              {directory ? "Repository folder" : "Repository URL"}
+            </span>
             <input
               className="input input--mono"
-              placeholder="/Users/you/dev/your-project"
               ref={pathRef}
-              value={draft.path}
-              onChange={(event) => setDraft({ ...draft, path: event.target.value })}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && draft.path.trim()) add();
+              aria-label={directory ? "Directory on backend" : "Remote to clone"}
+              placeholder={
+                directory
+                  ? capabilities.localFiles
+                    ? "/Users/you/dev/your-project"
+                    : "/workspace/your-project"
+                  : "https://github.com/you/your-project.git"
+              }
+              value={directory ? draft.path : cloning.remote}
+              onChange={(event) => {
+                if (directory) setDraft({ ...draft, path: event.target.value });
+                else setCloning({ ...cloning, remote: event.target.value });
+                setError(null);
               }}
             />
-            <button
-              type="button"
-              className="btn btn--small btn--primary"
-              disabled={busy !== null || !draft.path.trim()}
-              onClick={add}
-            >
-              Link
-            </button>
-            {/* Beside the thing it cancels rather than in a heading above the
-                list. The section owns the heading now, and a Cancel a panel
-                away from the form is one an operator hunts for. */}
-            <button type="button" className="btn btn--ghost btn--small" onClick={reset}>
-              Cancel
-            </button>
-          </div>
-          <div className="access__row">
-            <input
-              className="input input--slim"
-              placeholder="what you call it (optional)"
-              value={draft.name}
-              onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            <span className="field__hint">
+              {directory
+                ? "Use the path on the backend. For Docker, this must be a folder mounted into the container."
+                : "Guaca keeps its own checkout on the backend. Your Mac’s existing checkout is unchanged."}
+            </span>
+          </label>
+          {!directory && (
+            <>
+              <label className="field">
+                <span className="field__label">Repository access</span>
+                <select
+                  className="input"
+                  aria-label="Repository access"
+                  disabled={githubAvailable === null || busy !== null}
+                  value={githubApp ? "github" : "token"}
+                  onChange={(event) => {
+                    setAccess(event.target.value as "github" | "token");
+                    setCloning({ ...cloning, credential: "" });
+                    setError(null);
+                  }}
+                >
+                  <option value="github" disabled={!githubAvailable || !githubRemote}>
+                    {githubAvailable
+                      ? "GitHub App connected to this host"
+                      : "GitHub App (not configured on this host)"}
+                  </option>
+                  <option value="token">Access token or existing Git credentials</option>
+                </select>
+                <span className="field__hint">
+                  {githubAvailable === null
+                    ? "Checking GitHub connection…"
+                    : githubApp
+                      ? "Uses this host’s GitHub App to clone and push. A guaca.bot account is not required. After adding the repository, sign in under Git access so commits and pull requests use your account."
+                      : "Private repositories need Git credentials. Your Guaca or coding-tool sign-in does not grant repository access. Public repositories need no token."}
+                </span>
+              </label>
+              {!githubApp && (
+                <>
+                  <label className="field">
+                    <span className="field__label">Access token</span>
+                    <input
+                      className="input"
+                      type="password"
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label="Access token"
+                      placeholder="Required for private HTTPS repositories without existing Git credentials"
+                      value={cloning.credential}
+                      onChange={(event) =>
+                        setCloning({ ...cloning, credential: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="field__label">Git username (if required)</span>
+                    <input
+                      className="input"
+                      aria-label="Git username"
+                      autoComplete="off"
+                      value={cloning.username}
+                      onChange={(event) => setCloning({ ...cloning, username: event.target.value })}
+                    />
+                  </label>
+                </>
+              )}
+            </>
+          )}
+          <div className="field">
+            <span className="field__label">Coding tool</span>
+            <HarnessChoice
+              chosen={draft.harness}
+              machine={machine}
+              disabled={busy !== null}
+              onChoose={(harness) => setDraft({ ...draft, harness })}
             />
-            <input
-              className="input input--slim"
-              placeholder="run ./scripts/ci.sh before you finish (optional)"
-              value={draft.note}
-              onChange={(event) => setDraft({ ...draft, note: event.target.value })}
-            />
           </div>
-          <HarnessChoice
-            chosen={draft.harness}
-            machine={machine}
-            disabled={busy !== null}
-            onChoose={(harness) => setDraft({ ...draft, harness })}
-          />
           <GateChoice
             chosen={draft.gate}
             harness={draft.harness}
@@ -571,11 +704,53 @@ export function RepositoryList({ groupId, crew }: Props) {
             disabled={busy !== null}
             onChoose={(gate) => setDraft({ ...draft, gate })}
           />
-          <p className="field__hint">
-            The full path to the directory, which has to be the root of a git repository. Git is the
-            undo: it is the reason an agent can be turned loose in there at all. The note is read by
-            every agent that has it, on every turn.
-          </p>
+          <details>
+            <summary>More options</summary>
+            <label className="field">
+              <span className="field__label">Display name</span>
+              <input
+                className="input"
+                placeholder="what you call it (optional)"
+                value={draft.name}
+                onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span className="field__label">Instructions for assigned agents</span>
+              <input
+                className="input"
+                placeholder="run ./scripts/ci.sh before you finish (optional)"
+                value={draft.note}
+                onChange={(event) => setDraft({ ...draft, note: event.target.value })}
+              />
+            </label>
+            {!directory && (
+              <GitAuthor author={author} disabled={busy !== null} onChange={setAuthor} />
+            )}
+          </details>
+          <div className="access__row">
+            <button
+              type="button"
+              className="btn btn--small btn--primary"
+              disabled={
+                busy !== null ||
+                (directory
+                  ? !draft.path.trim()
+                  : !cloning.remote.trim() || githubAvailable === null)
+              }
+              onClick={directory ? add : addClone}
+            >
+              {busy === "add" ? "Adding…" : "Link"}
+            </button>
+            <button
+              type="button"
+              className="btn btn--ghost btn--small"
+              disabled={busy !== null}
+              onClick={reset}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       ) : (
         <button type="button" className="btn btn--small" onClick={() => setAdding(true)}>

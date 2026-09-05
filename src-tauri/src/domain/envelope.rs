@@ -134,6 +134,8 @@ pub enum NoticeKind {
     GuardStop,
     /// An upstream inference call failed.
     UpstreamError,
+    /// The host restarted with accepted work still outstanding.
+    Interrupted,
     /// Lifecycle transition worth showing in the transcript.
     Lifecycle,
 }

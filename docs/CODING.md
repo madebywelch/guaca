@@ -664,3 +664,68 @@ operator's own plan.
 cargo test --manifest-path src-tauri/Cargo.toml --test coding
 cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
 ```
+
+## Codex runs through its official CLI
+
+`Harness::Codex` starts `codex app-server --listen stdio://` in the same
+prepared worktree as the other harnesses. Existing repositories keep their
+harness, assignments and gate. Codex owns model selection and authentication.
+On the backend, as the daemon's user, run `codex login --device-auth`. This
+sign-in is separate from Guaca's ChatGPT provider sign-in. The image pins the
+CLI version; its configuration, credentials and sessions live in the persistent
+home volume. The control contract is measured against Codex 0.153.3; the UI
+requires 0.153 or newer for steering and approvals.
+
+The runner initializes one thread, starts one turn, and records its id, tool
+activity, answer and failures. It does not turn token counts into a dollar
+cost. A stream ending before `turn/completed` is an interrupted job, even if
+it printed narration. Both output pipes are drained concurrently under the
+job's deadline. Completion kills and reaps the listening app-server before
+the runtime releases the worktree.
+
+A correction uses `turn/steer` with the active turn id. Guaca reports it sent
+only after Codex acknowledges that id. A completed turn rejects a late
+correction visibly; Guaca never silently starts another turn. Steering guides
+the model's next decision and does not undo a command already executed. Stop
+remains available while acknowledgment is pending. An unanswered control
+request stops the job after thirty seconds; partial changes may remain.
+
+**Ask me before pushing** selects Codex's `untrusted` approval policy and user
+reviewer, verified in the thread response before any work starts. Command
+approval callbacks use the same script inspection and operator decision as
+Claude's hooks and the `shell` tool. Each decision applies to that request;
+Guaca never grants a session exemption. The protocol keeps reading corrections
+while an approval waits. As with the existing gate, this covers ordinary shell
+commands, not confinement or arbitrary API calls. The CLI retains its own
+[configured command rules](https://developers.openai.com/codex/rules), so an operator's explicit allow rule can bypass its
+approval callback. Keep outward commands out of those allow rules when relying
+on this gate.
+
+The official Claude Code CLI can also run on an operator's own backend. Its
+local `claude auth login` and Codex's `codex login status` are CLI operations;
+Guaca offers setup instructions and reads only sign-in status, never credential
+files. No model call is needed to check either CLI. This does not introduce a
+Guaca Claude.ai login flow or authorize a managed service to route consumer
+subscriptions. See the provider's current terms before offering such a service.
+
+## A GitHub App authenticates both repository doors
+
+[GitHub App access](GITHUB.md) supplies repository-scoped, renewable credentials
+through Git's helper and a `gh` wrapper. Both coding harnesses and `shell` get
+the wrapper for a connected repository; personal-token and SSH repositories
+retain their existing configuration. The push gate is unchanged: authentication
+answers whether GitHub permits an operation, and the gate answers whether the
+operator allowed this job to perform it.
+
+
+## Commit attribution is independent of access
+
+The repository's Git identity supplies the human author and committer defaults
+for all harnesses. The remote clone form and Git access panel let the operator
+set that name and email. GitHub App authentication does not replace it with a
+bot identity. Missing backend identity requires operator configuration before
+committing; Guaca never guesses the installation owner's identity. See
+[GitHub access](GITHUB.md#commit-authorship) for contribution attribution and
+GitHub user sign-in, which sets commit attribution and opens pull requests under
+the user's account. Installation alone grants Git access; PR commands require
+that additional user authorization and never fall back to a bot.

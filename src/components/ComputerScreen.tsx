@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { screenUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { prefersReducedMotion } from "../lib/motion";
 import { useStore } from "../lib/store";
+import { hosted } from "../lib/transport";
 import { type AgentCard, type Computer, errorMessage } from "../lib/types";
 
 interface Props {
@@ -327,8 +329,10 @@ export function ComputerScreen({ agent }: Props) {
               // touching the connection.
               key={computer.sandboxId}
               ref={frame}
+              sandbox={hosted ? "allow-scripts" : undefined}
+              referrerPolicy="no-referrer"
               title={`${agent.name}'s computer`}
-              src={computer.vncUrl ?? ""}
+              src={computer.vncUrl ? screenUrl(computer.vncUrl) : ""}
             />
             {!full && (
               // Swallows clicks aimed at the desktop while it is only meant to

@@ -1,0 +1,44 @@
+# The daemon under systemd, for a box without a container runtime.
+#
+#   install -m 755 guacad /usr/local/bin/guacad
+#   mkdir -p /usr/share/guaca && cp -r dist /usr/share/guaca/web
+#   install -m 644 deploy/guacad.service /etc/systemd/system/
+#   systemctl enable --now guacad
+#   journalctl -u guacad | grep 'open this'
+#
+# The bind stays on loopback, which is the daemon's own default: a box is
+# reached through a tunnel on the same machine. Anything the operator wants to
+# override (GUACA_BIND, GUACA_TOKEN, GUAC_LOG) goes in /etc/guaca/guacad.env.
+
+[Unit]
+Description=Guaca workspace daemon
+Documentation=https://github.com/madebywelch/guaca/blob/main/docs/HOSTING.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/guacad
+Environment=GUACA_ROOT=/var/lib/guaca
+Environment=GUACA_WEB=/usr/share/guaca/web
+EnvironmentFile=-/etc/guaca/guacad.env
+# A user that exists only while the service runs, and one directory it may
+# write. The token file lands under it with mode 0600.
+DynamicUser=yes
+StateDirectory=guaca
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# The daemon finishes the requests already in flight on SIGTERM, which is
+# what a turn somebody paid for deserves. Thirty seconds is longer than any
+# single model call the runtime waits for.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -29,6 +29,7 @@ function seed(over: Partial<ReturnType<typeof useStore.getState>> = {}) {
         harness: "pi",
         gate: "open",
         bench: "own",
+        remote: null,
         createdAt: 0,
         updatedAt: 0,
       },
@@ -144,6 +145,32 @@ describe("CodingPanel", () => {
       (screen.getByLabelText("Send a correction to the running coding job") as HTMLInputElement)
         .value,
     ).toBe("stop after the tests");
+  });
+
+  it("waits for acknowledgment without blocking Stop", async () => {
+    seed({ building: { [AGENT]: REPO } });
+    let acknowledge!: () => void;
+    messageCodingJob.mockReturnValue(
+      new Promise<void>((resolve) => {
+        acknowledge = resolve;
+      }),
+    );
+    render(<CodingPanel agent={AGENT} />);
+    const box = screen.getByLabelText(
+      "Send a correction to the running coding job",
+    ) as HTMLInputElement;
+    fireEvent.change(box, { target: { value: "use staging" } });
+    fireEvent.click(screen.getByText("Send"));
+    expect(screen.getByText("Sending correction…")).toBeTruthy();
+    expect(screen.queryByText(/Sent\./)).toBeNull();
+    expect(box.value).toBe("use staging");
+    expect((screen.getByText("Stop") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByText("Stop"));
+    fireEvent.click(screen.getByText("Stop it"));
+    await waitFor(() => expect(stopCodingJob).toHaveBeenCalledWith(AGENT));
+    acknowledge();
+    expect(await screen.findByText(/Sent\./)).toBeTruthy();
+    expect(box.value).toBe("");
   });
 
   it("arms the stop before it fires it, and says what survives", async () => {

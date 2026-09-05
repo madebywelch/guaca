@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
+import { artifactUrl } from "../lib/files";
 import { api } from "../lib/ipc";
 import { type AgentId, errorMessage } from "../lib/types";
 
@@ -51,7 +52,7 @@ export function HtmlArtifact({ html, title }: { html: string; title: string }) {
     setFailed(null);
     api
       .frameArtifact(html)
-      .then((at) => live && setSrc(`http://127.0.0.1:${at.port}/${at.id}`))
+      .then((at) => live && setSrc(artifactUrl(at)))
       .catch((error) => live && setFailed(errorMessage(error)));
     return () => {
       live = false;

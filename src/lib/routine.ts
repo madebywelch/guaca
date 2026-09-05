@@ -61,7 +61,7 @@ export function eventFields(spec: TriggerSpec): { service: string; topic: string
  */
 export function webhookLine(address: WebhookAddress, service: string, topic: string): string {
   return [
-    `curl -X POST http://127.0.0.1:${address.port}/events/${service.trim()}/${topic.trim()} \\`,
+    `curl -X POST ${address.url ?? `http://127.0.0.1:${address.port}/events`}/${service.trim()}/${topic.trim()} \\`,
     `  -H 'Authorization: Bearer ${address.secret}' \\`,
     `  -d '{"any":"body"}'`,
   ].join("\n");

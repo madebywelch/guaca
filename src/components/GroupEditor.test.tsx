@@ -104,6 +104,7 @@ vi.mock("../lib/ipc", () => ({
     pluginCatalog: () => pluginCatalog(),
     groupRepositories: () => groupRepositories(),
     codingHarnesses: () => codingHarnesses(),
+    githubAppAvailable: async () => false,
     conversationFlow: (group: string, limit?: number) => conversationFlow(group, limit),
     usageForRuns: () => usageForRuns(),
   },
@@ -246,6 +247,40 @@ describe("who pays for a group's turns", () => {
     const draft = createGroup.mock.calls.at(-1)![0];
     expect(draft.inference?.provider).toBe("compatible");
     expect(draft.inference?.baseUrl).toBe("https://api.groq.com/openai/v1");
+  });
+
+  it("withholds the Claude plan and the machine-local presets on a server", () => {
+    // Withheld rather than hidden, for the reason the harness row is: a row
+    // that vanishes on a server is a pane that disagrees with the operator's
+    // laptop and explains nothing.
+    useStore.setState({
+      capabilities: {
+        localDirectories: false,
+        loopbackEndpoints: false,
+        claudeProvider: false,
+        claudeCodeHarness: false,
+        localFiles: false,
+      },
+    });
+    try {
+      open();
+      pane("Provider");
+      expect(screen.getByText("Not on a server")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Use the Claude subscription" })).toBeNull();
+      expect(button(/LM Studio/).disabled).toBe(true);
+      expect(button(/LM Studio/).textContent).toContain("Not from a server");
+      expect(button(/Groq/).disabled).toBe(false);
+    } finally {
+      useStore.setState({
+        capabilities: {
+          localDirectories: true,
+          loopbackEndpoints: true,
+          claudeProvider: true,
+          claudeCodeHarness: true,
+          localFiles: true,
+        },
+      });
+    }
   });
 
   it("can spend the subscription while the app pays with a key", async () => {

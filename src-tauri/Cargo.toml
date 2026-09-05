@@ -4,13 +4,9 @@ version = "0.1.0"
 description = "Guac: a local, no-auth chat surface where you and your agents talk to each other."
 authors = ["madebywelch"]
 edition = "2021"
-# The floor the dependency tree already imposes, written down rather than
-# guessed at. Several crates in the lockfile pin 1.88 themselves and a large
-# number more are edition 2024, so an out-of-date toolchain gives up partway
-# through a download with an error about somebody else's crate. Declaring it
-# here moves that failure to the first line cargo reads, and keeps
-# `cargo update` inside the range that still builds.
-rust-version = "1.88"
+# Dependencies require 1.88; the workspace's process lock uses File::try_lock,
+# stabilized in 1.89. Declare the actual floor before Cargo downloads anything.
+rust-version = "1.89"
 
 [lib]
 name = "guac_lib"
@@ -22,8 +18,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # `tray-icon` is the menu bar presence. The image is decoded by
 # `include_image!` at compile time, so no runtime image feature goes with it.
-tauri = { version = "2", features = ["tray-icon"] }
-tauri-plugin-opener = "2"
+tauri = { version = "2", features = ["tray-icon"], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,6 +35,9 @@ tokio = { version = "1", features = [
     "io-util",
     "fs",
     "process",
+    # The daemon stops on a signal rather than when a window closes, so it has
+    # to be told: a container runtime sends SIGTERM and then loses patience.
+    "signal",
 ] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
@@ -65,6 +64,19 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = [
   "rustls-tls-webpki-roots",
 ] }
 
+# The daemon's transport. Already a dev-dependency, where the test suites use
+# it to script the servers this app dials; here it is the server this app *is*.
+# `ws` because the event channel is a socket: a runtime pushes and a client
+# never polls, which is what `EventSink` has always been.
+axum = { version = "0.7", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "cors", "trace"], optional = true }
+# The computer's screen reaches a browser through the daemon, and noVNC's
+# transport is a WebSocket the daemon has to hand through untouched. axum
+# answers the handshake; taking the connection over afterward is hyper's
+# `upgrade`, and the adapter is what makes the taken-over socket a tokio one.
+hyper = { version = "1", optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+
 rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
@@ -78,10 +90,16 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 uuid = { version = "1", features = ["v4", "serde"] }
 thiserror = "2"
 sha2 = "0.10"
+base64 = "0.22"
 parking_lot = "0.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tauri-plugin-notification = "2.3.3"
+tauri-plugin-notification = { version = "2.3.3", optional = true }
+
+[[test]]
+name = "server"
+path = "tests/server.rs"
+required-features = ["server"]
 
 [dev-dependencies]
 tempfile = "3"
@@ -89,8 +107,34 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time"
 axum = "0.7"
 
 [features]
-default = ["custom-protocol"]
-custom-protocol = ["tauri/custom-protocol"]
+default = ["desktop"]
+
+# The desktop app: a window, a menu bar, and the Tauri IPC transport.
+#
+# Optional rather than assumed, and the reason is not binary size. `app.rs`
+# expands `tauri::generate_context!`, which reads `dist/` at compile time, so
+# with Tauri unconditional the *daemon* cannot be built without first building
+# a frontend it will never serve from disk. A server that needs a webview
+# bundle to compile is a server nobody can build in CI.
+desktop = [
+  "dep:tauri",
+  "dep:tauri-plugin-opener",
+  "dep:tauri-plugin-notification",
+  "tauri/custom-protocol",
+]
+
+# The daemon: the same runtime, reached over HTTP and a socket.
+server = ["dep:axum", "dep:tower-http", "dep:hyper", "dep:hyper-util"]
+
+[[bin]]
+name = "guac"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "guacad"
+path = "src/bin/guacad.rs"
+required-features = ["server"]
 
 [profile.release]
 codegen-units = 1
