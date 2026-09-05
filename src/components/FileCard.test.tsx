@@ -72,7 +72,7 @@ describe("FileCard", () => {
 
     const drawn = screen.getByAltText("shot.png") as HTMLImageElement;
     const stored = file("shot.png", "image/png");
-    expect(drawn.src).toContain(encodeURIComponent(`${stored.digest}/shot.png`));
+    expect(drawn.src).toContain(`${encodeURIComponent(stored.digest)}/shot.png`);
     // Three hundred messages open with a channel and the operator is looking
     // at the last few.
     expect(drawn.getAttribute("loading")).toBe("lazy");
@@ -122,7 +122,7 @@ describe("FileCard", () => {
     // would eat its punctuation.
     expect(container.querySelector(".file__text")).toBeTruthy();
     const asked = fetched.mock.calls[0] ?? [];
-    expect(asked[0]).toContain("guacfile:");
+    expect(asked[0]).toContain("/v1/file/");
     expect(asked[1].headers.Range).toBe("bytes=0-2047");
   });
 

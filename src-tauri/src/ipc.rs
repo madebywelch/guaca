@@ -1,32 +1,7 @@
-//! The command surface, written once and served over two transports.
-//!
-//! Every command in [`crate::commands`] takes `&AppState` and returns a
-//! [`Reply`]. This module is the list of them, and the three things that list
-//! has to produce:
-//!
-//! - the `#[tauri::command]` wrappers the desktop app registers,
-//! - [`dispatch`], which is the same call arriving as JSON over HTTP,
-//! - [`NAMES`], which is what `ipc.contract.test.ts` compares against
-//!   `src/lib/ipc.ts`.
-//!
-//! ## Why a macro rather than three lists
-//!
-//! Because three lists drift, and the drift is invisible until somebody clicks
-//! something. A command reachable from the desktop and not from a server is a
-//! panel that works at your desk and fails on your box, with nothing on screen
-//! saying which half is missing. Written once, that failure cannot be
-//! expressed: adding a line here adds it everywhere or compiles nowhere.
-//!
-//! The contract test is still the gate, because it is the only thing that can
-//! see the fourth list, which is in TypeScript.
-//!
-//! ## Two shapes, not two protocols
-//!
-//! Tauri already models a command as "a name, some named arguments, and a
-//! result or a structured error". That is also what an HTTP POST is, so
-//! [`dispatch`] is a translation rather than a second API: same names, same
-//! camelCase argument keys, same [`CommandError`] on the way back. Nothing
-//! above this line learns which one it arrived on.
+//! The backend command surface. Browsers and native clients both use its HTTP
+//! dispatcher. Native-only host management lives in app.rs and holds no runtime.
+//! The macro keeps command names, argument shapes and responses in one place;
+//! ipc.contract.test.ts checks the frontend against this list.
 
 use serde::Serialize;
 use serde_json::Value;
@@ -140,32 +115,6 @@ pub struct Answered {
 
 macro_rules! surface {
     ($( $name:ident ( $( $arg:ident : $ty:ty ),* $(,)? ) -> $ret:ty ),* $(,)?) => {
-        /// The desktop half: the same commands, wearing Tauri's attribute.
-        ///
-        /// Absent from a daemon build, which is why the `surface!` list rather
-        /// than this module is what the contract test reads: the list is the
-        /// same in both builds and this module is not.
-        ///
-        /// Thin by construction. A wrapper that grew a line of its own would be
-        /// behavior the server transport does not have, which is the one thing
-        /// this module exists to make impossible.
-        #[cfg(feature = "desktop")]
-        pub mod desktop {
-            use tauri::State;
-
-            use super::*;
-
-            $(
-                #[tauri::command]
-                pub async fn $name(
-                    state: State<'_, AppState>,
-                    $( $arg: $ty, )*
-                ) -> crate::commands::Reply<$ret> {
-                    commands::$name(&state, $( $arg, )*).await
-                }
-            )*
-        }
-
         /// The server half: a name, some JSON arguments, and an answer.
         pub async fn dispatch(state: &AppState, name: &str, args: Value) -> Result<Value, Refused> {
             // A call with no arguments arrives as `null` from some clients and
@@ -211,6 +160,9 @@ macro_rules! surface {
 }
 
 surface! {
+    export_group(id: GroupId) -> crate::transfer::Archive,
+    import_group(archive: crate::transfer::Archive, name: String) -> Group,
+    group_reconnect(id: GroupId) -> Vec<crate::transfer::Reconnect>,
     begin_repository_github_signin(id: RepositoryId) -> crate::repo::github::UserSignin,
     poll_repository_github_signin(id: RepositoryId, flow_id: String) -> crate::repo::github::UserStatus,
     repository_github_user(id: RepositoryId) -> crate::repo::github::UserStatus,

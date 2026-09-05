@@ -98,7 +98,7 @@ describe("a window pointed at a box", () => {
     try {
       const boxed = await import("./transport");
       expect(boxed.attached()).toBeNull();
-      expect(boxed.hosted).toBe(false);
+      expect(boxed.hosted).toBe(true);
     } finally {
       delete (globalThis as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
       window.localStorage.removeItem("guaca.workspace.remote");

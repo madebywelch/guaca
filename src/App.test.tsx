@@ -80,7 +80,10 @@ vi.mock("./lib/ipc", () => ({
       throw new Error("not used");
     },
   },
-  onRuntimeEvent: vi.fn(async () => () => {}),
+  onRuntimeEvent: vi.fn(async (callback) => {
+    callback({ type: "liveSnapshot", activity: await agentActivity(), streams: {}, building: {} });
+    return () => {};
+  }),
   onRevealRequest: async () => () => {},
   onMenubarAsk: async () => () => {},
   onFileDrop: async () => () => {},

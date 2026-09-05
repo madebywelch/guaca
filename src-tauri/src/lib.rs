@@ -13,6 +13,7 @@ pub mod domain;
 pub mod e2b;
 pub mod eval;
 pub mod files;
+pub mod host;
 pub mod ipc;
 pub mod kernel;
 pub mod llm;
@@ -30,6 +31,7 @@ pub mod server;
 pub mod shell;
 pub mod subscription;
 pub mod trajectory;
+pub mod transfer;
 /// The other one.
 #[cfg(feature = "desktop")]
 pub mod tray;

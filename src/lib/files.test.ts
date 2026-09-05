@@ -59,7 +59,7 @@ describe("fileUrl", () => {
     // under different names are one set of bytes at one address.
     const stored = file("brief.pdf", "application/pdf");
     const url = fileUrl(stored);
-    expect(url).toContain("guacfile:");
+    expect(url).toContain("/v1/file/");
     expect(decodeURIComponent(url)).toContain(`${stored.digest}/brief.pdf`);
   });
 
@@ -154,7 +154,9 @@ describe("where a frame points", () => {
   // own suite, which takes the bridge off first.
   it("frames a page from the artifact origin on a desktop", async () => {
     const { artifactUrl } = await import("./files");
-    expect(artifactUrl({ port: 4242, id: "abc" })).toBe("http://127.0.0.1:4242/abc");
+    expect(artifactUrl({ port: 4242, id: "abc" })).toBe(
+      `${window.location.origin}/v1/artifact/abc?token=`,
+    );
   });
 
   it("leaves an absolute screen address alone and resolves a relative one", async () => {

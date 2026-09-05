@@ -29,7 +29,6 @@ import { LIMITS } from "../lib/limits";
 import { NOTIFY_KINDS, type NotifyKind, type SurfaceMode, UI_SCALES } from "../lib/prefs";
 import { type Provider as Preset, planLabel } from "../lib/providers";
 import { useStore } from "../lib/store";
-import { attached, hosted, probe, restart, setRemote } from "../lib/transport";
 import {
   type AccountConnectors,
   type AccountStatus,
@@ -40,6 +39,8 @@ import {
   type SettingsPatch,
   type SubscriptionStatus,
 } from "../lib/types";
+import { GroupTransfer, LegacyGroups } from "./GroupTransfer";
+import { HostChoice } from "./HostSetup";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 
 interface Props {
@@ -511,8 +512,8 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
         <div className="settings__head">
           <h2 className="dialog__title">Settings</h2>
           <p className="dialog__lede" style={{ margin: 0 }}>
-            Guaca runs entirely on this machine. The only thing it sends anywhere is what you and
-            your agents type, to the endpoint you choose.
+            Your host runs your agents. Choose where they work, how they connect, and how Guaca
+            appears on this device.
           </p>
         </div>
 
@@ -1315,125 +1316,11 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
  * be half-switched.
  */
 function WorkspacePane() {
-  const box = attached();
-  const [origin, setOrigin] = useState(box?.origin ?? "");
-  const [token, setToken] = useState("");
-  const [checking, setChecking] = useState(false);
-  const [status, setStatus] = useState<{ tone: "error" | "ok"; text: string } | null>(null);
-
-  // A browser is already in a workspace's own page. There is nothing to point
-  // anywhere: the desktop app is where that choice lives.
-  if (hosted && !box) {
-    return (
-      <div className="field">
-        <span className="field__label">This workspace</span>
-        <span className="field__hint">
-          You are reading this workspace in a browser, at its own address. To show it in the desktop
-          app instead, open the app, go to Settings, Workspace, and give it this address and the
-          workspace token.
-        </span>
-      </div>
-    );
-  }
-
-  const connect = async () => {
-    const candidate = { origin: origin.trim().replace(/\/+$/, ""), token: token.trim() };
-    if (!candidate.origin || !candidate.token) return;
-    setChecking(true);
-    setStatus(null);
-    try {
-      const found = await probe(candidate);
-      setRemote(candidate);
-      setStatus({
-        tone: "ok",
-        text: `Connected to ${candidate.origin}${found.build ? ` (build ${found.build})` : ""}. Reloading.`,
-      });
-      restart();
-    } catch (error) {
-      setStatus({ tone: "error", text: errorMessage(error) });
-    } finally {
-      setChecking(false);
-    }
-  };
-
-  const disconnect = () => {
-    setRemote(null);
-    restart();
-  };
-
   return (
-    <>
-      <p className="settings__lede">
-        {box
-          ? `This window is showing the workspace at ${box.origin}. The agents on this machine keep working underneath, out of sight, until you come back to them.`
-          : "This window is showing this machine's own workspace. Point it at a box running guacad and it shows that one instead, and the menu bar follows."}
-      </p>
-
-      {box && (
-        <div className="preset preset--plain" aria-current="true">
-          <span className="preset__text">
-            <span className="preset__name">{box.origin}</span>
-            <span className="preset__url">
-              A box, reached over HTTP. Version {buildLabel().replace("Version ", "")} here.
-            </span>
-          </span>
-          <button type="button" className="btn btn--small" onClick={disconnect}>
-            Show this machine
-          </button>
-        </div>
-      )}
-
-      <label className="field" style={{ marginTop: "1.1rem" }}>
-        <span className="field__label">Address of a box</span>
-        <input
-          className="input input--mono"
-          placeholder="https://guaca.example.com"
-          value={origin}
-          disabled={checking}
-          onChange={(event) => setOrigin(event.target.value)}
-        />
-        <span className="field__hint">
-          Where a browser reaches it: the tunnel's address, or <code>http://127.0.0.1:8787</code>{" "}
-          for a container on this machine.
-        </span>
-      </label>
-
-      <label className="field">
-        <span className="field__label">Workspace token</span>
-        <input
-          className="input input--mono"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          value={token}
-          disabled={checking}
-          onChange={(event) => setToken(event.target.value)}
-        />
-        <span className="field__hint">
-          The box printed one when it started. It is in its logs and in the <code>token</code> file
-          beside its settings.
-        </span>
-      </label>
-
-      {status && (
-        <div
-          className={status.tone === "error" ? "banner banner--error" : "banner banner--ok"}
-          role="status"
-        >
-          <span>{status.text}</span>
-        </div>
-      )}
-
-      <div className="access__row" style={{ marginTop: "0.8rem" }}>
-        <button
-          type="button"
-          className="btn btn--small btn--primary"
-          disabled={checking || !origin.trim() || !token.trim()}
-          onClick={() => void connect()}
-        >
-          {checking ? "Checking…" : box ? "Point at a different box" : "Show that box"}
-        </button>
-      </div>
-    </>
+    <div className="workspace-settings">
+      <HostChoice />
+      <GroupTransfer />
+      <LegacyGroups />
+    </div>
   );
 }

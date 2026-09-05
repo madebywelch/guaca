@@ -157,7 +157,9 @@ describe("a page in a message", () => {
       const frame = container.querySelector("iframe");
       if (!frame) throw new Error("no frame yet");
       expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
-      expect(frame.getAttribute("src")).toBe(`http://127.0.0.1:9999/${"a".repeat(64)}`);
+      expect(frame.getAttribute("src")).toBe(
+        `${window.location.origin}/v1/artifact/${"a".repeat(64)}?token=`,
+      );
     });
   });
 

@@ -1,33 +1,23 @@
 # Hosting
 
-Guaca on a machine that stays awake. The same runtime, reached over HTTP and a
-socket instead of over Tauri's IPC, so a crew keeps working with the operator's
-laptop shut. `src-tauri/src/server/mod.rs` is the host, `src-tauri/src/bin/guacad.rs`
-starts it, `src/lib/transport.ts` is the other end, and `domain/deployment.rs`
-is the line between what a box can do and what only a desk can.
+Guaca is a native desktop client connected to a `guacad` host. The host runs
+agents, schedules, coding jobs and plugins. It can run in Docker on the same
+Mac or on an always-on remote machine. Closing the app stops no backend work.
+A container on a sleeping laptop still sleeps; unattended work needs a host
+that stays awake.
 
 ## The runtime runs in two hosts, and neither knows which
 
-The runtime never knew it was inside a window. `docs/ARCHITECTURE.md` opens
-with the reason: agents are `tokio` tasks, the webview is a view over them, and
-the API key never crosses into it. What did know was `commands.rs`, which took
-Tauri's `State` in every signature and wore `#[tauri::command]` on every
-function. Hosting is the act of taking that knowledge out.
+The native client no longer constructs `Runtime`, opens the live database or
+starts schedulers. `app.rs` wires the window, notifications, menu bar, local
+file forwarding, Docker setup and read-only exports from the previous desktop
+workspace. `server/mod.rs` and `boot.rs` own runtime startup.
 
-So `commands.rs` takes `&AppState` and nothing else, `boot.rs` opens a
-workspace for whichever host asks, and there are two hosts over the top:
-`app.rs`, which puts the runtime behind a window, and `server/mod.rs`, which
-puts it behind a socket. Everything between them is one library. That is the
-design rather than a coincidence, and the whole suite is the evidence: every
-Rust suite and every frontend test passed unmodified when the second host was
-added, because nothing they exercise learned which host it was in.
-
-Tauri is an optional feature of the crate for a reason that is mechanical
-rather than tidy. `app.rs` expands `tauri::generate_context!`, which reads
-`dist/` at compile time, so a daemon that needed the desktop feature could not
-be built in a container that has no frontend. `--no-default-features
---features server` is what `ci.sh` builds and tests the daemon with, and it is
-the only thing that does: every other target is compiled with the desktop on.
+The desktop and browser use the same HTTP commands and WebSocket events.
+Tauri remains an optional Cargo feature. Build the backend with
+`--no-default-features --features server`; it requires no native webview.
+`Deployment::Desktop` remains for library compatibility and tests, not as an
+alternative startup mode in the downloadable application.
 
 ## Two, not three
 
@@ -46,38 +36,21 @@ to undo.
 
 ## One list, three readers
 
-The command surface is 102 names, and three things have to agree on it: the
-Tauri wrappers, the HTTP dispatch and the list `ipc.contract.test.ts` compares
-against the TypeScript side. Three hand-kept lists drift, and the drift is a
-panel that works at a desk and fails on a box with nothing on screen saying
-which half is gone.
+`ipc.rs` lists the backend commands, generates their HTTP dispatcher and
+exports the names checked by `ipc.contract.test.ts`. Both desktop and browser
+call that surface. Native commands are a separate, small list in `app.rs` for
+operations on the client machine. No Tauri wrapper holds `AppState`.
 
-`ipc.rs` writes the list once. The `surface!` macro takes each name with its
-arguments and its declared return type, and generates all three readers from
-it. The dispatch annotates the return type, so the list cannot claim a shape
-the implementation does not have: a command whose signature changes fails to
-compile in the macro rather than at runtime in a browser. That is what caught
-the rebase onto per-agent worktrees, which had added an argument to
-`update_repository` and renamed two others.
+The contract suite compares frontend calls to both lists and prevents runtime
+construction from returning to desktop startup.
 
 ## Opening a workspace is one act
 
-`boot.rs` opens the database, expires the approvals nothing can answer any
-more, loads the settings, builds the runtime, starts every agent, the
-scheduler, the sign-in sweep and the compost, and brings up the viewer and the
-artifact origin. Both hosts call it and neither has a copy of its own.
-
-Two copies would drift in the worst way there is: a loop started in one host
-and forgotten in the other is a workspace where routines never fire and
-nothing reports it. On a server that is a crew that has been silent for a week
-before anybody notices, because nobody was at the desk to notice.
-
-The permission expiry deserves a sentence. A parked turn is answered by a task
-holding the line for it, and nothing holds a line across a restart, so a
-request still pending at boot is waiting on an agent that no longer exists and
-is closed rather than left drawing live buttons. On a desktop that is the rare
-case. On a server it stops being rare: a container is recycled, a host is
-drained, a deploy happens, and every one of those lands here.
+`boot.rs` opens the database, expires stale approvals, loads settings and
+starts the runtime, scheduler, sign-in sweep, compost and viewers. Only the
+backend invokes it. Opening, closing or switching desktop windows does not
+start another copy of these loops. Pending turns cannot survive a backend
+restart; recovery notices explain interrupted work without replaying it.
 
 ## Resources belong to the backend
 
@@ -151,27 +124,16 @@ is inside the process asking, and there is no token to have.
 
 ## One bundle, and the host is read at runtime
 
-The daemon serves the same `dist/` the desktop app embeds, and which host the
-page is in is read from `window` when the module loads: Tauri puts
-`__TAURI_INTERNALS__` there before any of this code runs, and its absence means
-a browser, which means a daemon on the other end of the origin the page came
-from. A build-time flag would mean two bundles, and the second would be the
-one nobody runs the suite against.
+The daemon serves the same frontend bundle that Tauri embeds. `HostSetup`
+runs before the workspace mounts. A saved local connection starts the managed
+Docker container and retrieves its token automatically; a saved remote
+connection is probed before the UI opens. Failure returns to host setup.
 
-The shapes are the same because Tauri's IPC already was "a name, some named
-arguments, and a value or a structured error" plus one event channel. Those
-are a POST and a WebSocket. Nothing above `ipc::dispatch` learns which
-arrived, and `ipc.contract.test.ts` fails the build if the two transports ever
-answer to different sets of names.
-
-The socket reconnects, with backoff to a ceiling, because a box is reached
-across a network and a network drops. Reconnecting is not resynchronizing:
-events missed while it was down are gone, exactly as they are while the
-desktop app is closed, and the answer is the same in both. What the UI draws
-it refetches, which is what `onReconnect` is for. Losing events is also the
-correct failure on the other end: `SocketSink` drops what no client is
-attached to read, because a runtime that blocked on a slow socket would turn
-one bad connection into a crew that stops thinking.
+`Settings → Workspace` exposes the same On this Mac / Remote host choices.
+Changing hosts probes the new connection, saves it and reloads the UI. Groups
+stay on their own host; switching is not migration. Remote addresses require
+HTTPS, except loopback connections. Credentials are never sent to a nonlocal
+plain HTTP address entered through this form.
 
 ## A browser hands a document over as bytes
 
@@ -240,36 +202,14 @@ the other side of that wire.
 
 ## The desktop app can show a box, and the menu bar follows
 
-The desktop app is a window over exactly one workspace at a time. Pointed at
-a box from Settings, Workspace, it becomes a client of it over the same HTTP
-a browser uses: `transport.ts` reads the box's address and token from
-storage once, at load, and every call and the event socket go there. Which
-host the page is in was decided at import time on purpose, so a change is a
-reload rather than a state, and nothing can be half-switched. The address is
-probed before it is stored: `/health` for whether it is a Guaca workspace and
-which build, `capabilities` for whether the token opens it.
+The desktop shows exactly one host at a time. Its menu bar reads the presence
+fed by the connected frontend, and sends actions back through that connection.
+It has no local runtime to fall back to. Closing the window hides it; quitting
+the app ends the client and leaves the host running.
 
-This machine's runtime keeps running underneath, and its crew keeps working,
-exactly as it does with the window closed. The pane says so. It is not a
-footgun to be designed away: a laptop's crew working while the operator
-looks at a box's is the same arrangement as a laptop's crew working while the
-operator looks at their email.
-
-The strip follows the window. `tray.rs` reads this machine's runtime, which
-is the wrong runtime while the window shows a box, so the window hands the
-tray the box's presence instead: `presenceOf` projects the store into the
-same `Presence` Rust reads locally, coalesced and only when it would draw
-differently, and `report_presence` puts it on the tray. A click on a row
-drawn that way belongs to the box, and the window is what holds a connection
-to it, so the tray sends the click back down `guac://menubar` and the window
-does what the row said. A window showing this machine again tells the tray
-so once at boot, because the process outlives the page and the last page may
-have left it fed.
-
-The webview's content policy allows `https:` and `wss:` for calls and files,
-and loopback `http:` for a container on this machine. Scripts are still
-`'self'` only; what this widens is where the page may fetch from, which is
-what a client of a box is.
+The webview policy admits HTTPS/WSS and loopback HTTP/WS for Docker. Scripts
+remain restricted to the bundled application. Host setup and Docker errors
+appear before any workspace-dependent screen mounts.
 
 ## A repository arrives on a box as a clone of a remote
 
@@ -568,59 +508,57 @@ and a real E2B desktop remain separate integration checks requiring accounts.
 
 ## Moving an existing workspace
 
-Stop the original backend before taking a backup. Copy its data directory
-(the database together with any SQLite WAL files, attachments, memories and
-worktrees) into the new root's `data/`, and its configuration directory into
-`config/`. Keep an untouched backup: an older executable cannot open a database
-migrated by a newer one. For Docker, restore that root into the named volume
-and make it writable by UID 1000 before starting the service.
+Use **Import / export** in a group’s settings to export that group. Import is
+also available under **Settings → Workspace**. The desktop can list and export
+groups left by the previous native version without starting those agents or
+migrating the old database. Quit the old app before exporting so memory files
+and repository work stop changing while the snapshot is taken.
 
-Repository paths name the old machine until their directories are mounted at
-the same paths or linked again on the backend. Hosted provider credentials
-must be configured for the new environment; moving Guaca's files does not move
-the desktop keychain or a coding tool's sign-in. Keep the original workspace
-stopped after migration so its schedules do not run alongside the copy. The
-process lock prevents two hosts sharing one directory, not two independent
-copies. A browser connected to the new daemon starts no local backend.
+The versioned `.guaca.json` format includes the group’s nonsecret model and
+limit settings, agents, instructions, memory, transcripts, attachments, working
+notes, usage history, calendar entries, routines and firing history. Database
+reads use one transaction. Files are checked by their SHA-256 content address.
+The current limits are 64 MB per archive and 32 MB of attachment bytes.
 
-The Git integration suite (`tests/repository_auth.rs`) runs a local authenticated
-smart-HTTP server and exercises clone, pull, a real push from a linked worktree,
-credential rotation, revocation and repository-path scoping. It uses dummy
-credentials and no external Git service. Claude tests remain offline unless
-explicitly selected. An optional live Codex contract test pins a small model:
+Imports create a new group and new IDs. Routines arrive paused. Running jobs,
+pending approvals, remote computers, browser sessions, repository directories,
+API keys and stored sign-in credentials are not copied. Repository/harness
+settings and service names remain in a reconnection checklist under the
+imported group’s Import / export pane. Relink repositories, assign engineers,
+connect plugins and configure providers before resuming work. Never resume the
+same schedule in both copies unless duplicate execution is intended.
 
-```sh
-cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server --test codex_live -- --ignored
-```
-
-It uses `gpt-5.4-mini` at low reasoning in a disposable repository and never
-uses the operator's configured default model. It steers an active turn, checks
-and commits the revised file, then denies a push to a disposable local bare
-repository and verifies that no remote ref changed. No external Git service
-is contacted.
-
+Exports contain conversation content and memories, which may themselves hold
+private information. Native exports are saved to Downloads with mode 0600.
+The archive is not encrypted. Import validates its format, field allowlists,
+identifiers and group boundaries before inserting. A failed import rolls back
+the database and removes new memories; already installed content-addressed
+attachment bytes may remain unreferenced. No import executes code or contacts
+a service. Raw volume backup remains the operator’s disaster-recovery option,
+not the migration flow in the app.
 
 ## Installing after the hosting changes
 
-`./scripts/install.sh` still builds the macOS Tauri application, installs
-`/Applications/Guaca.app`, and preserves its existing settings and workspace.
-It fast-forwards the currently checked-out branch from origin when possible;
-it does not switch branches. `--no-pull` builds the checkout as it stands.
-`--launch` opens the installed application. The script neither starts Docker
-nor migrates the desktop workspace into a container.
+`./scripts/install.sh` builds and installs the native macOS application. It
+fast-forwards the current branch when possible; `--no-pull` uses the checkout
+as it stands. It preserves the original workspace. When Docker is ready, it
+also builds a backend image tagged with the source commit and embeds that
+image reference in the app. It does not start a backend during installation.
+Without Docker, installation still produces a client for remote hosts.
 
-A fresh desktop installation runs its Rust backend locally. A desktop already
-configured to connect to a remote workspace keeps that preference. The native
-process still starts its embedded local runtime; selecting a remote view does
-not stop that runtime. Use the web client when moving the same workspace off
-the laptop so the original copy can remain stopped. In Settings,
-the operator can connect the desktop client to a separately running backend.
-The backend may be a container on the same computer or an always-on VPS, and
-its web client can also be opened directly in a browser. Starting that backend
-is explicit: `docker compose up -d --build`. Its named volume is a separate
-workspace until the operator follows the migration procedure above. A laptop
-container still sleeps with the laptop; keeping jobs running requires an
-always-on machine.
+On first launch choose **On this Mac** or **Remote host**. Local setup detects
+Docker and offers installation, Open Docker and retry actions. Guaca creates
+an unprivileged container, binds a free loopback port, generates an access key
+and connects without exposing the key. The named volume survives app and
+container restarts. Existing containers are reused rather than silently
+replaced while jobs are running. Preview bundle IDs use separate containers
+and volumes. A remote Docker context is refused for On this Mac.
+
+For downloadable releases, `GUACA_BACKEND_IMAGE` must name the published image
+for that build, ideally by digest. The fallback is the versioned GHCR image;
+that image must be published and publicly pullable before releasing the app.
+Source development can override it with an already built local image. App and
+backend publishing are separate from merging this branch.
 
 ## Upgrading databases from the hosting branch
 

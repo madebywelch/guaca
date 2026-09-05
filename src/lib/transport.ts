@@ -1,38 +1,9 @@
-/**
- * How the frontend reaches the runtime, which is not always the same place.
- *
- * Guaca runs in two hosts. In the desktop app the runtime is in the window's
- * own process and Tauri carries a call; on a server it is a daemon on a box
- * and the same call is an HTTP POST, with the event channel a WebSocket. The
- * shapes are identical because Tauri's IPC is already "a name, some named
- * arguments, and a value or a structured error", which is what a POST is.
- *
- * ## One bundle, both hosts
- *
- * Which host this is, is decided at *runtime* rather than at build time, and
- * that is load-bearing rather than clever. The daemon serves the same `dist/`
- * the desktop app embeds, so there is one bundle to build, one to test and one
- * to ship. A build-time flag would mean two, and the second would be the one
- * nobody runs the suite against.
- *
- * The detection is Tauri's own marker on `window`. Absent means a browser,
- * which means a daemon is on the other end of the origin this page was served
- * from.
- *
- * ## The token
- *
- * A hosted workspace holds inference keys, plugin refresh tokens and an
- * operator's transcripts, so every call carries the workspace's bearer token
- * and there is no anonymous mode. It lives in `localStorage` because it has to
- * survive a reload and because a cookie would be sent by any page that could
- * reach the origin. The desktop app has no token and needs none: the runtime is
- * inside the process asking.
- */
+/** One backend transport for browsers and the native desktop client. */
 
 import type { UiEvent } from "./types";
 
 /** Tauri v2 puts this on `window` before any of our code runs. */
-const IN_A_WINDOW = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+export const desktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 /**
  * A box the desktop app is showing instead of its own workspace.
@@ -64,9 +35,9 @@ function readRemote(): Remote | null {
   }
 }
 
-const ATTACHED: Remote | null = IN_A_WINDOW ? readRemote() : null;
+let ATTACHED: Remote | null = desktop ? readRemote() : null;
 
-/** The box this window is showing, or null for this machine's own workspace. */
+/** The host this window is showing, or null before desktop setup. */
 export function attached(): Remote | null {
   return ATTACHED;
 }
@@ -77,6 +48,11 @@ export function attached(): Remote | null {
  * is was decided at import time, on purpose, so there is nothing to update in
  * place and nothing that can be half-updated.
  */
+export function activateRemote(remote: Remote): void {
+  ATTACHED = remote;
+  setRemote(remote);
+}
+
 export function setRemote(remote: Remote | null): void {
   try {
     if (remote) window.localStorage.setItem(REMOTE_KEY, JSON.stringify(remote));
@@ -92,10 +68,9 @@ export function restart(): void {
 }
 
 /** Whether the runtime is somewhere other than this process. */
-export const hosted = !IN_A_WINDOW || ATTACHED !== null;
+export const hosted = true;
 
 /** Whether calls go over Tauri's own bridge, to the runtime in this process. */
-const OVER_THE_BRIDGE = IN_A_WINDOW && ATTACHED === null;
 
 const TOKEN_KEY = "guaca.workspace.token";
 
@@ -192,7 +167,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
   let health: Response;
   let answer: Response;
   try {
-    health = await fetch(`${base}/health`);
+    health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(15000) });
     answer = await fetch(`${base}/v1/call`, {
       method: "POST",
       headers: {
@@ -200,6 +175,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
         authorization: `Bearer ${candidate.token}`,
       },
       body: JSON.stringify({ name: "capabilities", args: {} }),
+      signal: AbortSignal.timeout(15000),
     });
   } catch (cause) {
     throw {
@@ -226,7 +202,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
 }
 
 /**
- * Calls a command on the runtime in this process, whatever the window shows.
+ * Calls a native client command, whatever host the window shows.
  *
  * For the handful of things that are about this machine rather than the
  * workspace: forwarding a dropped file's bytes, feeding the menu bar. On a
@@ -234,7 +210,7 @@ export async function probe(candidate: Remote): Promise<{ build: string; capabil
  * better than a fetch to nowhere.
  */
 export async function invokeLocal<T>(name: string, args?: Record<string, unknown>): Promise<T> {
-  if (!IN_A_WINDOW) {
+  if (!desktop) {
     throw {
       kind: "config",
       message: `${name} is a desktop command, and this page is not the desktop app`,
@@ -301,11 +277,6 @@ export async function upload<T>(file: File): Promise<T> {
  * duplicate name differently from a disk failure.
  */
 export async function invoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
-  if (OVER_THE_BRIDGE) {
-    const core = await import("@tauri-apps/api/core");
-    return core.invoke<T>(name, args);
-  }
-
   let response: Response;
   try {
     response = await fetch(`${origin()}/v1/call`, {
@@ -357,15 +328,10 @@ export type Unlisten = () => void;
  * caller is told to do that.
  */
 export function subscribe(
-  channel: string,
+  _channel: string,
   handler: (payload: UiEvent) => void,
   onReconnect?: () => void,
 ): Promise<Unlisten> {
-  if (OVER_THE_BRIDGE) {
-    return import("@tauri-apps/api/event").then((events) =>
-      events.listen<UiEvent>(channel, (message) => handler(message.payload)),
-    );
-  }
   return Promise.resolve(openSocket(handler, onReconnect));
 }
 
@@ -433,7 +399,7 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
  * reference back to a document holding a workspace token.
  */
 export async function openExternal(url: string): Promise<void> {
-  if (IN_A_WINDOW) {
+  if (desktop) {
     const opener = await import("@tauri-apps/plugin-opener");
     return opener.openUrl(url);
   }
@@ -450,7 +416,7 @@ export async function openExternal(url: string): Promise<void> {
  */
 export async function notify(title: string, body: string): Promise<boolean> {
   try {
-    if (IN_A_WINDOW) {
+    if (desktop) {
       const plugin = await import("@tauri-apps/plugin-notification");
       const granted =
         (await plugin.isPermissionGranted()) || (await plugin.requestPermission()) === "granted";

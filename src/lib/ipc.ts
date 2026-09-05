@@ -1,3 +1,4 @@
+import type { GroupArchive, Reconnect } from "./transfer";
 /**
  * Typed wrappers over the command surface.
  *
@@ -107,6 +108,10 @@ const REVEAL_CHANNEL = "guac://reveal";
 const MENUBAR_CHANNEL = "guac://menubar";
 
 export const api = {
+  exportGroup: (id: GroupId) => invoke<GroupArchive>("export_group", { id }),
+  importGroup: (archive: GroupArchive, name: string) =>
+    invoke<Group>("import_group", { archive, name }),
+  groupReconnect: (id: GroupId) => invoke<Reconnect[]>("group_reconnect", { id }),
   /** `null` when the agent has never been given a computer. */
   agentComputer: (id: AgentId) => invoke<Computer | null>("agent_computer", { id }),
 

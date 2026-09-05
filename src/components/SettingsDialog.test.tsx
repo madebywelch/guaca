@@ -792,7 +792,7 @@ describe("the provider presets", () => {
     pane("Provider");
     // An empty key field beside a warning about a missing key is the state an
     // operator running a local model will try to fix forever.
-    expect(preset("LM Studio").textContent).toContain("On this machine");
+    expect(preset("LM Studio").textContent).toContain("On the backend");
     expect(preset("OpenRouter").textContent).toContain("Needs a key");
   });
 
@@ -854,7 +854,7 @@ describe("the provider presets", () => {
       expect(preset(name).textContent, name).not.toContain("Needs a key");
     }
     // And a local one still says what is true of the server itself.
-    expect(preset("Ollama").textContent).toContain("On this machine");
+    expect(preset("Ollama").textContent).toContain("On the backend");
   });
 });
 
@@ -879,18 +879,19 @@ describe("the Workspace pane", () => {
     open();
     pane("Workspace");
 
-    const button = screen.getByRole("button", { name: "Show that box" }) as HTMLButtonElement;
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    const button = screen.getByRole("button", { name: "Connect to host" }) as HTMLButtonElement;
     expect(button.disabled).toBe(true);
-    fireEvent.change(field(/^Address of a box/), { target: { value: "http://box.example:8787/" } });
-    fireEvent.change(field(/^Workspace token/), { target: { value: " t0k3n " } });
+    fireEvent.change(field(/^Host address/), { target: { value: "https://box.example:8787/" } });
+    fireEvent.change(field(/^Access key/), { target: { value: " t0k3n " } });
     expect(button.disabled).toBe(false);
     expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();
 
     fireEvent.click(button);
     await waitFor(() => expect(restarted).toHaveBeenCalled());
-    expect(probed).toHaveBeenCalledWith({ origin: "http://box.example:8787", token: "t0k3n" });
+    expect(probed).toHaveBeenCalledWith({ origin: "https://box.example:8787", token: "t0k3n" });
     expect(JSON.parse(window.localStorage.getItem("guaca.workspace.remote")!)).toEqual({
-      origin: "http://box.example:8787",
+      origin: "https://box.example:8787",
       token: "t0k3n",
     });
   });
@@ -903,9 +904,10 @@ describe("the Workspace pane", () => {
     const restarted = vi.spyOn(transport, "restart").mockImplementation(() => {});
     open();
     pane("Workspace");
-    fireEvent.change(field(/^Address of a box/), { target: { value: "http://box.example" } });
-    fireEvent.change(field(/^Workspace token/), { target: { value: "wrong" } });
-    fireEvent.click(screen.getByRole("button", { name: "Show that box" }));
+    fireEvent.click(screen.getByRole("button", { name: "Remote host" }));
+    fireEvent.change(field(/^Host address/), { target: { value: "https://box.example" } });
+    fireEvent.change(field(/^Access key/), { target: { value: "wrong" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect to host" }));
 
     await screen.findByText(/needs the token it printed/);
     expect(window.localStorage.getItem("guaca.workspace.remote")).toBeNull();

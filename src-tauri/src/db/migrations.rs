@@ -1418,6 +1418,15 @@ CREATE TABLE pending_runs (
 );
 "#,
     ),
+    (
+        50,
+        r#"
+CREATE TABLE group_imports (
+    group_id TEXT PRIMARY KEY REFERENCES groups(id) ON DELETE CASCADE,
+    reconnect TEXT NOT NULL
+);
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

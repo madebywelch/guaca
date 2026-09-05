@@ -664,3 +664,25 @@ async fn main_calendar_and_webhook_commands_work_on_the_remote_backend() {
         401
     );
 }
+
+#[tokio::test]
+async fn groups_transfer_between_hosts_without_copying_identity() {
+    let (source, _source_dir) = workspace().await;
+    let (target, _target_dir) = workspace().await;
+    let (_, groups) = call(source, "list_groups", json!({})).await;
+    let old = groups["ok"][0]["id"].clone();
+    let (_, created) = call(source, "create_agent", json!({"draft": {"groupId":old,"name":"Engineer","avatar":"avocado","color":"#7ab55c","model":"","systemPrompt":"Check before changing code.","skills":[]}})).await;
+    assert!(created.get("ok").is_some(), "{created}");
+    let (_, exported) = call(source, "export_group", json!({"id":old})).await;
+    assert_eq!(exported["ok"]["format"], "guaca-group", "{exported}");
+    let (_, imported) =
+        call(target, "import_group", json!({"archive":exported["ok"],"name":"Imported crew"}))
+            .await;
+    assert_eq!(imported["ok"]["name"], "Imported crew", "{imported}");
+    assert_ne!(imported["ok"]["id"], old);
+    let (_, agents) = call(target, "list_agents", json!({})).await;
+    assert_eq!(agents["ok"][0]["name"], "Engineer");
+    assert_ne!(agents["ok"][0]["id"], created["ok"]["id"]);
+    let (_, hints) = call(target, "group_reconnect", json!({"id":imported["ok"]["id"]})).await;
+    assert_eq!(hints["ok"], json!([]));
+}

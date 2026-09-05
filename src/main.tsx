@@ -7,6 +7,7 @@ import ReactDOM from "react-dom/client";
 
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { HostSetup } from "./components/HostSetup";
 import { Roster } from "./components/Markdown";
 import { TokenEntry } from "./components/TokenEntry";
 import { applyAppearance } from "./lib/appearance";
@@ -103,9 +104,11 @@ ReactDOM.createRoot(root).render(
       {/* Outside `Guaca` rather than inside `App`: a browser without its
           token has no roster to provide and must make no call that would
           need one. A desktop passes straight through. */}
-      <TokenEntry>
-        <Guaca />
-      </TokenEntry>
+      <HostSetup>
+        <TokenEntry>
+          <Guaca />
+        </TokenEntry>
+      </HostSetup>
     </ErrorBoundary>
   </React.StrictMode>,
 );

@@ -642,16 +642,18 @@ export function RepositoryList({ groupId, crew }: Props) {
                     setError(null);
                   }}
                 >
-                  {githubRemote && githubAvailable && (
-                    <option value="github">GitHub App connected to this workspace</option>
-                  )}
+                  <option value="github" disabled={!githubAvailable || !githubRemote}>
+                    {githubAvailable
+                      ? "GitHub App connected to this host"
+                      : "GitHub App (not configured on this host)"}
+                  </option>
                   <option value="token">Access token or existing Git credentials</option>
                 </select>
                 <span className="field__hint">
                   {githubAvailable === null
                     ? "Checking GitHub connection…"
                     : githubApp
-                      ? "Uses the workspace’s GitHub App to clone and push. After adding the repository, sign in under Git access so commits and pull requests use your account."
+                      ? "Uses this host’s GitHub App to clone and push. A guaca.bot account is not required. After adding the repository, sign in under Git access so commits and pull requests use your account."
                       : "Private repositories need Git credentials. Your Guaca or coding-tool sign-in does not grant repository access. Public repositories need no token."}
                 </span>
               </label>

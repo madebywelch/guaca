@@ -2354,6 +2354,14 @@ pub async fn forward_files(
 ) -> Reply<Staged> {
     state.deployment.capabilities().require(Absent::LocalFiles)?;
 
+    upload_local_files(origin, token, paths).await
+}
+
+pub async fn upload_local_files(
+    origin: String,
+    token: String,
+    paths: Vec<String>,
+) -> Reply<Staged> {
     let http = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -3036,6 +3044,54 @@ pub async fn test_connection(state: &AppState, patch: Option<SettingsPatch>) -> 
 /// open and at no other time. Nothing is blocked on it and no turn reads it.
 pub async fn ranked_models(state: &AppState, category: String) -> Reply<Vec<RankedModel>> {
     Ok(state.catalog.ranked(&category).await?)
+}
+
+// ---- moving a group -------------------------------------------------------
+pub async fn export_group(state: &AppState, id: GroupId) -> Reply<crate::transfer::Archive> {
+    let runtime = state.runtime.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut conn = runtime.store().conn()?;
+        crate::transfer::export(&mut conn, id, runtime.workspace(), runtime.files())
+            .map_err(|e| CommandError::new("export", e))
+    })
+    .await
+    .map_err(|e| CommandError::new("export", e.to_string()))?
+}
+
+pub async fn import_group(
+    state: &AppState,
+    archive: crate::transfer::Archive,
+    name: String,
+) -> Reply<Group> {
+    let runtime = state.runtime.clone();
+    tokio::task::spawn_blocking(move || {
+        let id = crate::transfer::import(
+            runtime.store(),
+            archive,
+            name,
+            runtime.workspace(),
+            runtime.files(),
+        )
+        .map_err(|e| CommandError::new("import", e))?;
+        for agent in runtime.store().list_agents()?.into_iter().filter(|a| a.group_id == id) {
+            runtime.start_agent(agent.id);
+        }
+        runtime.emit(UiEvent::AgentsChanged);
+        runtime
+            .store()
+            .get_group(id)?
+            .ok_or_else(|| CommandError::new("import", "The imported group was not found."))
+    })
+    .await
+    .map_err(|e| CommandError::new("import", e.to_string()))?
+}
+
+pub async fn group_reconnect(
+    state: &AppState,
+    id: GroupId,
+) -> Reply<Vec<crate::transfer::Reconnect>> {
+    crate::transfer::reconnect(state.runtime.store(), id)
+        .map_err(|e| CommandError::new("import", e))
 }
 
 #[cfg(test)]

@@ -29,6 +29,7 @@ import {
 } from "../lib/types";
 import { CredentialList } from "./CredentialList";
 import { GroupActivity } from "./GroupActivity";
+import { GroupTransfer } from "./GroupTransfer";
 import { PluginList } from "./PluginList";
 import { ProviderPresets, SubscriptionModel } from "./ProviderFields";
 import { RepositoryList } from "./RepositoryList";
@@ -39,7 +40,15 @@ interface Props {
   onClose: () => void;
 }
 
-const SECTIONS = ["general", "provider", "limits", "plugins", "repositories", "activity"] as const;
+const SECTIONS = [
+  "general",
+  "provider",
+  "limits",
+  "plugins",
+  "repositories",
+  "activity",
+  "transfer",
+] as const;
 
 type Section = (typeof SECTIONS)[number];
 
@@ -50,6 +59,7 @@ const SECTION_LABELS: Record<Section, string> = {
   plugins: "Plugins",
   repositories: "Repositories",
   activity: "Activity",
+  transfer: "Import / export",
 };
 
 /**
@@ -377,6 +387,7 @@ export function GroupEditor({ group, onClose }: Props) {
               section === "activity" ? "settings__pane settings__pane--board" : "settings__pane"
             }
           >
+            {section === "transfer" && <GroupTransfer group={group} />}
             {section === "general" && (
               <>
                 <h3 className="settings__title">General</h3>
