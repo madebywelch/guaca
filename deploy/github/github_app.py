@@ -447,10 +447,14 @@ def main():
     helper = sub.add_parser("credential")
     helper.add_argument("connection")
     helper.add_argument("operation", choices=("get", "store", "erase"))
-    options = sub.add_parser("gh")
-    options.add_argument("args", nargs=argparse.REMAINDER)
-    parsed = parser.parse_args()
+    sub.add_parser("gh", help="Run the GitHub CLI with repository credentials")
     try:
+        # gh owns its flags, including leading options such as --version and
+        # --repo. argparse's REMAINDER still rejects some leading options.
+        if sys.argv[1:2] == ["gh"]:
+            gh(sys.argv[2:])
+            return
+        parsed = parser.parse_args()
         if parsed.mode == "serve":
             config = json.loads(Path(parsed.config).read_text())
             broker = Broker(config)
@@ -460,8 +464,6 @@ def main():
             server.serve_forever()
         elif parsed.mode == "credential":
             credential(parsed.connection, parsed.operation)
-        else:
-            gh(parsed.args)
     except (Failure, OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
         message = str(error) if isinstance(error, Failure) else "GitHub App configuration or command failed"
         print(message, file=sys.stderr)

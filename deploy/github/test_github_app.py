@@ -18,6 +18,13 @@ spec.loader.exec_module(github)
 
 
 class GitHubAppTest(unittest.TestCase):
+    def test_cli_forwards_github_flags_without_parsing_or_reordering(self):
+        for args in (["--version"], ["--help"], ["--repo", "owner/repo", "pr", "list"],
+                     ["api", "user", "--jq", ".login"], []):
+            with self.subTest(args=args), patch("sys.argv", ["github-helper.py", "gh", *args]), patch.object(github, "gh") as command:
+                github.main()
+                command.assert_called_once_with(args)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
