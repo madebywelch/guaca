@@ -1891,16 +1891,14 @@ button {
    the outline is recomputed per frame and written as one `d`, because what a
    creature does is change shape, and a keyframe can only move a drawing about.
 
-   What is left here is what CSS is actually better at. The accent is the whole
-   color: the body is that value flat, with no outline, no gradient and nothing
-   drawn on top of it, and the eyes are the same hue taken most of the way to
-   ink so they read as marks in the body rather than as holes through it. The
-   marks beside a head are three small loops, and they are the only motion in
-   this block.
+   Skin adds the paper relief: the same outline under a shallow shadow and a
+   lifted edge. The face is ink on the agent's pigment. The marks beside a
+   head follow the reading surface so they remain visible in a dark room;
+   their three small loops are the only motion in this block.
    ========================================================================== */
 
 .avatar {
-  --eye: color-mix(in oklab, var(--accent, var(--flesh)) 34%, #171410);
+  --eye: #252824;
 
   display: inline-grid;
   place-items: center;
@@ -1941,6 +1939,10 @@ button {
   width: 100%;
   height: 100%;
   overflow: visible;
+}
+
+.avatar__mark {
+  --eye: var(--text);
 }
 
 /* Paused and composted are the same face and the same treatment: a creature

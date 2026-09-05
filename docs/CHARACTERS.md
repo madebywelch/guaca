@@ -1,6 +1,6 @@
 # Characters
 
-An agent is a creature made of clay, cut from one of five shapes, and everything
+An agent is a creature cut from pigmented paper in one of five shapes, and everything
 it has to say it says by changing shape.
 
 This is the fourth cast. The three before it were emoji, then a hand-drawn set
@@ -29,6 +29,7 @@ So it is two decisions now: which of five shapes, and then the lump on top.
 |---|---|
 | `src/avatars/silhouette.ts` | The five shapes, as one radius function each, and the two numbers they are sized against. |
 | `src/avatars/form.ts` | The body. `FORM`, the types, and the maths that turns a character and a mood into points. |
+| `src/avatars/Skin.tsx` | The paper relief: one outline, a shallow shadow and a lifted edge. Shared by the app and the README. |
 | `src/avatars/eyes.ts` | The eye primitive, the blink, and the gaze. |
 | `src/avatars/catalog.ts` | The cast, the accents, and the alias table that keeps every key an older build wrote still meaning something. |
 | `src/avatars/moods.ts` | The ten expressions, the marks drawn beside a head, and `moodFor`, which is the only place a runtime signal becomes a face. |
@@ -60,12 +61,25 @@ falls between two samples is a corner that gets chamfered off. At the 28 this
 started with, the octagons drew as lumpy circles and every test still passed.
 `silhouette.test.ts` holds the count and checks both shapes keep their corners.
 
-**No transform is ever put on the drawing.** A character that slides around
+**Motion changes the outline, never its position.** A character that slides around
 inside its own box reads as a sprite being moved; one whose outline changes
 reads as a thing that is alive. This is the load-bearing decision and it is why
-there is no `translate`, no `rotate` and no keyframe anywhere in the drawing
-path. When a creature leans, the mass leans: one side thickens and the other
+there is no animated transform or keyframe in the drawing path. When a creature
+leans, the mass leans: one side thickens and the other
 thins.
+
+**The material is paper relief.** `Skin` draws three uses of the same path:
+a shadow offset by (1.1, 2.3) at 18% opacity, the agent's pigment, and a white
+edge offset by (-0.4, -0.5), 0.55 units wide at 45% opacity. These are fixed
+material offsets in the 64-unit viewBox, so they scale with the avatar. A frame
+still writes one outline, and all three layers follow it. Each instance owns
+its SVG references; one creature cannot borrow another's shape.
+
+The relief is clipped to `FORM.reach` because its offset is not permission to
+draw outside the space the crew's circle allows. Eyes and attention marks are
+outside that clip. The face uses dark ink; marks beside it use the reading
+surface's text color so they remain visible in a dark room. `make-crew.ts`
+renders the same `Skin` component for the README strip.
 
 **The amplitudes are small on purpose.** The body breathes, leans and settles.
 It does not act. An early version had the body doing the acting — a puddle for

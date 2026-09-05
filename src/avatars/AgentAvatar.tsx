@@ -8,6 +8,7 @@ import { gaitOf, join, type Painter } from "./clock";
 import { AIM, aimedEye, blendEyes, type Drawn, eyePath, eyesAt, gazeAt, settle } from "./eyes";
 import { blend, bodyPoints, FORM, outline, type Point } from "./form";
 import { MOODS, type Mood, markFor, moodFor } from "./moods";
+import { Skin } from "./Skin";
 
 /** Where the character is looking. Used to make a send visibly aimed at someone. */
 export type Look = "up" | "down" | null;
@@ -285,7 +286,7 @@ export function AgentAvatar({
       title={title ?? character.label}
     >
       <svg viewBox={`0 0 ${FORM.box} ${FORM.box}`} className="avatar__body" aria-hidden="true">
-        <path ref={skin} className="avatar__skin" fill="var(--accent)" />
+        <Skin pathRef={skin} />
         <g
           ref={eyes}
           className="avatar__eyes"

@@ -342,9 +342,9 @@ export function lookupCharacter(key: string): Character {
 /**
  * Accents. Pigments rather than candy: saturated primaries are half of what
  * reads as childish, and a mid-luminance body keeps the eyes as the darkest
- * thing on the figure, which is where the expression is. Nothing is mixed from
- * these any more, since the body has no rim to darken and no gradient to light,
- * so the value picked here is the value on the screen.
+ * thing on the figure, which is where the expression is. The paper relief
+ * adds a shared edge and shadow without mixing the body pigment, so the value
+ * picked here is the value on the screen.
  */
 export const ACCENTS: { name: string; value: string }[] = [
   { name: "Ochre", value: "#c28c31" },

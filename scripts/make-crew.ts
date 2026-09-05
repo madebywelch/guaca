@@ -16,10 +16,14 @@
  * sees the cast is more than one shape.
  */
 
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+
 import { CHARACTERS } from "../src/avatars/catalog";
 import { eyePath, eyesAt } from "../src/avatars/eyes";
 import { bodyPoints, FORM, outline, type Point } from "../src/avatars/form";
 import { markFor, MOODS, type Mood } from "../src/avatars/moods";
+import { Skin } from "../src/avatars/Skin";
 
 /**
  * Who appears, in which accent, doing what, and where it is looking.
@@ -42,17 +46,11 @@ const CREW: { key: string; color: string; mood: Mood; gaze: Point; t: number }[]
 const CELL = FORM.box;
 const GAP = 6;
 
-/* The stylesheet derives both of these from an agent's accent. A file in a
-   README has no stylesheet, so the same derivation is inlined per cell:
-   `color-mix` rather than precomputed hex, so the recipe stays in one place and
-   this cannot drift from `.avatar` in `src/styles.css`. `--flesh` is the amber
-   of the light theme, spent on one mark and nothing else. */
+/* A README has no stylesheet: inline the pigment and face ink per cell.
+   The relief itself is shared with the app. Amber is still only a request
+   for a person. */
 function palette(color: string): string {
-  return [
-    `--accent:${color}`,
-    `--eye:color-mix(in oklab, ${color} 34%, #171410)`,
-    `--flesh:#b4530a`,
-  ].join(";");
+  return [`--accent:${color}`, "--eye:#252824", "--flesh:#b4530a"].join(";");
 }
 
 function cell(member: (typeof CREW)[number], index: number): string {
@@ -71,9 +69,13 @@ function cell(member: (typeof CREW)[number], index: number): string {
      whose color is not its accent. */
   const dim = mood.dim ? ";filter:grayscale(0.72);opacity:0.5" : "";
   const x = index * (CELL + GAP);
+  // Supply the SVG namespace to the server renderer, then join the outer strip.
+  const skin = renderToStaticMarkup(createElement("svg", null, createElement(Skin, { d: body })), {
+    identifierPrefix: `crew-${index}-`,
+  }).replace(/^<svg>|<\/svg>$/g, "");
   return [
     `  <g transform="translate(${x} 0)" style="${palette(member.color)}${dim}">`,
-    `<path d="${body}" fill="var(--accent)"/>`,
+    skin,
     `<g fill="none" stroke="var(--eye)" stroke-linecap="round">${eyes}</g>`,
     markFor(member.mood),
     `</g>`,
