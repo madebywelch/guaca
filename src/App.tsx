@@ -116,11 +116,12 @@ export default function App() {
     // itself, which looks like a model bug rather than a subscription bug.
     let canceled = false;
 
+    let initialReadDone = false;
     let refreshing = false;
     let requested = false;
     const refresh = async () => {
       requested = true;
-      if (refreshing) return;
+      if (!initialReadDone || refreshing) return;
       refreshing = true;
       try {
         while (requested && !canceled) {
@@ -141,6 +142,22 @@ export default function App() {
         (event) => {
           applyEvent(event);
           announce(event);
+          // A read that overlapped a durable change may contain older rows.
+          // Read again after it completes; token deltas need no database read.
+          if (
+            refreshing &&
+            [
+              "messageAppended",
+              "agentsChanged",
+              "approvalRequested",
+              "approvalSettled",
+              "escalationRaised",
+              "escalationCleared",
+              "runSettled",
+            ].includes(event.type)
+          ) {
+            requested = true;
+          }
         },
         () => {
           void refresh();
@@ -164,6 +181,8 @@ export default function App() {
       } catch (error) {
         setBanner({ tone: "error", text: errorMessage(error) });
       } finally {
+        initialReadDone = true;
+        if (requested && !canceled) await refresh();
         if (!canceled) setReady(true);
       }
     })();
