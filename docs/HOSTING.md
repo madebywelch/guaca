@@ -514,11 +514,13 @@ URL is shown explicitly; an origin token does not grant access to that other
 address. Git access does not sign in `gh` for pull-request API operations;
 configure `gh auth login` or `GH_TOKEN` separately if jobs need those.
 
-Codex jobs support worktrees, streamed progress, completion and cancellation.
-The initial `exec` adapter has no correction mailbox or Guaca push gate. Jobs
-with **Ask me before pushing** enabled are blocked before starting; use Claude
-Code to retain the gate or explicitly turn it off. Changing harness preserves
-the repository's path, engineer assignments and gate setting.
+Codex jobs support worktrees, streamed progress, completion, cancellation,
+acknowledged corrections and Guaca push approvals through the official
+app-server interface (Codex 0.153 or newer). Changing harness preserves the
+repository's path, engineer assignments and gate setting. Corrections guide the
+next model decision; they do not reverse commands already executed. See
+[the coding contract](CODING.md#codex-runs-through-its-official-cli) for approval
+policy and command-rule behavior.
 
 A container does not inherit the host's installed dependencies, login sessions,
 or unmounted files. For a working tree on the host, add a volume such as
@@ -585,5 +587,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features
 ```
 
 It uses `gpt-5.4-mini` at low reasoning in a disposable repository and never
-uses the operator's configured default model. It makes a file, checks it and
-commits locally, with no remote configured.
+uses the operator's configured default model. It steers an active turn, checks
+and commits the revised file, then denies a push to a disposable local bare
+repository and verifies that no remote ref changed. No external Git service
+is contacted.

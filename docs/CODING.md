@@ -667,23 +667,39 @@ cargo test --manifest-path src-tauri/Cargo.toml --test coding -- --ignored
 
 ## Codex runs through its official CLI
 
-`Harness::Codex` starts `codex exec --json` in the same prepared worktree as the
-other harnesses. Existing repositories keep their harness and assignments; no
-migration changes them. Codex owns model selection and authentication. On the
-backend, as the daemon's user, run `codex login --device-auth`. This sign-in is
-separate from Guaca's ChatGPT provider sign-in. The image pins the CLI version;
-its configuration, credentials and sessions live in the persistent home volume.
+`Harness::Codex` starts `codex app-server --listen stdio://` in the same
+prepared worktree as the other harnesses. Existing repositories keep their
+harness, assignments and gate. Codex owns model selection and authentication.
+On the backend, as the daemon's user, run `codex login --device-auth`. This
+sign-in is separate from Guaca's ChatGPT provider sign-in. The image pins the
+CLI version; its configuration, credentials and sessions live in the persistent
+home volume. The control contract is measured against Codex 0.153.3; the UI
+requires 0.153 or newer for steering and approvals.
 
-The runner records the CLI thread id, tool activity, final answer and failures.
-It does not turn token counts into a dollar cost. A stream ending before
-`turn.completed` is an interrupted job, even if it printed some narration.
-Both process output pipes are drained concurrently under the job's deadline.
+The runner initializes one thread, starts one turn, and records its id, tool
+activity, answer and failures. It does not turn token counts into a dollar
+cost. A stream ending before `turn/completed` is an interrupted job, even if
+it printed narration. Both output pipes are drained concurrently under the
+job's deadline. Completion kills and reaps the listening app-server before
+the runtime releases the worktree.
 
-This adapter can be stopped but has no correction mailbox or push-approval
-bridge yet. A Codex job in a repository with **Ask me before pushing** enabled
-is refused before work starts. Switching harnesses never silently clears that
-setting: choose Claude Code to keep the gate, or explicitly disable it. This
-is a declared limitation of the new adapter; Claude's existing bridge remains.
+A correction uses `turn/steer` with the active turn id. Guaca reports it sent
+only after Codex acknowledges that id. A completed turn rejects a late
+correction visibly; Guaca never silently starts another turn. Steering guides
+the model's next decision and does not undo a command already executed. Stop
+remains available while acknowledgment is pending. An unanswered control
+request stops the job after thirty seconds; partial changes may remain.
+
+**Ask me before pushing** selects Codex's `untrusted` approval policy and user
+reviewer, verified in the thread response before any work starts. Command
+approval callbacks use the same script inspection and operator decision as
+Claude's hooks and the `shell` tool. Each decision applies to that request;
+Guaca never grants a session exemption. The protocol keeps reading corrections
+while an approval waits. As with the existing gate, this covers ordinary shell
+commands, not confinement or arbitrary API calls. The CLI retains its own
+[configured command rules](https://developers.openai.com/codex/rules), so an operator's explicit allow rule can bypass its
+approval callback. Keep outward commands out of those allow rules when relying
+on this gate.
 
 The official Claude Code CLI can also run on an operator's own backend. Its
 local `claude auth login` and Codex's `codex login status` are CLI operations;

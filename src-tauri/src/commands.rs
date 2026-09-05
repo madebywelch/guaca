@@ -288,7 +288,6 @@ impl From<crate::runtime::RuntimeError> for CommandError {
             // A precondition the operator can fix from the rail, so it says so
             // rather than reading as something that broke.
             RuntimeError::NoRepository(_)
-            | RuntimeError::CodingGateUnavailable
             | RuntimeError::RepositoryBusy { .. }
             | RuntimeError::NoWorkTree { .. } => CommandError::new("badRequest", err.to_string()),
             // A `shell` failure is answered to the model inside its turn and
@@ -852,11 +851,8 @@ pub struct HarnessOnMachine {
     pub version: String,
     /// Whether a job on it can be reached while it runs.
     ///
-    /// False for `pi`, which has no second interface, and for a Claude Code
-    /// older than the one the bridge's contract was measured against. Neither
-    /// stops a job: both run exactly as every job ran before the bridge
-    /// existed, which is why this is a fact the panel states rather than a
-    /// refusal. `coding::presence` is the argument.
+    /// False for `pi` and CLI versions older than the steering contract was
+    /// measured against. `coding::presence` defines each version floor.
     pub bridged: bool,
     /// How to get it if it is not. Sent from here rather than spelled in the
     /// webview, because it is the same string a refused job quotes at an agent,
@@ -911,16 +907,15 @@ pub async fn coding_harnesses(state: &AppState) -> Reply<Vec<HarnessOnMachine>> 
 /// Sends a correction into a coding job that is already running.
 ///
 /// The one thing an operator watching a job go the wrong way could not do. It
-/// is staged rather than delivered: the job reads it at its next tool boundary,
-/// or when it tries to finish, whichever comes first. `coding/bridge.rs` is
-/// both halves.
+/// is staged for Claude's next hook boundary. Codex uses native `turn/steer`
+/// and this call waits for its acknowledgment before reporting success.
 ///
 /// Refused rather than swallowed when nothing takes it. A job that has just
 /// ended, and a repository whose harness has no bridge, are two different
 /// sentences and both are things the operator can act on: the second is why
 /// the panel says which harness a repository runs.
 pub async fn message_coding_job(state: &AppState, agent_id: AgentId, message: String) -> Reply<()> {
-    state.runtime.message_job(agent_id, &message).map_err(Into::into)
+    state.runtime.message_job(agent_id, &message).await.map_err(Into::into)
 }
 
 /// Stops a coding job that is running, leaving whatever it has committed.
