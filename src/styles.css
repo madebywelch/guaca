@@ -1939,6 +1939,9 @@ button {
   width: 100%;
   height: 100%;
   overflow: visible;
+  /* WebKit can drop a click on a <use> whose outline changes between press
+     and release. The artwork is decoration; its stable wrapper is the target. */
+  pointer-events: none;
 }
 
 .avatar__mark {
