@@ -38,6 +38,7 @@ export default function App() {
   const focusGroup = useStore((s) => s.focusGroup);
   const loadChannel = useStore((s) => s.loadChannel);
   const groups = useStore((s) => s.groups);
+  const railGroup = useStore((s) => s.railGroup);
   const dropAgent = useStore((s) => s.dropAgent);
   const prefs = useStore((s) => s.prefs);
 
@@ -296,13 +297,15 @@ export default function App() {
     }
   };
 
-  // A key is only missing if a key is what pays. An operator on a subscription
-  // has nothing to paste, so this asked them forever for something the Provider
-  // pane does not offer them, and the one banner the app uses to say "you are
-  // not set up yet" stopped meaning anything.
-  const needsKey =
-    ready && settings !== null && settings.provider === "compatible" && !settings.apiKeySet;
   const openAgent = selected ? agents.find((a) => a.id === selected) : undefined;
+  const currentGroup = groups.find((group) => group.id === (openAgent?.groupId ?? railGroup));
+  // Read the same group-over-workspace provider and key choices as the backend.
+  const needsKey =
+    ready &&
+    settings !== null &&
+    (currentGroup?.inference.provider ?? settings.provider) === "compatible" &&
+    !currentGroup?.apiKeySet &&
+    !settings.apiKeySet;
 
   return (
     <div className="app">
