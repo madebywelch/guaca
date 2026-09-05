@@ -35,6 +35,8 @@
 //! it is why the token is per-workspace and rotatable rather than derived from
 //! anything longer-lived.
 
+mod live;
+
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -98,6 +100,7 @@ pub struct Settings {
 /// than an error. The transcript is already durable by the time this is called.
 struct SocketSink {
     events: broadcast::Sender<UiEvent>,
+    live: parking_lot::Mutex<live::Snapshot>,
 }
 
 impl EventSink for SocketSink {
@@ -105,6 +108,10 @@ impl EventSink for SocketSink {
         // An `Err` here is "no client is attached", which is the normal state of
         // a workspace doing its work at four in the morning. It must never
         // propagate into an agent's turn.
+        // Snapshot and subscription use this same lock. No delta can land
+        // in both the snapshot and the feed, or fall between them.
+        let mut live = self.live.lock();
+        live.observe(&event);
         let _ = self.events.send(event);
     }
 }
@@ -113,7 +120,7 @@ impl EventSink for SocketSink {
 struct Serving {
     state: Arc<AppState>,
     token: Arc<str>,
-    events: broadcast::Sender<UiEvent>,
+    sink: Arc<SocketSink>,
 }
 
 /// A workspace that is open and a socket that is listening, not yet serving.
@@ -151,7 +158,7 @@ pub async fn serve(settings: Settings) -> Result<(), String> {
 /// Opens the workspace and binds the socket, without serving yet.
 pub async fn bind(settings: Settings) -> Result<Bound, String> {
     let (events, _) = broadcast::channel(BACKLOG);
-    let sink = Arc::new(SocketSink { events: events.clone() });
+    let sink = Arc::new(SocketSink { events: events.clone(), live: Default::default() });
 
     let paths = crate::boot::Paths::under(&settings.root);
     let booted = crate::boot::open(&paths, tokio::runtime::Handle::current(), sink.clone()).await?;
@@ -195,7 +202,7 @@ pub async fn bind(settings: Settings) -> Result<Bound, String> {
     });
 
     let token: Arc<str> = settings.token.into();
-    let serving = Serving { state, token: token.clone(), events };
+    let serving = Serving { state, token: token.clone(), sink };
 
     let mut app = Router::new()
         .route("/health", get(health))
@@ -701,12 +708,23 @@ async fn events_socket(
     // Subscribed before the upgrade completes. Between accepting and
     // subscribing there is a window in which events are dropped, and a client
     // that reconnects mid-cascade would silently miss the run settling.
-    let feed = serving.events.subscribe();
-    upgrade.on_upgrade(move |socket| pump(socket, feed))
+    let (feed, snapshot) = {
+        let live = serving.sink.live.lock();
+        (
+            serving.sink.events.subscribe(),
+            serde_json::to_string(&*live).expect("live state serializes"),
+        )
+    };
+    upgrade.on_upgrade(move |socket| pump(socket, feed, snapshot))
 }
 
 /// Forwards events to one client until it goes away.
-async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>) {
+async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>, snapshot: String) {
+    if socket.send(Message::Text(snapshot)).await.is_err() {
+        return;
+    }
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(20));
+    let mut heard = tokio::time::Instant::now();
     loop {
         tokio::select! {
             event = feed.recv() => match event {
@@ -721,10 +739,10 @@ async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>) {
                 // about is a transcript that is quietly missing a message.
                 Err(broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::warn!(missed, "a client fell behind the event stream");
-                    let notice = json!({ "type": "streamLagged", "missed": missed });
-                    if socket.send(Message::Text(notice.to_string())).await.is_err() {
-                        return;
-                    }
+                    // Reconnect starts with a fresh snapshot. A warning event
+                    // alone cannot repair partial text or a missed job ending.
+                    let _ = socket.close().await;
+                    return;
                 }
                 Err(broadcast::error::RecvError::Closed) => return,
             },
@@ -733,8 +751,12 @@ async fn pump(mut socket: WebSocket, mut feed: broadcast::Receiver<UiEvent>) {
             // where it is one named command with typed arguments rather than
             // whatever arrived on a socket.
             incoming = socket.recv() => match incoming {
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => { heard = tokio::time::Instant::now(); },
                 _ => return,
+            },
+            _ = heartbeat.tick() => {
+                if heard.elapsed() > std::time::Duration::from_secs(60) { return; }
+                if socket.send(Message::Ping(Vec::new())).await.is_err() { return; }
             },
         }
     }

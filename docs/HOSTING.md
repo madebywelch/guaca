@@ -425,3 +425,19 @@ so a desktop window connected across origins also receives a download.
 An artifact URL carries a ticket for that document, not the workspace token:
 script can read its own URL even with an opaque origin. Artifact policies admit
 the desktop origins as ancestors, while retaining their opaque sandbox.
+
+## Reconnecting is a snapshot followed by events
+
+Each socket begins with the current activity, unfinished reply text and coding
+jobs. Capturing that snapshot and subscribing to subsequent events share a
+lock with emission, so a delta cannot be omitted or applied twice. A slow
+client whose feed overflows reconnects for another snapshot. Heartbeats retire
+connections that disappeared without a close frame.
+
+On every connection, including the first, the page refreshes the roster,
+settings, decisions, usage and selected transcript. It keeps the window and
+composer mounted. A transcript refresh merges messages arriving during the
+read. A new snapshot removes obsolete streams and restores Stop for live runs.
+Thinking and past live tool chips are not replayed; completed tool records
+remain in the transcript. Live reply snapshots hold at most 512 KiB per turn;
+the completed message remains authoritative for larger replies.

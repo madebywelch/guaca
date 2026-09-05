@@ -240,3 +240,41 @@ describe("a call", () => {
     });
   });
 });
+
+describe("the event connection", () => {
+  it("refreshes on first open and reconnect, and reconnects on legacy event loss", async () => {
+    vi.useFakeTimers();
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      onopen?: () => void;
+      onclose?: () => void;
+      onerror?: () => void;
+      onmessage?: (event: { data: string }) => void;
+      constructor() {
+        sockets.push(this);
+      }
+      close() {
+        this.onclose?.();
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const { subscribe } = await import("./transport");
+    const changed = vi.fn();
+    const refresh = vi.fn();
+    const stop = await subscribe("unused", changed, refresh);
+    try {
+      sockets[0]!.onopen?.();
+      expect(refresh).toHaveBeenCalledTimes(1);
+      sockets[0]!.onmessage?.({ data: JSON.stringify({ type: "streamLagged", missed: 3 }) });
+      expect(changed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(500);
+      sockets[1]!.onopen?.();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      sockets[1]!.onmessage?.({ data: JSON.stringify({ type: "agentsChanged" }) });
+      expect(changed).toHaveBeenCalledWith({ type: "agentsChanged" });
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+});

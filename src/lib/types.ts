@@ -1017,6 +1017,15 @@ export interface DeviceCode {
 export type Reveal = { kind: "agent"; id: AgentId } | { kind: "crew"; id: GroupId };
 
 export type UiEvent =
+  | {
+      type: "liveSnapshot";
+      activity: Record<AgentId, Activity>;
+      streams: Record<
+        MessageId,
+        { channelId: AgentId; agentId: AgentId; runId: RunId; to: Participant; text: string }
+      >;
+      building: Record<AgentId, RepositoryId>;
+    }
   | { type: "agentsChanged" }
   | { type: "openUrl"; url: string }
   | { type: "messageAppended"; message: Envelope }

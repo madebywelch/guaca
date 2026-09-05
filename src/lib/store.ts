@@ -12,7 +12,7 @@ import { create } from "zustand";
 import { api } from "./ipc";
 import { loadPrefs, type Prefs, savePrefs } from "./prefs";
 import { type DropTarget, landsBefore, railOrder } from "./rail";
-import { openExternal } from "./transport";
+import { hosted, openExternal } from "./transport";
 
 /**
  * How much of a running coding job's work is kept on screen.
@@ -343,6 +343,7 @@ export interface State {
   sessionSpend: Tokens;
 
   bootstrap: () => Promise<void>;
+  resynchronize: () => Promise<void>;
   refreshAgents: () => Promise<void>;
   /**
    * Asks git, and `gh`, what the linked repositories are doing.
@@ -551,7 +552,7 @@ export const useStore = create<State>((set, get) => ({
       api.listAgents(),
       api.listGroups(),
       api.listRepositories(),
-      api.agentActivity(),
+      hosted ? Promise.resolve(null) : api.agentActivity(),
       api.agentLastActive(),
       api.getSettings(),
       api.capabilities(),
@@ -570,7 +571,7 @@ export const useStore = create<State>((set, get) => ({
       agents,
       groups,
       repositories,
-      activity,
+      ...(activity ? { activity } : {}),
       lastActive,
       settings,
       capabilities,
@@ -585,6 +586,28 @@ export const useStore = create<State>((set, get) => ({
     if (!current && live.length > 0) {
       await get().select(live[0]!.id);
     }
+  },
+
+  async resynchronize() {
+    await get().bootstrap();
+    const { selected, agents } = get();
+    const live = agents.filter((a) => a.lifecycle !== "terminated");
+    const next = live.some((a) => a.id === selected) ? selected : (live[0]?.id ?? null);
+    set((state) => ({
+      selected: next,
+      railGroup: state.groups.some((g) => g.id === state.railGroup) ? state.railGroup : null,
+      routineVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.routineVersion[a.id] ?? 0) + 1]),
+      ),
+      memoryVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.memoryVersion[a.id] ?? 0) + 1]),
+      ),
+      workingNotesVersion: Object.fromEntries(
+        agents.map((a) => [a.id, (state.workingNotesVersion[a.id] ?? 0) + 1]),
+      ),
+    }));
+    if (next) await get().loadChannel(next);
+    await get().refreshRepoStatuses();
   },
 
   async refreshRepoStatuses() {
@@ -742,8 +765,15 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadChannel(key, through) {
+    const before = new Set((get().messages[key] ?? []).map((m) => m.id));
     const messages = await api.channelMessages(key, 300, through);
-    set((state) => ({ messages: { ...state.messages, [key]: messages } }));
+    set((state) => {
+      let merged = messages;
+      for (const arrived of state.messages[key] ?? []) {
+        if (!before.has(arrived.id)) merged = insert(merged, arrived) ?? merged;
+      }
+      return { messages: { ...state.messages, [key]: merged } };
+    });
   },
 
   /**
@@ -834,6 +864,24 @@ export const useStore = create<State>((set, get) => ({
     switch (event.type) {
       case "agentsChanged": {
         void get().refreshAgents();
+        break;
+      }
+
+      case "liveSnapshot": {
+        set({
+          activity: event.activity,
+          streams: event.streams,
+          activeRun: Object.fromEntries(
+            Object.values(event.streams).map((s) => [s.agentId, s.runId]),
+          ),
+          building: event.building,
+          coding: {},
+          reasoning: {},
+          trail: {},
+          pulse: {},
+          pulses: [],
+          handoff: null,
+        });
         break;
       }
 

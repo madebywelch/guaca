@@ -753,3 +753,61 @@ describe("a coding job that could not run", () => {
     expect(useStore.getState().banner?.text).toContain("vision-ios-api");
   });
 });
+
+describe("reconnecting to a running workspace", () => {
+  it("replaces obsolete streams and jobs and restores the run that can be stopped", () => {
+    useStore.setState({
+      streams: {
+        old: { agentId: "chef", channelId: "chef", to: { kind: "human" }, text: "stale" },
+      },
+      activeRun: { chef: "finished" },
+      building: { chef: "old-repo" },
+      reasoning: { chef: "old thought" },
+      coding: { chef: [{ tool: "shell", detail: "old" }] },
+    });
+    apply({
+      type: "liveSnapshot",
+      activity: { manager: { state: "thinking" } },
+      building: { manager: "repo" },
+      streams: {
+        current: {
+          agentId: "manager",
+          channelId: "manager",
+          runId: "running",
+          to: { kind: "human" },
+          text: "Already written",
+        },
+      },
+    });
+    expect(useStore.getState().activeRun).toEqual({ manager: "running" });
+    expect(useStore.getState().streams.old).toBeUndefined();
+    expect(useStore.getState().building).toEqual({ manager: "repo" });
+    expect(useStore.getState().reasoning).toEqual({});
+    apply({ type: "streamDelta", messageId: "current", channelId: "manager", text: " plus live" });
+    expect(useStore.getState().streams.current?.text).toBe("Already written plus live");
+    apply({
+      type: "liveSnapshot",
+      activity: { manager: { state: "idle" } },
+      building: {},
+      streams: {},
+    });
+    expect(useStore.getState().activeRun).toEqual({});
+    expect(useStore.getState().streams).toEqual({});
+  });
+
+  it("keeps a message arriving while a transcript refresh is in flight", async () => {
+    const { api } = await import("./ipc");
+    let finish!: (rows: Envelope[]) => void;
+    vi.mocked(api.channelMessages).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    reset({ chef: [] });
+    const loading = useStore.getState().loadChannel("chef");
+    apply({ type: "messageAppended", message: envelope({ id: "new", createdAt: 200 }) });
+    finish([envelope()]);
+    await loading;
+    expect(useStore.getState().messages.chef?.map((m) => m.id)).toEqual(["m1", "new"]);
+  });
+});

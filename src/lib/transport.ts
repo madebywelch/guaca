@@ -378,9 +378,6 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
   let timer: ReturnType<typeof setTimeout> | null = null;
   let wait = RETRY_FLOOR;
   let closed = false;
-  // The first open is not a reconnect. Telling the caller to refetch on it
-  // would double every read the app already does when it mounts.
-  let opened = false;
 
   const connect = () => {
     if (closed) return;
@@ -389,12 +386,15 @@ function openSocket(handler: (payload: UiEvent) => void, onReconnect?: () => voi
 
     socket.onopen = () => {
       wait = RETRY_FLOOR;
-      if (opened) onReconnect?.();
-      opened = true;
+      // The first connection may have completed after the initial HTTP reads.
+      // Refresh on it too, so that startup gap cannot lose a durable message.
+      onReconnect?.();
     };
     socket.onmessage = (message) => {
       try {
-        handler(JSON.parse(message.data as string) as UiEvent);
+        const event = JSON.parse(message.data as string);
+        if (event.type === "streamLagged") socket?.close();
+        else handler(event as UiEvent);
       } catch {
         // A frame this build cannot parse is a newer daemon talking to an
         // older page. Dropping it beats taking the channel down: everything

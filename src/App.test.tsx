@@ -80,7 +80,7 @@ vi.mock("./lib/ipc", () => ({
       throw new Error("not used");
     },
   },
-  onRuntimeEvent: async () => () => {},
+  onRuntimeEvent: vi.fn(async () => () => {}),
   onRevealRequest: async () => () => {},
   onMenubarAsk: async () => () => {},
   onFileDrop: async () => () => {},
@@ -411,4 +411,16 @@ describe("failure surfacing", () => {
     expect(screen.getByText(/render exploded/)).toBeTruthy();
     spy.mockRestore();
   });
+});
+
+it("refreshes the roster when the event connection returns", async () => {
+  const { onRuntimeEvent } = await import("./lib/ipc");
+  render(<App />);
+  await screen.findByRole("navigation", { name: /agents/i });
+  const before = listAgents.mock.calls.length;
+  const calls = vi.mocked(onRuntimeEvent).mock.calls;
+  const reconnect = calls[calls.length - 1]?.[1];
+  expect(reconnect).toBeTypeOf("function");
+  reconnect?.();
+  await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
 });

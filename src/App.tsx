@@ -116,13 +116,36 @@ export default function App() {
     // itself, which looks like a model bug rather than a subscription bug.
     let canceled = false;
 
+    let refreshing = false;
+    let requested = false;
+    const refresh = async () => {
+      requested = true;
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        while (requested && !canceled) {
+          requested = false;
+          await useStore.getState().resynchronize();
+        }
+      } catch (error) {
+        if (!canceled) setBanner({ tone: "error", text: errorMessage(error) });
+      } finally {
+        refreshing = false;
+      }
+    };
+
     void (async () => {
       // Subscribe before the first read so nothing that happens during startup
       // is missed.
-      const stop = await onRuntimeEvent((event) => {
-        applyEvent(event);
-        announce(event);
-      });
+      const stop = await onRuntimeEvent(
+        (event) => {
+          applyEvent(event);
+          announce(event);
+        },
+        () => {
+          void refresh();
+        },
+      );
       if (canceled) {
         stop();
         return;
