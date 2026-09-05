@@ -104,6 +104,7 @@ vi.mock("../lib/ipc", () => ({
     pluginCatalog: () => pluginCatalog(),
     groupRepositories: () => groupRepositories(),
     codingHarnesses: () => codingHarnesses(),
+    githubAppAvailable: async () => false,
     conversationFlow: (group: string, limit?: number) => conversationFlow(group, limit),
     usageForRuns: () => usageForRuns(),
   },

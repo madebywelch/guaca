@@ -354,8 +354,18 @@ impl Landing {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .insert(state.to_string(), sender);
+                // Native OAuth clients allow varying ports on loopback IPs,
+                // not the DNS name localhost (RFC 8252). Both reach the same
+                // local backend; use the literal address in the callback.
+                let mut callback_origin = origin.trim_end_matches('/').to_string();
+                if let Ok(mut url) = reqwest::Url::parse(&callback_origin) {
+                    if url.scheme() == "http" && url.host_str() == Some("localhost") {
+                        url.set_host(Some("127.0.0.1")).expect("a loopback IP is a valid host");
+                        callback_origin = url.as_str().trim_end_matches('/').to_string();
+                    }
+                }
                 Ok(Opened {
-                    redirect_uri: format!("{}{CALLBACK_ROUTE}", origin.trim_end_matches('/')),
+                    redirect_uri: format!("{callback_origin}{CALLBACK_ROUTE}"),
                     waiter: Waiter::Served {
                         receiver,
                         filed: Filed { state: state.to_string(), in_: callbacks.clone() },
@@ -1150,6 +1160,22 @@ fn decode(raw: &str) -> String {
 #[cfg(test)]
 mod landing_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn local_hosted_callbacks_use_a_loopback_ip_for_native_oauth() {
+        for (origin, expected) in [
+            ("http://localhost:8788", "http://127.0.0.1:8788"),
+            ("http://127.0.0.1:9999", "http://127.0.0.1:9999"),
+            ("https://localhost:8788", "https://localhost:8788"),
+            ("https://workspace.example", "https://workspace.example"),
+        ] {
+            let landing = Landing::Served { origin: origin.into(), callbacks: Default::default() };
+            assert_eq!(
+                landing.open("test").await.unwrap().redirect_uri,
+                format!("{expected}{CALLBACK_ROUTE}")
+            );
+        }
+    }
 
     fn served() -> Landing {
         Landing::Served { origin: "https://box.example".into(), callbacks: Default::default() }

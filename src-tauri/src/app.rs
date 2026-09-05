@@ -498,6 +498,7 @@ pub fn run() {
             crate::ipc::desktop::create_repository,
             crate::ipc::desktop::update_repository,
             crate::ipc::desktop::delete_repository,
+            crate::ipc::desktop::github_app_available,
             crate::ipc::desktop::coding_harnesses,
             crate::ipc::desktop::repository_connection,
             crate::ipc::desktop::begin_repository_github_signin,

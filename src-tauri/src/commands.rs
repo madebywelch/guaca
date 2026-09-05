@@ -909,6 +909,12 @@ pub struct HarnessOnMachine {
     pub sign_in: &'static str,
 }
 
+/// Whether this workspace has a configured GitHub App credential service.
+/// No credentials or broker addresses cross the command boundary.
+pub async fn github_app_available(_state: &AppState) -> Reply<bool> {
+    Ok(crate::repo::github::configured())
+}
+
 /// Which coding harnesses are on this machine, and how to get the ones that are
 /// not.
 ///

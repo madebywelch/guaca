@@ -18,6 +18,7 @@ const createRepository = vi.fn<(draft: RepositoryDraft) => Promise<Repository>>(
 const updateRepository = vi.fn();
 const deleteRepository = vi.fn();
 const setAgentRepository = vi.fn();
+const githubAppAvailable = vi.fn<() => Promise<boolean>>().mockResolvedValue(false);
 const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>();
 
 vi.mock("../lib/ipc", () => ({
@@ -36,6 +37,7 @@ vi.mock("../lib/ipc", () => ({
     deleteRepository: (id: string) => deleteRepository(id),
     setAgentRepository: vi.fn(),
     codingHarnesses: () => codingHarnesses(),
+    githubAppAvailable: () => githubAppAvailable(),
   },
 }));
 
@@ -88,6 +90,7 @@ function repository(over: Partial<Repository> = {}): Repository {
 
 describe("RepositoryList", () => {
   beforeEach(() => {
+    githubAppAvailable.mockResolvedValue(false);
     groupRepositories.mockReset();
     createRepository.mockReset();
     updateRepository.mockReset();
@@ -575,6 +578,7 @@ it("offers Codex and preserves assignments and the gate when switching harness",
 });
 
 it("links through the configured GitHub App while preserving the selected harness", async () => {
+  githubAppAvailable.mockResolvedValue(true);
   const previous = useStore.getState().capabilities;
   useStore.setState({ capabilities: { ...previous, localFiles: false } });
   groupRepositories.mockResolvedValue([]);
@@ -585,7 +589,10 @@ it("links through the configured GitHub App while preserving the selected harnes
     fireEvent.change(screen.getByPlaceholderText(/github.com/), {
       target: { value: "https://github.com/team/project.git" },
     });
-    fireEvent.click(screen.getByLabelText("Use the GitHub App configured on this backend"));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Repository access")).toHaveProperty("value", "github"),
+    );
+    fireEvent.click(screen.getByText("More options"));
     fireEvent.click(screen.getByLabelText("Coding harness: Codex"));
     fireEvent.change(screen.getByLabelText("Commit author name"), {
       target: { value: "Engineer" },
@@ -606,6 +613,54 @@ it("links through the configured GitHub App while preserving the selected harnes
       ),
     );
     expect(screen.queryByLabelText("Access token")).toBeNull();
+  } finally {
+    useStore.setState({ capabilities: previous });
+  }
+});
+
+it("keeps explicit token access and never sends GitHub credentials to another host", async () => {
+  const previous = useStore.getState().capabilities;
+  useStore.setState({ capabilities: { ...previous, localFiles: false } });
+  githubAppAvailable.mockResolvedValue(true);
+  groupRepositories.mockResolvedValue([]);
+  createGithubRepository.mockClear();
+  createRepository.mockClear();
+  createRepository.mockResolvedValue(repository());
+  try {
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Link a repository"));
+    fireEvent.change(screen.getByLabelText("Remote to clone"), {
+      target: { value: "https://github.com/team/private" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Repository access")).toHaveProperty("value", "github"),
+    );
+    expect(screen.queryByLabelText("Access token")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Repository access"), { target: { value: "token" } });
+    fireEvent.change(screen.getByLabelText("Access token"), { target: { value: "test-token" } });
+    fireEvent.click(screen.getByText("Link"));
+    await waitFor(() =>
+      expect(createRepository).toHaveBeenCalledWith(
+        expect.objectContaining({ credential: "test-token" }),
+      ),
+    );
+    expect(createGithubRepository).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByText("Link a repository"));
+    fireEvent.change(screen.getByLabelText("Remote to clone"), {
+      target: { value: "https://git.example/team/project" },
+    });
+    expect(screen.getByLabelText("Repository access")).toHaveProperty("value", "token");
+    expect(screen.getByLabelText("Access token")).toHaveProperty("value", "");
+    fireEvent.click(screen.getByText("Link"));
+    await waitFor(() =>
+      expect(createRepository).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remote: "https://git.example/team/project",
+          credential: undefined,
+        }),
+      ),
+    );
+    expect(createGithubRepository).not.toHaveBeenCalled();
   } finally {
     useStore.setState({ capabilities: previous });
   }

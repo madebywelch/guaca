@@ -382,9 +382,11 @@ runtime, every command, the transcript, the desk, the flow board, the
 schedule, the compost and the plugins that were signed in before the move.
 What it does not have yet:
 
-- **The account sign-in from a box.** The flow is built and tested against a
-  scripted server; guaca.bot has to register the served redirect before the
-  live one completes.
+- **Account sign-in from a VPS.** The operator's exact HTTPS callback must be
+  registered with the account service. Local Docker callbacks use
+  `http://127.0.0.1:<port>/v1/oauth/callback`; guaca-bot migration 0005 registers
+  that path with native loopback port matching. A browser using `localhost`
+  returns to `127.0.0.1` for OAuth. Arbitrary remote hosts are not accepted.
 - **The page that says how to put a tunnel in front of a box.** The image
   and the unit file exist; what to put in front of them on a rented machine
   is written nowhere yet. `GUACA_BIND` defaults to loopback on purpose: a
@@ -638,3 +640,11 @@ public origin. The routine panel prints that address and its dedicated webhook
 secret. That secret cannot call the workspace API, and the workspace token
 cannot post a routine event. Desktop installs retain the existing loopback
 receiver.
+
+
+The repository form checks whether the connected backend has a GitHub App.
+For a GitHub URL it selects that connection by default, before cloning. Token
+access remains an explicit alternative for other accounts or Git services.
+GitHub user authorization follows the clone under Git access; it supplies human
+commit and pull-request attribution. Optional names, instructions and manual
+commit metadata are under More options.

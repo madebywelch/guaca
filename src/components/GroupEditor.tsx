@@ -685,10 +685,8 @@ export function GroupEditor({ group, onClose }: Props) {
               <>
                 <h3 className="settings__title">Repositories</h3>
                 <p className="settings__lede">
-                  The directories on this machine this crew may write code in, and which program
-                  does the writing in each. Linking one gives it to nobody: you hand it to an agent
-                  from that agent&rsquo;s own panel, one at a time, and an agent you hire later does
-                  not inherit it.
+                  Add a codebase for this crew, then assign it to an agent in that agent’s profile.
+                  Repositories and coding tools run on the connected backend.
                 </p>
                 <RepositoryList groupId={group.id} crew={members} />
               </>

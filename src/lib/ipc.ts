@@ -224,6 +224,7 @@ export const api = {
    * cannot be, because the refusal would reach an agent minutes later rather
    * than the person choosing.
    */
+  githubAppAvailable: () => invoke<boolean>("github_app_available"),
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
   setRepositoryAuthor: (id: RepositoryId, author: { name: string; email: string }) =>
     invoke<RepositoryConnection>("set_repository_author", { id, author }),
