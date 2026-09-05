@@ -1531,15 +1531,24 @@ A key is the one field that cannot take part in that comparison, because a store
 one is never read back. So a key box counts as an edit whenever it holds
 anything, spaces excepted, which is the same rule that keeps it out of the patch.
 
-Which is why a save puts every box that stages something back to blank. Blank is
-their resting state: each one means "keep what is stored" and each has a
-placeholder saying what that is, read from what the save returned. A key left on
-screen afterward is indistinguishable from an edit nobody saved, which is how the
-E2B key kept the Save up offering to send itself again. The three durations are
-worse than that, because the runtime clamps them: a box still reading 2000 sits
-under "Saved." claiming a machine sleeps after thirty-three hours when what was
-stored was twenty-four. It is the same read-back the limits have always had,
-finally applied to the fields beside them.
+A save clears every staged key and duration. A blank value means "keep what is
+stored." Provider, E2B and Kernel keys also close their editors. Each shows
+"API key saved," the redacted hint returned by the runtime, and a Change key
+button. Storage is the fact this status reports; saving does not test the
+connection. The Provider pane keeps Test connection available for that. Cancel discards a replacement without clearing the stored
+key, and a failed save leaves the editor and its draft intact. All three editors
+keep their state across section changes, just like the values in them. Changing
+an inference endpoint opens the key editor, because another service usually
+needs another key. Leaving it blank still keeps the saved key, as the hint says.
+
+The three durations stay editable and return to placeholders read from the save's
+answer, because the runtime clamps them: a box still reading 2000 under "Saved."
+would claim a machine sleeps after thirty-three hours when what was stored was
+twenty-four. The limits likewise display what the runtime returned.
+
+Native file pickers share the app's button border, surface and hover treatment.
+File pickers, checkboxes, radio buttons, selects and disclosure summaries also
+carry a pointer cursor, including the labels that toggle a checkbox or radio.
 
 Two things open onto a named section rather than onto the top. The banner that
 says there is no API key opens Provider, because landing on General with the key

@@ -398,6 +398,32 @@ button {
   cursor: pointer;
 }
 
+select:not(:disabled),
+input[type="checkbox"]:not(:disabled),
+input[type="radio"]:not(:disabled),
+input[type="file"]:not(:disabled),
+label:has(input[type="checkbox"]:not(:disabled)),
+label:has(input[type="radio"]:not(:disabled)),
+summary {
+  cursor: pointer;
+}
+
+summary:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+input[type="file"] {
+  max-width: 100%;
+  color: var(--muted);
+  font-size: var(--type-ui);
+}
+
+input[type="file"]::file-selector-button {
+  cursor: inherit;
+  margin-right: var(--space-4);
+}
+
 :focus-visible {
   outline: 2px solid var(--flesh);
   outline-offset: 2px;
@@ -4775,7 +4801,8 @@ button {
   color: var(--faint);
 }
 
-.btn {
+.btn,
+input[type="file"]::file-selector-button {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
@@ -4794,11 +4821,13 @@ button {
   transition: background var(--tempo-tap) var(--ease), border-color var(--tempo-tap) var(--ease);
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled),
+input[type="file"]:not(:disabled)::file-selector-button:hover {
   background: var(--sunken);
 }
 
-.btn:disabled {
+.btn:disabled,
+input[type="file"]:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
@@ -7213,6 +7242,41 @@ button {
 .settings__list .field__label,
 .settings__list .field__hint {
   display: block;
+}
+
+.api-key {
+  border: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.api-key__saved,
+.api-key__entry {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+
+.api-key__saved {
+  margin-bottom: var(--space-3);
+}
+
+.api-key__status {
+  color: var(--mint);
+  font-size: var(--type-ui);
+  font-weight: 500;
+}
+
+.api-key__hint {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-aside);
+}
+
+.api-key__entry .input {
+  flex: 1;
+  min-width: 0;
 }
 
 .settings__foot {
