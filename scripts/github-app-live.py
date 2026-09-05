@@ -25,6 +25,8 @@ spec.loader.exec_module(github)
 def main():
     name = github.repository(os.environ["GUACA_TEST_GITHUB_REPOSITORY"])
     daemon = os.environ["GUACAD"]
+    author = {"name": os.environ["GUACA_TEST_GIT_AUTHOR_NAME"], "email": os.environ["GUACA_TEST_GIT_AUTHOR_EMAIL"]}
+    expected_user = os.environ["GUACA_TEST_GITHUB_USER"]
     with tempfile.TemporaryDirectory(prefix="guaca-github-live-") as temporary:
         root = Path(temporary)
         broker_auth = root / "broker-token"
@@ -46,7 +48,7 @@ def main():
                            GUACA_GITHUB_BROKER=f"http://127.0.0.1:{service.server_port}",
                            GUACA_GITHUB_BROKER_TOKEN_FILE=str(broker_auth))
         # Model and global GitHub credentials cannot make this test pass accidentally.
-        for key in ("GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
+        for key in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"):
             environment.pop(key, None)
         running = subprocess.Popen([daemon], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
@@ -72,8 +74,9 @@ def main():
             groups = call("list_groups")
             group = groups[0] if groups else call("create_group", {"draft": {"name": "GitHub App verification"}})
             remote = "https://github.com/" + name + ".git"
-            repo = call("create_github_repository", {"draft": {"groupId": group["id"], "name": "GitHub App verification", "remote": remote, "harness": "codex", "bench": "own", "gate": "askBeforePushing"}})
+            repo = call("create_github_repository", {"draft": {"groupId": group["id"], "name": "GitHub App verification", "remote": remote, "harness": "codex", "bench": "own", "gate": "askBeforePushing", "author": author}})
             checkout = Path(repo["path"])
+            assert call("repository_connection", {"id": repo["id"]})["author"] == author
 
             def git(args, cwd=checkout, allow=False):
                 result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env=environment, timeout=60)
@@ -108,6 +111,12 @@ def main():
             broker.invalidate(name)
             git(["push", "-u", "origin", branch], bench)
             git(["fetch", "origin"], bench)
+            commit = git(["rev-parse", "HEAD"], bench).stdout.strip()
+            record = github.exchange("https://api.github.com/repos/" + name + "/commits/" + commit, broker.token(name)["token"])
+            assert record["commit"]["author"]["name"] == author["name"]
+            assert record["commit"]["author"]["email"] == author["email"]
+            assert record["author"]["login"].lower() == expected_user.lower(), "GitHub must credit the supplied user"
+            assert record["committer"]["login"].lower() == expected_user.lower()
             connection = git(["config", "--get", "guaca.githubConnection"], bench).stdout.strip()
             helper = Path(connection).parent / "github-helper.py"
             body = root / "pr-body.md"
@@ -126,7 +135,7 @@ def main():
             assert "succeeded" in call("check_repository_connection", {"id": repo["id"]})
             call("clear_repository_credential", {"id": repo["id"]})
             assert git(["fetch", "origin"], bench, allow=True).returncode != 0
-            print(json.dumps({"installationId": broker.installation, "repository": name, "pullRequest": url, "actor": pr["user"]["login"], "checks": ["daemon App clone", "worktree push", "token replacement", "bot draft PR", "read/push check", "disconnect"]}), flush=True)
+            print(json.dumps({"installationId": broker.installation, "repository": name, "pullRequest": url, "actor": pr["user"]["login"], "commitAuthor": record["author"]["login"], "commit": commit, "checks": ["daemon App clone", "user-authored worktree push", "token replacement", "bot draft PR", "read/push check", "disconnect"]}), flush=True)
         finally:
             running.terminate()
             try:

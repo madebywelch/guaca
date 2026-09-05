@@ -77,6 +77,13 @@ def main():
             group = groups[0] if groups else call("create_group", {"draft": {"name": "Container verification"}})
             repo = call("create_github_repository", {"draft": {"groupId": group["id"], "remote": "https://github.com/" + name + ".git", "harness": "claude", "bench": "own"}})
             assert call("repository_connection", {"id": repo["id"]})["githubApp"]
+            author = {"name": "Container Engineer", "email": "engineer@example.com"}
+            updated = call("set_repository_author", {"id": repo["id"], "author": author})
+            assert updated["githubApp"] and updated["author"] == author
+            # Local commit only. The read-only remote test never pushes a ref.
+            docker("exec", "-w", repo["path"], runtime, "git", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "test: container commit attribution")
+            actual = docker("exec", "-w", repo["path"], runtime, "git", "log", "-1", "--format=%an <%ae>").stdout.strip()
+            assert actual == "Container Engineer <engineer@example.com>"
             assert "succeeded" in call("check_repository_connection", {"id": repo["id"]})
             connection = docker("exec", "-w", repo["path"], runtime, "git", "config", "--get", "guaca.githubConnection").stdout.strip()
             helper = str(Path(connection).parent / "github-helper.py")
@@ -86,7 +93,7 @@ def main():
             mounts = json.loads(docker("inspect", runtime, "--format", "{{json .Mounts}}").stdout)
             assert all("private-key" not in m["Source"] and "private_key" not in m["Destination"] for m in mounts)
             docker("exec", runtime, "ssh", "-V")
-            print(json.dumps({"repository": name, "checks": ["container App clone", "Git read/push dry run", "gh API access", "PEM absent from runtime mounts", "SSH installed"]}))
+            print(json.dumps({"repository": name, "checks": ["container App clone", "configured commit author", "Git read/push dry run", "gh API access", "PEM absent from runtime mounts", "SSH installed"]}))
         finally:
             docker("rm", "-f", runtime, broker, check=False)
             docker("volume", "rm", client_volume, data_volume, check=False)

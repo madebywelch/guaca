@@ -5,6 +5,31 @@ The App is independent of the coding harness: Codex, Claude Code and shell
 commands use the same repository connection. Existing token and SSH connections
 remain available. No Guaca account or guaca.bot service is required.
 
+## Commit authorship
+
+The operator is the commit author. Set **Commit author name** and **Commit author
+email** when linking a remote or under its **Git access** panel. Use an email
+associated with the user's GitHub account or their GitHub-provided noreply
+address. The identity lives in the repository's Git config, shared with its
+engineer worktrees, independently of the harness and credential helper. New
+clones can inherit an explicitly configured backend identity, but cannot invent
+one from the container user. Existing linked directories retain their config.
+Older clones with `guaca <guaca@localhost>` need an explicit identity update;
+Guaca cannot infer a human from an App installation owned by an organization.
+Only future commits change. Git configuration supplies the normal author and
+committer defaults; explicit Git environment variables or `--author` can override
+those defaults as usual.
+
+An installation token authenticates a push as the App without changing commit
+authorship. Pull requests opened with that token are still authored by the App.
+Opening PRs as the human requires a separate GitHub App user authorization flow,
+which is not implemented here. It is distinct from installing the App and from
+setting a commit email. These settings do not grant account access or verify
+ownership of an email.
+
+GitHub documents [commit attribution](https://docs.github.com/en/account-and-profile/how-tos/email-preferences/setting-your-commit-email-address)
+and [acting on behalf of a user](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/authenticating-with-a-github-app-on-behalf-of-a-user).
+
 ## What runs where
 
 A separate credential service holds the App's PEM private key. A workspace
@@ -114,7 +139,8 @@ For an explicitly disposable GitHub repository, `scripts/github-app-live.py`
 starts a temporary broker and daemon, links through the daemon API, pushes from
 an engineer worktree, and creates a draft PR as the App. It leaves the PR and
 branch for review, unmerged. An empty repository receives an initial README
-commit so it has a PR base. No model is called.
+commit so it has a PR base. The test checks that GitHub attributes the worktree
+commit to the supplied user while the PR actor remains the App. No model is called.
 
 ```sh
 export GUACAD=/absolute/path/to/guacad
@@ -122,6 +148,9 @@ export GUACA_TEST_GITHUB_CLIENT_ID=your-client-id
 export GUACA_TEST_GITHUB_INSTALLATION_ID=123456
 export GUACA_TEST_GITHUB_REPOSITORY=owner/disposable-repository
 export GUACA_TEST_GITHUB_PRIVATE_KEY_FILE=/absolute/path/private-key.pem
+export GUACA_TEST_GIT_AUTHOR_NAME=your-name
+export GUACA_TEST_GIT_AUTHOR_EMAIL=your-github-noreply-email
+export GUACA_TEST_GITHUB_USER=your-github-login
 python3 scripts/github-app-live.py
 ```
 

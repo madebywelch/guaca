@@ -1356,7 +1356,10 @@ mod tests {
         assert!(config.contains("credential"), "the helper is set for every later push: {config}");
         assert!(config.contains(&credential.display().to_string()), "{config}");
         assert!(!config.contains("tok%2F"), "the token itself never enters the tree: {config}");
-        assert!(config.contains("useConfigOnly = true"), "Git must not guess an author: {config}");
+        assert!(
+            config.to_ascii_lowercase().contains("useconfigonly = true"),
+            "Git must not guess an author: {config}"
+        );
         assert!(!config.contains("name = guaca"), "do not replace the operator identity: {config}");
 
         let _ = tokio::fs::remove_dir_all(&scratch).await;
