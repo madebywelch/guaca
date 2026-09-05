@@ -608,7 +608,10 @@ it does not switch branches. `--no-pull` builds the checkout as it stands.
 nor migrates the desktop workspace into a container.
 
 A fresh desktop installation runs its Rust backend locally. A desktop already
-configured to connect to a remote workspace keeps that preference. In Settings,
+configured to connect to a remote workspace keeps that preference. The native
+process still starts its embedded local runtime; selecting a remote view does
+not stop that runtime. Use the web client when moving the same workspace off
+the laptop so the original copy can remain stopped. In Settings,
 the operator can connect the desktop client to a separately running backend.
 The backend may be a container on the same computer or an always-on VPS, and
 its web client can also be opened directly in a browser. Starting that backend
