@@ -617,6 +617,18 @@ describe("the Save in the foot", () => {
 });
 
 describe("moving between sections", () => {
+  it("opens Compost inside settings and preserves pending edits", () => {
+    useStore.setState({ agents: [] });
+    open();
+    type(/^Your name/, "New name");
+    pane("Compost");
+    expect(screen.getByText("No deleted agents.")).toBeTruthy();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(onClose).not.toHaveBeenCalled();
+    pane("General");
+    expect(field(/^Your name/).value).toBe("New name");
+  });
+
   it("keeps typing that has not been saved", () => {
     open();
     pane("Provider");

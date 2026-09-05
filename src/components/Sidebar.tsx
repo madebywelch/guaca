@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { AgentAvatar, type Look } from "../avatars/AgentAvatar";
 import { FLIGHT_MS, roleOf, usePulseChoreography } from "../lib/choreography";
-import { composted } from "../lib/compost";
 import { prefersReducedMotion } from "../lib/motion";
 import { type DropTarget, railOrder } from "../lib/rail";
 import { useLiveAgents, useStore } from "../lib/store";
@@ -18,7 +17,6 @@ interface Props {
   onEditAgent: (agent: AgentCard) => void;
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
-  onOpenCompost: () => void;
   /** The workspace calendar: every crew's dates, in one place. */
   onOpenCalendar: () => void;
   onOpenSettings: () => void;
@@ -60,7 +58,6 @@ export function Sidebar({
   onEditAgent,
   onEditGroup,
   onOpenCafeteria,
-  onOpenCompost,
   onOpenCalendar,
   onOpenSettings,
   onOpenSearch,
@@ -69,10 +66,6 @@ export function Sidebar({
   onOpenMenu,
 }: Props) {
   const agents = useLiveAgents();
-  // The whole roster, not the live half: what is in the compost is exactly what
-  // `useLiveAgents` filters out, and the footer row below is the only thing in
-  // the rail that asks about it.
-  const everyone = useStore((s) => s.agents);
   const groups = useStore((s) => s.groups);
   const repositories = useStore((s) => s.repositories);
   const building = useStore((s) => s.building);
@@ -468,8 +461,6 @@ export function Sidebar({
     </button>
   );
 
-  const inCompost = useMemo(() => composted(everyone), [everyone]);
-
   const held = drag ? agents.find((a) => a.id === drag.id) : undefined;
 
   return (
@@ -675,9 +666,6 @@ export function Sidebar({
           </div>
         </div>
 
-        {/* Two rows, not four. Making somebody moved to the plus at the top of
-            this rail; what is left down here is the two places you go rather
-            than the two things you make. */}
         <div className="rail__foot">
           <button type="button" className="btn btn--rail" onClick={onOpenCafeteria}>
             <span aria-hidden="true" className="rail__hash">
@@ -685,32 +673,12 @@ export function Sidebar({
             </span>
             Cafeteria
           </button>
-          {/* Always drawn, unlike the compost above it, because an empty
-              calendar is the state it is most worth reaching: the compost is
-              discovered the moment it has something in it, and this is
-              discovered before anybody has put anything on it. */}
           <button type="button" className="btn btn--rail" onClick={onOpenCalendar}>
             <span aria-hidden="true" className="rail__hash">
               ▤
             </span>
             Calendar
           </button>
-          {/* Drawn only while there is something in it, which is what keeps the
-              footer two rows for an operator who has never deleted anybody. It
-              is also how the compost is discovered: the row appears the moment
-              it has a reason to, which is the moment somebody has just deleted
-              an agent and might want it back. The count is on it because the
-              question this row answers from across the room is whether there is
-              anything in there at all. */}
-          {inCompost.length > 0 && (
-            <button type="button" className="btn btn--rail" onClick={onOpenCompost}>
-              <span aria-hidden="true" className="rail__hash">
-                ♻
-              </span>
-              Compost
-              <span className="rail__count">{inCompost.length}</span>
-            </button>
-          )}
           <button type="button" className="btn btn--rail" onClick={onOpenSettings}>
             <span aria-hidden="true" className="rail__hash">
               ⚙
