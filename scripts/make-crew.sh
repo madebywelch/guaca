@@ -17,8 +17,10 @@ ESBUILD=node_modules/.pnpm/node_modules/.bin/esbuild
 # Written inside the project for the same reason.
 mkdir -p docs/img
 "$ESBUILD" scripts/make-crew.ts \
-  --bundle --platform=node --format=esm --log-level=warning \
-  --outfile=node_modules/.cache/make-crew.mjs
+  --bundle --platform=node --format=cjs --log-level=warning \
+  --outfile=node_modules/.cache/make-crew.cjs
 
-node node_modules/.cache/make-crew.mjs > docs/img/crew.svg
+# A failed render must leave the last good illustration intact.
+node node_modules/.cache/make-crew.cjs > node_modules/.cache/crew.svg
+mv node_modules/.cache/crew.svg docs/img/crew.svg
 echo "wrote docs/img/crew.svg"
