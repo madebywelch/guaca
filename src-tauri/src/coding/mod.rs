@@ -1,8 +1,8 @@
 //! Running a coding harness against a linked repository.
 //!
 //! Guaca does not write code. It starts something that does, in a directory the
-//! operator linked, and reads what comes back. There are two of those things,
-//! `pi` and Claude Code, and the operator installs and signs in to whichever of
+//! operator linked, and reads what comes back. Codex, Claude Code and `pi` each
+//! own their model settings and credentials. The operator installs and signs in to whichever of
 //! them they use.
 //!
 //! ## Why a harness and not tools
@@ -19,7 +19,7 @@
 //! So the harness keeps its own loop, its own context and its own budget, and
 //! Guaca spends one tool round starting it.
 //!
-//! ## Why there are two, and why they are not one with a setting
+//! ## Why each harness is a program rather than a provider setting
 //!
 //! Because a subscription is spent by the program it was issued to. The
 //! argument is in [`Harness`], and it is the reason this module is a dispatch
@@ -33,15 +33,15 @@
 //!
 //! ## Why the credentials are not ours
 //!
-//! Both harnesses read their own auth: `pi` from `~/.pi/agent/auth.json` or the
-//! environment, Claude Code from its own sign-in. Each is already signed in or
+//! The harnesses read their own auth: `pi` from `~/.pi/agent/auth.json` or the
+//! environment, Codex and Claude Code from their own sign-ins. Each is already signed in or
 //! it is not, and Guaca passing a key would put the operator's Guaca key on a
 //! second bill under a second provider for work they are already paying for.
 //! The consequence is stated rather than hidden: a job's spend does not appear
 //! in this app's usage table, because this app did not spend it. What the job
 //! reports back is what the harness says it cost.
 //!
-//! ## A job is reachable while it runs, on one of the two
+//! ## Claude Code jobs are reachable while they run
 //!
 //! `code` returns as soon as the process is up, which is what keeps the agent
 //! that asked from reading as `Thinking` for the length of a change to a
@@ -56,7 +56,8 @@
 //! produced. `pi` has no equivalent and gets none of it, which is a difference
 //! between the harnesses rather than a gap: everything the bridge adds is an
 //! improvement on a job that already worked without it, so every part of it
-//! fails open.
+//! fails open on the existing adapters. Codex has no bridge in this runner and
+//! refuses jobs requiring the push gate before any process starts.
 //!
 //! ## What is not here
 //!

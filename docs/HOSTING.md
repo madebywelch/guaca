@@ -89,14 +89,15 @@ host, use `host.docker.internal` (the compose file supplies the Linux mapping).
 A model running on a sleeping laptop will still stop answering, even when
 Guaca itself runs on a VPS.
 
-These client-local capabilities remain unavailable:
+The backend may run the official Codex and Claude CLIs under its own user.
+Guaca does not import the laptop's credentials or provide a Claude.ai login
+flow. Configure the CLI on the backend, as described under **Coding inside
+the container** below. This applies to an operator-controlled workspace;
+offering consumer subscription routing as a managed service is a separate
+product and policy question.
 
-- **A Claude plan as the provider.** `Provider::Claude` works by being the
-  program: `claude` runs where the operator signed in, so the credential never
-  leaves the program it was issued to. There is no version of that which ships
-  the credential to a box. `docs/PROTOCOL.md`.
-- **A Claude plan for coding.** The desktop sign-in is not imported. Claude Code
-  is available on the server when `ANTHROPIC_API_KEY` is configured.
+This client-local capability remains unavailable:
+
 - **A path on the operator's disk.** Attachments named by path, and a saved
   copy landing in the downloads folder. On a server both become the browser's
   own upload and download; the capability is gone and the ability to hand a
@@ -298,11 +299,9 @@ reached with a key the box holds. Unlinking a clone removes it, clone and
 credential both: they were the workspace's, not the operator's, and the
 check is the clone living under `repos/` rather than the row's say-so.
 
-The harness on a box is `pi`, or Claude Code spending `ANTHROPIC_API_KEY`.
-The plan argument (`docs/PROTOCOL.md`) is about a consumer credential on the
-operator's own machine, and a key in the daemon's environment is neither, so
-`coding_harnesses` withholds Claude Code only while the key is absent, and
-the refusal says exactly that. The image ships `git`, `gh` and `claude`.
+A repository offers Codex, Claude Code and pi on either host. Availability is
+reported by the installed program, not inferred from an API key. The image
+ships all three plus `git` and `gh`.
 
 ## Two loopback origins reach a browser through the daemon
 
@@ -460,12 +459,66 @@ a second scheduler or treating the first process's work as interrupted.
 
 ## Coding inside the container
 
-The image includes pinned releases of both `pi` and Claude Code, plus Git,
+The image includes pinned releases of Codex, `pi` and Claude Code, plus Git,
 GitHub CLI, Node 22, pnpm, Python 3, a C/C++ build toolchain and ripgrep.
 `docker-compose.yml` explicitly forwards the optional `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `GH_TOKEN` environment variables.
+`CODEX_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY` and `GH_TOKEN` environment variables.
 These configure the coding tools; the inference key entered in Guaca Settings
 is separate and is never silently reused by a harness.
+
+For a personally operated backend, sign in as the container's `guaca` user
+(the default), after starting it:
+
+```sh
+docker compose exec guacad codex login --device-auth
+docker compose exec guacad codex login status
+docker compose exec guacad claude auth login
+docker compose exec guacad claude auth status
+```
+
+Codex prints the verification link and device code. Claude's CLI can print a
+login URL and accept the code when its callback cannot reach the container.
+These operations belong to the official programs. Their home is
+`/var/lib/guaca`, on the persistent volume; never sign in as root and expect the
+daemon user to find that session. Reopen the repository panel to refresh the
+CLI status. Codex coding authentication is separate from Guaca's ChatGPT
+provider sign-in. The model settings for coding also belong to each CLI.
+
+Claude's noninteractive CLI prioritizes `ANTHROPIC_API_KEY` over subscription
+OAuth. Leave that variable unset when intending to use a CLI-owned subscription;
+otherwise jobs can incur API charges. `claude setup-token` also supports the
+CLI's `CLAUDE_CODE_OAUTH_TOKEN` environment variable for personally operated
+headless scripts; it is not a Guaca OAuth client or a token field in Settings.
+The compose file does not import a laptop's OAuth credentials automatically.
+See [Codex authentication](https://developers.openai.com/codex/auth),
+[Claude authentication](https://code.claude.com/docs/en/authentication) and
+[Claude's usage terms](https://code.claude.com/docs/en/legal-and-compliance).
+A managed service must use a permitted API/provider authentication arrangement;
+CLI availability alone is not authorization to route users' consumer plans.
+
+In a group's repository panel, **Git access** is independent of either CLI
+sign-in. For HTTPS, save a repository-scoped access token and the username your
+Git service requires. GitHub's token creation link is included; select the
+repository and grant Contents read/write (workflow edits need their own
+permission). SSH uses keys configured under the backend user. The token is
+stored outside the checkout, mode 0600, replaced atomically, and scoped to the
+origin's host **and path**. Linked agent worktrees share the repository's helper.
+Existing tokens keep their configured path; saving again applies the tighter
+scope. **Remove saved token** removes Guaca's local copy; revoke it at the Git
+service too if it must become unusable elsewhere.
+
+**Check read and push access** runs `ls-remote` and a push dry run. It changes
+no remote refs and distinguishes read failure from push failure. Branch
+protection and server hooks can only decide an actual update. A separate push
+URL is shown explicitly; an origin token does not grant access to that other
+address. Git access does not sign in `gh` for pull-request API operations;
+configure `gh auth login` or `GH_TOKEN` separately if jobs need those.
+
+Codex jobs support worktrees, streamed progress, completion and cancellation.
+The initial `exec` adapter has no correction mailbox or Guaca push gate. Jobs
+with **Ask me before pushing** enabled are blocked before starting; use Claude
+Code to retain the gate or explicitly turn it off. Changing harness preserves
+the repository's path, engineer assignments and gate setting.
 
 A container does not inherit the host's installed dependencies, login sessions,
 or unmounted files. For a working tree on the host, add a volume such as
@@ -520,3 +573,17 @@ the desktop keychain or a coding tool's sign-in. Keep the original workspace
 stopped after migration so its schedules do not run alongside the copy. The
 process lock prevents two hosts sharing one directory, not two independent
 copies. A browser connected to the new daemon starts no local backend.
+
+The Git integration suite (`tests/repository_auth.rs`) runs a local authenticated
+smart-HTTP server and exercises clone, pull, a real push from a linked worktree,
+credential rotation, revocation and repository-path scoping. It uses dummy
+credentials and no external Git service. Claude tests remain offline unless
+explicitly selected. An optional live Codex contract test pins a small model:
+
+```sh
+cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --features server --test codex_live -- --ignored
+```
+
+It uses `gpt-5.4-mini` at low reasoning in a disposable repository and never
+uses the operator's configured default model. It makes a file, checks it and
+commits locally, with no remote configured.

@@ -127,14 +127,12 @@ impl Absent {
                  local workspace"
             }
             Absent::ClaudeProvider => {
-                "a Claude plan pays for a turn by running the `claude` program where you signed \
-                 in, which is your own machine, so it is not offered on a server. Use an API key \
-                 or a ChatGPT subscription here, or run this crew in a local workspace"
+                "this backend does not offer the Claude CLI provider. Choose an API provider \
+                 or a ChatGPT subscription, or use a backend with Claude Code configured"
             }
             Absent::ClaudeCodeHarness => {
-                "Claude Code spends the plan you signed in to on your own machine, so a plan is \
-                 not offered on a server. Set ANTHROPIC_API_KEY where this workspace runs and \
-                 Claude Code spends that key instead, or pick the other harness"
+                "this backend does not offer the Claude Code harness. Configure the official \
+                 CLI on the backend, or choose another coding harness"
             }
             Absent::LocalFiles => {
                 "this workspace runs on a server, so it cannot read a path on your own machine. \

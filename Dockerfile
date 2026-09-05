@@ -54,8 +54,7 @@ FROM node:22-bookworm-slim
 # `curl` is the health check. TLS roots are for the model endpoints, the
 # sandboxes and the plugins the daemon calls out to. `git` and `gh` are what a
 # remote-linked repository is cloned, fetched and pushed with, and `claude` is
-# the coding harness, which spends ANTHROPIC_API_KEY when the operator sets it
-# (a plan cannot be signed in to here, and is not offered).
+# a coding harness. Authentication is configured under the backend user.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git python3 build-essential ripgrep \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
@@ -88,7 +87,8 @@ COPY --from=web /app/dist /usr/share/guaca/web
 # port reaches it; the container's network namespace is the boundary the
 # loopback default draws on bare metal. Publish it to 127.0.0.1 on the host
 # and put a tunnel in front, as the compose file does.
-ENV GUACA_ROOT=/var/lib/guaca \
+ENV HOME=/var/lib/guaca \
+    GUACA_ROOT=/var/lib/guaca \
     GUACA_BIND=0.0.0.0:8787 \
     GUACA_WEB=/usr/share/guaca/web \
     GUAC_LOG=guac=info,warn

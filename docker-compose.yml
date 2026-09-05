@@ -22,6 +22,7 @@ services:
       GUACA_TOKEN: ${GUACA_TOKEN:-}
       # Coding harness credentials, separate from the model key in Settings.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CODEX_API_KEY: ${CODEX_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GH_TOKEN: ${GH_TOKEN:-}

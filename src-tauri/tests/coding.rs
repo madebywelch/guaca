@@ -83,6 +83,7 @@ fn write_stand_in(dir: &Path, name: &str, canned: &str) {
          if [ \"$1\" = '--version' ]; then echo 'stand-in'; exit 0; fi\n\
          : > {ARGV}\n\
          for arg in \"$@\"; do printf '%s\\n<<>>\\n' \"$arg\" >> {ARGV}; done\n\
+         if [ -f .noisy ]; then dd if=/dev/zero bs=1024 count=256 >&2 2>/dev/null; fi\n\
          if [ -f {LINGER} ]; then sleep \"$(cat {LINGER})\"; fi\n\
          if [ -f {SAY} ]; then cat {SAY}; fi\n\
          if [ -f {EXIT} ]; then exit \"$(cat {EXIT})\"; fi\n\
@@ -94,6 +95,22 @@ fn write_stand_in(dir: &Path, name: &str, canned: &str) {
     file.write_all(script.as_bytes()).unwrap();
     drop(file);
     std::fs::set_permissions(&at, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+}
+
+#[tokio::test]
+async fn a_noisy_harness_cannot_fill_stderr_and_deadlock() {
+    stand_ins();
+    let repo = a_repository("noisy");
+    std::fs::write(repo.join(".noisy"), "").unwrap();
+    let done = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        coding::run(Which::Codex, repo.to_str().unwrap(), "work", None, |_| {}),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(done.failed.is_none());
+    let _ = std::fs::remove_dir_all(repo);
 }
 
 const PI_SUCCESS: &str = concat!(
@@ -366,6 +383,42 @@ async fn a_version_nothing_can_read_runs_the_job_without_a_bridge() {
     ));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_codex_job_cannot_silently_skip_the_repository_push_gate() {
+    stand_ins();
+    let repo = a_repository("codex-gate");
+    let stub = serve(|body| {
+        if anyone_said(body, "push-approval gate") {
+            Script::Say("The repository requires its push gate.".into())
+        } else {
+            Script::Code("make a change".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Engineer"], GuardLimits::default());
+    let engineer = h.agent_named("Engineer").unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: engineer.group_id,
+            name: "code".into(),
+            path: repo.to_string_lossy().into(),
+            note: String::new(),
+            harness: Which::Codex,
+            gate: Gate::AskBeforePushing,
+            remote: None,
+            bench: Bench::Shared,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+    let run = h.runtime.send_from_human(engineer.id, "make a change").unwrap();
+    h.settle(run).await;
+    assert!(!repo.join(ARGV).exists(), "no subprocess may start before the gate is resolved");
+    assert!(h.channel_texts("Engineer").iter().any(|text| text.contains("requires its push gate")));
+    let _ = std::fs::remove_dir_all(repo);
+}
+
 // ---- the whole path ------------------------------------------------------
 
 /// The agent that asked is told what the harness said, in its own channel.
@@ -377,59 +430,65 @@ async fn a_version_nothing_can_read_runs_the_job_without_a_bridge() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agent_is_told_what_the_harness_it_was_given_said() {
     stand_ins();
-    let repo = a_repository("end-to-end");
+    for which in Which::ALL {
+        let repo = a_repository(&format!("end-to-end-{}", which.as_str()));
 
-    // The second call is the agent reading the finished job back. Branching on
-    // what it was sent rather than on a counter: a turn can take more than one
-    // call, and a counter would make this depend on how many.
-    let stub = serve(|body| {
-        if anyone_said(body, "has finished") {
-            Script::Say("The coding agent fixed the flaky test and pushed.".into())
-        } else {
-            Script::Code("fix the flaky test".into())
-        }
-    })
-    .await;
-    let h = harness(&stub, &["Engineer"], GuardLimits::default());
-
-    let engineer = h.agent_named("Engineer").unwrap();
-    let linked = h
-        .runtime
-        .store()
-        .create_repository(&CleanRepository {
-            group_id: engineer.group_id,
-            name: "guaca".into(),
-            path: repo.to_string_lossy().to_string(),
-            note: String::new(),
-            harness: Which::Claude,
-            gate: Gate::Open,
-            // Pinned rather than defaulted. These tests are about the argument
-            // vector a harness is started with and the directory it is started
-            // in, and a worktree would put that directory somewhere the
-            // stand-in's recording is not. What the default does instead is
-            // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
-            remote: None,
-            bench: Bench::Shared,
+        // The second call is the agent reading the finished job back. Branching on
+        // what it was sent rather than on a counter: a turn can take more than one
+        // call, and a counter would make this depend on how many.
+        let stub = serve(|body| {
+            if anyone_said(body, "has finished") {
+                Script::Say("The coding agent fixed the flaky test and pushed.".into())
+            } else {
+                Script::Code("fix the flaky test".into())
+            }
         })
-        .unwrap();
-    h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
+        .await;
+        let h = harness(&stub, &["Engineer"], GuardLimits::default());
 
-    let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
-    h.settle(run).await;
+        let engineer = h.agent_named("Engineer").unwrap();
+        let linked = h
+            .runtime
+            .store()
+            .create_repository(&CleanRepository {
+                group_id: engineer.group_id,
+                name: "guaca".into(),
+                path: repo.to_string_lossy().to_string(),
+                note: String::new(),
+                harness: which,
+                gate: Gate::Open,
+                // Pinned rather than defaulted. These tests are about the argument
+                // vector a harness is started with and the directory it is started
+                // in, and a worktree would put that directory somewhere the
+                // stand-in's recording is not. What the default does instead is
+                // `a_job_runs_in_a_work_tree_of_the_agents_own` below.
+                remote: None,
+                bench: Bench::Shared,
+            })
+            .unwrap();
+        h.runtime.store().set_agent_repository(engineer.id, Some(linked.id)).unwrap();
 
-    // The job outlives the turn that started it, which is the whole shape of
-    // this feature: the tool returns as soon as the process is up.
-    h.wait_until("the coding job is reported back", |h| {
-        h.channel_texts("Engineer").iter().any(|line| line.contains("fixed the flaky test"))
-    })
-    .await;
+        let run = h.runtime.send_from_human(h.id("Engineer"), "fix the flaky test").unwrap();
+        h.settle(run).await;
 
-    let argv = argv_at(&repo);
-    assert!(argv.contains(&"stream-json".to_string()), "the column was not read: {argv:?}");
-    // Contained rather than equal: the brief a job is started with carries the
-    // footing in front of it, which the test below is the test of.
-    assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
-    let _ = std::fs::remove_dir_all(&repo);
+        // The job outlives the turn that started it, which is the whole shape of
+        // this feature: the tool returns as soon as the process is up.
+        h.wait_until("the coding job is reported back", |h| {
+            h.channel_texts("Engineer").iter().any(|line| line.contains("fixed the flaky test"))
+        })
+        .await;
+
+        let argv = argv_at(&repo);
+        match which {
+            Which::Claude => assert!(argv.contains(&"stream-json".to_string())),
+            Which::Codex => assert_eq!(argv[0], "exec"),
+            Which::Pi => assert!(argv.contains(&"--mode".to_string())),
+        }
+        // Contained rather than equal: the brief a job is started with carries the
+        // footing in front of it, which the test below is the test of.
+        assert!(argv.iter().any(|arg| arg.contains("fix the flaky test")), "{argv:?}");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
 }
 
 /// The one announcement this app asks for, and the one thing that outlives the
