@@ -1381,6 +1381,17 @@ CREATE INDEX occasions_when ON occasions (starts_at);
 CREATE INDEX occasions_crew ON occasions (group_id, starts_at);
 "#,
     ),
+    (
+        47,
+        r#"
+-- An agent remembers its own replies wherever they were filed. The pair
+-- index orders by recipient before time, so it cannot bound a read of the
+-- newest messages written to all recipients without sorting the whole past.
+CREATE INDEX messages_author_time
+    ON messages (from_agent, created_at DESC, id DESC)
+    WHERE from_kind = 'agent';
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

@@ -3542,24 +3542,24 @@ impl Runtime {
 
         let roster = self.roster_excluding(agent_id);
         let names = self.name_table();
-        // Nothing newer than what this turn is answering. `deliver` writes to
-        // the store before the inbox, so an operator's second line typed while
-        // the first was being picked up is in this read while still queued
-        // behind the batch — and rendered from here it would sit *above* the
-        // message it corrects, because the batch is rendered last. Left out,
-        // it reaches the model through intake instead, in the order it was
-        // said. Ties are kept: within one millisecond there is no order to
-        // restore, and the id filter already keeps the batch itself out.
+        // Newer incoming messages reach the model through intake, after the
+        // batch they might correct. Completed work of our own stays visible,
+        // including answers filed in a peer's channel, even when the batch
+        // queued before that work finished. The store applies this boundary
+        // before the limit so a backlog cannot crowd the history out.
         let newest = batch.iter().map(|e| e.created_at).max().unwrap_or(i64::MAX);
         let history = self
             .inner
             .store
-            .channel_messages(agent_id, HISTORY_WINDOW)
-            .unwrap_or_default()
+            .agent_history(agent_id, newest, HISTORY_WINDOW)
+            .unwrap_or_else(|err| {
+                tracing::warn!(%agent_id, %err, "could not read this agent's conversation history");
+                Vec::new()
+            })
             .into_iter()
             // The batch is rendered separately; including it twice would make
             // the model answer itself.
-            .filter(|e| !batch.iter().any(|b| b.id == e.id) && e.created_at <= newest)
+            .filter(|e| !batch.iter().any(|b| b.id == e.id))
             .collect::<Vec<_>>();
 
         // Everything the prompt already carries, which is what stops a message
@@ -3774,12 +3774,16 @@ impl Runtime {
                 break;
             }
 
-            // Before the step is claimed, so what arrived is paid for by the
-            // call it is part of rather than by the one after it. A turn that
-            // is about to be cut off by the budget still reads its last
-            // message: taking it in costs nothing and releases the run holding
-            // it, and leaving it queued behind a turn that is ending buys
-            // nobody anything.
+            // Claim before intake. An exhausted turn cannot show a new
+            // message to the model, so consuming it here would settle its run
+            // without doing the work. Left queued, it keeps its own budget.
+            // One claim per model call, not per turn.
+            let reserved = { self.inner.guard.lock().run_within(run_id, limits).reserve_step() };
+            if !reserved {
+                budget_exhausted = true;
+                break;
+            }
+
             let arrived = self.take_in(mode, &names, &mut rendered, &mut messages, intake);
             if !arrived.is_empty() {
                 self.deliver_files(&card, &arrived, modalities, &mut messages).await;
@@ -3793,15 +3797,6 @@ impl Runtime {
                 if mode == ReplyMode::NoteOnly && arrived.iter().any(|e| e.intent.is_work()) {
                     mode = ReplyMode::Assigned;
                 }
-            }
-
-            // One claim per model call. Claiming per turn instead would let a
-            // tool-looping turn bill max_rounds times against one unit of
-            // budget, which is how a bounded run still runs up a bill.
-            let reserved = { self.inner.guard.lock().run_within(run_id, limits).reserve_step() };
-            if !reserved {
-                budget_exhausted = true;
-                break;
             }
 
             let request = ChatRequest {

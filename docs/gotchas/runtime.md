@@ -19,6 +19,15 @@ code.
 - **A thread between two agents is `pair_messages`.** A send is filed under the
   recipient and the answer under the sender, so a thread assembled from one
   channel's rows is missing messages nobody can account for.
+- **An agent's prompt reads `agent_history`, not its channel.** Automatic
+  replies are filed under the recipient; reading only the sender's channel
+  made it forget what it had answered. Its own completed work remains visible
+  even if the next question queued before that work finished. Incoming history
+  is cut before its size is bounded, so a busy inbox cannot evict older context.
+- **Reserve the next model call before taking in new work.** Intake consumes
+  the envelope and releases its run. An exhausted turn that takes it first
+  marks work handled without ever showing it to the model. It must stay queued
+  and run against its own budget instead.
 - **`ToolStarted` is emitted before the call, and that ordering is the
   feature.** A `run_command` can sit for a minute. A call reported only once it
   comes back is silence for exactly as long as the wait it was meant to explain,
