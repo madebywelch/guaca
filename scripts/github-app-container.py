@@ -16,7 +16,7 @@ import urllib.request
 def main():
     stem = "guaca-app-check-" + secrets.token_hex(4)
     runtime, broker = stem + "-runtime", stem + "-broker"
-    client_volume, data_volume = stem + "-client", stem + "-data"
+    client_volume, data_volume, user_volume = stem + "-client", stem + "-data", stem + "-users"
     authorization = secrets.token_hex(32)
     environment = dict(os.environ, GUACA_TOKEN=authorization)
     name = os.environ["GUACA_TEST_GITHUB_REPOSITORY"]
@@ -32,17 +32,17 @@ def main():
         config.write_text(json.dumps({"clientId": os.environ["GUACA_TEST_GITHUB_CLIENT_ID"],
                                      "installationId": int(os.environ["GUACA_TEST_GITHUB_INSTALLATION_ID"]),
                                      "repositories": [name], "privateKeyFile": "/run/secrets/github_private_key",
-                                     "tokenFile": "/run/github-client/token", "initializeToken": True,
+                                     "tokenFile": "/run/github-client/token", "userStateDir": "/var/lib/guaca-github/users", "initializeToken": True,
                                      "tokenUid": 1000, "listen": "0.0.0.0:8791"}))
         config.chmod(0o600)
         try:
             docker("network", "create", stem)
-            for volume in (client_volume, data_volume):
+            for volume in (client_volume, data_volume, user_volume):
                 docker("volume", "create", volume)
             docker("run", "-d", "--init", "--read-only", "--name", broker, "--network", stem,
                    "--mount", f"type=bind,source={config},target=/run/secrets/github_config,readonly",
                    "--mount", f"type=bind,source={os.environ['GUACA_TEST_GITHUB_PRIVATE_KEY_FILE']},target=/run/secrets/github_private_key,readonly",
-                   "-v", client_volume + ":/run/github-client", os.environ["GUACA_GITHUB_BROKER_IMAGE"])
+                   "-v", client_volume + ":/run/github-client", "-v", user_volume + ":/var/lib/guaca-github", os.environ["GUACA_GITHUB_BROKER_IMAGE"])
             for _ in range(30):
                 if docker("exec", broker, "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8791/health',timeout=1)", check=False).returncode == 0:
                     break
@@ -87,16 +87,18 @@ def main():
             assert "succeeded" in call("check_repository_connection", {"id": repo["id"]})
             connection = docker("exec", "-w", repo["path"], runtime, "git", "config", "--get", "guaca.githubConnection").stdout.strip()
             helper = str(Path(connection).parent / "github-helper.py")
-            answer = docker("exec", "-w", repo["path"], runtime, "python3", helper, "gh", "api", "repos/" + name, "--jq", ".full_name").stdout.strip()
-            assert answer.lower() == name.lower()
+            assert call("repository_github_user", {"id": repo["id"]})["status"] == "signedOut"
+            unsigned = docker("exec", "-w", repo["path"], runtime, "python3", helper, "gh", "api", "repos/" + name, "--jq", ".full_name", check=False)
+            assert unsigned.returncode != 0, "gh must not fall back to the bot before user authorization"
             docker("exec", runtime, "test", "!", "-e", "/run/secrets/github_private_key")
             mounts = json.loads(docker("inspect", runtime, "--format", "{{json .Mounts}}").stdout)
             assert all("private-key" not in m["Source"] and "private_key" not in m["Destination"] for m in mounts)
+            assert all(m.get("Name") != user_volume for m in mounts)
             docker("exec", runtime, "ssh", "-V")
-            print(json.dumps({"repository": name, "checks": ["container App clone", "configured commit author", "Git read/push dry run", "gh API access", "PEM absent from runtime mounts", "SSH installed"]}))
+            print(json.dumps({"repository": name, "checks": ["container App clone", "configured commit author", "Git read/push dry run", "gh requires user authorization", "PEM and user grants absent from runtime mounts", "SSH installed"]}))
         finally:
             docker("rm", "-f", runtime, broker, check=False)
-            docker("volume", "rm", client_volume, data_volume, check=False)
+            docker("volume", "rm", client_volume, data_volume, user_volume, check=False)
             docker("network", "rm", stem, check=False)
 
 

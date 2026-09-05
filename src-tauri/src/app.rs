@@ -320,6 +320,7 @@ pub fn run() {
                 Err(err) => tracing::warn!(%err, "no menu bar presence this session"),
             }
 
+            tauri::async_runtime::block_on(crate::repo::github::refresh_helpers(&config_dir))?;
             let started = runtime.start_all()?;
             // Agents keep their own appointments.
             runtime.start_scheduler();
@@ -499,6 +500,10 @@ pub fn run() {
             crate::ipc::desktop::delete_repository,
             crate::ipc::desktop::coding_harnesses,
             crate::ipc::desktop::repository_connection,
+            crate::ipc::desktop::begin_repository_github_signin,
+            crate::ipc::desktop::poll_repository_github_signin,
+            crate::ipc::desktop::repository_github_user,
+            crate::ipc::desktop::sign_out_repository_github_user,
             crate::ipc::desktop::set_repository_author,
             crate::ipc::desktop::create_github_repository,
             crate::ipc::desktop::set_repository_github,

@@ -25,7 +25,6 @@ spec.loader.exec_module(github)
 def main():
     name = github.repository(os.environ["GUACA_TEST_GITHUB_REPOSITORY"])
     daemon = os.environ["GUACAD"]
-    author = {"name": os.environ["GUACA_TEST_GIT_AUTHOR_NAME"], "email": os.environ["GUACA_TEST_GIT_AUTHOR_EMAIL"]}
     expected_user = os.environ["GUACA_TEST_GITHUB_USER"]
     with tempfile.TemporaryDirectory(prefix="guaca-github-live-") as temporary:
         root = Path(temporary)
@@ -35,7 +34,7 @@ def main():
         broker = github.Broker({"clientId": os.environ["GUACA_TEST_GITHUB_CLIENT_ID"],
                                 "installationId": int(os.environ["GUACA_TEST_GITHUB_INSTALLATION_ID"]),
                                 "privateKeyFile": os.environ["GUACA_TEST_GITHUB_PRIVATE_KEY_FILE"],
-                                "tokenFile": str(broker_auth), "repositories": [name]})
+                                "tokenFile": str(broker_auth), "userStateDir": str(root / "broker-private"), "repositories": [name]})
         service = ThreadingHTTPServer(("127.0.0.1", 0), github.handler(broker))
         worker = threading.Thread(target=service.serve_forever, daemon=True)
         worker.start()
@@ -74,9 +73,26 @@ def main():
             groups = call("list_groups")
             group = groups[0] if groups else call("create_group", {"draft": {"name": "GitHub App verification"}})
             remote = "https://github.com/" + name + ".git"
-            repo = call("create_github_repository", {"draft": {"groupId": group["id"], "name": "GitHub App verification", "remote": remote, "harness": "codex", "bench": "own", "gate": "askBeforePushing", "author": author}})
+            repo = call("create_github_repository", {"draft": {"groupId": group["id"], "name": "GitHub App verification", "remote": remote, "harness": "codex", "bench": "own", "gate": "askBeforePushing"}})
             checkout = Path(repo["path"])
+            flow = call("begin_repository_github_signin", {"id": repo["id"]})
+            print(json.dumps({"verificationUrl": flow["verificationUri"], "userCode": flow["userCode"]}), flush=True)
+            deadline = time.time() + flow["expiresIn"]
+            interval = flow["interval"]
+            while time.time() < deadline:
+                time.sleep(interval)
+                signed_in = call("poll_repository_github_signin", {"id": repo["id"], "flowId": flow["flowId"]})
+                if signed_in["status"] == "authorized":
+                    break
+                interval = signed_in.get("interval") or interval
+            else:
+                raise RuntimeError("GitHub user sign-in expired")
+            assert signed_in["login"].lower() == expected_user.lower()
+            author = signed_in["author"]
             assert call("repository_connection", {"id": repo["id"]})["author"] == author
+            # Credentials survive the broker restarting, without a new device flow.
+            restarted = github.Broker(broker.config)
+            assert restarted.users.status(name)["login"] == signed_in["login"]
 
             def git(args, cwd=checkout, allow=False):
                 result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env=environment, timeout=60)
@@ -130,12 +146,18 @@ def main():
             url = created.stdout.strip()
             assert url.startswith("https://github.com/" + name + "/pull/")
             pr = github.exchange("https://api.github.com/repos/" + name + "/pulls/" + url.rsplit("/", 1)[1], broker.token(name)["token"])
-            assert pr["draft"] and pr["user"]["type"] == "Bot"
+            assert pr["draft"] and pr["user"]["login"].lower() == expected_user.lower()
             assert call("repository_connection", {"id": repo["id"]})["githubApp"]
             assert "succeeded" in call("check_repository_connection", {"id": repo["id"]})
+            call("sign_out_repository_github_user", {"id": repo["id"]})
+            try:
+                broker.users.token(name)
+                raise AssertionError("Signed-out user must not obtain a token")
+            except github.Failure:
+                pass
             call("clear_repository_credential", {"id": repo["id"]})
             assert git(["fetch", "origin"], bench, allow=True).returncode != 0
-            print(json.dumps({"installationId": broker.installation, "repository": name, "pullRequest": url, "actor": pr["user"]["login"], "commitAuthor": record["author"]["login"], "commit": commit, "checks": ["daemon App clone", "user-authored worktree push", "token replacement", "bot draft PR", "read/push check", "disconnect"]}), flush=True)
+            print(json.dumps({"installationId": broker.installation, "repository": name, "pullRequest": url, "actor": pr["user"]["login"], "commitAuthor": record["author"]["login"], "commit": commit, "checks": ["daemon App clone", "user-authored worktree push", "token replacement", "user draft PR", "read/push check", "disconnect"]}), flush=True)
         finally:
             running.terminate()
             try:

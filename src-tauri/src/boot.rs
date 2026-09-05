@@ -153,6 +153,7 @@ pub async fn open(
         sink,
     );
 
+    crate::repo::github::refresh_helpers(&paths.config).await.map_err(|err| err.to_string())?;
     runtime.hold_workspace_lease(lease);
 
     let started = runtime.start_all().map_err(|err| format!("could not start the crew: {err}"))?;

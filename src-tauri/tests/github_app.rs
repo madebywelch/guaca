@@ -40,9 +40,15 @@ async fn git_and_gh_share_app_access_across_worktrees_and_disconnect_fails_close
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/v1/token", post(token)).with_state(requests))
-            .await
-            .unwrap();
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/v1/token", post(token))
+                .route("/v1/user/token", post(token))
+                .with_state(requests),
+        )
+        .await
+        .unwrap();
     });
     let broker_token = root.join("broker-token");
     std::fs::write(&broker_token, "test-broker-authorization").unwrap();

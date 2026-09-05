@@ -726,4 +726,6 @@ set that name and email. GitHub App authentication does not replace it with a
 bot identity. Missing backend identity requires operator configuration before
 committing; Guaca never guesses the installation owner's identity. See
 [GitHub access](GITHUB.md#commit-authorship) for contribution attribution and
-the separate identity GitHub shows on App-created pull requests.
+GitHub user sign-in, which sets commit attribution and opens pull requests under
+the user's account. Installation alone grants Git access; PR commands require
+that additional user authorization and never fall back to a bot.

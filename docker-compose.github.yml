@@ -17,6 +17,7 @@ services:
     read_only: true
     volumes:
       - github-client:/run/github-client
+      - github-users:/var/lib/guaca-github
     secrets:
       - github_config
       - github_private_key
@@ -30,3 +31,4 @@ secrets:
     file: ${GUACA_GITHUB_PRIVATE_KEY_FILE:?Set the path to your GitHub App PEM file}
 volumes:
   github-client:
+  github-users:

@@ -6,6 +6,7 @@ import {
   type RepositoryId,
 } from "../lib/types";
 import { GitAuthor } from "./GitAuthor";
+import { RepositoryGithubUser } from "./RepositoryGithubUser";
 
 /** Git access belongs to the repository, independently of the coding harness. */
 export function RepositoryConnection({ id }: { id: RepositoryId }) {
@@ -55,6 +56,20 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
         <>
           {connection && (
             <>
+              {connection.githubApp && (
+                <RepositoryGithubUser
+                  id={id}
+                  onAuthorized={(identity) => {
+                    setAuthor(identity);
+                    setConnection((current) =>
+                      current ? { ...current, author: identity } : current,
+                    );
+                    setChecked(
+                      "GitHub connected. Future commits and pull requests use your account.",
+                    );
+                  }}
+                />
+              )}
               <GitAuthor author={author} disabled={busy} onChange={setAuthor} />
               {(!connection.author?.name ||
                 !connection.author?.email ||
@@ -86,7 +101,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
               )}
               <p className="field__hint">
                 {connection.githubApp
-                  ? "GitHub App access is connected. Git and pull-request commands obtain short-lived tokens automatically."
+                  ? "GitHub App access is connected. Git obtains short-lived tokens automatically; pull requests require your GitHub sign-in."
                   : connection.managedCredential
                     ? "A repository token is saved on the backend."
                     : "No repository token is saved. Git uses the backend's configured access."}{" "}

@@ -211,6 +211,11 @@ macro_rules! surface {
 }
 
 surface! {
+    begin_repository_github_signin(id: RepositoryId) -> crate::repo::github::UserSignin,
+    poll_repository_github_signin(id: RepositoryId, flow_id: String) -> crate::repo::github::UserStatus,
+    repository_github_user(id: RepositoryId) -> crate::repo::github::UserStatus,
+    sign_out_repository_github_user(id: RepositoryId) -> crate::repo::github::UserStatus,
+
     set_agent_browser_consent(id: AgentId, consent: crate::domain::agent::Consent) -> (),
     calendar(from: i64, until: i64, group_id: Option<GroupId>) -> Vec<crate::domain::occasion::Occasion>,
     create_occasion(draft: crate::commands::OccasionDraft) -> crate::domain::occasion::Occasion,

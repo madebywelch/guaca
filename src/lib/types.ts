@@ -1494,3 +1494,17 @@ export interface RepositoryConnection {
   githubAvailable?: boolean;
   acceptsToken: boolean;
 }
+
+export interface GithubUserSignin {
+  flowId: string;
+  userCode: string;
+  verificationUri: string;
+  expiresIn: number;
+  interval: number;
+}
+export interface GithubUserStatus {
+  status: "signedOut" | "pending" | "authorized";
+  login?: string | null;
+  author?: GitIdentity | null;
+  interval?: number | null;
+}

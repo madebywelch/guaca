@@ -16,6 +16,7 @@ const { read, save, remove, check, app, author } = vi.hoisted(() => ({
   app: vi.fn(),
   author: vi.fn(),
 }));
+vi.mock("./RepositoryGithubUser", () => ({ RepositoryGithubUser: () => null }));
 vi.mock("../lib/ipc", () => ({
   api: {
     repositoryConnection: read,

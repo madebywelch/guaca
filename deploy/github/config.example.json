@@ -4,6 +4,7 @@
   "repositories": ["your-account/your-repository"],
   "privateKeyFile": "/run/secrets/github_private_key",
   "tokenFile": "/run/github-client/token",
+  "userStateDir": "/var/lib/guaca-github/users",
   "initializeToken": true,
   "tokenUid": 1000,
   "listen": "0.0.0.0:8791"

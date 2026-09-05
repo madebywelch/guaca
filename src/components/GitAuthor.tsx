@@ -35,8 +35,8 @@ export function GitAuthor({
       </label>
       <p className="field__hint">
         Future commits use this identity. Use your GitHub email or GitHub noreply address for
-        contribution credit. The address becomes part of commit history. GitHub App pull requests
-        are still opened by Guaca.
+        contribution credit. The address becomes part of commit history. GitHub App sign-in also
+        sets this identity and authorizes pull requests under your account.
       </p>
     </>
   );

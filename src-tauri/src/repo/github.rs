@@ -210,6 +210,20 @@ pub async fn environment(path: &str, command: &mut tokio::process::Command) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn upgrading_refreshes_existing_helpers_without_creating_a_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        refresh_helpers(dir.path()).await.unwrap();
+        assert!(!dir.path().join("repo-credentials").exists());
+        let helper = dir.path().join("repo-credentials/github-helper.py");
+        std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        std::fs::write(&helper, "obsolete bot helper").unwrap();
+        refresh_helpers(dir.path()).await.unwrap();
+        let script = std::fs::read_to_string(helper).unwrap();
+        assert_eq!(script, SCRIPT);
+        assert!(script.contains("/v1/user/token"));
+    }
+
     #[test]
     fn app_access_has_one_exact_github_repository() {
         assert_eq!(repository("https://github.com/Owner/Repo.git").unwrap(), "owner/repo");
@@ -224,4 +238,85 @@ mod tests {
             assert!(repository(remote).is_err(), "{remote}");
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSignin {
+    pub flow_id: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: u64,
+    pub interval: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum UserState {
+    SignedOut,
+    Pending,
+    Authorized,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserStatus {
+    pub status: UserState,
+    pub login: Option<String>,
+    pub author: Option<crate::domain::repository::GitIdentity>,
+    pub interval: Option<u64>,
+}
+
+/// The helper is embedded executable code, not immutable user configuration.
+/// Upgrade existing checkouts too, so an old helper cannot keep opening bot PRs.
+pub async fn refresh_helpers(config_dir: &Path) -> Result<(), RepoError> {
+    let script = config_dir.join("repo-credentials/github-helper.py");
+    if script.exists() {
+        save(&script, SCRIPT.as_bytes(), false).await?;
+    }
+    Ok(())
+}
+
+pub async fn user_request<T: serde::de::DeserializeOwned>(
+    path: &str,
+    action: &str,
+    flow: Option<&str>,
+) -> Result<T, RepoError> {
+    let file = attached(path)
+        .await
+        .ok_or_else(|| failed("Connect GitHub App access for this repository first"))?;
+    let connection: Connection = serde_json::from_slice(
+        &tokio::fs::read(&file).await.map_err(|_| failed("GitHub App access was disconnected"))?,
+    )
+    .map_err(|_| failed("Invalid GitHub App connection"))?;
+    let remote = tokio::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["remote", "get-url", "origin"])
+        .output()
+        .await
+        .map_err(|_| failed("Could not check repository origin"))?;
+    if !remote.status.success()
+        || repository(String::from_utf8_lossy(&remote.stdout).trim())? != connection.repository
+    {
+        return Err(failed("Origin changed; reconnect GitHub App access"));
+    }
+    let authorization = tokio::fs::read_to_string(&connection.token_file)
+        .await
+        .map_err(|_| failed("Could not read GitHub broker authentication"))?;
+    let response = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|_| failed("Could not start GitHub sign-in"))?
+        .post(format!("{}/v1/user/{action}", connection.url.trim_end_matches('/')))
+        .bearer_auth(authorization.trim())
+        .json(&serde_json::json!({"repository":connection.repository,"flowId":flow}))
+        .send()
+        .await
+        .map_err(|_| failed("Could not reach the GitHub credential service"))?;
+    if !response.status().is_success() {
+        return Err(failed("GitHub user authorization failed. Check Device flow, the broker's private userStateDir, repository access, and whether sign-in expired. Start sign-in again if needed"));
+    }
+    response.json::<T>().await.map_err(|_| failed("Invalid GitHub user authorization response"))
 }

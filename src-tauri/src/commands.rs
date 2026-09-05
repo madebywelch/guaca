@@ -1049,6 +1049,63 @@ pub async fn set_repository_author(
         .await?)
 }
 
+pub async fn begin_repository_github_signin(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::github::UserSignin> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::github::user_request(&repository.path, "start", None).await?)
+}
+
+pub async fn repository_github_user(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::github::UserStatus> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::github::user_request(&repository.path, "status", None).await?)
+}
+
+pub async fn poll_repository_github_signin(
+    state: &AppState,
+    id: RepositoryId,
+    flow_id: String,
+) -> Reply<crate::repo::github::UserStatus> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    let result: crate::repo::github::UserStatus =
+        crate::repo::github::user_request(&repository.path, "poll", Some(&flow_id)).await?;
+    if result.status == crate::repo::github::UserState::Authorized {
+        let author = result.author.as_ref().ok_or_else(|| {
+            crate::repo::RepoError::Connection("GitHub returned no commit author".into())
+        })?;
+        crate::repo::auth::set_identity(&repository.path, author).await?;
+    }
+    Ok(result)
+}
+
+pub async fn sign_out_repository_github_user(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::github::UserStatus> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::github::user_request(&repository.path, "disconnect", None).await?)
+}
+
 pub async fn set_repository_github(
     state: &AppState,
     id: RepositoryId,

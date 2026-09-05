@@ -46,6 +46,8 @@ import type {
   Escalation,
   EscalationId,
   Gate,
+  GithubUserSignin,
+  GithubUserStatus,
   Group,
   GroupDraft,
   GroupId,
@@ -225,6 +227,14 @@ export const api = {
   codingHarnesses: () => invoke<HarnessOnMachine[]>("coding_harnesses"),
   setRepositoryAuthor: (id: RepositoryId, author: { name: string; email: string }) =>
     invoke<RepositoryConnection>("set_repository_author", { id, author }),
+  beginRepositoryGithubSignin: (id: RepositoryId) =>
+    invoke<GithubUserSignin>("begin_repository_github_signin", { id }),
+  pollRepositoryGithubSignin: (id: RepositoryId, flowId: string) =>
+    invoke<GithubUserStatus>("poll_repository_github_signin", { id, flowId }),
+  repositoryGithubUser: (id: RepositoryId) =>
+    invoke<GithubUserStatus>("repository_github_user", { id }),
+  signOutRepositoryGithubUser: (id: RepositoryId) =>
+    invoke<GithubUserStatus>("sign_out_repository_github_user", { id }),
   repositoryConnection: (id: RepositoryId) =>
     invoke<RepositoryConnection>("repository_connection", { id }),
   setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>
