@@ -733,7 +733,31 @@ pub async fn list_repositories(state: &AppState) -> Reply<Vec<Repository>> {
 /// Nobody is given it here. Adding and handing out are two decisions, and the
 /// second one is `set_repository_access`.
 pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Reply<Repository> {
+    create_repository_with_auth(state, draft, false).await
+}
+
+pub async fn create_github_repository(
+    state: &AppState,
+    draft: RepositoryDraft,
+) -> Reply<Repository> {
+    create_repository_with_auth(state, draft, true).await
+}
+
+async fn create_repository_with_auth(
+    state: &AppState,
+    draft: RepositoryDraft,
+    github: bool,
+) -> Reply<Repository> {
     let mut clean = draft.clean()?;
+    if github
+        && (clean.remote.is_none()
+            || draft.credential.as_deref().is_some_and(|s| !s.trim().is_empty()))
+    {
+        return Err(crate::repo::RepoError::Connection(
+            "Choose a remote URL and GitHub App access without a pasted token".into(),
+        )
+        .into());
+    }
 
     if let Some(remote) = clean.remote.clone() {
         // A clone of the workspace's own, into a directory named by nothing
@@ -743,32 +767,40 @@ pub async fn create_repository(state: &AppState, draft: RepositoryDraft) -> Repl
         let into = state.repos.join(&stamp);
         let credential =
             draft.credential.as_deref().map(str::trim).filter(|token| !token.is_empty());
-        let credential_file = match credential {
-            Some(token) => {
-                let file = credentials_dir(state).join(&stamp);
-                crate::repo::auth::keep(
-                    &file,
-                    &remote,
-                    draft.username.as_deref().unwrap_or("git"),
-                    token,
-                )
-                .await?;
-                Some(file)
-            }
-            None => None,
+        let credential_file = credentials_dir(state).join(&stamp);
+        let github_file = crate::repo::github::file(&credential_file);
+        let helper = if github {
+            crate::repo::github::prepare(&github_file, &remote).await?;
+            Some(crate::repo::github::helper(&github_file))
+        } else if let Some(token) = credential {
+            crate::repo::auth::keep(
+                &credential_file,
+                &remote,
+                draft.username.as_deref().unwrap_or("git"),
+                token,
+            )
+            .await?;
+            Some(crate::repo::auth::helper(&credential_file))
+        } else {
+            None
         };
-        clean.path =
-            match crate::repo::clone_remote(&remote, &into, credential_file.as_deref()).await {
-                Ok(path) => path,
-                Err(err) => {
-                    // A credential written for a clone that never happened is a
-                    // credential on disk for nothing.
-                    if let Some(file) = credential_file {
-                        let _ = tokio::fs::remove_file(file).await;
-                    }
-                    return Err(err.into());
-                }
-            };
+        let cloned = async {
+            let path = crate::repo::clone_with_helper(&remote, &into, helper.as_deref()).await?;
+            if github {
+                crate::repo::github::attach(&path, &github_file).await?;
+            }
+            Ok::<_, crate::repo::RepoError>(path)
+        }
+        .await;
+        clean.path = match cloned {
+            Ok(path) => path,
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&credential_file).await;
+                let _ = tokio::fs::remove_file(&github_file).await;
+                let _ = tokio::fs::remove_dir_all(&into).await;
+                return Err(error.into());
+            }
+        };
     } else {
         // A path belongs to the backend. In a container this is a mounted
         // directory, never a path interpreted on the client.
@@ -959,7 +991,9 @@ pub async fn delete_repository(state: &AppState, id: RepositoryId) -> Reply<()> 
         {
             let _ = tokio::fs::remove_dir_all(&repository.path).await;
             if let Some(stamp) = std::path::Path::new(&repository.path).file_name() {
-                let _ = tokio::fs::remove_file(credentials_dir(state).join(stamp)).await;
+                let credential = credentials_dir(state).join(stamp);
+                let _ = tokio::fs::remove_file(crate::repo::github::file(&credential)).await;
+                let _ = tokio::fs::remove_file(credential).await;
             }
         }
     }
@@ -992,6 +1026,27 @@ pub async fn repository_connection(
         .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
     Ok(crate::repo::auth::connection(&repository.path, &repository_credential(state, &repository))
         .await?)
+}
+
+pub async fn set_repository_github(
+    state: &AppState,
+    id: RepositoryId,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    let credential = repository_credential(state, &repository);
+    let connection = crate::repo::auth::connection(&repository.path, &credential).await?;
+    let remote = connection.remote.ok_or_else(|| {
+        crate::repo::RepoError::Connection("This repository has no origin".into())
+    })?;
+    let file = crate::repo::github::file(&credential);
+    crate::repo::github::prepare(&file, &remote).await?;
+    crate::repo::github::attach(&repository.path, &file).await?;
+    let _ = tokio::fs::remove_file(&credential).await;
+    Ok(crate::repo::auth::connection(&repository.path, &credential).await?)
 }
 
 pub async fn set_repository_credential(

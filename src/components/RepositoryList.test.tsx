@@ -13,6 +13,7 @@ import type {
 import { RepositoryList } from "./RepositoryList";
 
 const groupRepositories = vi.fn<(groupId: string) => Promise<Repository[]>>();
+const createGithubRepository = vi.fn<(draft: RepositoryDraft) => Promise<Repository>>();
 const createRepository = vi.fn<(draft: RepositoryDraft) => Promise<Repository>>();
 const updateRepository = vi.fn();
 const deleteRepository = vi.fn();
@@ -22,6 +23,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>();
 vi.mock("../lib/ipc", () => ({
   api: {
     groupRepositories: (groupId: string) => groupRepositories(groupId),
+    createGithubRepository: (draft: RepositoryDraft) => createGithubRepository(draft),
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
     updateRepository: (
       id: string,
@@ -570,4 +572,34 @@ it("offers Codex and preserves assignments and the gate when switching harness",
   );
   expect(setAgentRepository).not.toHaveBeenCalled();
   expect((screen.getByLabelText(/Ask me before pushing/) as HTMLInputElement).disabled).toBe(false);
+});
+
+it("links through the configured GitHub App while preserving the selected harness", async () => {
+  const previous = useStore.getState().capabilities;
+  useStore.setState({ capabilities: { ...previous, localFiles: false } });
+  groupRepositories.mockResolvedValue([]);
+  createGithubRepository.mockResolvedValue(repository({ harness: "codex" }));
+  try {
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Link a repository"));
+    fireEvent.change(screen.getByPlaceholderText(/github.com/), {
+      target: { value: "https://github.com/team/project.git" },
+    });
+    fireEvent.click(screen.getByLabelText("Use the GitHub App configured on this backend"));
+    fireEvent.click(screen.getByLabelText("Coding harness: Codex"));
+    fireEvent.click(screen.getByText("Link"));
+    await waitFor(() =>
+      expect(createGithubRepository).toHaveBeenCalledWith(
+        expect.objectContaining({
+          groupId: GROUP,
+          remote: "https://github.com/team/project.git",
+          harness: "codex",
+          credential: undefined,
+        }),
+      ),
+    );
+    expect(screen.queryByLabelText("Access token")).toBeNull();
+  } finally {
+    useStore.setState({ capabilities: previous });
+  }
 });

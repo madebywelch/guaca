@@ -1482,5 +1482,7 @@ export interface RepositoryConnection {
   remote: string | null;
   pushRemote: string | null;
   managedCredential: boolean;
+  githubApp?: boolean;
+  githubAvailable?: boolean;
   acceptsToken: boolean;
 }

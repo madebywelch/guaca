@@ -18,3 +18,7 @@ scripts/icon-source.png
 # Kept out of the build directory because `cargo clean` should not take a run
 # recording with it, and out of git because it is a log of one afternoon.
 /runs/
+
+# Credential-service bytecode and private keys never belong in source control.
+__pycache__/
+*.pem

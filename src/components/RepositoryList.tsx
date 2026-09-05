@@ -296,6 +296,7 @@ export function RepositoryList({ groupId, crew }: Props) {
   const capabilities = useStore((s) => s.capabilities);
   const [repositories, setRepositories] = useState<Repository[] | null>(null);
   const [adding, setAdding] = useState(false);
+  const [githubApp, setGithubApp] = useState(false);
   const [source, setSource] = useState<"directory" | "remote">(
     capabilities.localFiles ? "directory" : "remote",
   );
@@ -379,6 +380,7 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const reset = () => {
     setAdding(false);
+    setGithubApp(false);
     setCloning({ remote: "", credential: "", username: "" });
     setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open", bench: "own" });
   };
@@ -393,12 +395,12 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   const addClone = () =>
     void run("add", () =>
-      api.createRepository({
+      (githubApp ? api.createGithubRepository : api.createRepository)({
         groupId,
         ...draft,
         path: "",
         remote: cloning.remote.trim(),
-        credential: cloning.credential.trim() || undefined,
+        credential: githubApp ? undefined : cloning.credential.trim() || undefined,
         username: cloning.username.trim() || undefined,
       } satisfies RepositoryDraft),
     ).then((ok) => {
@@ -660,6 +662,19 @@ export function RepositoryList({ groupId, crew }: Props) {
             onChoose={(gate) => setDraft({ ...draft, gate })}
           />
           {!directory && (
+            <label className="field field--row">
+              <input
+                type="checkbox"
+                checked={githubApp}
+                onChange={(event) => {
+                  setGithubApp(event.target.checked);
+                  setCloning({ ...cloning, credential: "" });
+                }}
+              />
+              <span>Use the GitHub App configured on this backend</span>
+            </label>
+          )}
+          {!directory && !githubApp && (
             <div className="access__row">
               <input
                 className="input input--slim"

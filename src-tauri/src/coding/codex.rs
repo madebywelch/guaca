@@ -41,7 +41,9 @@ pub async fn run(
     control: Option<Control>,
     mut watching: impl FnMut(Progress),
 ) -> Result<Outcome, CodingError> {
-    let mut child = tokio::process::Command::new(BINARY)
+    let mut command = tokio::process::Command::new(BINARY);
+    crate::repo::github::environment(repository, &mut command).await;
+    let mut child = command
         .args(["app-server", "--listen", "stdio://"])
         .current_dir(repository)
         .stdin(Stdio::piped())

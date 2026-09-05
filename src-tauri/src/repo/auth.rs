@@ -12,6 +12,8 @@ pub struct Connection {
     pub push_remote: Option<String>,
     pub managed_credential: bool,
     pub accepts_token: bool,
+    pub github_app: bool,
+    pub github_available: bool,
 }
 
 fn error(message: &str) -> RepoError {
@@ -140,8 +142,14 @@ pub async fn connection(path: &str, file: &Path) -> Result<Connection, RepoError
     let push_remote = origin(path, true).await?;
     let accepts_token = remote.as_deref().is_some_and(|r| https_remote(r).is_ok());
     Ok(Connection {
-        remote: shown(remote),
+        remote: shown(remote.clone()),
         push_remote: shown(push_remote),
+        github_app: match super::github::attached(path).await {
+            Some(file) => file.is_file(),
+            None => false,
+        },
+        github_available: super::github::configured()
+            && remote.as_deref().is_some_and(|r| super::github::repository(r).is_ok()),
         accepts_token,
         managed_credential: tokio::fs::metadata(file)
             .await
@@ -163,10 +171,19 @@ pub async fn set(
     setting(path, &["config", "--local", "--replace-all", "credential.helper", ""]).await?;
     setting(path, &["config", "--local", "--add", "credential.helper", &helper(file)]).await?;
     setting(path, &["config", "--local", "credential.useHttpPath", "true"]).await?;
+    super::github::detach(path).await;
+    let _ = tokio::fs::remove_file(super::github::file(file)).await;
     connection(path, file).await
 }
 
 pub async fn clear(path: &str, file: &Path) -> Result<Connection, RepoError> {
+    if super::github::attached(path).await.is_some() {
+        match tokio::fs::remove_file(super::github::file(file)).await {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(error("Could not remove GitHub App connection")),
+        }
+    }
     match tokio::fs::remove_file(file).await {
         Ok(()) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

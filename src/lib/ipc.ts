@@ -192,6 +192,10 @@ export const api = {
    * Links a directory, after checking with git that it is the root of a work
    * tree. Nobody is given it here: that is `setRepositoryAccess`.
    */
+  createGithubRepository: (draft: RepositoryDraft) =>
+    invoke<Repository>("create_github_repository", { draft }),
+  setRepositoryGithub: (id: RepositoryId) =>
+    invoke<RepositoryConnection>("set_repository_github", { id }),
   createRepository: (draft: RepositoryDraft) => invoke<Repository>("create_repository", { draft }),
 
   /**

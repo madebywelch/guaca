@@ -8,15 +8,17 @@ const connection = {
   acceptsToken: true,
   managedCredential: false,
 };
-const { read, save, remove, check } = vi.hoisted(() => ({
+const { read, save, remove, check, app } = vi.hoisted(() => ({
   read: vi.fn(),
   save: vi.fn(),
   remove: vi.fn(),
   check: vi.fn(),
+  app: vi.fn(),
 }));
 vi.mock("../lib/ipc", () => ({
   api: {
     repositoryConnection: read,
+    setRepositoryGithub: app,
     setRepositoryCredential: save,
     clearRepositoryCredential: remove,
     checkRepositoryConnection: check,
@@ -66,4 +68,17 @@ it("shows a separate push destination without claiming the origin token covers i
   render(<RepositoryConnection id="repo-1" />);
   fireEvent.click(screen.getByText("Git access"));
   expect(await screen.findByText(/token saved here applies to origin only/)).not.toBeNull();
+});
+
+it("connects and disconnects App access without asking for or displaying a key", async () => {
+  read.mockResolvedValue({ ...connection, githubAvailable: true });
+  app.mockResolvedValue({ ...connection, githubAvailable: true, githubApp: true });
+  render(<RepositoryConnection id="repo-1" />);
+  fireEvent.click(screen.getByText("Git access"));
+  fireEvent.click(await screen.findByText("Connect GitHub App"));
+  await waitFor(() => expect(app).toHaveBeenCalledWith("repo-1"));
+  expect(await screen.findByText(/short-lived tokens automatically/)).toBeTruthy();
+  expect(screen.queryByLabelText("Repository access token")).toBeNull();
+  fireEvent.click(screen.getByText("Disconnect GitHub App"));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith("repo-1"));
 });

@@ -55,12 +55,26 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
                 </p>
               )}
               <p className="field__hint">
-                {connection.managedCredential
-                  ? "A repository token is saved on the backend."
-                  : "No repository token is saved. Git uses the backend's configured access."}{" "}
+                {connection.githubApp
+                  ? "GitHub App access is connected. Git and pull-request commands obtain short-lived tokens automatically."
+                  : connection.managedCredential
+                    ? "A repository token is saved on the backend."
+                    : "No repository token is saved. Git uses the backend's configured access."}{" "}
                 Codex and Claude sign-ins do not grant Git access.
               </p>
-              {connection.acceptsToken && (
+              {connection.githubAvailable && !connection.githubApp && (
+                <button
+                  type="button"
+                  className="btn btn--small"
+                  disabled={busy}
+                  onClick={() =>
+                    void run(async () => setConnection(await api.setRepositoryGithub(id)))
+                  }
+                >
+                  Connect GitHub App
+                </button>
+              )}
+              {connection.acceptsToken && !connection.githubApp && (
                 <>
                   <label className="field">
                     <span className="field__label">Git username</span>
@@ -128,7 +142,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
                   remote.
                 </p>
               )}
-              {connection.managedCredential && (
+              {(connection.managedCredential || connection.githubApp) && (
                 <button
                   type="button"
                   className="btn btn--ghost btn--small"
@@ -140,7 +154,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
                     })
                   }
                 >
-                  Remove saved token
+                  {connection.githubApp ? "Disconnect GitHub App" : "Remove saved token"}
                 </button>
               )}
               <button

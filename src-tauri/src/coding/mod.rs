@@ -414,7 +414,9 @@ pub async fn run_with_control(
         Harness::Claude => (claude_code::argv(task, wiring), claude_code::absorb),
     };
 
-    let mut child = tokio::process::Command::new(binary(harness))
+    let mut command = tokio::process::Command::new(binary(harness));
+    crate::repo::github::environment(repository, &mut command).await;
+    let mut child = command
         .current_dir(repository)
         .args(&args)
         .stdin(std::process::Stdio::null())

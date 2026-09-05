@@ -27,6 +27,7 @@
 //! as the boundary.
 
 pub mod auth;
+pub mod github;
 
 use std::path::Path;
 
@@ -105,6 +106,15 @@ pub async fn clone_remote(
     into: &std::path::Path,
     credential_file: Option<&std::path::Path>,
 ) -> Result<String, RepoError> {
+    let helper = credential_file.map(auth::helper);
+    clone_with_helper(remote, into, helper.as_deref()).await
+}
+
+pub async fn clone_with_helper(
+    remote: &str,
+    into: &Path,
+    helper: Option<&str>,
+) -> Result<String, RepoError> {
     if let Some(parent) = into.parent() {
         tokio::fs::create_dir_all(parent).await.map_err(|err| RepoError::Unreadable {
             path: display(parent),
@@ -114,12 +124,12 @@ pub async fn clone_remote(
 
     let mut command = tokio::process::Command::new("git");
     command.arg("clone");
-    if let Some(file) = credential_file {
+    if let Some(helper) = helper {
         command
             .arg("--config")
             .arg("credential.helper=")
             .arg("--config")
-            .arg(format!("credential.helper={}", auth::helper(file)))
+            .arg(format!("credential.helper={helper}"))
             .arg("--config")
             .arg("credential.useHttpPath=true");
     }
