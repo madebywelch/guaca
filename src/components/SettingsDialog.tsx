@@ -19,7 +19,7 @@
  * sends what is on screen rather than what is stored. Save does not close.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import { applyAppearance, resolveSurface } from "../lib/appearance";
 import { buildLabel } from "../lib/build";
@@ -130,9 +130,12 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
   const [model, setModel] = useState(settings?.defaultModel ?? "");
   const [subscriptionModel, setSubscriptionModel] = useState(settings?.subscriptionModel ?? "");
   const [apiKey, setApiKey] = useState("");
+  const [editingApiKey, setEditingApiKey] = useState(false);
   const [e2bKey, setE2bKey] = useState("");
+  const [editingE2bKey, setEditingE2bKey] = useState(false);
   const [idleMinutes, setIdleMinutes] = useState("");
   const [kernelKey, setKernelKey] = useState("");
+  const [editingKernelKey, setEditingKernelKey] = useState(false);
   const [browserIdleMinutes, setBrowserIdleMinutes] = useState("");
   const [stealth, setStealth] = useState(settings?.browserStealth ?? false);
   const [timeout, setTimeoutSecs] = useState("");
@@ -270,18 +273,14 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
       // 16. Saying "Saved." over a box still reading 40 tells the operator
       // something untrue about what is running.
       setLimits(next.limits);
-      // And every box that stages something goes back to blank, which is the
-      // same argument one field further. A key box left holding a key the
-      // runtime already has is indistinguishable from an edit nobody saved, and
-      // a duration box is worse than that: those three are clamped on the way
-      // in, so a box still reading 2000 sits under "Saved." claiming a machine
-      // sleeps after thirty-three hours when the runtime stored twenty-four.
-      // Blank is these boxes' resting state and the placeholder beside each one
-      // is read from what came back, so what is on screen after this is what is
-      // running.
+      // Clear staged secrets and close their editors only after storage succeeds.
+      // Timers return to the stored placeholder because the runtime clamps them.
       setApiKey("");
+      setEditingApiKey(false);
       setE2bKey("");
       setKernelKey("");
+      setEditingE2bKey(false);
+      setEditingKernelKey(false);
       setIdleMinutes("");
       setBrowserIdleMinutes("");
       setTimeoutSecs("");
@@ -317,6 +316,7 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
     // key that nothing used, with no error to explain why.
     setProvider("compatible");
     setBaseUrl(preset.baseUrl);
+    if (preset.baseUrl !== baseUrl) setEditingApiKey(true);
     if (preset.model) setModel(preset.model);
   };
 
@@ -722,7 +722,10 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                         className="input input--mono"
                         value={baseUrl}
                         placeholder="https://openrouter.ai/api/v1"
-                        onChange={(event) => setBaseUrl(event.target.value)}
+                        onChange={(event) => {
+                          setBaseUrl(event.target.value);
+                          setEditingApiKey(true);
+                        }}
                       />
                       <span className="field__hint">
                         Any OpenAI-compatible base URL. Point it at a local server to run without a
@@ -730,24 +733,21 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                       </span>
                     </label>
 
-                    <label className="field">
-                      <span className="field__label">API key</span>
-                      <input
-                        className="input input--mono"
-                        type="password"
-                        value={apiKey}
-                        placeholder={
-                          settings?.apiKeySet ? `Stored ${settings.apiKeyHint}` : "sk-or-v1-…"
-                        }
-                        autoComplete="off"
-                        onChange={(event) => setApiKey(event.target.value)}
-                      />
-                      <span className="field__hint">
-                        Stored on this machine in a file only your user account can read, and never
-                        sent to the webview. Leave blank to keep the current key. A server on this
-                        machine usually wants none.
-                      </span>
-                    </label>
+                    <ApiKeyField
+                      label="API key"
+                      stored={settings?.apiKeySet ?? false}
+                      hint={settings?.apiKeyHint ?? ""}
+                      value={apiKey}
+                      onChange={setApiKey}
+                      editing={editingApiKey}
+                      onEdit={setEditingApiKey}
+                      busy={busy}
+                      placeholder="sk-or-v1-…"
+                    >
+                      Stored on the host and never read back into this form. Leave blank to keep the
+                      saved key, including when changing endpoints. A local server usually wants
+                      none. Use Test connection to check the endpoint and key.
+                    </ApiKeyField>
 
                     <label className="field">
                       <span className="field__label">Default model</span>
@@ -845,23 +845,20 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   A sandbox each: a desktop and a terminal an agent can actually work in.
                 </p>
 
-                <label className="field">
-                  <span className="field__label">E2B API key</span>
-                  <input
-                    className="input input--mono"
-                    type="password"
-                    value={e2bKey}
-                    placeholder={
-                      settings?.e2bKeySet ? `Stored ${settings.e2bKeyHint}` : "e2b_… (optional)"
-                    }
-                    autoComplete="off"
-                    onChange={(event) => setE2bKey(event.target.value)}
-                  />
-                  <span className="field__hint">
-                    Gives every agent its own computer: a desktop and a terminal in a sandbox, shown
-                    in the corner of its channel. Without a key that pane stays closed.
-                  </span>
-                </label>
+                <ApiKeyField
+                  label="E2B API key"
+                  stored={settings?.e2bKeySet ?? false}
+                  hint={settings?.e2bKeyHint ?? ""}
+                  value={e2bKey}
+                  onChange={setE2bKey}
+                  editing={editingE2bKey}
+                  onEdit={setEditingE2bKey}
+                  busy={busy}
+                  placeholder="e2b_… (optional)"
+                >
+                  Gives every agent its own computer: a desktop and a terminal in a sandbox, shown
+                  in the corner of its channel. Without a key that pane stays closed.
+                </ApiKeyField>
 
                 <label className="field">
                   <span className="field__label">Sleep computers after</span>
@@ -878,27 +875,22 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
                   </span>
                 </label>
 
-                <label className="field">
-                  <span className="field__label">Kernel API key</span>
-                  <input
-                    className="input input--mono"
-                    type="password"
-                    value={kernelKey}
-                    placeholder={
-                      settings?.kernelKeySet
-                        ? `Stored ${settings.kernelKeyHint}`
-                        : "sk_… (optional)"
-                    }
-                    autoComplete="off"
-                    onChange={(event) => setKernelKey(event.target.value)}
-                  />
-                  <span className="field__hint">
-                    Gives every agent its own browser: a Chrome in the cloud, separate from its
-                    computer. This is what agents use for the web, because it tells them where
-                    everything on a page is instead of making them aim at pixels. Without a key that
-                    pane stays closed and agents have no `browse`.
-                  </span>
-                </label>
+                <ApiKeyField
+                  label="Kernel API key"
+                  stored={settings?.kernelKeySet ?? false}
+                  hint={settings?.kernelKeyHint ?? ""}
+                  value={kernelKey}
+                  onChange={setKernelKey}
+                  editing={editingKernelKey}
+                  onEdit={setEditingKernelKey}
+                  busy={busy}
+                  placeholder="sk_… (optional)"
+                >
+                  Gives every agent its own browser: a Chrome in the cloud, separate from its
+                  computer. This is what agents use for the web, because it tells them where
+                  everything on a page is instead of making them aim at pixels. Without a key that
+                  pane stays closed and agents have no `browse`.
+                </ApiKeyField>
 
                 <label className="field">
                   <span className="field__label">Close browsers after</span>
@@ -1345,5 +1337,96 @@ function WorkspacePane() {
       <GroupTransfer />
       <LegacyGroups />
     </div>
+  );
+}
+
+/** The runtime reports storage, not a live connection check. */
+function ApiKeyField({
+  label,
+  stored,
+  hint,
+  value,
+  onChange,
+  editing,
+  onEdit,
+  busy,
+  placeholder,
+  children,
+}: {
+  label: string;
+  stored: boolean;
+  hint: string;
+  value: string;
+  onChange: (value: string) => void;
+  editing: boolean;
+  onEdit: (editing: boolean) => void;
+  busy: boolean;
+  placeholder: string;
+  children: ReactNode;
+}) {
+  const id = useId();
+  const input = useRef<HTMLInputElement>(null);
+  const change = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (editing) input.current?.focus();
+  }, [editing]);
+  return (
+    <fieldset className="field api-key">
+      <legend className="field__label">{label}</legend>
+      {stored && (
+        <div className="api-key__saved">
+          <span className="api-key__status" role="status">
+            API key saved
+          </span>
+          <span className="api-key__hint">{hint}</span>
+          {!editing && (
+            <button
+              ref={change}
+              type="button"
+              className="btn btn--small"
+              aria-label={`Change ${label}`}
+              disabled={busy}
+              onClick={() => onEdit(true)}
+            >
+              Change key
+            </button>
+          )}
+        </div>
+      )}
+      {(!stored || editing) && (
+        <div className="api-key__entry">
+          <input
+            ref={input}
+            className="input input--mono"
+            type="password"
+            aria-label={label}
+            aria-describedby={id}
+            value={value}
+            placeholder={stored ? "Enter replacement key" : placeholder}
+            autoComplete="off"
+            disabled={busy}
+            onChange={(event) => onChange(event.target.value)}
+          />
+          {stored && (
+            <button
+              type="button"
+              className="btn btn--small"
+              aria-label={`Cancel changing ${label}`}
+              disabled={busy}
+              onClick={() => {
+                onChange("");
+                onEdit(false);
+                requestAnimationFrame(() => change.current?.focus());
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </div>
+      )}
+      <p className="field__hint" id={id}>
+        {children}
+      </p>
+    </fieldset>
   );
 }

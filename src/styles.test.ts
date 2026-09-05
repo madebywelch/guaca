@@ -743,3 +743,43 @@ describe("every length is named, not spelled", () => {
     expect(bad.map((d) => `${d.selector} { box-shadow: ${d.value} }`)).toEqual([]);
   });
 });
+
+describe("native settings controls show that they are interactive", () => {
+  it.each(["file", "checkbox", "radio"])("gives an enabled %s input a pointer", (type) => {
+    const input = document.createElement("input");
+    input.type = type;
+    document.body.append(input);
+    expect(getComputedStyle(input).cursor).toBe("pointer");
+    input.disabled = true;
+    expect(getComputedStyle(input).cursor).not.toBe("pointer");
+  });
+
+  it.each(["select", "summary"])("gives %s a pointer", (tag) => {
+    const control = document.createElement(tag);
+    document.body.append(control);
+    expect(getComputedStyle(control).cursor).toBe("pointer");
+  });
+
+  it("draws the file picker button with the same border and surface as other buttons", () => {
+    const shared = declarations().filter(
+      (d) => d.selector === '.btn, input[type="file"]::file-selector-button',
+    );
+    expect(shared.map((d) => d.property)).toEqual(
+      expect.arrayContaining([
+        "border",
+        "background",
+        "color",
+        "min-height",
+        "padding",
+        "border-radius",
+      ]),
+    );
+    expect(
+      declarations().some(
+        (d) =>
+          d.selector.includes('input[type="file"]:not(:disabled)::file-selector-button:hover') &&
+          d.property === "background",
+      ),
+    ).toBe(true);
+  });
+});
