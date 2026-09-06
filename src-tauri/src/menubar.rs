@@ -120,6 +120,8 @@ pub enum Row {
         id: GroupId,
         label: String,
     },
+    /// Open the durable attention inbox.
+    ForYou,
     /// Bring the window back.
     Open,
     /// End every conversation in flight. Absent when there is nothing to end.
@@ -138,7 +140,7 @@ impl Row {
             Row::Waiting { label, .. } | Row::Agent { label, .. } | Row::Crew { label, .. } => {
                 Some(label)
             }
-            Row::Separator | Row::Open | Row::Quit => None,
+            Row::Separator | Row::ForYou | Row::Open | Row::Quit => None,
         }
     }
 
@@ -160,6 +162,7 @@ impl Row {
             // The count on it moves as agents start and stop, so the label is
             // out of the shape and the row is edited rather than replaced.
             Row::Crew { id, .. } => format!("crew:{id}"),
+            Row::ForYou => "for-you".to_string(),
             Row::Open => "open".to_string(),
             Row::StopAll(_) => "stop".to_string(),
             Row::Quit => "quit".to_string(),
@@ -175,6 +178,7 @@ impl Row {
 /// version of this file and is ignored rather than guessed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
+    ForYou,
     Open,
     StopAll,
     /// Show the window with one agent's channel open.
@@ -187,6 +191,7 @@ pub enum Command {
 impl Command {
     pub fn id(self) -> String {
         match self {
+            Command::ForYou => "guac.for-you".to_string(),
             Command::Open => "guac.open".to_string(),
             Command::StopAll => "guac.stop".to_string(),
             Command::Reveal(agent) => format!("guac.reveal.{agent}"),
@@ -199,6 +204,7 @@ impl Command {
 
     pub fn parse(id: &str) -> Option<Self> {
         match id {
+            "guac.for-you" => return Some(Command::ForYou),
             "guac.open" => return Some(Command::Open),
             "guac.stop" => return Some(Command::StopAll),
             _ => {}
@@ -305,6 +311,8 @@ pub struct Presence {
     /// them because the two are answered differently and only one of them can
     /// be answered from here at all.
     pub stuck: Vec<Escalation>,
+    #[serde(default)]
+    pub decisions: Vec<crate::domain::decision::WorkDecision>,
     /// Spent since the window opened.
     pub session: Tokens,
     /// Spent ever, across every crew.
@@ -408,7 +416,7 @@ impl Presence {
         // is anything over there mine. A parked turn and an agent that has
         // stopped are different work and the same answer to that question, and
         // two numbers in the menu bar is the state nobody can read at a glance.
-        let waiting = self.waiting.len() + self.stuck.len();
+        let waiting = self.waiting.len() + self.stuck.len() + self.decisions.len();
         let busy = self.busy();
 
         let glyph = if waiting > 0 {
@@ -424,7 +432,9 @@ impl Presence {
         // it worth the space.
         let title = (waiting > 0).then(|| waiting.to_string());
 
-        let state = if waiting == 1 {
+        let state = if !self.decisions.is_empty() {
+            format!("{waiting} items need your attention in For you")
+        } else if waiting == 1 {
             // Named either way, because one is the case where a name fits and
             // it is the whole difference between "something needs you" and
             // knowing whether to go and look now. Its crew too, for the same
@@ -480,6 +490,11 @@ impl Presence {
     /// The menu, top to bottom.
     pub fn rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
+        if !self.decisions.is_empty() {
+            rows.push(Row::Note(format!("{} decisions need review", self.decisions.len())));
+            rows.push(Row::ForYou);
+            rows.push(Row::Separator);
+        }
 
         if !self.waiting.is_empty() {
             rows.push(Row::Note("Waiting on you".to_string()));
@@ -603,7 +618,11 @@ impl Presence {
             rows.push(Row::Separator);
         }
 
-        if self.waiting.is_empty() && self.stuck.is_empty() && busy.is_empty() {
+        if self.waiting.is_empty()
+            && self.stuck.is_empty()
+            && self.decisions.is_empty()
+            && busy.is_empty()
+        {
             rows.push(Row::Note("Nothing running".to_string()));
             rows.push(Row::Separator);
         }
@@ -894,6 +913,7 @@ mod tests {
             activity: HashMap::from([(agent, Activity::Queued { depth: 2 })]),
             waiting: Vec::new(),
             stuck: Vec::new(),
+            decisions: Vec::new(),
             session: Tokens { prompt: 3, completion: 2, cost: None, calls: 1 },
             all_time: Tokens { prompt: 30, completion: 20, cost: Some(0.5), calls: 9 },
             running: 1,

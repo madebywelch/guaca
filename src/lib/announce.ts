@@ -65,6 +65,15 @@ export function announcementFor(
       if (!channels.has(event.runId)) channels.set(event.runId, event.channelId);
       return null;
 
+    case "decisionReminder":
+      return {
+        kind: "decision",
+        title: "For you",
+        body: `${event.count} ${event.count === 1 ? "decision needs" : "decisions need"} a review. Open For you to answer or follow up.`,
+        channel: null,
+        key: "decision-briefing",
+      };
+
     case "approvalRequested":
       return {
         kind: "approval",
@@ -83,7 +92,7 @@ export function announcementFor(
         // one thing it can say without reading the store from a pure function:
         // that there is now something on the desk, and that nothing will take
         // it off again.
-        body: "It cannot go on without you. On your desk until you clear it.",
+        body: "It cannot go on without you. In For you until you clear it.",
         channel: event.agentId,
         key: `stuck:${event.agentId}`,
       };

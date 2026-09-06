@@ -78,6 +78,7 @@ pub enum Ask {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Reveal {
+    ForYou,
     Agent { id: AgentId },
     Crew { id: GroupId },
 }
@@ -296,6 +297,7 @@ impl Tray {
         };
 
         match command {
+            Command::ForYou => self.reveal(Some(Reveal::ForYou)),
             Command::Open => self.reveal(None),
             Command::Reveal(agent) => self.reveal(Some(Reveal::Agent { id: agent })),
             Command::Enter(crew) => self.reveal(Some(Reveal::Crew { id: crew })),
@@ -410,6 +412,11 @@ fn build(app: &AppHandle, rows: &[Row]) -> tauri::Result<Painted> {
                 let item = answer(app, Command::Enter(*id), label)?;
                 menu.append(&item)?;
                 items.push(Some(item));
+            }
+            Row::ForYou => {
+                let item = answer(app, Command::ForYou, "For you")?;
+                menu.append(&item)?;
+                items.push(None);
             }
             Row::Open => {
                 let item = answer(app, Command::Open, "Open Guaca")?;

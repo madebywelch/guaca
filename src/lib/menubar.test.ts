@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aGroup } from "../test-fixtures";
+import { aDecision, aGroup } from "../test-fixtures";
 import { presenceOf, samePresence } from "./menubar";
 import { useStore } from "./store";
 import type { AgentCard } from "./types";
@@ -65,6 +65,19 @@ describe("presenceOf", () => {
     expect(presence.session).toEqual({ prompt: 3, completion: 2, cost: null, calls: 1 });
     // Priced calls sum; an unpriced one does not turn the total into zero.
     expect(presence.allTime).toEqual({ prompt: 11, completion: 6, cost: 0.5, calls: 3 });
+  });
+
+  it("counts unanswered and interrupted decisions, including snoozed ones", () => {
+    const presence = presenceOf({
+      ...useStore.getState(),
+      decisions: [
+        aDecision({ id: "pending", snoozedUntil: Date.now() + 3600000 }),
+        aDecision({ id: "interrupted", status: "answered", interrupted: true }),
+        aDecision({ id: "following", status: "answered" }),
+        aDecision({ id: "done", status: "completed" }),
+      ],
+    });
+    expect(presence.decisions.map((item) => item.id)).toEqual(["pending", "interrupted"]);
   });
 
   it("knows when nothing the strip draws has moved", () => {

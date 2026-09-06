@@ -37,6 +37,7 @@ export type NotifyClass = "attention" | "ambient" | "completion";
 
 export function classOf(kind: NotifyKind): NotifyClass {
   switch (kind) {
+    case "decision":
     case "approval":
     // An escalation is the same class from the other end: nothing is parked on
     // it, so nothing lapses, and it has to reach the operator anyway because

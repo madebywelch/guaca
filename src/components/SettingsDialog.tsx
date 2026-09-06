@@ -88,13 +88,17 @@ const SURFACE_LABELS: Record<SurfaceMode, string> = {
 };
 
 const NOTIFY_COPY: Record<NotifyKind, { label: string; hint: string }> = {
+  decision: {
+    label: "Decisions and follow-through",
+    hint: "Batched reminders at 9 AM and 4 PM in the workspace timezone, and earlier for approaching deadlines. Decisions remain in For you until answered or withdrawn.",
+  },
   approval: {
     label: "An agent needs permission",
     hint: "The only one that blocks: the turn that asked is parked until you answer, and gives up after ten minutes. Reaches you even while Guaca is open, if the request is in a channel you are not looking at.",
   },
   stuck: {
     label: "An agent is stuck on you",
-    hint: "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it sits on your desk until you clear it. Same channel rule as above.",
+    hint: "It could not go on without you and said so on its way out of a turn. Nothing is parked and nothing expires, so it stays in For you until you clear it. Same channel rule as above.",
   },
   routine: {
     label: "A routine fired",

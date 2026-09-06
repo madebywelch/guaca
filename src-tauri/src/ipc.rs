@@ -3,6 +3,8 @@
 //! The macro keeps command names, argument shapes and responses in one place;
 //! ipc.contract.test.ts checks the frontend against this list.
 
+use crate::domain::decision::WorkDecision;
+use crate::domain::ids::DecisionId;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -221,6 +223,10 @@ surface! {
     scan_agent_signins(id: AgentId) -> Vec<Signin>,
     agent_signins(id: AgentId) -> Vec<Signin>,
     approval_states() -> HashMap<ApprovalId, ApprovalState>,
+    list_decisions() -> Vec<WorkDecision>,
+    answer_decision(id: DecisionId, answer: String, updated_at: i64) -> WorkDecision,
+    resume_decision(id: DecisionId) -> WorkDecision,
+    snooze_decision(id: DecisionId, until: i64) -> (),
     pending_approvals() -> Vec<Approval>,
     agent_grants(id: AgentId) -> Vec<ProtectedAction>,
     revoke_grant(id: AgentId, action: ProtectedAction) -> Vec<ProtectedAction>,

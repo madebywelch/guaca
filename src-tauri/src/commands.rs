@@ -5,6 +5,8 @@
 //! network access on the frontend's behalf with a caller-supplied URL. The
 //! webview never holds a credential.
 
+use crate::domain::decision::WorkDecision;
+use crate::domain::ids::DecisionId;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -3094,6 +3096,24 @@ pub async fn group_reconnect(
 ) -> Reply<Vec<crate::transfer::Reconnect>> {
     crate::transfer::reconnect(state.runtime.store(), id)
         .map_err(|e| CommandError::new("import", e))
+}
+
+pub async fn list_decisions(state: &AppState) -> Reply<Vec<WorkDecision>> {
+    Ok(state.runtime.store().decisions(None)?)
+}
+pub async fn answer_decision(
+    state: &AppState,
+    id: DecisionId,
+    answer: String,
+    updated_at: i64,
+) -> Reply<WorkDecision> {
+    Ok(state.runtime.answer_decision(id, &answer, false, Some(updated_at))?)
+}
+pub async fn resume_decision(state: &AppState, id: DecisionId) -> Reply<WorkDecision> {
+    Ok(state.runtime.answer_decision(id, "", true, None)?)
+}
+pub async fn snooze_decision(state: &AppState, id: DecisionId, until: i64) -> Reply<()> {
+    Ok(state.runtime.snooze_decision(id, until)?)
 }
 
 #[cfg(test)]
