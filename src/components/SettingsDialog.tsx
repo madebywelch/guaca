@@ -524,6 +524,20 @@ export function SettingsDialog({ onClose, section: opening }: Props) {
           </p>
         </div>
 
+        <label className="mobile-only settings__section field">
+          <span className="field__label">Settings section</span>
+          <select
+            className="input"
+            value={section}
+            onChange={(event) => setSection(event.target.value as Section)}
+          >
+            {SECTIONS.map((key) => (
+              <option key={key} value={key}>
+                {SECTION_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="settings__body">
           <div
             className="settings__nav"

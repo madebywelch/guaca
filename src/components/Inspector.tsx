@@ -15,6 +15,7 @@ interface Props {
   onReveal?: () => void;
   onHide?: () => void;
   onEditProfile: (agent: AgentCard) => void;
+  onOpenActions?: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
 
 const REMEMBERED = "guac.inspector";
@@ -71,7 +72,14 @@ function remembered(): boolean {
  * moving above them buys: the two stores are read against each other, and what
  * each is for is clearest when the other is under it.
  */
-export function Inspector({ agent, onEditProfile, reveal, onReveal, onHide }: Props) {
+export function Inspector({
+  agent,
+  onEditProfile,
+  onOpenActions,
+  reveal,
+  onReveal,
+  onHide,
+}: Props) {
   const [open, setOpen] = useState(remembered);
   const [routine, setRoutine] = useState<RoutineId | "new" | null>(null);
 
@@ -134,6 +142,16 @@ export function Inspector({ agent, onEditProfile, reveal, onReveal, onHide }: Pr
   return (
     <aside className="inspector" aria-label={`${agent.name}: screen and routines`}>
       <div className="inspector__head">
+        {onHide && (
+          <button
+            type="button"
+            className="mobile-only btn btn--ghost mobile-back"
+            aria-label="Back to conversation"
+            onClick={onHide}
+          >
+            ‹
+          </button>
+        )}
         {routine !== null ? (
           <>
             <button
@@ -149,6 +167,19 @@ export function Inspector({ agent, onEditProfile, reveal, onReveal, onHide }: Pr
           </>
         ) : (
           <>
+            <span className="inspector__agent-name mobile-only">{agent.name}</span>
+            {onOpenActions && (
+              <button
+                type="button"
+                className="mobile-only btn btn--ghost"
+                onClick={(event) => {
+                  const box = event.currentTarget.getBoundingClientRect();
+                  onOpenActions(agent, { x: box.left, y: box.bottom });
+                }}
+              >
+                Actions
+              </button>
+            )}
             <span style={{ flex: 1 }} />
             <button
               type="button"

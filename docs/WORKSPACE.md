@@ -1834,16 +1834,18 @@ are exactly as worth stopping.
 ## A phone shows one pane at a time
 
 Below 48rem, and on touch-only devices in either orientation, the workspace
-shows Agents, Chat or Details, chosen by three
-persistent buttons. The rail and inspector no longer take width from the
-conversation. Hidden panes stay mounted: changing views must not discard a
+shows one pane at a time. A bottom bar keeps Chats, For you (with its attention
+count), Search and Settings within thumb reach. Chats opens the crew and agent
+list; a conversation has a back button, its crew name and a Details button.
+Details has its own back button and an Actions menu. The rail and inspector
+no longer take width from the conversation. Hidden panes stay mounted: changing views must not discard a
 draft, move the transcript or reconnect the event stream. Selecting an agent,
 including the one already selected, returns to Chat. A routine opened from the
 transcript reveals Details.
 
 Crews are selected by name on a phone. The desktop's proximity column is hidden,
 and a touch scrolling the agent list never starts a reorder. Settings uses a
-horizontal section list above its pane; dialogs fit the viewport, controls have
+labeled section picker above its pane, and Search has a visible Cancel button; dialogs fit the viewport, controls have
 touch-sized targets and inputs stay large enough to avoid Safari's focus zoom.
 The visual viewport sizes the workspace while the keyboard is up and follows
 Safari's pan. Pinch zoom does not resize that layout.
