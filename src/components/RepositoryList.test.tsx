@@ -23,6 +23,7 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
+    savedRepositoryCredentials: vi.fn().mockResolvedValue([]),
     groupRepositories: (groupId: string) => groupRepositories(groupId),
     createGithubRepository: (draft: RepositoryDraft) => createGithubRepository(draft),
     createRepository: (draft: RepositoryDraft) => createRepository(draft),
@@ -462,7 +463,7 @@ describe("RepositoryList", () => {
       fireEvent.change(screen.getByLabelText("Remote to clone"), {
         target: { value: " https://github.com/you/thing.git " },
       });
-      const token = screen.getByLabelText("Access token") as HTMLInputElement;
+      const token = (await screen.findByLabelText("Access token")) as HTMLInputElement;
       expect(token.type).toBe("password");
       fireEvent.change(token, { target: { value: "ghp_secret" } });
       fireEvent.click(screen.getByText("Link"));
@@ -637,7 +638,9 @@ it("keeps explicit token access and never sends GitHub credentials to another ho
     );
     expect(screen.queryByLabelText("Access token")).toBeNull();
     fireEvent.change(screen.getByLabelText("Repository access"), { target: { value: "token" } });
-    fireEvent.change(screen.getByLabelText("Access token"), { target: { value: "test-token" } });
+    fireEvent.change(await screen.findByLabelText("Access token"), {
+      target: { value: "test-token" },
+    });
     fireEvent.click(screen.getByText("Link"));
     await waitFor(() =>
       expect(createRepository).toHaveBeenCalledWith(
@@ -650,7 +653,7 @@ it("keeps explicit token access and never sends GitHub credentials to another ho
       target: { value: "https://git.example/team/project" },
     });
     expect(screen.getByLabelText("Repository access")).toHaveProperty("value", "token");
-    expect(screen.getByLabelText("Access token")).toHaveProperty("value", "");
+    expect(await screen.findByLabelText("Access token")).toHaveProperty("value", "");
     fireEvent.click(screen.getByText("Link"));
     await waitFor(() =>
       expect(createRepository).toHaveBeenCalledWith(
@@ -662,6 +665,56 @@ it("keeps explicit token access and never sends GitHub credentials to another ho
     );
     expect(createGithubRepository).not.toHaveBeenCalled();
   } finally {
+    useStore.setState({ capabilities: previous });
+  }
+});
+
+it("links the next repository with a saved credential ID and clears a failed pasted token", async () => {
+  const { api } = await import("../lib/ipc");
+  const previous = useStore.getState().capabilities;
+  useStore.setState({ capabilities: { ...previous, localDirectories: false, localFiles: false } });
+  try {
+    groupRepositories.mockResolvedValue([]);
+    githubAppAvailable.mockResolvedValue(false);
+    vi.mocked(api.savedRepositoryCredentials).mockResolvedValue([
+      { id: "saved-id", remote: "https://forge.example/team/first.git", username: "engineer" },
+    ]);
+    createRepository.mockRejectedValue(new Error("Check repository access"));
+    render(<RepositoryList groupId={GROUP} crew={[]} />);
+    fireEvent.click(await screen.findByText("Link a repository"));
+    fireEvent.change(screen.getByLabelText("Remote to clone"), {
+      target: { value: "https://forge.example/team/second.git" },
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText("Git credential")).toHaveProperty("value", "saved-id"),
+    );
+    fireEvent.click(screen.getByText("Link"));
+    await waitFor(() =>
+      expect(createRepository).toHaveBeenCalledWith(
+        expect.objectContaining({
+          remote: "https://forge.example/team/second.git",
+          credentialId: "saved-id",
+          credential: undefined,
+        }),
+      ),
+    );
+    await screen.findByText("Check repository access");
+    fireEvent.change(screen.getByLabelText("Git credential"), { target: { value: "new" } });
+    fireEvent.change(screen.getByLabelText("Access token"), {
+      target: { value: "replacement-secret" },
+    });
+    fireEvent.click(screen.getByText("Link"));
+    await waitFor(() =>
+      expect(createRepository).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          credential: "replacement-secret",
+          credentialId: undefined,
+        }),
+      ),
+    );
+    expect(screen.getByLabelText("Access token")).toHaveProperty("value", "");
+  } finally {
+    vi.mocked(api.savedRepositoryCredentials).mockResolvedValue([]);
     useStore.setState({ capabilities: previous });
   }
 });

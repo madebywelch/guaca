@@ -751,6 +751,17 @@ async fn create_repository_with_auth(
     github: bool,
 ) -> Reply<Repository> {
     let mut clean = draft.clean()?;
+    if draft.credential_id.is_some()
+        && (github
+            || clean.remote.is_none()
+            || draft.credential.as_deref().is_some_and(|token| !token.trim().is_empty()))
+    {
+        return Err(crate::repo::RepoError::Connection(
+            "Choose one access method: a saved credential, a new token, or GitHub App access"
+                .into(),
+        )
+        .into());
+    }
     if let Some(author) = &draft.author {
         crate::repo::auth::validate_identity(author)?;
     }
@@ -777,6 +788,10 @@ async fn create_repository_with_auth(
         let helper = if github {
             crate::repo::github::prepare(&github_file, &remote).await?;
             Some(crate::repo::github::helper(&github_file))
+        } else if let Some(id) = &draft.credential_id {
+            crate::repo::credentials::keep(&credentials_dir(state), id, &credential_file, &remote)
+                .await?;
+            Some(crate::repo::auth::helper(&credential_file))
         } else if let Some(token) = credential {
             crate::repo::auth::keep(
                 &credential_file,
@@ -1151,6 +1166,33 @@ pub async fn set_repository_credential(
         &repository_credential(state, &repository),
         &username,
         &token,
+    )
+    .await?)
+}
+
+/// Metadata only; saved secrets never leave the backend.
+pub async fn saved_repository_credentials(
+    state: &AppState,
+    remote: String,
+) -> Reply<Vec<crate::repo::credentials::Saved>> {
+    Ok(crate::repo::credentials::list(&credentials_dir(state), &remote).await?)
+}
+
+pub async fn reuse_repository_credential(
+    state: &AppState,
+    id: RepositoryId,
+    credential_id: String,
+) -> Reply<crate::repo::auth::Connection> {
+    let repository = state
+        .runtime
+        .store()
+        .get_repository(id)?
+        .ok_or(crate::db::StoreError::RepositoryNotFound(id))?;
+    Ok(crate::repo::credentials::set(
+        &credentials_dir(state),
+        &credential_id,
+        &repository_credential(state, &repository),
+        &repository.path,
     )
     .await?)
 }

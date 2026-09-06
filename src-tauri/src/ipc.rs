@@ -203,6 +203,8 @@ surface! {
     create_github_repository(draft: RepositoryDraft) -> Repository,
     set_repository_github(id: RepositoryId) -> crate::repo::auth::Connection,
     set_repository_credential(id: RepositoryId, username: String, token: String) -> crate::repo::auth::Connection,
+    saved_repository_credentials(remote: String) -> Vec<crate::repo::credentials::Saved>,
+    reuse_repository_credential(id: RepositoryId, credential_id: String) -> crate::repo::auth::Connection,
     clear_repository_credential(id: RepositoryId) -> crate::repo::auth::Connection,
     check_repository_connection(id: RepositoryId) -> String,
     message_coding_job(agent_id: AgentId, message: String) -> (),

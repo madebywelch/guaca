@@ -27,6 +27,7 @@
 //! as the boundary.
 
 pub mod auth;
+pub mod credentials;
 pub mod github;
 
 use std::path::Path;

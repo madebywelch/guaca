@@ -17,6 +17,7 @@ import {
 } from "../lib/types";
 import { GitAuthor } from "./GitAuthor";
 import { RepositoryConnection } from "./RepositoryConnection";
+import { RepositoryToken, type TokenChoice } from "./RepositoryToken";
 
 interface Props {
   groupId: GroupId;
@@ -385,7 +386,8 @@ export function RepositoryList({ groupId, crew }: Props) {
   const reset = () => {
     setAdding(false);
     setAccess("automatic");
-    setCloning({ remote: "", credential: "", username: "" });
+    setCloning({ remote: "" });
+    setTokenChoice({ kind: "loading" });
     setDraft({ path: "", name: "", note: "", harness: "pi", gate: "open", bench: "own" });
   };
 
@@ -394,14 +396,17 @@ export function RepositoryList({ groupId, crew }: Props) {
       api.createRepository({ groupId, ...draft } satisfies RepositoryDraft),
     ).then((ok) => ok && reset());
 
-  /** The clone form's own two fields; everything else is shared with `draft`. */
+  /** Git access is submitted once and never kept in the repository row. */
   const [author, setAuthor] = useState({ name: "", email: "" });
-  const [cloning, setCloning] = useState({ remote: "", credential: "", username: "" });
+  const [cloning, setCloning] = useState({ remote: "" });
+  const [tokenChoice, setTokenChoice] = useState<TokenChoice>({ kind: "loading" });
 
   const githubRemote = /^https:\/\/github\.com\//i.test(cloning.remote.trim());
   const githubApp = githubRemote && githubAvailable === true && access !== "token";
 
-  const addClone = () =>
+  const addClone = () => {
+    const submitted = tokenChoice;
+    if (submitted.kind === "new") setTokenChoice({ ...submitted, token: "" });
     void run("add", () =>
       (githubApp ? api.createGithubRepository : api.createRepository)({
         groupId,
@@ -409,16 +414,21 @@ export function RepositoryList({ groupId, crew }: Props) {
         path: "",
         remote: cloning.remote.trim(),
         author: author.name.trim() || author.email.trim() ? author : undefined,
-        credential: githubApp ? undefined : cloning.credential.trim() || undefined,
-        username: cloning.username.trim() || undefined,
+        credential:
+          !githubApp && submitted.kind === "new" ? submitted.token.trim() || undefined : undefined,
+        credentialId: !githubApp && submitted.kind === "saved" ? submitted.id : undefined,
+        username:
+          !githubApp && submitted.kind === "new"
+            ? submitted.username.trim() || undefined
+            : undefined,
       } satisfies RepositoryDraft),
     ).then((ok) => {
       if (ok) {
         reset();
-        setCloning({ remote: "", credential: "", username: "" });
         setAuthor({ name: "", email: "" });
       }
     });
+  };
 
   if (repositories === null) return <p className="field__hint">Loading repositories…</p>;
 
@@ -617,7 +627,10 @@ export function RepositoryList({ groupId, crew }: Props) {
               value={directory ? draft.path : cloning.remote}
               onChange={(event) => {
                 if (directory) setDraft({ ...draft, path: event.target.value });
-                else setCloning({ ...cloning, remote: event.target.value });
+                else {
+                  setCloning({ remote: event.target.value });
+                  setTokenChoice({ kind: "loading" });
+                }
                 setError(null);
               }}
             />
@@ -638,7 +651,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                   value={githubApp ? "github" : "token"}
                   onChange={(event) => {
                     setAccess(event.target.value as "github" | "token");
-                    setCloning({ ...cloning, credential: "" });
+                    setTokenChoice({ kind: "new", username: "", token: "" });
                     setError(null);
                   }}
                 >
@@ -658,33 +671,13 @@ export function RepositoryList({ groupId, crew }: Props) {
                 </span>
               </label>
               {!githubApp && (
-                <>
-                  <label className="field">
-                    <span className="field__label">Access token</span>
-                    <input
-                      className="input"
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      aria-label="Access token"
-                      placeholder="Required for private HTTPS repositories without existing Git credentials"
-                      value={cloning.credential}
-                      onChange={(event) =>
-                        setCloning({ ...cloning, credential: event.target.value })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field__label">Git username (if required)</span>
-                    <input
-                      className="input"
-                      aria-label="Git username"
-                      autoComplete="off"
-                      value={cloning.username}
-                      onChange={(event) => setCloning({ ...cloning, username: event.target.value })}
-                    />
-                  </label>
-                </>
+                <RepositoryToken
+                  key={cloning.remote}
+                  remote={cloning.remote}
+                  choice={tokenChoice}
+                  onChange={setTokenChoice}
+                  disabled={busy !== null}
+                />
               )}
             </>
           )}
@@ -736,7 +729,9 @@ export function RepositoryList({ groupId, crew }: Props) {
                 busy !== null ||
                 (directory
                   ? !draft.path.trim()
-                  : !cloning.remote.trim() || githubAvailable === null)
+                  : !cloning.remote.trim() ||
+                    githubAvailable === null ||
+                    (!githubApp && tokenChoice.kind === "loading"))
               }
               onClick={directory ? add : addClone}
             >

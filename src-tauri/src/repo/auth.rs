@@ -115,7 +115,7 @@ async fn setting(path: &str, args: &[&str]) -> Result<(), RepoError> {
     }
 }
 
-async fn origin(path: &str, push: bool) -> Result<Option<String>, RepoError> {
+pub(super) async fn origin(path: &str, push: bool) -> Result<Option<String>, RepoError> {
     let args = if push {
         vec!["remote", "get-url", "--push", "origin"]
     } else {
@@ -216,7 +216,19 @@ pub async fn set(
 ) -> Result<Connection, RepoError> {
     let remote =
         origin(path, false).await?.ok_or_else(|| error("This repository has no origin remote"))?;
-    keep(file, &remote, username, token).await?;
+    set_for_remote(path, file, &remote, username, token).await
+}
+
+/// Use the same origin that was validated. A concurrent remote change must
+/// leave a credential for the old origin, never move it to an unchecked host.
+pub(super) async fn set_for_remote(
+    path: &str,
+    file: &Path,
+    remote: &str,
+    username: &str,
+    token: &str,
+) -> Result<Connection, RepoError> {
+    keep(file, remote, username, token).await?;
     // Reset inherited helpers, which could otherwise return the wrong account
     // before this repository's helper is consulted. No global config changes.
     setting(path, &["config", "--local", "--replace-all", "credential.helper", ""]).await?;
@@ -276,4 +288,25 @@ pub async fn check(path: &str) -> Result<String, RepoError> {
         return Err(error("Git read access works, but the push dry run failed. Check write permissions and the push remote"));
     }
     Ok("Read access and push dry run succeeded. No remote refs changed; branch protection and server hooks are checked only on an actual push.".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_changed_remote_cannot_retarget_a_validated_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        assert!(git(path, &["init"]).await.unwrap().status.success());
+        let checked = "https://forge.example/team/repo.git";
+        setting(path, &["remote", "add", "origin", "https://other.example/team/repo.git"])
+            .await
+            .unwrap();
+        let file = dir.path().join("credentials").join(uuid::Uuid::new_v4().to_string());
+        set_for_remote(path, &file, checked, "engineer", "private-token").await.unwrap();
+        let stored = tokio::fs::read_to_string(&file).await.unwrap();
+        assert!(stored.contains("@forge.example/team/repo.git"));
+        assert!(!stored.contains("other.example"));
+    }
 }

@@ -238,6 +238,31 @@ settings, so a fetch or a push from any process standing in the tree (a
 job's harness included) finds the token without the token ever entering
 `.git/config` or a URL; the file is git's own credential-store format, mode
 0600, named for the clone's directory, and it goes when the repository does.
+When another repository is linked, Git access offers credentials already saved
+on this backend, most recently saved first. `repo::credentials` returns only an
+opaque ID, the source remote and the Git username. The selected ID is resolved
+on the backend and its complete origin (scheme, host and port) is checked again
+before cloning or updating Git configuration. The operator can choose another
+saved entry, paste a different token, or use the backend's existing Git access.
+GitHub App access remains a separate choice. No token is read back into a form.
+
+Reuse writes a separate entry scoped to the destination repository. Removing or
+replacing one repository's token does not change another repository's access.
+Removing every copy also removes it from future setup choices. Existing files
+are discovered directly, so an upgrade needs no credential migration. A token
+restricted by its provider to one repository may still fail on another; Guaca
+does not broaden the token's permissions or silently retry with other accounts.
+
+This is credential reuse, not encrypted secret storage. Git's credential-store
+adapter remains plaintext protected by file permissions. A full secret store
+should replace that adapter with OS credential storage for desktop and an
+external secret service for headless hosts, return only opaque references, and
+serve Git through a repository-scoped helper. Provider API keys and sign-ins
+need their own migration into that same boundary. Encryption with its key beside
+the ciphertext would not improve this threat model. Do not describe the current
+adapter as a vault or claim that coding processes under the same backend user
+cannot read it.
+
 The operator supplies their commit name and email when linking a remote, or
 under **Git access** afterward. Leaving both blank inherits the backend's Git
 configuration. `user.useConfigOnly=true` prevents Git from inventing a container
