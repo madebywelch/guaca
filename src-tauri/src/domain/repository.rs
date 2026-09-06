@@ -436,6 +436,9 @@ pub struct RepositoryDraft {
     /// never stored on the row and never read back out.
     #[serde(default)]
     pub credential: Option<String>,
+    /// An opaque saved credential ID. Mutually exclusive with a pasted token.
+    #[serde(default)]
+    pub credential_id: Option<String>,
     /// HTTP username required by some Git services. Never a password.
     #[serde(default)]
     pub username: Option<String>,
@@ -669,6 +672,7 @@ mod tests {
             bench: Bench::default(),
             remote: None,
             credential: None,
+            credential_id: None,
             username: None,
             author: None,
         }

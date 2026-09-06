@@ -126,7 +126,8 @@ async fn authenticated_clone_pull_worktree_push_rotation_and_revocation() {
         .with_state(Forge { root: dir.path().into(), password: password.clone() });
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-    let credential = dir.path().join("operator's credentials").join("repository");
+    let credential =
+        dir.path().join("operator's credentials").join(uuid::Uuid::new_v4().to_string());
     auth::keep(&credential, &remote, "engineer", "wrong").await.unwrap();
     let checkout = dir.path().join("clone");
     assert!(repo::clone_remote(&remote, &checkout, Some(&credential)).await.is_err());
@@ -136,6 +137,29 @@ async fn authenticated_clone_pull_worktree_push_rotation_and_revocation() {
     let config = std::fs::read_to_string(checkout.join(".git/config")).unwrap();
     assert!(!config.contains("first/token") && !config.contains("first%2Ftoken"));
     assert!(auth::connection(&path, &credential).await.unwrap().managed_credential);
+    // A second setup reuses the first token without a value crossing IPC.
+    let second_bare = dir.path().join("second.git");
+    good(dir.path(), &["clone", "--bare", bare.to_str().unwrap(), second_bare.to_str().unwrap()]);
+    let second_remote = remote.replace("repo.git", "second.git");
+    let choices =
+        repo::credentials::list(credential.parent().unwrap(), &second_remote).await.unwrap();
+    assert_eq!(choices.len(), 1);
+    let second_credential = credential.parent().unwrap().join(uuid::Uuid::new_v4().to_string());
+    repo::credentials::keep(
+        credential.parent().unwrap(),
+        &choices[0].id,
+        &second_credential,
+        &second_remote,
+    )
+    .await
+    .unwrap();
+    let second = dir.path().join("second-clone");
+    let second_path =
+        repo::clone_remote(&second_remote, &second, Some(&second_credential)).await.unwrap();
+    auth::clear(&second_path, &second_credential).await.unwrap();
+    assert!(!git(&second, &["fetch", "origin"]).status.success());
+    good(&checkout, &["fetch", "origin"]);
+
     let before = good(&bare, &["show-ref"]);
     assert!(auth::check(&path).await.unwrap().contains("No remote refs changed"));
     assert_eq!(good(&bare, &["show-ref"]), before);
@@ -193,4 +217,97 @@ fn token_origins_reject_plaintext_and_embedded_secrets() {
         assert!(!error.contains("secret"));
     }
     assert!(auth::https_remote("https://forge.example:8443/owner/repo.git").is_ok());
+}
+
+#[tokio::test]
+async fn saved_credentials_are_private_descriptions_and_reuse_checks_the_origin() {
+    use repo::credentials;
+    let dir = tempfile::tempdir().unwrap();
+    let store = dir.path().join("credentials");
+    let id = uuid::Uuid::new_v4().to_string();
+    let file = store.join(&id);
+    let destination = store.join(uuid::Uuid::new_v4().to_string());
+    let remote = "https://forge.example/team/first.git";
+    auth::keep(&file, remote, "engineer@example.com", "tok/1 + %").await.unwrap();
+
+    for invalid in [
+        "https://other.example/team/second.git",
+        "https://forge.example:8443/team/second.git",
+        "http://forge.example/team/second.git",
+        "https://forge.example.evil.test/team/second.git",
+        "https://secret@forge.example/team/second.git",
+    ] {
+        assert!(credentials::list(&store, invalid).await.unwrap().is_empty());
+        assert!(credentials::keep(&store, &id, &destination, invalid).await.is_err());
+        assert!(!destination.exists());
+    }
+    for invalid in ["../outside", "/etc/passwd", "", "github-helper.py"] {
+        assert!(credentials::keep(&store, invalid, &destination, remote).await.is_err());
+    }
+    let next = "https://forge.example/team/second.git";
+    let saved = credentials::list(&store, next).await.unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].id, id);
+    assert_eq!(saved[0].username, "engineer@example.com");
+    let metadata = serde_json::to_string(&saved).unwrap();
+    assert!(!metadata.contains("tok") && !metadata.contains("%2F"));
+    credentials::keep(&store, &id, &destination, next).await.unwrap();
+    let copied = std::fs::read_to_string(&destination).unwrap();
+    assert!(copied.ends_with("/team/second.git\n"));
+    assert!(copied.contains("tok%2F1%20%2B%20%25"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&destination).unwrap().permissions().mode() & 0o777, 0o600);
+    }
+    std::fs::remove_file(&file).unwrap();
+    assert!(credentials::keep(&store, &id, &destination, next).await.is_err());
+    assert_eq!(std::fs::read_to_string(&destination).unwrap(), copied);
+    assert_eq!(credentials::list(&store, next).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn saved_credentials_ignore_non_credentials_and_survive_reopening() {
+    use repo::credentials;
+    let dir = tempfile::tempdir().unwrap();
+    let remote = "https://forge.example/team/repo.git";
+    assert!(credentials::list(&dir.path().join("absent"), remote).await.unwrap().is_empty());
+    let id = uuid::Uuid::new_v4().to_string();
+    auth::keep(&dir.path().join(&id), remote, "git", "secret").await.unwrap();
+    std::fs::write(dir.path().join("github-helper.py"), "not a credential").unwrap();
+    std::fs::write(dir.path().join(uuid::Uuid::new_v4().to_string()), "malformed secret").unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        dir.path().join(&id),
+        dir.path().join(uuid::Uuid::new_v4().to_string()),
+    )
+    .unwrap();
+    let saved = credentials::list(dir.path(), remote).await.unwrap();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].id, id);
+}
+
+#[tokio::test]
+async fn the_most_recently_saved_credential_is_offered_first() {
+    use repo::credentials;
+    let dir = tempfile::tempdir().unwrap();
+    let remote = "https://forge.example/team/repo.git";
+    let mut ids = Vec::new();
+    for seconds in [10, 30, 20] {
+        let id = uuid::Uuid::new_v4().to_string();
+        let file = dir.path().join(&id);
+        auth::keep(&file, remote, "engineer", "token").await.unwrap();
+        std::fs::File::open(file)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            ))
+            .unwrap();
+        ids.push(id);
+    }
+    let saved = credentials::list(dir.path(), remote).await.unwrap();
+    assert_eq!(
+        saved.iter().map(|saved| saved.id.as_str()).collect::<Vec<_>>(),
+        vec![ids[1].as_str(), ids[2].as_str(), ids[0].as_str()]
+    );
 }

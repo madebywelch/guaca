@@ -81,6 +81,7 @@ import type {
   RoutineRun,
   RunId,
   RunUsage,
+  SavedRepositoryCredential,
   SearchHits,
   ServerReport,
   Settings,
@@ -244,6 +245,10 @@ export const api = {
     invoke<GithubUserStatus>("sign_out_repository_github_user", { id }),
   repositoryConnection: (id: RepositoryId) =>
     invoke<RepositoryConnection>("repository_connection", { id }),
+  savedRepositoryCredentials: (remote: string) =>
+    invoke<SavedRepositoryCredential[]>("saved_repository_credentials", { remote }),
+  reuseRepositoryCredential: (id: RepositoryId, credentialId: string) =>
+    invoke<RepositoryConnection>("reuse_repository_credential", { id, credentialId }),
   setRepositoryCredential: (id: RepositoryId, username: string, token: string) =>
     invoke<RepositoryConnection>("set_repository_credential", { id, username, token }),
   clearRepositoryCredential: (id: RepositoryId) =>

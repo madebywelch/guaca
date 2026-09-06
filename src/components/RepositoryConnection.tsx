@@ -7,14 +7,14 @@ import {
 } from "../lib/types";
 import { GitAuthor } from "./GitAuthor";
 import { RepositoryGithubUser } from "./RepositoryGithubUser";
+import { RepositoryToken, type TokenChoice } from "./RepositoryToken";
 
 /** Git access belongs to the repository, independently of the coding harness. */
 export function RepositoryConnection({ id }: { id: RepositoryId }) {
   const [open, setOpen] = useState(false);
   const [connection, setConnection] = useState<Connection | null>(null);
   const [author, setAuthor] = useState({ name: "", email: "" });
-  const [username, setUsername] = useState("");
-  const [token, setToken] = useState("");
+  const [tokenChoice, setTokenChoice] = useState<TokenChoice>({ kind: "loading" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checked, setChecked] = useState<string | null>(null);
@@ -41,7 +41,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
         disabled={busy}
         onClick={() => {
           setOpen(!open);
-          setToken("");
+          setTokenChoice({ kind: "loading" });
           if (!open)
             void run(async () => {
               const next = await api.repositoryConnection(id);
@@ -121,27 +121,14 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
               )}
               {connection.acceptsToken && !connection.githubApp && (
                 <>
-                  <label className="field">
-                    <span className="field__label">Git username</span>
-                    <input
-                      className="input"
-                      autoComplete="off"
-                      value={username}
-                      placeholder="git (or the username your service requires)"
-                      onChange={(event) => setUsername(event.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span className="field__label">Repository access token</span>
-                    <input
-                      className="input"
-                      type="password"
-                      autoComplete="off"
-                      spellCheck={false}
-                      value={token}
-                      onChange={(event) => setToken(event.target.value)}
-                    />
-                  </label>
+                  <RepositoryToken
+                    remote={connection.remote ?? ""}
+                    choice={tokenChoice}
+                    onChange={setTokenChoice}
+                    disabled={busy}
+                    tokenLabel="Repository access token"
+                    allowExisting={false}
+                  />
                   <p className="field__hint">
                     Create a token with read and write access to this repository in your Git
                     service. Saving it replaces the previous token; it is never read back.
@@ -168,16 +155,25 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
                   <button
                     type="button"
                     className="btn btn--small"
-                    disabled={busy || !token.trim()}
+                    disabled={
+                      busy ||
+                      tokenChoice.kind === "loading" ||
+                      tokenChoice.kind === "existing" ||
+                      (tokenChoice.kind === "new" && !tokenChoice.token.trim())
+                    }
                     onClick={() =>
                       void run(async () => {
-                        const value = token;
-                        setToken("");
-                        setConnection(await api.setRepositoryCredential(id, username, value));
+                        if (tokenChoice.kind === "saved") {
+                          setConnection(await api.reuseRepositoryCredential(id, tokenChoice.id));
+                        } else if (tokenChoice.kind === "new") {
+                          const { username, token } = tokenChoice;
+                          setTokenChoice({ ...tokenChoice, token: "" });
+                          setConnection(await api.setRepositoryCredential(id, username, token));
+                        }
                       })
                     }
                   >
-                    Save token
+                    {tokenChoice.kind === "saved" ? "Use saved token" : "Save token"}
                   </button>
                 </>
               )}
@@ -194,7 +190,7 @@ export function RepositoryConnection({ id }: { id: RepositoryId }) {
                   disabled={busy}
                   onClick={() =>
                     void run(async () => {
-                      setToken("");
+                      setTokenChoice({ kind: "new", username: "", token: "" });
                       setConnection(await api.clearRepositoryCredential(id));
                     })
                   }
