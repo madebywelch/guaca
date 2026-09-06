@@ -1,0 +1,132 @@
+<div id="guaca-mobile-concept" aria-label="Guaca mobile navigation concept">
+  <style>
+    #guaca-mobile-concept { --gm-paper: light-dark(#fff,#0f0f0e); --gm-edge: light-dark(#e7e5df,#2a2926); --gm-ink: light-dark(#23231f,#f7f5f0); --gm-muted: light-dark(#67665f,#a8a49c); --gm-rail: light-dark(#f7f6f2,#171715); --gm-accent: light-dark(#965715,#f0a63c); --gm-soft: light-dark(#fbf1df,#33240e); font-family: 'Instrument Sans',system-ui,sans-serif; color:var(--gm-ink); font-size:15px; line-height:1.5; }
+    #guaca-mobile-concept * { box-sizing:border-box; }
+    #guaca-mobile-concept .gm-phone { max-width:420px; margin:auto; background:var(--gm-paper); border:1px solid var(--gm-edge); border-radius:24px; overflow:hidden; }
+    #guaca-mobile-concept .gm-header { padding:22px 20px 16px; background:var(--gm-rail); border-bottom:1px solid var(--gm-edge); }
+    #guaca-mobile-concept .gm-top { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    #guaca-mobile-concept h2 { font-size:22px; line-height:1.3; font-weight:500; margin:0; }
+    #guaca-mobile-concept h3 { font-size:17px; font-weight:500; margin:0 0 10px; }
+    #guaca-mobile-concept p { margin:6px 0 14px; }
+    #guaca-mobile-concept .gm-small { font-size:13px; color:var(--gm-muted); }
+    #guaca-mobile-concept .gm-view { padding:20px; min-height:430px; }
+    #guaca-mobile-concept [hidden] { display:none!important; }
+    #guaca-mobile-concept button { font:inherit; color:inherit; cursor:pointer; min-height:44px; border:1px solid var(--gm-edge); background:var(--gm-paper); border-radius:10px; padding:9px 13px; }
+    #guaca-mobile-concept button:hover { background:var(--gm-rail); }
+    #guaca-mobile-concept button:focus-visible, #guaca-mobile-concept textarea:focus-visible { outline:2px solid var(--gm-accent); outline-offset:3px; }
+    #guaca-mobile-concept .gm-row { display:flex; align-items:center; width:100%; gap:14px; text-align:left; border:0; border-radius:0; border-bottom:1px solid var(--gm-edge); padding:18px 0; }
+    #guaca-mobile-concept .gm-row-copy { flex:1; min-width:0; }
+    #guaca-mobile-concept .gm-row-copy span { display:block; }
+    #guaca-mobile-concept .gm-avatar { width:40px; height:40px; flex:none; display:grid; place-items:center; border-radius:45% 45% 40% 40%; color:var(--gm-accent); background:var(--gm-soft); font-size:18px; letter-spacing:5px; padding-left:5px; }
+    #guaca-mobile-concept .gm-count { background:var(--gm-soft); color:var(--gm-accent); border-radius:50%; min-width:25px; text-align:center; font-size:13px; }
+    #guaca-mobile-concept .gm-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); padding:8px 8px 18px; gap:4px; background:var(--gm-rail); border-top:1px solid var(--gm-edge); }
+    #guaca-mobile-concept .gm-nav button { border:0; background:transparent; color:var(--gm-muted); padding:10px 3px; font-size:14px; }
+    #guaca-mobile-concept .gm-nav button[aria-pressed=true] { color:var(--gm-ink); background:var(--gm-paper); }
+    #guaca-mobile-concept .gm-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+    #guaca-mobile-concept .gm-primary { background:var(--gm-ink); color:var(--gm-paper); border-color:var(--gm-ink); }
+    #guaca-mobile-concept .gm-primary:hover { background:var(--gm-muted); }
+    #guaca-mobile-concept .gm-request { border-left:3px solid var(--gm-accent); padding-left:15px; margin-top:22px; }
+    #guaca-mobile-concept .gm-message { padding:14px 0; border-bottom:1px solid var(--gm-edge); }
+    #guaca-mobile-concept .gm-message p:last-child { margin-bottom:0; }
+    #guaca-mobile-concept .gm-chip { display:inline-block; background:var(--gm-rail); border-radius:6px; padding:4px 9px; font-size:13px; color:var(--gm-muted); }
+    #guaca-mobile-concept textarea { width:100%; resize:vertical; min-height:84px; font:inherit; font-size:16px; border:1px solid var(--gm-edge); border-radius:12px; background:var(--gm-paper); color:var(--gm-ink); padding:12px; margin-top:7px; }
+    #guaca-mobile-concept .gm-detail { overflow-wrap:anywhere; padding:14px 0; border-bottom:1px solid var(--gm-edge); }
+    #guaca-mobile-concept .gm-detail p { margin:0; }
+  </style>
+  <div class="gm-phone">
+    <header class="gm-header">
+      <div class="gm-top"><h2>Guaca</h2><span class="gm-small" id="gm-host-label">Personal VPS</span></div>
+      <div class="gm-small" id="gm-status">Connected through Tailscale</div>
+    </header>
+    <section class="gm-view" data-view="crews" aria-label="Crews">
+      <h3>Your crews</h3>
+      <button class="gm-row" data-open-chat="Studio"><span class="gm-avatar" aria-hidden="true">••</span><span class="gm-row-copy"><span>Studio</span><span class="gm-small">Mara has a question for you</span></span><span class="gm-count" id="gm-crew-count">1</span></button>
+      <button class="gm-row" data-open-chat="Research"><span class="gm-avatar" aria-hidden="true">••</span><span class="gm-row-copy"><span>Research</span><span class="gm-small">Reviewing the source material</span></span><span aria-hidden="true">›</span></button>
+      <button class="gm-row" data-open-chat="Operations"><span class="gm-avatar" aria-hidden="true">••</span><span class="gm-row-copy"><span>Operations</span><span class="gm-small">All caught up</span></span><span aria-hidden="true">›</span></button>
+    </section>
+    <section class="gm-view" data-view="desk" aria-label="Waiting on you" hidden>
+      <h3>Waiting on you</h3><p class="gm-small">Across your crews</p>
+      <div class="gm-request" id="gm-question"><span class="gm-small">Studio · Mara · Question</span><p>Which audience should the landing page speak to first?</p><div class="gm-actions"><button class="gm-primary" data-answer="Independent teams">Independent teams</button><button data-answer="Larger organizations">Larger organizations</button><button data-open-chat="Studio">Read conversation</button></div></div>
+      <p id="gm-answer-status" role="status"></p>
+    </section>
+    <section class="gm-view" data-view="chat" aria-label="Conversation" hidden>
+      <button id="gm-back" aria-label="Back to crews">‹ Crews</button>
+      <div class="gm-message"><div class="gm-small" id="gm-chat-title">Studio · Mara</div><p id="gm-chat-copy">The page structure is ready. I need one decision before writing the headline.</p><span class="gm-chip">Read brief · 2 sources</span></div>
+      <div class="gm-message" id="gm-chat-question"><p>Which audience should the landing page speak to first?</p><button id="gm-open-desk">Answer question</button></div>
+      <div id="gm-local-messages" aria-live="polite"></div>
+      <form id="gm-composer"><label class="gm-small" for="gm-draft">Message this crew</label><textarea id="gm-draft" placeholder="Give direction…"></textarea><div class="gm-actions"><button class="gm-primary" type="submit">Send</button></div></form>
+    </section>
+    <section class="gm-view" data-view="workspace" aria-label="Workspace" hidden>
+      <h3>Workspace</h3>
+      <div class="gm-detail"><p id="gm-workspace-name">Personal VPS</p><p class="gm-small" id="gm-workspace-address">guaca.example-tailnet.ts.net</p></div>
+      <div class="gm-detail"><p>Connection</p><p class="gm-small" id="gm-workspace-connection">Private access through Tailscale</p></div>
+      <div class="gm-detail"><p>Agents run on this host</p><p class="gm-small">Closing Guaca leaves their work running.</p></div>
+      <div class="gm-actions"><button id="gm-switch">Preview managed workspace</button></div>
+    </section>
+    <nav class="gm-nav" aria-label="Main navigation"><button data-nav="crews" aria-pressed="true">Crews</button><button data-nav="desk" aria-pressed="false" id="gm-desk-tab">Desk · 1</button><button data-nav="workspace" aria-pressed="false">Workspace</button></nav>
+  </div>
+  <script>
+    (() => {
+      const root = document.getElementById('guaca-mobile-concept');
+      const find = (id) => root.querySelector('#' + id);
+      const design = { managed: false, spacing: 20 };
+      let crew = 'Studio';
+      const drafts = {};
+      let view = 'crews';
+      function show(next) {
+        if (view === 'chat') drafts[crew] = find('gm-draft').value;
+        view = next;
+        root.querySelectorAll('[data-view]').forEach(el => { el.hidden = el.dataset.view !== next; });
+        root.querySelectorAll('[data-nav]').forEach(el => el.setAttribute('aria-pressed', String(el.dataset.nav === (next === 'chat' ? 'crews' : next))));
+      }
+      function render() {
+        find('gm-host-label').textContent = design.managed ? 'Studio space' : 'Personal VPS';
+        find('gm-status').textContent = design.managed ? 'Connected to Guaca' : 'Connected through Tailscale';
+        find('gm-workspace-name').textContent = design.managed ? 'Studio space' : 'Personal VPS';
+        find('gm-workspace-address').textContent = design.managed ? 'Your managed Guaca workspace' : 'guaca.example-tailnet.ts.net';
+        find('gm-workspace-connection').textContent = design.managed ? 'Signed in to Guaca' : 'Private access through Tailscale';
+        find('gm-switch').textContent = design.managed ? 'Preview self-hosted workspace' : 'Preview managed workspace';
+        root.querySelectorAll('.gm-view').forEach(el => { el.style.padding = design.spacing + 'px'; });
+      }
+      root.querySelectorAll('[data-nav]').forEach(el => el.addEventListener('click', () => show(el.dataset.nav)));
+      root.querySelectorAll('[data-open-chat]').forEach(el => el.addEventListener('click', () => {
+        if (view === 'chat') drafts[crew] = find('gm-draft').value;
+        crew = el.dataset.openChat;
+        show('chat');
+        find('gm-draft').value = drafts[crew] || '';
+        find('gm-chat-title').textContent = crew === 'Studio' ? 'Studio · Mara' : crew + ' · Crew wall';
+        find('gm-chat-copy').textContent = crew === 'Studio' ? 'The page structure is ready. I need one decision before writing the headline.' : crew === 'Research' ? 'I am comparing the source material. The findings will appear here.' : 'The review is complete. No action is needed.';
+        find('gm-chat-question').hidden = crew !== 'Studio';
+        find('gm-local-messages').replaceChildren();
+      }));
+      find('gm-back').addEventListener('click', () => show('crews'));
+      find('gm-open-desk').addEventListener('click', () => show('desk'));
+      find('gm-switch').addEventListener('click', () => { design.managed = !design.managed; render(); });
+      root.querySelectorAll('[data-answer]').forEach(el => el.addEventListener('click', () => {
+        find('gm-question').hidden = true;
+        find('gm-answer-status').textContent = 'Answered: ' + el.dataset.answer + '. Nobody else is waiting on you.';
+        find('gm-desk-tab').textContent = 'Desk';
+        find('gm-crew-count').hidden = true;
+        root.querySelector('[data-open-chat="Studio"] .gm-small').textContent = 'Writing the headline';
+        find('gm-open-desk').textContent = 'View answer';
+      }));
+      find('gm-composer').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const text = find('gm-draft').value.trim();
+        if (!text) return;
+        const message = document.createElement('p');
+        message.className = 'gm-message';
+        message.textContent = 'You: ' + text;
+        find('gm-local-messages').append(message);
+        find('gm-draft').value = '';
+        drafts[crew] = '';
+      });
+      render();
+      if (globalThis.Tweak) {
+        const tweak = new Tweak({ container: root, onChange: render });
+        tweak.addToggle(design, 'managed', { label: 'Managed workspace' });
+        tweak.addSlider(design, 'spacing', { label: 'Screen inset', min: 16, max: 28, unit: 'px' });
+      }
+    })();
+  </script>
+</div>
