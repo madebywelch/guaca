@@ -264,7 +264,7 @@ adapter as a vault or claim that coding processes under the same backend user
 cannot read it.
 
 The operator supplies their commit name and email when linking a remote, or
-under **Git access** afterward. Leaving both blank inherits the backend's Git
+under **Edit → Git access** afterward. Leaving both blank inherits the backend's Git
 configuration. `user.useConfigOnly=true` prevents Git from inventing a container
 identity when that configuration is absent. Existing directories keep their
 identity; older clones using `guaca <guaca@localhost>` can update it under Git
@@ -505,7 +505,7 @@ Codex prints the verification link and device code. Claude's CLI can print a
 login URL and accept the code when its callback cannot reach the container.
 These operations belong to the official programs. Their home is
 `/var/lib/guaca`, on the persistent volume; never sign in as root and expect the
-daemon user to find that session. Reopen the repository panel to refresh the
+daemon user to find that session. Use **Refresh coding status** in the repository panel to refresh the
 CLI status. Codex coding authentication is separate from Guaca's ChatGPT
 provider sign-in. The model settings for coding also belong to each CLI.
 
@@ -522,7 +522,10 @@ A managed service must use a permitted API/provider authentication arrangement;
 CLI availability alone is not authorization to route users' consumer plans.
 
 In a group's repository panel, **Git access** is independent of either CLI
-sign-in. For HTTPS, save a repository-scoped access token and the username your
+sign-in. Each row shows saved access and the effective commit author. **Edit**
+is the single entry point for repository settings, identity and credentials.
+An existing token is not requested again: **Change saved token** opens its
+replacement form, and closing Edit discards unsaved identity and token inputs. For HTTPS, save a repository-scoped access token and the username your
 Git service requires. GitHub's token creation link is included; select the
 repository and grant Contents read/write (workflow edits need their own
 permission). SSH uses keys configured under the backend user. The token is

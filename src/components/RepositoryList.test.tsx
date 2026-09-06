@@ -23,6 +23,13 @@ const codingHarnesses = vi.fn<() => Promise<HarnessOnMachine[]>>();
 
 vi.mock("../lib/ipc", () => ({
   api: {
+    repositoryConnection: vi.fn().mockResolvedValue({
+      remote: null,
+      pushRemote: null,
+      acceptsToken: false,
+      managedCredential: true,
+      author: { name: "Robert", email: "robert@example.com" },
+    }),
     savedRepositoryCredentials: vi.fn().mockResolvedValue([]),
     groupRepositories: (groupId: string) => groupRepositories(groupId),
     createGithubRepository: (draft: RepositoryDraft) => createGithubRepository(draft),
@@ -717,4 +724,32 @@ it("links the next repository with a saved credential ID and clears a failed pas
     vi.mocked(api.savedRepositoryCredentials).mockResolvedValue([]);
     useStore.setState({ capabilities: previous });
   }
+});
+
+it("shows a missing Codex sign-in beside saved Git access and refreshes without reopening", async () => {
+  groupRepositories.mockResolvedValue([repository({ harness: "codex" })]);
+  const codex = {
+    harness: "codex" as const,
+    installed: true,
+    bridged: true,
+    version: "0.153.3",
+    install: "install codex",
+    signedIn: false,
+    signIn: "codex login --device-auth",
+  };
+  codingHarnesses.mockResolvedValue([codex]);
+  render(<RepositoryList groupId={GROUP} crew={CREW} />);
+  expect(await screen.findByText(/Codex is not signed in on this backend/)).toBeTruthy();
+  expect(await screen.findByText(/Repository token saved/)).toBeTruthy();
+  expect(screen.queryByLabelText("Repository access token")).toBeNull();
+  const edit = screen.getByRole("button", { name: "Edit" });
+  expect(edit.className).not.toContain("btn--ghost");
+  fireEvent.click(edit);
+  expect(((await screen.findByLabelText("Commit author name")) as HTMLInputElement).value).toBe(
+    "Robert",
+  );
+  expect(screen.queryByLabelText("Repository access token")).toBeNull();
+  codingHarnesses.mockResolvedValue([{ ...codex, signedIn: true }]);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh coding status" }));
+  expect(await screen.findByText(/Codex is signed in on this backend/)).toBeTruthy();
 });
