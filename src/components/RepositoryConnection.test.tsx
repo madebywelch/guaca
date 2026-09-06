@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
+import { api } from "../lib/ipc";
 import { RepositoryConnection } from "./RepositoryConnection";
 
 const connection = {
@@ -19,6 +20,8 @@ const { read, save, remove, check, app, author } = vi.hoisted(() => ({
 vi.mock("./RepositoryGithubUser", () => ({ RepositoryGithubUser: () => null }));
 vi.mock("../lib/ipc", () => ({
   api: {
+    savedRepositoryCredentials: vi.fn().mockResolvedValue([]),
+    reuseRepositoryCredential: vi.fn(),
     repositoryConnection: read,
     setRepositoryAuthor: author,
     setRepositoryGithub: app,
@@ -31,6 +34,7 @@ vi.mock("../lib/ipc", () => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  vi.mocked(api.savedRepositoryCredentials).mockResolvedValue([]);
   read.mockResolvedValue(connection);
   save.mockResolvedValue({ ...connection, managedCredential: true });
   remove.mockResolvedValue(connection);
@@ -124,4 +128,22 @@ it("shows a failed author save without reporting success", async () => {
   fireEvent.click(screen.getByText("Save commit author"));
   expect((await screen.findByRole("alert")).textContent).toContain("Could not save");
   expect(screen.queryByText(/Commit author saved/)).toBeNull();
+});
+
+it("reuses a saved credential by ID without asking for its token", async () => {
+  vi.mocked(api.savedRepositoryCredentials).mockResolvedValue([
+    { id: "saved-id", remote: connection.remote, username: "engineer" },
+  ]);
+  vi.mocked(api.reuseRepositoryCredential).mockResolvedValue({
+    ...connection,
+    managedCredential: true,
+  } as Awaited<ReturnType<typeof api.reuseRepositoryCredential>>);
+  render(<RepositoryConnection id="repo-2" />);
+  fireEvent.click(screen.getByText("Git access"));
+  fireEvent.click(await screen.findByText("Use saved token"));
+  await waitFor(() =>
+    expect(api.reuseRepositoryCredential).toHaveBeenCalledWith("repo-2", "saved-id"),
+  );
+  expect(save).not.toHaveBeenCalled();
+  expect(screen.queryByLabelText("Repository access token")).toBeNull();
 });

@@ -510,6 +510,7 @@ export interface RepositoryDraft {
   /** A token for a private https remote. Kept beside the settings, never in
    *  the clone, and never read back out. */
   credential?: string;
+  credentialId?: string;
   username?: string;
   author?: GitIdentity;
 }
@@ -1537,4 +1538,11 @@ export interface WorkDecision {
   snoozedUntil: number | null;
   deliveryRun: RunId | null;
   interrupted: boolean;
+}
+
+/** A saved credential description. No secret value crosses this boundary. */
+export interface SavedRepositoryCredential {
+  id: string;
+  remote: string;
+  username: string;
 }

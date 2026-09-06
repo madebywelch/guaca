@@ -686,3 +686,86 @@ async fn groups_transfer_between_hosts_without_copying_identity() {
     let (_, hints) = call(target, "group_reconnect", json!({"id":imported["ok"]["id"]})).await;
     assert_eq!(hints["ok"], json!([]));
 }
+
+#[tokio::test]
+async fn repository_credentials_are_reusable_through_the_api_without_reading_secrets_back() {
+    let (addr, dir) = workspace().await;
+    let mut ids = Vec::new();
+    for name in ["first", "second"] {
+        let path = dir.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        for args in
+            [vec!["init"], vec!["remote", "add", "origin", "https://forge.example/team/repo.git"]]
+        {
+            assert!(std::process::Command::new("git")
+                .arg("-C")
+                .arg(&path)
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success());
+        }
+        let (status, body) = call(
+            addr,
+            "create_repository",
+            json!({"draft": {
+                "groupId": "00000000-0000-4000-8000-000000000001", "path": path,
+            }}),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        ids.push(body["ok"]["id"].as_str().unwrap().to_owned());
+    }
+    let (status, body) = call(
+        addr,
+        "set_repository_credential",
+        json!({"id":ids[0], "username":"engineer", "token":"private-token"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{body}");
+    let (status, saved) = call(
+        addr,
+        "saved_repository_credentials",
+        json!({"remote":"https://forge.example/team/other.git"}),
+    )
+    .await;
+    assert_eq!(status, 200, "{saved}");
+    assert!(!saved.to_string().contains("private-token"));
+    let credential_id = &saved["ok"][0]["id"];
+    let (status, reused) = call(
+        addr,
+        "reuse_repository_credential",
+        json!({"id":ids[1], "credentialId":credential_id}),
+    )
+    .await;
+    assert_eq!(status, 200, "{reused}");
+    assert_eq!(reused["ok"]["managedCredential"], true);
+    assert!(!reused.to_string().contains("private-token"));
+
+    // Request-side checks apply before clone tries to contact a remote.
+    for draft in [
+        json!({"remote":"https://other.example/team/repo.git", "credentialId":credential_id}),
+        json!({"remote":"https://forge.example/team/repo.git", "credentialId":credential_id, "credential":"another-token"}),
+    ] {
+        let mut draft = draft;
+        draft["groupId"] = json!("00000000-0000-4000-8000-000000000001");
+        let (status, error) = call(addr, "create_repository", json!({"draft":draft})).await;
+        assert_eq!(status, 200, "{error}");
+        assert!(error.get("err").is_some(), "{error}");
+        assert!(!error.to_string().contains("private-token"));
+        assert!(!error.to_string().contains("another-token"));
+    }
+    call(addr, "clear_repository_credential", json!({"id":ids[0]})).await;
+    let (_, remaining) = call(addr, "repository_connection", json!({"id":ids[1]})).await;
+    assert_eq!(remaining["ok"]["managedCredential"], true);
+    let (status, error) = call(
+        addr,
+        "reuse_repository_credential",
+        json!({"id":ids[1], "credentialId":credential_id}),
+    )
+    .await;
+    assert_eq!(status, 200, "{error}");
+    assert!(error.get("err").is_some(), "{error}");
+    assert!(error.to_string().contains("unavailable"));
+}
