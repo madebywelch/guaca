@@ -455,3 +455,43 @@ it("refreshes the roster when the event connection returns", async () => {
   reconnect?.();
   await waitFor(() => expect(listAgents.mock.calls.length).toBeGreaterThan(before));
 });
+
+describe("phone navigation", () => {
+  it("opens the same channel again and preserves its draft across panes", async () => {
+    listAgents.mockResolvedValue([agent("Ada")]);
+    localStorage.setItem("guac.inspector", "closed");
+    const { container } = render(<App />);
+    await screen.findByText("Ada");
+    fireEvent.click(railRow("Ada"));
+    await screen.findByRole("heading", { name: "Ada" });
+    const pane = () => container.querySelector(".app")?.getAttribute("data-mobile-pane");
+    const input = container.querySelector(".composer__input") as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: "Keep this draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    expect(pane()).toBe("details");
+    expect(container.querySelector(".inspector--closed")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Hide this panel" }));
+    expect(pane()).toBe("conversation");
+    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+    expect(pane()).toBe("agents");
+    fireEvent.click(railRow("Ada"));
+    expect(pane()).toBe("conversation");
+    expect((container.querySelector(".composer__input") as HTMLTextAreaElement).value).toBe(
+      "Keep this draft",
+    );
+  });
+
+  it("lets a phone choose a crew by name without hovering", async () => {
+    const other = aGroup({ id: "crew-other", name: "Research" });
+    listGroups.mockResolvedValue([aGroup(), other]);
+    listAgents.mockResolvedValue([agent("Ada"), { ...agent("Lin"), groupId: other.id }]);
+    const { container } = render(<App />);
+    await screen.findByText("Ada");
+    fireEvent.change(screen.getByRole("combobox", { name: "Crew" }), {
+      target: { value: other.id },
+    });
+    await waitFor(() => expect(useStore.getState().railGroup).toBe(other.id));
+    expect(railNames()).toEqual(["Lin"]);
+    expect(container.querySelector(".app")?.getAttribute("data-mobile-pane")).toBe("agents");
+  });
+});

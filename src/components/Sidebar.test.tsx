@@ -898,3 +898,17 @@ describe("an agent that has stopped and said so", () => {
     expect(screen.getAllByText("stuck 2d")).toHaveLength(1);
   });
 });
+
+it("lets a touch scroll the rail without rearranging agents", () => {
+  const { container } = draw([group("Crew")], [agent("Ada"), agent("Lin")]);
+  fireEvent.pointerDown(row("Ada"), {
+    button: 0,
+    pointerType: "touch",
+    clientX: 100,
+    clientY: 300,
+  });
+  fireEvent.pointerMove(window, { pointerType: "touch", clientX: 100, clientY: 200 });
+  expect(container.querySelector('.rail[data-dragging="true"]')).toBeNull();
+  fireEvent.pointerUp(window, { pointerType: "touch", clientX: 100, clientY: 200 });
+  expect(moveAgent).not.toHaveBeenCalled();
+});
