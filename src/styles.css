@@ -103,6 +103,12 @@
      than a size, because it is also what a script would read back. */
   --ui-scale: 1;
   --measure-attention: 46rem;
+  --control-touch: 2.75rem;
+  --type-touch: max(16px, 1rem);
+  --space-safe-top: env(safe-area-inset-top, 0px);
+  --space-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --space-safe-left: env(safe-area-inset-left, 0px);
+  --space-safe-right: env(safe-area-inset-right, 0px);
 
   /* ---- Type ---------------------------------------------------------------
      Ten roles, whole pixels at scale 1, no two closer than 1px.
@@ -7585,4 +7591,241 @@ input[type="file"]:disabled {
 
 .for-you__body > .for-you__receipt {
   padding: var(--space-5) var(--space-7);
+}
+
+/* A phone shows one workspace pane at a time. Keep the transcript mounted so
+   drafts, scroll position and live events survive a trip to the agent list. */
+.mobile-nav,
+.mobile-crews {
+  display: none;
+}
+
+/* CSS media queries cannot read custom properties. 48rem is the point where
+   the two desktop columns leave too little room to read a conversation.
+   Touch-only devices keep this navigation in landscape as well. */
+@media (max-width: 48rem), (hover: none) and (pointer: coarse) {
+  :root {
+    --control-h: var(--control-touch);
+    --control-h-sm: var(--control-touch);
+    --column-inset: var(--space-5);
+  }
+
+  .app {
+    position: fixed;
+    top: var(--viewport-top, 0px);
+    left: 0;
+    width: 100%;
+    height: var(--viewport-height, 100dvh);
+    padding: var(--space-safe-top) var(--space-safe-right) var(--space-safe-bottom) var(--space-safe-left);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .mobile-nav {
+    display: flex;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--edge);
+    background: var(--rail-ground);
+  }
+
+  .mobile-nav .btn {
+    flex: 1;
+  }
+
+  .mobile-nav [aria-pressed="true"] {
+    background: var(--raised);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .app > .grail,
+  .app:not([data-mobile-pane="agents"]) > .rail,
+  .app:not([data-mobile-pane="conversation"]) > main,
+  .app:not([data-mobile-pane="details"]) > .inspector {
+    display: none;
+  }
+
+  .app > .rail,
+  .app > .inspector {
+    width: 100%;
+    min-width: 0;
+    border: 0;
+  }
+
+  .mobile-crews {
+    display: flex;
+    flex-direction: column;
+    margin: 0 var(--space-6) var(--space-4);
+  }
+
+  .rail__brand {
+    padding-top: var(--space-5);
+  }
+
+  .rail__gear {
+    opacity: 1;
+  }
+
+  .agent-row {
+    touch-action: pan-y;
+    min-height: var(--control-touch);
+  }
+
+  .rail__search,
+  .rail__new,
+  .rail__gear,
+  .pane__more,
+  .inspector__tab,
+  .inspector__gear,
+  .composer__send,
+  .composer__attach {
+    min-width: var(--control-touch);
+    min-height: var(--control-touch);
+  }
+
+  .pane__header {
+    height: auto;
+    min-height: var(--control-touch);
+    padding: var(--space-3) var(--space-5);
+    gap: var(--space-4);
+  }
+
+  .pane__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .msg {
+    grid-template-columns: var(--space-7) minmax(0, 1fr);
+    gap: var(--space-2) var(--space-4);
+  }
+
+  .msg[data-operator="true"] {
+    grid-template-columns: minmax(0, 1fr);
+    padding-right: var(--space-5);
+    padding-left: var(--space-8);
+  }
+
+  .msg[data-operator="true"] .msg__body {
+    grid-column: 1;
+  }
+
+  .msg .msg__at {
+    grid-column: 2;
+    grid-row: 2;
+    opacity: 1;
+  }
+
+  .msg[data-operator="true"] .msg__at {
+    grid-column: 1;
+    justify-self: end;
+  }
+
+  .composer {
+    margin: var(--space-4) var(--space-5);
+  }
+
+  .composer__row {
+    align-items: flex-end;
+  }
+
+  .composer__foot {
+    display: none;
+  }
+
+  input,
+  select,
+  textarea,
+  .input,
+  .palette__input {
+    font-size: var(--type-touch);
+  }
+
+  .composer__input,
+  .composer__mirror {
+    font-size: var(--type-touch);
+    max-height: 30dvh;
+  }
+
+  .banner,
+  .settings__foot,
+  .cafeteria__head,
+  .cafeteria__foot,
+  .calendar__title-row,
+  .calendar__foot {
+    flex-wrap: wrap;
+  }
+
+  .scrim {
+    top: var(--viewport-top, 0px);
+    bottom: auto;
+    height: var(--viewport-height, 100dvh);
+    padding: var(--space-safe-top) var(--space-safe-right) var(--space-safe-bottom) var(--space-safe-left);
+  }
+
+  .scrim > .dialog,
+  .scrim > .palette {
+    width: 100%;
+    max-width: 100%;
+    max-height: 100%;
+    margin: auto;
+    border-radius: 0;
+    overflow-y: auto;
+  }
+
+  .scrim > .dialog--settings,
+  .scrim > .dialog--cafeteria,
+  .scrim > .dialog--calendar,
+  .scrim > .for-you {
+    height: 100%;
+    padding: 0;
+    overflow: hidden;
+  }
+
+  .settings__body {
+    flex-direction: column;
+  }
+
+  .settings__nav {
+    width: 100%;
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--edge);
+  }
+
+  .settings__tab {
+    flex: none;
+    white-space: nowrap;
+  }
+
+  .settings__head,
+  .settings__pane,
+  .settings__foot,
+  .cafeteria__head,
+  .cafeteria__stations,
+  .cafeteria__foot,
+  .calendar__head,
+  .calendar__body,
+  .calendar__foot {
+    padding: var(--space-5);
+  }
+
+  .settings__pane {
+    min-width: 0;
+  }
+
+  .cafeteria__grid,
+  .calendar__pair,
+  .occasion {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .palette__results {
+    max-height: 65dvh;
+  }
 }

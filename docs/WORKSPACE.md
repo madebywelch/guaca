@@ -1830,3 +1830,26 @@ statement that this agent is working on that run, and the entry is dropped when
 the run settles. Not read from what `sendMessage` returned, which only knows
 about conversations the operator started — a routine's work and a peer's request
 are exactly as worth stopping.
+
+## A phone shows one pane at a time
+
+Below 48rem, and on touch-only devices in either orientation, the workspace
+shows Agents, Chat or Details, chosen by three
+persistent buttons. The rail and inspector no longer take width from the
+conversation. Hidden panes stay mounted: changing views must not discard a
+draft, move the transcript or reconnect the event stream. Selecting an agent,
+including the one already selected, returns to Chat. A routine opened from the
+transcript reveals Details.
+
+Crews are selected by name on a phone. The desktop's proximity column is hidden,
+and a touch scrolling the agent list never starts a reorder. Settings uses a
+horizontal section list above its pane; dialogs fit the viewport, controls have
+touch-sized targets and inputs stay large enough to avoid Safari's focus zoom.
+The visual viewport sizes the workspace while the keyboard is up and follows
+Safari's pan. Pinch zoom does not resize that layout.
+
+`scripts/hosting-browser.mjs` checks actual touch hit targets, phone widths,
+draft preservation, constrained viewport height, dialogs and the wide layout
+against a scratch daemon. Set `GUACA_BROWSER_SHOTS` to retain screenshots for
+visual review. The viewport event suite covers keyboard resize, pan and zoom
+without depending on a particular device keyboard.
