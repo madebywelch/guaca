@@ -146,6 +146,36 @@ async fn codex_runs_in_the_repository_and_retains_its_own_session() {
     let _ = std::fs::remove_dir_all(repo);
 }
 
+#[tokio::test]
+async fn codex_without_auth_refuses_before_starting_a_thread_or_spending_a_model_call() {
+    stand_ins();
+    let repo = a_repository("codex-signed-out");
+    std::fs::write(repo.join(".codex_signed_out"), "").unwrap();
+    let error = coding::run(Which::Codex, repo.to_str().unwrap(), "work", None, |_| {})
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Codex is not signed in on this backend"), "{error}");
+    assert!(error.contains("codex login --device-auth"), "{error}");
+    let requests = std::fs::read_to_string(repo.join(".rpc.jsonl")).unwrap();
+    assert!(requests.contains("account/read"));
+    assert!(!requests.contains("thread/start"));
+    assert!(!requests.contains("turn/start"));
+    let _ = std::fs::remove_dir_all(repo);
+}
+
+#[tokio::test]
+async fn codex_custom_provider_does_not_require_an_openai_account() {
+    stand_ins();
+    let repo = a_repository("codex-custom-provider");
+    std::fs::write(repo.join(".codex_custom_provider"), "").unwrap();
+    let outcome =
+        coding::run(Which::Codex, repo.to_str().unwrap(), "work", None, |_| {}).await.unwrap();
+    assert!(outcome.failed.is_none());
+    assert_eq!(outcome.tool_calls, 1);
+    let _ = std::fs::remove_dir_all(repo);
+}
+
 const CLAUDE_SUCCESS: &str = concat!(
     r#"{"type":"system","subtype":"init","model":"claude-opus-5"}"#,
     "\n",

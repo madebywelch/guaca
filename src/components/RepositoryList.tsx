@@ -220,6 +220,44 @@ function labelOf(harness: Harness): string {
   return HARNESSES.find((known) => known.id === harness)?.label ?? harness;
 }
 
+/** A saved Git token says nothing about the program that will write code. */
+function CodingStatus({
+  harness,
+  machine,
+}: {
+  harness: Harness;
+  machine: HarnessOnMachine[] | null;
+}) {
+  const row = machine?.find((known) => known.harness === harness);
+  const label = labelOf(harness);
+  return (
+    <div className="field">
+      <span className="field__label">Coding tool</span>
+      <p className="field__hint">
+        {!row ? (
+          `${label}: status not checked.`
+        ) : row.withheld ? (
+          `${label}: ${row.withheld}`
+        ) : !row.installed ? (
+          <>
+            {label} is not installed. On the backend, run <code>{row.install}</code>.
+          </>
+        ) : row.signedIn === false ? (
+          <>
+            {label} is not signed in on this backend. Run <code>{row.signIn}</code> as the backend
+            user, then refresh coding status. Git tokens and Guaca chat sign-in do not sign in the
+            coding tool.
+          </>
+        ) : row.signedIn === true ? (
+          `${label} is signed in on this backend. Model access is checked when a job runs.`
+        ) : (
+          `${label} is installed. Sign-in status is unknown.`
+        )}
+      </p>
+    </div>
+  );
+}
+
 /** Who works in a repository, as a sentence. */
 function worksIn(repository: Repository, crew: AgentCard[]): string {
   const named = crew.filter((agent) => agent.repositoryId === repository.id);
@@ -322,6 +360,8 @@ export function RepositoryList({ groupId, crew }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [machine, setMachine] = useState<HarnessOnMachine[] | null>(null);
+  const [checkingHarnesses, setCheckingHarnesses] = useState(false);
+  const [harnessError, setHarnessError] = useState<string | null>(null);
   const pathRef = useRef<HTMLInputElement>(null);
 
   // The path is the only field that has to be filled in, so it takes the
@@ -344,20 +384,22 @@ export function RepositoryList({ groupId, crew }: Props) {
     void load();
   }, [load]);
 
-  // Two process spawns, asked once when the panel opens. It is a question about
-  // what is on the machine rather than about the workspace, so nothing in the
-  // app can invalidate it: an operator who installs one while this is open sees
-  // it the next time they open the panel.
-  useEffect(() => {
-    api
-      .codingHarnesses()
-      .then(setMachine)
-      // A check that could not run must not disable both choices. Unknown reads
-      // as installed: the refusal a job gives already names the install command,
-      // and the failure mode of guessing the other way is a panel that refuses
-      // to save the thing the operator can see working in their own terminal.
-      .catch(() => setMachine(null));
+  const checkHarnesses = useCallback(async () => {
+    setCheckingHarnesses(true);
+    setHarnessError(null);
+    setMachine(null);
+    try {
+      setMachine(await api.codingHarnesses());
+    } catch (caught) {
+      setHarnessError(errorMessage(caught));
+    } finally {
+      setCheckingHarnesses(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void checkHarnesses();
+  }, [checkHarnesses]);
 
   useEffect(() => {
     api
@@ -434,6 +476,21 @@ export function RepositoryList({ groupId, crew }: Props) {
 
   return (
     <div className="access">
+      <div className="access__row">
+        <button
+          type="button"
+          className="btn btn--small"
+          disabled={checkingHarnesses}
+          onClick={() => void checkHarnesses()}
+        >
+          {checkingHarnesses ? "Checking coding tools…" : "Refresh coding status"}
+        </button>
+      </div>
+      {harnessError && (
+        <p className="field__hint" role="alert">
+          Could not check coding tools: {harnessError}
+        </p>
+      )}
       {repositories.map((repository) => (
         <div className="access__item" key={repository.id}>
           <div className="access__row">
@@ -441,7 +498,7 @@ export function RepositoryList({ groupId, crew }: Props) {
             <span className="access__where">{repository.remote ?? repository.path}</span>
             <button
               type="button"
-              className="btn btn--small btn--ghost"
+              className="btn btn--small"
               disabled={busy !== null}
               onClick={() => {
                 setEditing(editing === repository.id ? null : repository.id);
@@ -466,6 +523,7 @@ export function RepositoryList({ groupId, crew }: Props) {
             </button>
           </div>
 
+          <CodingStatus harness={repository.harness} machine={machine} />
           {editing === repository.id ? (
             <>
               <div className="access__row">
@@ -574,7 +632,7 @@ export function RepositoryList({ groupId, crew }: Props) {
             repository.note && <p className="field__hint">{repository.note}</p>
           )}
 
-          <RepositoryConnection id={repository.id} />
+          <RepositoryConnection id={repository.id} editing={editing === repository.id} />
 
           {/* The harness is on the row and not only behind Edit, because the
               question it answers is asked about the list: which of these
@@ -666,7 +724,7 @@ export function RepositoryList({ groupId, crew }: Props) {
                   {githubAvailable === null
                     ? "Checking GitHub connection…"
                     : githubApp
-                      ? "Uses this host’s GitHub App to clone and push. A guaca.bot account is not required. After adding the repository, sign in under Git access so commits and pull requests use your account."
+                      ? "Uses this host’s GitHub App to clone and push. A guaca.bot account is not required. After adding the repository, choose Edit and sign in under Git access so commits and pull requests use your account."
                       : "Private repositories need Git credentials. Your Guaca or coding-tool sign-in does not grant repository access. Public repositories need no token."}
                 </span>
               </label>
