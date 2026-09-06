@@ -43,6 +43,10 @@ for raw in sys.stdin:
     method = request.get("method")
     if method == "initialize":
         reply(request, {"userAgent": "fixture"})
+    elif method == "account/read":
+        custom = Path(".codex_custom_provider").exists()
+        missing = Path(".codex_signed_out").exists()
+        reply(request, {"account": None if custom or missing else {"type": "apiKey"}, "requiresOpenaiAuth": not custom})
     elif method == "thread/start":
         policy = "never" if Path(".codex_bad_policy").exists() else request["params"]["approvalPolicy"]
         reply(request, {"thread": {"id": thread}, "model": "fixture-mini", "approvalPolicy": policy, "approvalsReviewer": "user"})

@@ -676,6 +676,15 @@ CLI version; its configuration, credentials and sessions live in the persistent
 home volume. The control contract is measured against Codex 0.153.3; the UI
 requires 0.153 or newer for steering and approvals.
 
+Before creating a thread, the runner asks that same app-server for `account/read`.
+If its provider requires OpenAI authentication and no account is present, the job
+ends with the backend sign-in command before any model request. A provider that
+does not require OpenAI authentication still runs. This checks missing credentials,
+not whether a saved credential is valid or a plan has capacity. The repository
+list shows the CLI's local sign-in status and can refresh it without reopening.
+`tests/codex_auth.rs` checks the missing-account path against the real CLI with
+an isolated credential directory and no model spend.
+
 The runner initializes one thread, starts one turn, and records its id, tool
 activity, answer and failures. It does not turn token counts into a dollar
 cost. A stream ending before `turn/completed` is an interrupted job, even if
@@ -721,7 +730,7 @@ operator allowed this job to perform it.
 ## Commit attribution is independent of access
 
 The repository's Git identity supplies the human author and committer defaults
-for all harnesses. The remote clone form and Git access panel let the operator
+for all harnesses. The remote clone form and the repository’s Edit panel let the operator
 set that name and email. GitHub App authentication does not replace it with a
 bot identity. Missing backend identity requires operator configuration before
 committing; Guaca never guesses the installation owner's identity. See

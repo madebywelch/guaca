@@ -128,7 +128,7 @@ async fn drive(
     let mut ready = false;
     let mut complete = false;
     let mut accepting = true;
-    let mut next_id = 4u64;
+    let mut next_id = 5u64;
     let mut pending: Option<(u64, oneshot::Sender<Result<(), String>>)> = None;
     let mut deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
     let mut approvals: FuturesUnordered<BoxFuture<'static, Value>> = FuturesUnordered::new();
@@ -216,6 +216,18 @@ async fn drive(
                 match id {
                     1 => {
                         write(&mut stdin, json!({"method":"initialized"})).await?;
+                        write(&mut stdin, json!({"id":4,"method":"account/read","params":{"refreshToken":false}})).await?;
+                        deadline = tokio::time::Instant::now() + RESPONSE_LIMIT;
+                    }
+                    4 => {
+                        // Ask the process that will run the job. A separate CLI
+                        // login check can disagree with a custom provider.
+                        if result["requiresOpenaiAuth"] == true && result["account"].is_null() {
+                            return Err(failed(format!(
+                                "Codex is not signed in on this backend. Run `{}` as the backend user, then retry the coding job. Guaca's chat sign-in and repository Git token do not sign in Codex.",
+                                super::sign_in(crate::domain::repository::Harness::Codex)
+                            )));
+                        }
                         write(&mut stdin, json!({"id":2,"method":"thread/start","params":{
                             "cwd":repository, "approvalPolicy": if gate == Gate::AskBeforePushing { "untrusted" } else { "never" },
                             "approvalsReviewer":"user", "sandbox":"danger-full-access",
