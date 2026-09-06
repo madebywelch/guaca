@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile, writeFile } from "node:fs/promises";
 import http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -193,7 +193,7 @@ try {
     tab = (await cdp("Target.createTarget", { url: `${base}/#token=${token}` })).targetId;
     session = (await cdp("Target.attachToTarget", { targetId: tab, flatten: true })).sessionId;
     await until(
-      () => evaluate(`document.body.innerText.includes('Browser check')`),
+      () => evaluate(`document.body?.innerText.includes('Browser check')`),
       "real app renders its roster",
     );
     await evaluate(
@@ -220,7 +220,7 @@ try {
     "reconnected client restores partial reply",
   );
   await cdp("Target.closeTarget", { targetId: tab });
-  finish("Finished while the client was closed.");
+  finish("Finished while the client was closed.\n\nThe workspace keeps working while you are away. You can read replies, switch agents, and review their notes from your phone.\n\n- Open Agents to choose a crew.\n- Return to Chat without losing your draft.\n- Open Details for memory and routines.\n\nA long reference should wrap: https://example.com/" + "reference".repeat(18));
   await until(
     async () =>
       (await call("channel_messages", { channelId: agent.id })).some((m) =>
@@ -236,6 +236,110 @@ try {
   console.log(
     "PASS: partial reply restored; backend finished with no client; transcript restored.",
   );
+
+  // Phone layout uses real touch hit testing. Keep a draft while changing
+  // panes, and shrink the viewport as a keyboard would before returning wide.
+  const tap = async (selector) => {
+    const point = await evaluate(`(() => {
+      const node = document.querySelector(${JSON.stringify(selector)});
+      if (!node) throw new Error('Missing target: ' + ${JSON.stringify(selector)});
+      node.scrollIntoView({block:'nearest'});
+      const r = node.getBoundingClientRect();
+      if (!r.width || !r.height) throw new Error('Hidden target');
+      return {x:r.x+r.width/2,y:r.y+r.height/2};
+    })()`);
+    await cdp("Input.dispatchTouchEvent", {type:"touchStart", touchPoints:[point]}, session);
+    await cdp("Input.dispatchTouchEvent", {type:"touchEnd", touchPoints:[]}, session);
+  };
+  const fits = async (selector) => {
+    const bounds = await evaluate(`(() => {
+      const n=document.querySelector(${JSON.stringify(selector)}), r=n.getBoundingClientRect();
+      return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height,
+        overflow:n.scrollWidth-n.clientWidth, vw:innerWidth, vh:visualViewport.height};
+    })()`);
+    assert.ok(bounds.width > 0 && bounds.height > 0, `${selector} is visible`);
+    assert.ok(bounds.left >= -1 && bounds.right <= bounds.vw+1, `${selector} fits horizontally: ${JSON.stringify(bounds)}`);
+    assert.ok(bounds.top >= -1 && bounds.bottom <= bounds.vh+1, `${selector} fits vertically: ${JSON.stringify(bounds)}`);
+    assert.ok(bounds.overflow <= 1, `${selector} has no horizontal overflow: ${JSON.stringify(bounds)}`);
+  };
+  const size = async (width,height,mobile=true) => {
+    await cdp("Emulation.setDeviceMetricsOverride", {width,height,deviceScaleFactor:1,mobile},session);
+    await cdp("Emulation.setTouchEmulationEnabled", {enabled:mobile},session);
+    await delay(150);
+  };
+  for (const width of [320,390,430,768]) {
+    await size(width,844);
+    await fits(".app");
+    await fits(".pane");
+    await fits(".pane__scroll");
+    await fits(".composer");
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('.rail')).display"),"none");
+    await tap(".composer__input");
+    await cdp("Input.insertText", {text:"Draft survives navigation"},session);
+    await tap(".mobile-nav button:first-child");
+    await fits(".rail");
+    await fits(".mobile-crews select");
+    await tap(".agent-row");
+    assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
+    await tap(".mobile-nav button:last-child");
+    await fits(".inspector");
+    await tap(".mobile-nav button:nth-child(2)");
+    await size(width,400);
+    await fits(".composer");
+    await size(width,844);
+    await evaluate("document.querySelector('.composer__input').focus()");
+    // React must see the input event; assigning .value alone would not clear its draft.
+    await evaluate(`(() => { const n=document.querySelector('.composer__input');
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
+      n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
+    await tap(".mobile-nav button:first-child");
+    await tap(".rail__foot button:last-child");
+    await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
+    await delay(250);
+    await fits(".dialog--settings");
+    await fits(".settings__pane");
+    await fits(".settings__foot");
+    if (width === 320) {
+      const tabs = await evaluate("document.querySelectorAll('.settings__tab').length");
+      for (let i=1;i<=tabs;i++) {
+        await tap(`.settings__tab:nth-child(${i})`);
+        await delay(100);
+        await fits(".settings__pane");
+        await fits(".settings__foot");
+      }
+      await tap(".settings__tab:first-child");
+    }
+    if (process.env.GUACA_BROWSER_SHOTS) {
+      await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
+      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
+      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`settings-${width}.png`),Buffer.from(shot.data,"base64"));
+    }
+    await evaluate("document.querySelector('.scrim__close').click()");
+    if (width === 320) {
+      for (const [button,dialog] of [[".rail__foot button:first-child",".dialog--cafeteria"],[".rail__foot button:nth-child(2)",".dialog--calendar"],[".rail__for-you",".for-you"]]) {
+        await tap(button);
+        await until(() => evaluate(`!!document.querySelector('${dialog}')`),`${dialog} opens`);
+        await delay(250);
+        await fits(dialog);
+        await evaluate("document.querySelector('.scrim__close').click()");
+      }
+    }
+    await tap(".agent-row");
+    if (process.env.GUACA_BROWSER_SHOTS) {
+      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
+      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`chat-${width}.png`),Buffer.from(shot.data,"base64"));
+    }
+  }
+  await size(844,390);
+  await fits(".pane");
+  await fits(".composer");
+  await fits(".mobile-nav");
+  await size(1280,900,false);
+  await fits(".pane");
+  await fits(".rail");
+  await fits(".inspector");
+  assert.equal(await evaluate("getComputedStyle(document.querySelector('.mobile-nav')).display"),"none");
+  console.log("PASS: phone widths, touch navigation, preserved drafts, keyboard-sized viewport, settings and desktop layout.");
 
   // Exercise the real artifact route in Chromium, including its opaque origin.
   const artifact = await call("frame_artifact", {

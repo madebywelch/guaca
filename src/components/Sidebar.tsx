@@ -14,6 +14,7 @@ import { RailRepositories } from "./RailRepositories";
 import { SpendTag, useSpendTag } from "./Spend";
 
 interface Props {
+  onOpenChannel?: () => void;
   onEditAgent: (agent: AgentCard) => void;
   onEditGroup: (group: Group) => void;
   onOpenCafeteria: () => void;
@@ -55,6 +56,7 @@ interface Drag {
 }
 
 export function Sidebar({
+  onOpenChannel,
   onEditAgent,
   onEditGroup,
   onOpenCafeteria,
@@ -395,7 +397,10 @@ export function Sidebar({
         data-held={dragging === agent.id ? "true" : undefined}
         data-over={dragging && dragging !== agent.id && isOver(target) ? "true" : undefined}
         style={{ "--accent": agent.color } as React.CSSProperties}
-        onClick={() => void select(agent.id)}
+        onClick={() => {
+          void select(agent.id);
+          onOpenChannel?.();
+        }}
         onDoubleClick={() => onEditAgent(agent)}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -404,7 +409,7 @@ export function Sidebar({
         // The press is remembered and nothing else happens yet: a row is a
         // button first, and it only becomes a handle once the pointer moves.
         onPointerDown={(event) => {
-          if (event.button !== 0) return;
+          if (event.button !== 0 || event.pointerType === "touch") return;
           press.current = { id: agent.id, x: event.clientX, y: event.clientY };
         }}
         onPointerEnter={() => hover(target)}
@@ -504,6 +509,22 @@ export function Sidebar({
           <span className="rail__wordmark">Guaca</span>
           <NewMenu onNewAgent={onNewAgent} onNewGroup={onNewGroup} />
         </div>
+
+        <label className="mobile-crews field">
+          <span className="field__label">Crew</span>
+          <select
+            className="input"
+            value={railGroup ?? ""}
+            onChange={(event) => void focusGroup(event.target.value || null)}
+          >
+            <option value="">All crews</option>
+            {groups.map((group) => (
+              <option key={group.id} value={group.id}>
+                {group.name}
+              </option>
+            ))}
+          </select>
+        </label>
 
         {/* Looks like a field and behaves like a button, because the field it
           opens onto is the one that does the searching. Two inputs would mean

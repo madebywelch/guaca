@@ -11,6 +11,9 @@ import { WorkingNotes } from "./WorkingNotes";
 
 interface Props {
   agent: AgentCard | undefined;
+  reveal?: boolean;
+  onReveal?: () => void;
+  onHide?: () => void;
   onEditProfile: (agent: AgentCard) => void;
 }
 
@@ -68,7 +71,7 @@ function remembered(): boolean {
  * moving above them buys: the two stores are read against each other, and what
  * each is for is clearest when the other is under it.
  */
-export function Inspector({ agent, onEditProfile }: Props) {
+export function Inspector({ agent, onEditProfile, reveal, onReveal, onHide }: Props) {
   const [open, setOpen] = useState(remembered);
   const [routine, setRoutine] = useState<RoutineId | "new" | null>(null);
 
@@ -79,6 +82,10 @@ export function Inspector({ agent, onEditProfile }: Props) {
       // As above: not worth telling the operator about.
     }
   }, [open]);
+
+  useEffect(() => {
+    if (reveal) setOpen(true);
+  }, [reveal]);
 
   // Switching agent comes back to the top of the panel. A routine id belongs
   // to one agent, and leaving it open would show another agent's schedule
@@ -98,9 +105,10 @@ export function Inspector({ agent, onEditProfile }: Props) {
   useEffect(() => {
     if (asked === null) return;
     setRoutine(asked);
+    onReveal?.();
     setOpen(true);
     taken();
-  }, [asked, taken]);
+  }, [asked, taken, onReveal]);
 
   // Nothing to inspect with no channel open, which is what going inside a crew
   // the open one was not in leaves behind.
@@ -156,7 +164,10 @@ export function Inspector({ agent, onEditProfile }: Props) {
         <button
           type="button"
           className="inspector__tab"
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            setOpen(false);
+            onHide?.();
+          }}
           title="Hide this panel"
           aria-label="Hide this panel"
           aria-expanded={true}

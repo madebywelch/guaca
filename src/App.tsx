@@ -21,8 +21,10 @@ import { away, burst, markQuiet, quiet, shouldNotify } from "./lib/notify";
 import { useLiveAgents, useStore } from "./lib/store";
 import { attached, hosted } from "./lib/transport";
 import { type AgentCard, errorMessage, type Group, type UiEvent } from "./lib/types";
+import { followViewport } from "./lib/viewport";
 
 export default function App() {
+  useEffect(followViewport, []);
   const agents = useLiveAgents();
   const selected = useStore((s) => s.selected);
   const settings = useStore((s) => s.settings);
@@ -83,6 +85,16 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [showCafeteria, setShowCafeteria] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
+  const [mobilePane, setMobilePane] = useState<"agents" | "conversation" | "details">(
+    "conversation",
+  );
+  const openConversation = useCallback(() => setMobilePane("conversation"), []);
+  const openDetails = useCallback(() => setMobilePane("details"), []);
+
+  // Search and notifications can select a channel without going through the rail.
+  useEffect(() => {
+    if (selected) setMobilePane("conversation");
+  }, [selected]);
 
   // The three shortcuts that work wherever the operator is, matched against
   // the same table the Shortcuts pane draws from, so a key listed there is a key
@@ -313,8 +325,37 @@ export default function App() {
     !settings.apiKeySet;
 
   return (
-    <div className="app">
+    <div className="app" data-mobile-pane={openAgent ? mobilePane : "agents"}>
+      <nav className="mobile-nav" aria-label="Workspace views">
+        <button
+          type="button"
+          className="btn btn--ghost"
+          aria-pressed={!openAgent || mobilePane === "agents"}
+          onClick={() => setMobilePane("agents")}
+        >
+          Agents
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          aria-pressed={!!openAgent && mobilePane === "conversation"}
+          disabled={!openAgent}
+          onClick={openConversation}
+        >
+          Chat
+        </button>
+        <button
+          type="button"
+          className="btn btn--ghost"
+          aria-pressed={!!openAgent && mobilePane === "details"}
+          disabled={!openAgent}
+          onClick={openDetails}
+        >
+          Details
+        </button>
+      </nav>
       <Sidebar
+        onOpenChannel={openConversation}
         onEditAgent={(agent) => setEditing(agent)}
         onOpenCafeteria={() => setShowCafeteria(true)}
         onOpenCalendar={() => setShowCalendar(true)}
@@ -404,7 +445,13 @@ export default function App() {
       </main>
 
       {ready && agents.length > 0 && (
-        <Inspector agent={openAgent} onEditProfile={(agent) => setEditing(agent)} />
+        <Inspector
+          agent={openAgent}
+          onEditProfile={(agent) => setEditing(agent)}
+          reveal={mobilePane === "details"}
+          onReveal={openDetails}
+          onHide={openConversation}
+        />
       )}
 
       {/* Outside `main` and after the panes, so nothing that scrolls can clip it
