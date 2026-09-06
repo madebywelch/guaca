@@ -9,6 +9,7 @@ import { ChannelView } from "./components/ChannelView";
 import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
+import { MobileNavigation } from "./components/MobileNavigation";
 import { Search } from "./components/Search";
 import { type Section, SettingsDialog } from "./components/SettingsDialog";
 import { Sidebar } from "./components/Sidebar";
@@ -326,34 +327,11 @@ export default function App() {
 
   return (
     <div className="app" data-mobile-pane={openAgent ? mobilePane : "agents"}>
-      <nav className="mobile-nav" aria-label="Workspace views">
-        <button
-          type="button"
-          className="btn btn--ghost"
-          aria-pressed={!openAgent || mobilePane === "agents"}
-          onClick={() => setMobilePane("agents")}
-        >
-          Agents
-        </button>
-        <button
-          type="button"
-          className="btn btn--ghost"
-          aria-pressed={!!openAgent && mobilePane === "conversation"}
-          disabled={!openAgent}
-          onClick={openConversation}
-        >
-          Chat
-        </button>
-        <button
-          type="button"
-          className="btn btn--ghost"
-          aria-pressed={!!openAgent && mobilePane === "details"}
-          disabled={!openAgent}
-          onClick={openDetails}
-        >
-          Details
-        </button>
-      </nav>
+      <MobileNavigation
+        onChats={() => setMobilePane("agents")}
+        onSearch={() => setSearching(true)}
+        onSettings={() => setShowSettings(true)}
+      />
       <Sidebar
         onOpenChannel={openConversation}
         onEditAgent={(agent) => setEditing(agent)}
@@ -440,7 +418,12 @@ export default function App() {
             <p className="empty__body">Pick someone in the rail to open their channel.</p>
           </div>
         ) : (
-          <ChannelView channel={selected} onOpenMenu={(agent, at) => setMenu({ agent, ...at })} />
+          <ChannelView
+            channel={selected}
+            onOpenMenu={(agent, at) => setMenu({ agent, ...at })}
+            onBack={() => setMobilePane("agents")}
+            onDetails={openDetails}
+          />
         )}
       </main>
 
@@ -448,6 +431,7 @@ export default function App() {
         <Inspector
           agent={openAgent}
           onEditProfile={(agent) => setEditing(agent)}
+          onOpenActions={(agent, at) => setMenu({ agent, ...at })}
           reveal={mobilePane === "details"}
           onReveal={openDetails}
           onHide={openConversation}
@@ -521,6 +505,7 @@ export default function App() {
       )}
       {searching && (
         <Search
+          onOpenChannel={openConversation}
           onClose={() => setSearching(false)}
           onEditAgent={(agent) => setEditing(agent)}
           onEditGroup={(group) => setEditingGroup(group)}

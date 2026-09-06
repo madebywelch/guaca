@@ -32,6 +32,8 @@ import { PeerBurstRow, RefusedRow, WritingRow } from "./WireRow";
 
 interface Props {
   channel: ChannelKey;
+  onBack?: () => void;
+  onDetails?: () => void;
   /** Where the operator asked for an agent's actions, and on whom. */
   onOpenMenu: (agent: AgentCard, at: { x: number; y: number }) => void;
 }
@@ -49,7 +51,7 @@ const FLASH_MS = 1800;
  */
 const WAITED_MS = 1000;
 
-export function ChannelView({ channel, onOpenMenu }: Props) {
+export function ChannelView({ channel, onOpenMenu, onBack, onDetails }: Props) {
   const lookups = useAgentLookup();
   const messages = useStore((s) => s.messages[channel]);
   const activity = useStore((s) => s.activity);
@@ -66,6 +68,7 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   const { ref: scrollRef, node: transcript, follow, pin } = useFollowBottom();
 
   const agent = lookups.byId(channel);
+  const crew = useStore((s) => s.groups.find((group) => group.id === agent?.groupId)?.name);
   // Held steady across renders: it is the value of a context read by every page
   // in the transcript, and a fresh object each time would redraw all of them
   // for every token that lands anywhere.
@@ -133,6 +136,16 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
   return (
     <section className="pane">
       <header className="pane__header">
+        {onBack && (
+          <button
+            type="button"
+            className="mobile-only btn btn--ghost mobile-back"
+            aria-label="Back to chats"
+            onClick={onBack}
+          >
+            ‹
+          </button>
+        )}
         {agent ? (
           <>
             <AgentAvatar
@@ -143,7 +156,19 @@ export function ChannelView({ channel, onOpenMenu }: Props) {
               seed={agent.id}
               size="sm"
             />
-            <h1 className="pane__title">{agent.name}</h1>
+            <div className="pane__identity">
+              <h1 className="pane__title">{agent.name}</h1>
+              <span className="mobile-only pane__crew">{crew ?? "Independent agent"}</span>
+            </div>
+            {onDetails && (
+              <button
+                type="button"
+                className="mobile-only btn btn--ghost mobile-details"
+                onClick={onDetails}
+              >
+                Details
+              </button>
+            )}
             {/* The one thing about an agent that changes what this pane does.
                 Everything else it is set up with is edited rarely and read
                 behind the menu, rather than sitting over every message. */}
@@ -610,6 +635,8 @@ function LiveStreams({
   follow,
 }: {
   channel: ChannelKey;
+  onBack?: () => void;
+  onDetails?: () => void;
   lookups: ReturnType<typeof useAgentLookup>;
   follow: () => void;
 }) {
@@ -668,6 +695,8 @@ function Arrivals({
   lookups,
 }: {
   channel: ChannelKey;
+  onBack?: () => void;
+  onDetails?: () => void;
   messages: Envelope[] | undefined;
   lookups: ReturnType<typeof useAgentLookup>;
 }) {
