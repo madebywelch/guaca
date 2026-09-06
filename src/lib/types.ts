@@ -1024,7 +1024,10 @@ export interface DeviceCode {
  * `focusGroup`, which opens the crew and chooses nobody in it. Kept in step
  * with `Reveal` in `tray.rs`, which `ipc.contract.test.ts` checks.
  */
-export type Reveal = { kind: "agent"; id: AgentId } | { kind: "crew"; id: GroupId };
+export type Reveal =
+  | { kind: "forYou" }
+  | { kind: "agent"; id: AgentId }
+  | { kind: "crew"; id: GroupId };
 
 export type UiEvent =
   | {
@@ -1094,6 +1097,8 @@ export type UiEvent =
   | { type: "approvalRequested"; approvalId: ApprovalId; agentId: AgentId }
   | { type: "approvalSettled"; approvalId: ApprovalId; state: ApprovalState }
   | { type: "escalationRaised"; escalationId: EscalationId; agentId: AgentId }
+  | { type: "decisionsChanged" }
+  | { type: "decisionReminder"; count: number }
   | { type: "escalationCleared"; escalationId: EscalationId }
   /**
    * One agent's schedule changed: it set a routine, edited one, canceled one,
@@ -1411,6 +1416,7 @@ export interface Presence {
   activity: Record<AgentId, Activity>;
   waiting: Approval[];
   stuck: Escalation[];
+  decisions: WorkDecision[];
   /** Spent since this window opened. */
   session: Tokens;
   allTime: Tokens;
@@ -1507,4 +1513,28 @@ export interface GithubUserStatus {
   login?: string | null;
   author?: GitIdentity | null;
   interval?: number | null;
+}
+
+export interface WorkDecision {
+  id: string;
+  agentId: AgentId;
+  groupId: GroupId;
+  topic: string;
+  request: {
+    question: string;
+    context: string;
+    recommendation: string;
+    options: string[];
+    source: string;
+  };
+  status: "pending" | "answered" | "completed" | "withdrawn";
+  answer: string | null;
+  outcome: string | null;
+  createdAt: number;
+  updatedAt: number;
+  dueAt: number | null;
+  remindAt: number;
+  snoozedUntil: number | null;
+  deliveryRun: RunId | null;
+  interrupted: boolean;
 }

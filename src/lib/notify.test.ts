@@ -40,7 +40,14 @@ import { NOTIFY_KINDS, type NotifyKind, type NotifyPrefs } from "./prefs";
 function wanted(): NotifyPrefs {
   return {
     on: true,
-    kinds: { approval: true, stuck: true, routine: true, settled: true, failed: true },
+    kinds: {
+      decision: true,
+      approval: true,
+      stuck: true,
+      routine: true,
+      settled: true,
+      failed: true,
+    },
   };
 }
 

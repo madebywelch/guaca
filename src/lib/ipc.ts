@@ -90,6 +90,7 @@ import type {
   SubscriptionStatus,
   UiEvent,
   WebhookAddress,
+  WorkDecision,
   WorkingNote,
 } from "./types";
 import { errorMessage } from "./types";
@@ -395,6 +396,11 @@ export const api = {
    */
   approvalStates: () => invoke<Record<ApprovalId, ApprovalState>>("approval_states"),
   /** Every request still waiting on the operator, oldest first. */
+  listDecisions: () => invoke<WorkDecision[]>("list_decisions"),
+  answerDecision: (id: string, answer: string, updatedAt: number) =>
+    invoke<WorkDecision>("answer_decision", { id, answer, updatedAt }),
+  resumeDecision: (id: string) => invoke<WorkDecision>("resume_decision", { id }),
+  snoozeDecision: (id: string, until: number) => invoke<void>("snooze_decision", { id, until }),
   pendingApprovals: () => invoke<Approval[]>("pending_approvals"),
 
   /**

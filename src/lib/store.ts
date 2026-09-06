@@ -21,6 +21,7 @@ import { hosted, openExternal } from "./transport";
  * transcript is the message the job delivers when it ends.
  */
 const CODING_TAIL = 40;
+let decisionRead = 0;
 
 /** A desktop's answer, which is every capability there is. */
 const EVERYTHING: Capabilities = {
@@ -59,6 +60,7 @@ import type {
   Settings,
   Tokens,
   UiEvent,
+  WorkDecision,
 } from "./types";
 import { errorMessage } from "./types";
 
@@ -217,6 +219,11 @@ export interface State {
    * waits as long as it takes.
    */
   stuck: Escalation[];
+  decisions: WorkDecision[];
+  decisionError: string | null;
+  forYou: boolean;
+  showForYou: (open: boolean) => void;
+  refreshDecisions: () => Promise<void>;
 
   selected: ChannelKey | null;
   /**
@@ -517,6 +524,19 @@ export const useStore = create<State>((set, get) => ({
   approvals: {},
   pending: [],
   stuck: [],
+  decisions: [],
+  decisionError: null,
+  forYou: false,
+  showForYou: (open) => set({ forYou: open }),
+  async refreshDecisions() {
+    const read = ++decisionRead;
+    try {
+      const decisions = await api.listDecisions();
+      if (read === decisionRead) set({ decisions, decisionError: null });
+    } catch (error) {
+      if (read === decisionRead) set({ decisionError: errorMessage(error) });
+    }
+  },
   selected: null,
   railGroup: null,
   messages: {},
@@ -536,6 +556,7 @@ export const useStore = create<State>((set, get) => ({
   sessionSpend: { prompt: 0, completion: 0, cost: null, calls: 0 },
 
   async bootstrap() {
+    const decisionSnapshot = ++decisionRead;
     const [
       agents,
       groups,
@@ -548,6 +569,7 @@ export const useStore = create<State>((set, get) => ({
       approvals,
       pending,
       stuck,
+      decisions,
     ] = await Promise.all([
       api.listAgents(),
       api.listGroups(),
@@ -566,6 +588,7 @@ export const useStore = create<State>((set, get) => ({
       // one has no window at all, so first paint is the only thing that decides
       // whether the operator ever sees it.
       api.openEscalations(),
+      api.listDecisions(),
     ]);
     set({
       agents,
@@ -579,6 +602,7 @@ export const useStore = create<State>((set, get) => ({
       approvals,
       pending,
       stuck,
+      ...(decisionSnapshot === decisionRead ? { decisions, decisionError: null } : {}),
     });
 
     const live = agents.filter((a) => a.lifecycle !== "terminated");
@@ -862,8 +886,15 @@ export const useStore = create<State>((set, get) => ({
 
   applyEvent(event) {
     switch (event.type) {
+      case "decisionsChanged":
+        void get().refreshDecisions();
+        return;
+      case "decisionReminder":
+        void get().refreshDecisions();
+        return;
       case "agentsChanged": {
         void get().refreshAgents();
+        void get().refreshDecisions();
         break;
       }
 

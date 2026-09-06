@@ -114,11 +114,9 @@ beforeEach(() => {
 });
 
 describe("the desk", () => {
-  // Being gone almost all the time is what buys the corner of the screen. A
-  // panel that is always there is furniture inside a week.
   it("is not on screen at all when nothing is waiting", () => {
     const { container } = draw([]);
-    expect(container.querySelector(".desk")).toBeNull();
+    expect(container.querySelector(".for-you__requests")).toBeNull();
   });
 
   it("draws a request where it can be answered without going to find it", () => {
@@ -170,33 +168,10 @@ describe("the desk", () => {
     expect(screen.getByText("A deleted agent")).toBeTruthy();
   });
 
-  it("collapses to its count, and still says how many", () => {
-    draw([request()]);
-
-    fireEvent.click(screen.getByRole("button", { expanded: true }));
-    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
-    expect(screen.getByText("1 turn is waiting on you")).toBeTruthy();
-  });
-
-  it("closes on Escape, being the last thing on screen with a claim to it", () => {
-    draw([request()]);
-
-    fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("button", { name: "Allow" })).toBeNull();
-  });
-
-  // Collapsing is about the requests that were on screen at the time. A desk
-  // that stayed shut once it had been emptied would silently hold the next
-  // thing that stops work.
-  it("opens again for a queue that emptied and refilled", () => {
-    const { rerender } = draw([request()]);
-    fireEvent.click(screen.getByRole("button", { expanded: true }));
-
-    useStore.setState({ pending: [] });
+  it("shows new requests while an older blocker remains", () => {
+    const { rerender } = draw([], [stuckOn()]);
+    useStore.setState({ pending: [request()] });
     rerender(<Desk />);
-    useStore.setState({ pending: [request({ id: "req-2" as ApprovalId })] });
-    rerender(<Desk />);
-
     expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy();
   });
 
@@ -266,7 +241,7 @@ describe("an escalation on the desk", () => {
   it("is on it with nothing parked, because nothing has to be parked", () => {
     draw([], [stuckOn()]);
     expect(screen.getByText("The deploy needs a key only you have.")).toBeTruthy();
-    expect(screen.getByText("1 agent is stuck on you")).toBeTruthy();
+    expect(screen.getByText("1 agent needs your help")).toBeTruthy();
   });
 
   // The two numbers the message in a channel could not carry. "Stuck" is a

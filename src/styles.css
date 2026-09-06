@@ -102,6 +102,7 @@
      one root font size and this is the multiplier behind it. A number rather
      than a size, because it is also what a script would read back. */
   --ui-scale: 1;
+  --measure-attention: 46rem;
 
   /* ---- Type ---------------------------------------------------------------
      Ten roles, whole pixels at scale 1, no two closer than 1px.
@@ -494,90 +495,6 @@ input[type="file"]::file-selector-button {
    Not a dialog. No scrim, no focus trap, nothing behind it goes inert: a
    request arrives while the operator is doing something else, and the whole
    point is that they can finish that first. */
-.desk {
-  position: fixed;
-  right: 1rem;
-  /* Level with the composer's own bottom edge, so the two read as sitting on
-     one line rather than one being slightly adrift of the other. */
-  bottom: 1.15rem;
-  z-index: 40;
-  /* The inspector's width, deliberately, and the same cap on it. Something has
-     to be underneath a panel in a corner, and the inspector is a column of
-     details that can be scrolled back to; the composer is where the operator is
-     typing. A wider desk overhangs the inspector into the reading column and
-     covers the right end of the composer, which is the one thing on screen that
-     must never be sat on. */
-  width: min(20rem, 30vw);
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--radius);
-  background: var(--raised);
-  box-shadow: var(--lift-2);
-  overflow: hidden;
-}
-
-.desk__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-4);
-  width: 100%;
-  padding: var(--space-4) var(--space-5);
-  background: none;
-  border: 0;
-  text-align: left;
-  color: var(--text);
-  font-family: var(--font-ui);
-  font-size: var(--type-aside);
-}
-
-.desk[data-open] .desk__head {
-  border-bottom: 1px solid var(--edge);
-}
-
-/* The number is the thing being glanced at, so it is drawn as a number and not
-   as part of the sentence beside it. Same warm red as the count on a crew's
-   circle and the menu bar's attention glyph: one statement, three places. */
-.desk__count {
-  flex: none;
-  /* A badge is a circle when its leading is its width, so the two are one
-     number rather than two that happen to agree. */
-  --badge: 1.15rem;
-  min-width: var(--badge);
-  padding: 0 var(--space-2);
-  border-radius: var(--radius);
-  background: var(--alarm);
-  color: #fff;
-  font-family: var(--font-mono);
-  font-size: var(--type-meta);
-  font-weight: 600;
-  line-height: var(--badge);
-  text-align: center;
-}
-
-.desk__title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.desk__chevron {
-  flex: none;
-  color: var(--faint);
-  font-size: var(--type-meta);
-}
-
-/* Capped and scrolling rather than growing. A queue of nine must not become a
-   panel the height of the window: what is on screen at the bottom right is a
-   thing to answer, and a thing that covers the conversation it is about is a
-   thing the operator closes. */
-.desk__queue {
-  max-height: min(26rem, 55vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
 .desk__card + .desk__card {
   border-top: 1px solid var(--edge);
 }
@@ -7545,4 +7462,127 @@ input[type="file"]:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--space-8);
+}
+
+/* Decisions are a destination, with the same paper and named rhythm as chat. */
+.rail__for-you {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: var(--space-4) var(--space-5);
+  padding: var(--space-5) var(--space-6);
+  color: var(--rail-text);
+  background: var(--rail-raised);
+  border: 1px solid var(--rail-edge);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-ui);
+  cursor: pointer;
+}
+.rail__for-you span:last-child {
+  color: var(--flesh);
+  font-variant-numeric: tabular-nums;
+}
+.dialog.for-you {
+  height: min(var(--measure-attention), calc(100dvh - var(--space-7) - var(--space-7)));
+  max-height: calc(100dvh - var(--space-7) - var(--space-7));
+  width: min(var(--measure-attention), calc(100vw - var(--space-8)));
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.for-you__head {
+  flex-shrink: 0;
+  padding: var(--space-7);
+  background: var(--rail-ground);
+  border-bottom: 1px solid var(--edge);
+}
+.for-you__title, .for-you__meta, .for-you__actions, .for-you__tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.for-you__title {
+  justify-content: space-between;
+}
+.for-you h2 {
+  font-family: var(--font-display);
+  font-size: var(--type-title);
+}
+.for-you h2 span {
+  color: var(--flesh);
+}
+.for-you__tabs {
+  margin-top: var(--space-6);
+}
+.for-you__tabs .btn[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--ground);
+}
+.for-you__body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+.for-you__item, .for-you__requests, .for-you__later, .for-you__empty {
+  padding: var(--space-7);
+  border-bottom: 1px solid var(--edge);
+}
+.for-you__item h3 {
+  font-size: var(--type-body);
+  font-weight: 600;
+  line-height: var(--lead-ui);
+}
+.for-you__item p, .for-you__head p {
+  margin-top: var(--space-4);
+  line-height: var(--lead-read);
+}
+.for-you__meta, .for-you__source, .for-you__foot {
+  color: var(--muted);
+  font-size: var(--type-small);
+}
+.for-you__meta {
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+}
+.for-you__due {
+  color: var(--flesh);
+  font-size: var(--type-small);
+}
+.for-you__actions, .for-you__source {
+  margin-top: var(--space-6);
+}
+.for-you__actions input {
+  flex: 1;
+  min-width: 0;
+}
+.for-you__receipt {
+  color: var(--mint);
+  padding: var(--space-4) 0;
+}
+.for-you__foot {
+  flex-shrink: 0;
+  background: var(--rail-ground);
+  padding: var(--space-6) var(--space-7);
+  border-top: 1px solid var(--edge);
+}
+.for-you summary {
+  cursor: pointer;
+}
+.for-you__item {
+  overflow-wrap: anywhere;
+}
+
+.dialog.for-you:focus,
+.dialog.for-you:focus-visible {
+  outline: none;
+}
+
+.for-you__error {
+  padding: var(--space-7);
+}
+
+.for-you__body > .for-you__receipt {
+  padding: var(--space-5) var(--space-7);
 }

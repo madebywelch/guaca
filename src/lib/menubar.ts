@@ -10,6 +10,7 @@
  * the store, and the test beside it is what keeps the projection honest.
  */
 
+import { needsAnswer } from "./decisions";
 import type { State } from "./store";
 import type { Presence, Tokens } from "./types";
 
@@ -26,6 +27,7 @@ export function presenceOf(state: State): Presence {
     activity: state.activity,
     waiting: state.pending,
     stuck: state.stuck,
+    decisions: state.decisions.filter(needsAnswer),
     session: state.sessionSpend,
     allTime: sum(Object.values(state.usage).filter((t): t is Tokens => t !== undefined)),
     running: Object.values(state.activeRun).filter((run) => run !== undefined).length,

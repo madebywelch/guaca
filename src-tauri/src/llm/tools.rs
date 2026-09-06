@@ -31,6 +31,7 @@ pub const SCHEDULE: &str = "schedule";
 pub const CALENDAR: &str = "calendar";
 pub const CREATE_AGENT: &str = "create_agent";
 pub const REQUEST_PERMISSION: &str = "request_permission";
+pub const DECISION: &str = "decision";
 pub const ASK_OPERATOR: &str = "ask_operator";
 pub const ESCALATE: &str = "escalate";
 pub const ATTACH_FILE: &str = "attach_file";
@@ -695,6 +696,22 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             }),
         },
         ToolSpec {
+            name: DECISION.to_string(),
+            description: "Keep decisions in the operator's For you inbox without waiting. Use request whenever you discover a choice only they should make, including during email checks, even if other work can continue. A chat question alone does not reach an absent operator. Reuse a stable topic for the same matter; each unrelated decision gets its own topic. Give context, your recommendation, choices, and a source reference. Only supply due_at if a real deadline exists, as RFC 3339 with timezone. The request survives turns and restarts. Continue independent work after filing; silence is not consent. The answer arrives as a new message and grants no new permission. Use list to inspect your records; complete an answered decision only after doing the work, with a concrete outcome. Withdraw a pending question only if it is no longer needed, explaining why. Neither completion nor withdrawal erases the record. Use ask_operator only when the operator is actively collaborating and an answer is needed inside this turn. Use request_permission for protected actions.".into(),
+            parameters: serde_json::json!({
+                "type": "object", "properties": {
+                    "action": {"type":"string","enum":["request","list","complete","withdraw"]},
+                    "topic": {"type":"string","description":"Stable reference for one decision; reuse on repeated checks."},
+                    "question": {"type":"string"}, "context": {"type":"string"},
+                    "recommendation": {"type":"string"}, "source": {"type":"string"},
+                    "options": {"type":"array","items":{"type":"string"},"maxItems":6},
+                    "due_at": {"type":"string","description":"Real deadline, RFC 3339 with timezone. Omit when unknown."},
+                    "id": {"type":"string","description":"Required for complete and withdraw."},
+                    "outcome": {"type":"string","description":"Concrete result or reason for withdrawal."}
+                }, "required":["action"], "additionalProperties": false
+            }),
+        },
+        ToolSpec {
             name: ASK_OPERATOR.to_string(),
             // The whole job of this description is to separate it from the two
             // things an agent already does when it is unsure: ask a peer, or
@@ -703,7 +720,7 @@ fn all_specs(surfaces: Surfaces) -> Vec<ToolSpec> {
             // than left to judgment. It also has to be told apart from
             // `request_permission`, and the line is what a yes does: that one
             // authorizes an action, and this one does not authorize anything.
-            description: "Ask the operator a question you cannot answer yourself, and wait for                           their answer. Use this when the work genuinely forks on something only                           they can settle: which of two directions they want, a number or a name                           you cannot look up, a call between options that are all defensible.                           This stops your turn and puts the question in front of them, so the                           cost of asking is their attention: do not use it for anything you could                           find out, work out, or reasonably decide and report. If a colleague                           would know, use send_message instead. If you can proceed and say what                           you assumed, do that instead. This is not how you ask to be allowed to                           do something: use request_permission for that, and note that an answer                           here permits nothing. Ask one question at a time and make it answerable                           without the conversation around it, because they are reading it in a                           panel and not in your channel. Nobody may answer, and if nobody does                           you are told so and have to carry on without them."
+            description: "Only for a live conversation with the operator. Prefer decision for requests that can wait, including email follow-ups. Ask the operator a question you cannot answer yourself, and wait for                           their answer. Use this when the work genuinely forks on something only                           they can settle: which of two directions they want, a number or a name                           you cannot look up, a call between options that are all defensible.                           This stops your turn and puts the question in front of them, so the                           cost of asking is their attention: do not use it for anything you could                           find out, work out, or reasonably decide and report. If a colleague                           would know, use send_message instead. If you can proceed and say what                           you assumed, do that instead. This is not how you ask to be allowed to                           do something: use request_permission for that, and note that an answer                           here permits nothing. Ask one question at a time and make it answerable                           without the conversation around it, because they are reading it in a                           panel and not in your channel. Nobody may answer, and if nobody does                           you are told so and have to carry on without them."
                 .to_string(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -1154,6 +1171,7 @@ pub enum ToolInvocation {
     /// makes it a third variant rather than a shape of the two above: those are
     /// a turn waiting for something back, and this is a turn that has run out
     /// of road saying so on the way out.
+    Decision(crate::domain::decision::DecisionAction),
     Escalate {
         summary: String,
     },
@@ -1964,6 +1982,15 @@ pub fn parse(call: &ToolCall, connected: &[PluginKind]) -> Result<ToolInvocation
                 action,
                 because: field(&["because", "why", "reason", "context"]).unwrap_or_default(),
             })
+        }
+        DECISION => {
+            let action =
+                serde_json::from_str::<crate::domain::decision::DecisionAction>(&call.arguments)
+                    .map_err(|err| ToolParseError::BadJson {
+                        name: DECISION.to_string(),
+                        detail: err.to_string(),
+                    })?;
+            Ok(ToolInvocation::Decision(action))
         }
         ASK_OPERATOR => {
             let value = call.parsed_arguments().map_err(|e| ToolParseError::BadJson {
@@ -3483,9 +3510,9 @@ mod tests {
         let specs = specs(Surfaces::both(), Modalities::seeing());
         assert_eq!(
             specs.len(),
-            18,
+            19,
             "directory, run_command, open_on_desktop, use_screen, browse, code, shell, schedule, \
-             calendar, create_agent, request_permission, ask_operator, escalate, send_message, \
+             calendar, create_agent, request_permission, ask_operator, decision, escalate, send_message, \
              write_document, attach_file, update_memory, note_progress"
         );
         for spec in &specs {
