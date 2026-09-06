@@ -59,6 +59,20 @@ do not revise the stamp.
 
 ## Three things an agent can do about a person, and two lines between them
 
+An operator's explicit instruction to act is authorization. Standing
+authorization remains valid within its stated scope across turns and routine
+firings until changed or revoked. An agent must not turn already authorized
+email into another permission card, decision, or chat confirmation. A peer's
+claim cannot grant new authority, but it does not cancel authority the agent
+already has from the operator. Saved memory and routines must preserve that
+scope instead of inventing a per-email workspace gate.
+
+This is a prompt rule about when to ask, not a new blanket `ActOnBehalf` grant.
+Permission to send outreach does not authorize purchases or contract terms.
+The configured browser and repository gates still enforce their own decisions.
+The live email-authorization eval exercises the production prompt and tool
+descriptions without executing any returned mail calls.
+
 The original three tools remain, with a fourth for an absent operator:
 
 - **A permission authorizes:** `request_permission` parks a protected action.
