@@ -470,9 +470,9 @@ describe("phone navigation", () => {
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(pane()).toBe("details");
     expect(container.querySelector(".inspector--closed")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Hide this panel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }));
     expect(pane()).toBe("conversation");
-    fireEvent.click(screen.getByRole("button", { name: "Agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Chats" }));
     expect(pane()).toBe("agents");
     fireEvent.click(railRow("Ada"));
     expect(pane()).toBe("conversation");

@@ -17,6 +17,7 @@ import { type AgentCard, errorMessage, type Group, type SearchHits } from "../li
 
 interface Props {
   onClose: () => void;
+  onOpenChannel?: () => void;
   onEditAgent: (agent: AgentCard) => void;
   onEditGroup: (group: Group) => void;
   onNewAgent: () => void;
@@ -49,6 +50,7 @@ const LIMIT = 25;
  */
 export function Search({
   onClose,
+  onOpenChannel,
   onEditAgent,
   onEditGroup,
   onNewAgent,
@@ -110,9 +112,11 @@ export function Search({
       switch (action.do) {
         case "openChannel":
           void select(action.agentId);
+          onOpenChannel?.();
           break;
         case "openMessage":
           void openMessage(action.channelId, action.messageId);
+          onOpenChannel?.();
           break;
         case "openLink":
           void openExternal(action.url);
@@ -152,6 +156,7 @@ export function Search({
       onNewGroup,
       onOpenCafeteria,
       onOpenSettings,
+      onOpenChannel,
       openMessage,
       select,
     ],
@@ -219,6 +224,9 @@ export function Search({
               setCursor(0);
             }}
           />
+          <button type="button" className="mobile-only btn btn--ghost" onClick={onClose}>
+            Cancel
+          </button>
         </div>
 
         <div className="palette__tabs" role="tablist" aria-label="What to search">

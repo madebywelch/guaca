@@ -220,7 +220,7 @@ try {
     "reconnected client restores partial reply",
   );
   await cdp("Target.closeTarget", { targetId: tab });
-  finish("Finished while the client was closed.\n\nThe workspace keeps working while you are away. You can read replies, switch agents, and review their notes from your phone.\n\n- Open Agents to choose a crew.\n- Return to Chat without losing your draft.\n- Open Details for memory and routines.\n\nA long reference should wrap: https://example.com/" + "reference".repeat(18));
+  finish("Finished while the client was closed.\n\nThe workspace keeps working while you are away. You can read replies, switch agents, and review their notes from your phone.\n\n- Open Chats to choose a crew.\n- Return to Chat without losing your draft.\n- Open Details for memory and routines.\n\nA long reference should wrap: https://example.com/" + "reference".repeat(18));
   await until(
     async () =>
       (await call("channel_messages", { channelId: agent.id })).some((m) =>
@@ -271,19 +271,43 @@ try {
     await size(width,844);
     await fits(".app");
     await fits(".pane");
+    assert.equal(await evaluate("document.querySelector('.pane__crew').textContent"), "Browser test");
     await fits(".pane__scroll");
     await fits(".composer");
     assert.equal(await evaluate("getComputedStyle(document.querySelector('.rail')).display"),"none");
     await tap(".composer__input");
     await cdp("Input.insertText", {text:"Draft survives navigation"},session);
-    await tap(".mobile-nav button:first-child");
+    await fits(".mobile-nav");
+    assert.ok(await evaluate("document.querySelector('.mobile-nav').getBoundingClientRect().top > visualViewport.height / 2"), "navigation is within thumb reach at the bottom");
+    await tap('[aria-label="Back to chats"]');
     await fits(".rail");
     await fits(".mobile-crews select");
-    await tap(".agent-row");
+    if (process.env.GUACA_BROWSER_SHOTS) {
+      await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
+      const shot=await cdp("Page.captureScreenshot",{format:"png"},session);
+      await writeFile(path.join(process.env.GUACA_BROWSER_SHOTS,`chats-${width}.png`),Buffer.from(shot.data,"base64"));
+    }
+    await tap(".mobile-nav button:nth-child(3)");
+    await until(() => evaluate("!!document.querySelector('.palette__input')"), "search opens from the list");
+    await tap(".palette__input");
+    await cdp("Input.insertText", {text:"Browser check"},session);
+    await until(() => evaluate("!!document.querySelector('.palette__row')"), "agent is found");
+    await tap(".palette__row");
+    await fits(".pane");
     assert.equal(await evaluate("document.querySelector('.composer__input').value"),"Draft survives navigation");
-    await tap(".mobile-nav button:last-child");
+    await tap(".mobile-details");
     await fits(".inspector");
-    await tap(".mobile-nav button:nth-child(2)");
+    await tap(".inspector__head .btn:not(.mobile-back)");
+    await until(() => evaluate("!!document.querySelector('.menu')"), "agent actions open by touch");
+    await fits(".menu");
+    await evaluate("document.querySelector('.menu__scrim').click()");
+    await tap('[aria-label="Back to conversation"]');
+    await tap(".mobile-nav button:nth-child(3)");
+    await until(() => evaluate("!!document.querySelector('.palette')"), "search opens from chat");
+    await fits(".palette");
+    await tap(".palette__query button");
+    await until(() => evaluate("!document.querySelector('.palette')"), "search cancels by touch");
+    assert.equal(await evaluate("document.querySelector('.composer__input').value"), "Draft survives navigation");
     await size(width,400);
     await fits(".composer");
     await size(width,844);
@@ -293,21 +317,20 @@ try {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set.call(n,'');
       n.dispatchEvent(new Event('input',{bubbles:true})); n.blur(); })()`);
     await tap(".mobile-nav button:first-child");
-    await tap(".rail__foot button:last-child");
+    await tap(".mobile-nav button:last-child");
     await until(() => evaluate("!!document.querySelector('.dialog--settings')"),"settings opens on phone");
     await delay(250);
     await fits(".dialog--settings");
     await fits(".settings__pane");
     await fits(".settings__foot");
     if (width === 320) {
-      const tabs = await evaluate("document.querySelectorAll('.settings__tab').length");
-      for (let i=1;i<=tabs;i++) {
-        await tap(`.settings__tab:nth-child(${i})`);
+      const sections = await evaluate("Array.from(document.querySelector('.settings__section select').options).map(o=>o.value)");
+      for (const section of sections) {
+        await evaluate(`(() => {const n=document.querySelector('.settings__section select'); n.value=${JSON.stringify(section)}; n.dispatchEvent(new Event('change',{bubbles:true}));})()`);
         await delay(100);
         await fits(".settings__pane");
         await fits(".settings__foot");
       }
-      await tap(".settings__tab:first-child");
     }
     if (process.env.GUACA_BROWSER_SHOTS) {
       await mkdir(process.env.GUACA_BROWSER_SHOTS,{recursive:true});
@@ -316,7 +339,7 @@ try {
     }
     await evaluate("document.querySelector('.scrim__close').click()");
     if (width === 320) {
-      for (const [button,dialog] of [[".rail__foot button:first-child",".dialog--cafeteria"],[".rail__foot button:nth-child(2)",".dialog--calendar"],[".rail__for-you",".for-you"]]) {
+      for (const [button,dialog] of [[".rail__foot button:first-child",".dialog--cafeteria"],[".rail__foot button:nth-child(2)",".dialog--calendar"],[".mobile-nav button:nth-child(2)",".for-you"]]) {
         await tap(button);
         await until(() => evaluate(`!!document.querySelector('${dialog}')`),`${dialog} opens`);
         await delay(250);
