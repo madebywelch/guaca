@@ -120,6 +120,10 @@ pub async fn open(
         Err(err) => tracing::warn!(%err, "could not close stale permission requests"),
     }
 
+    store
+        .recover_decisions()
+        .map_err(|err| format!("could not recover decision answers: {err}"))?;
+
     let interrupted = store
         .recover_interrupted_runs()
         .map_err(|err| format!("could not recover interrupted conversations: {err}"))?;

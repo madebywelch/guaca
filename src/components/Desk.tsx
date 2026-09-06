@@ -1,160 +1,54 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import { type FormEvent, useState } from "react";
 
 import { AgentAvatar } from "../avatars/AgentAvatar";
 import { useStore } from "../lib/store";
 import { relativeTime } from "../lib/time";
 import type { AgentCard, Approval, Decision, Escalation } from "../lib/types";
 
-/**
- * Everything waiting on the operator, wherever they are in the app.
- *
- * A parked turn is the one thing in Guaca that stops until a person deals with
- * it, and until now the only complete list of them was in the menu bar, which
- * exists for the time the window is *not* in front of you. With the window open
- * and a dozen crews, a parked turn was a mark on a circle and a card somewhere
- * in a transcript three groups away: noticing it and answering it were six
- * steps apart, and the answer had a ten minute fuse on it.
- *
- * So there are three tiers now, over one queue, and each is a different
- * question. The count on a crew's circle says *where*. This says *what*, and
- * takes the answer. The transcript's card is still the record, and still the
- * place to go when the summary is not enough and the conversation around it is.
- *
- * Four rules keep it from turning into a notification center, and each of them
- * is a thing it refuses to do.
- *
- * **It holds stopped work and nothing else.** A parked turn qualifies by
- * definition, and so does an escalation, which is the same sentence without the
- * parking: an agent that cannot go on until the operator does something. A run
- * that failed does not: nothing is waiting, and the channel is where a failure
- * is understood. Neither does a run that finished, a routine that fired, or a
- * paused agent. Guaca already has a surface for "something happened" and it is
- * a notification; this is for "something has stopped, and you are the reason".
- *
- * **It is usually absent.** No queue, no surface, not even a small empty one.
- * A panel that is always there is furniture within a week, and furniture is not
- * read. Being gone almost all the time is what buys the corner of the screen.
- * An escalation is the one thing here that can stay up for days, and it is
- * allowed to for the reason it exists: a crew stuck since Tuesday should be
- * furniture in the corner of the operator's screen until they deal with it.
- *
- * **It has no composer and no scrollback.** Every control on it is bounded, and
- * what has been answered is gone from it. The transcript is the record; a
- * second one that could be scrolled back through would eventually disagree with
- * the first, and the operator would have no way to tell which was lying.
- *
- * **It never takes focus.** A request can arrive while the operator is mid
- * sentence in a composer, and a panel that grabbed the caret would lose what
- * they were typing. It announces itself once, politely, and waits.
- */
+/** Live permissions and operational blockers inside For you. */
 export function Desk() {
   const pending = useStore((s) => s.pending);
   const stuck = useStore((s) => s.stuck);
   const agents = useStore((s) => s.agents);
   const select = useStore((s) => s.select);
   const decide = useStore((s) => s.decideApproval);
-  const answerQuestion = useStore((s) => s.answerQuestion);
+  const answer = useStore((s) => s.answerQuestion);
   const clear = useStore((s) => s.clearEscalation);
-  const [open, setOpen] = useState(true);
-  const count = pending.length + stuck.length;
-
-  // Opens itself again for a queue that has refilled. Collapsing is about the
-  // requests that were on screen at the time, not a standing instruction to
-  // keep quiet: a desk that stayed shut after being emptied and refilled would
-  // silently hold the one thing that has stopped work.
-  const wasEmpty = useRef(true);
-  useEffect(() => {
-    if (wasEmpty.current && count > 0) setOpen(true);
-    wasEmpty.current = count === 0;
-  }, [count]);
-
-  // The lowest-priority owner of Escape: a dialog, a menu or a drag all have
-  // something more urgent to close, and every one of them stops the event
-  // before it reaches the window.
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
-
-  if (count === 0) return null;
-
-  const summary = deskSummary(pending.length, stuck.length);
-
+  const open = (id: string) => {
+    void select(id);
+    useStore.getState().showForYou(false);
+  };
+  if (pending.length + stuck.length === 0) return null;
   return (
-    <section className="desk" aria-label="Waiting on you" data-open={open ? "true" : undefined}>
-      <button
-        type="button"
-        className="desk__head"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-      >
-        <span className="desk__count">{count}</span>
-        {/* The live region is the line that is already on screen rather than a
-            second copy of it offscreen. Two elements saying the same sentence
-            is a screen reader reading it twice, and it is the shape a live
-            region usually goes wrong in. Polite, so it waits for a gap: this
-            can land while the operator is mid sentence in a composer. */}
-        <span className="desk__title" role="status">
-          {summary}
-        </span>
-        <span className="desk__chevron" aria-hidden="true">
-          {open ? "▾" : "▴"}
-        </span>
-      </button>
-
-      {open && (
-        <div className="desk__queue">
-          {/* Requests first, and that ordering is not arbitrary: one of these
-              has ten minutes to be answered in and the other has as long as it
-              takes. Sorting the perishable half under the durable half is how a
-              permission lapses while the operator reads about a wall that has
-              been there since Tuesday. */}
-          {pending.map((request) => (
-            <DeskCard
-              key={request.id}
-              request={request}
-              agent={agents.find((a) => a.id === request.agentId)}
-              onDecide={(decision) => decide(request.id, decision)}
-              onAnswer={(answer) => answerQuestion(request.id, answer)}
-              onOpenChannel={() => void select(request.agentId)}
-            />
-          ))}
-          {stuck.map((one) => (
-            <StuckCard
-              key={one.id}
-              escalation={one}
-              agent={agents.find((a) => a.id === one.agentId)}
-              onClear={() => void clear(one.id)}
-              onOpenChannel={() => void select(one.agentId)}
-            />
-          ))}
-        </div>
-      )}
+    <section className="for-you__requests" aria-label="Waiting on you">
+      <h3>{deskSummary(pending.length, stuck.length)}</h3>
+      {pending.map((request) => (
+        <DeskCard
+          key={request.id}
+          request={request}
+          agent={agents.find((a) => a.id === request.agentId)}
+          onDecide={(decision) => decide(request.id, decision)}
+          onAnswer={(text) => answer(request.id, text)}
+          onOpenChannel={() => open(request.agentId)}
+        />
+      ))}
+      {stuck.map((one) => (
+        <StuckCard
+          key={one.id}
+          escalation={one}
+          agent={agents.find((a) => a.id === one.agentId)}
+          onClear={() => void clear(one.id)}
+          onOpenChannel={() => open(one.agentId)}
+        />
+      ))}
     </section>
   );
 }
-
-/**
- * The line at the top, over a queue that holds two different things.
- *
- * One sentence rather than two counts, because the operator is answering one
- * question with it and a head that read "2 waiting, 1 stuck" makes them add up
- * before they can decide whether to open it. The kinds are named while there is
- * only one kind, since that is when the word is worth something: "1 agent is
- * stuck on you" says where to go and "3 things are waiting on you" says how
- * many, and the queue underneath says the rest.
- */
 export function deskSummary(waiting: number, stuck: number): string {
-  if (stuck === 0) {
+  if (stuck === 0)
     return waiting === 1 ? "1 turn is waiting on you" : `${waiting} turns are waiting on you`;
-  }
-  if (waiting === 0) {
-    return stuck === 1 ? "1 agent is stuck on you" : `${stuck} agents are stuck on you`;
-  }
+  if (waiting === 0)
+    return stuck === 1 ? "1 agent needs your help" : `${stuck} agents need your help`;
   return `${waiting + stuck} things are waiting on you`;
 }
 

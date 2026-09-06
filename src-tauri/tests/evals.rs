@@ -1231,6 +1231,34 @@ mod live {
 
     #[tokio::test]
     #[ignore = "live: costs money, needs a configured key"]
+    async fn live_an_absent_operator_can_answer_after_the_agent_finishes_other_work() {
+        use guac_lib::domain::decision::DecisionStatus;
+        let crew = [LiveAgent::generic("Assistant")];
+        let Some((h, eval)) = run_live_crew(&crew,
+            "I will be away for the rest of the day. Alex offered 10 AM or 11 AM for our meeting next Tuesday (email thread alex-time). Both work on my calendar, but only I know which I prefer. Do not choose for me. Make sure I can answer when I return. Meanwhile write a three-item meeting agenda in your reply. This is a local planning exercise: do not send messages, book anything, or use a browser. After I eventually choose, just record the chosen time in our conversation; that will finish this task.", 180).await else { return; };
+        report("absent operator", &eval);
+        eval.expect_clean("absent operator");
+        let decisions = h.runtime.store().decisions(None).unwrap();
+        assert_eq!(decisions.len(), 1, "the question must survive the turn: {}", h.transcript());
+        assert_eq!(decisions[0].status, DecisionStatus::Pending);
+        assert!(h.runtime.store().pending_approvals(50).unwrap().is_empty());
+        let answered = h
+            .runtime
+            .answer_decision(decisions[0].id, "11 AM", false, Some(decisions[0].updated_at))
+            .unwrap();
+        assert!(h.settled_within(answered.delivery_run.unwrap(), 120).await);
+        let completed = h.runtime.store().decisions(None).unwrap();
+        assert_eq!(
+            completed[0].status,
+            DecisionStatus::Completed,
+            "answer needs follow-through: {}",
+            h.transcript()
+        );
+        println!("decision outcome: {:?}", completed[0].outcome);
+    }
+
+    #[tokio::test]
+    #[ignore = "live: costs money, needs a configured key"]
     async fn live_introduction_to_a_team() {
         let names = ["Manager", "Researcher", "Mathematician", "Scientist"];
         let Some(eval) = run_live(&names, "Introduce yourself to your team.").await else {

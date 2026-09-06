@@ -7,7 +7,7 @@
  * nothing here reaches the bundle.
  */
 
-import type { Group, GroupId } from "./lib/types";
+import type { Group, GroupId, WorkDecision } from "./lib/types";
 
 /** The group the migration creates, which the UI hides while it is the only one. */
 export const DEFAULT_GROUP: GroupId = "00000000-0000-4000-8000-000000000001";
@@ -35,6 +35,34 @@ export function aGroup(over: Partial<Group> = {}): Group {
       maxSendsPerPair: null,
       maxToolRounds: null,
     },
+    ...over,
+  };
+}
+
+/** A durable decision with enough context to answer away from its conversation. */
+export function aDecision(over: Partial<WorkDecision> = {}): WorkDecision {
+  return {
+    id: "decision-1",
+    agentId: "assistant",
+    groupId: DEFAULT_GROUP,
+    topic: "mail/thread/time",
+    request: {
+      question: "10 AM or 11 AM?",
+      context: "Alex asked about tomorrow.",
+      recommendation: "11 AM leaves a break.",
+      options: ["10 AM", "11 AM"],
+      source: "Alex email",
+    },
+    status: "pending",
+    answer: null,
+    outcome: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+    dueAt: null,
+    remindAt: 2000,
+    snoozedUntil: null,
+    deliveryRun: null,
+    interrupted: false,
     ...over,
   };
 }

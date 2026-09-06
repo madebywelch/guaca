@@ -1471,6 +1471,7 @@ describe("notifications", () => {
     fireEvent.click(switchOn(ROUTINE));
 
     expect(useStore.getState().prefs.notify.kinds).toEqual({
+      decision: true,
       approval: true,
       stuck: true,
       routine: false,

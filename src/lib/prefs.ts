@@ -36,9 +36,10 @@ export type SurfaceMode = "light" | "dark" | "system";
  * not said they want to stop hearing that an agent has stopped dead, and one
  * switch would take that decision for them.
  */
-export type NotifyKind = "approval" | "stuck" | "routine" | "settled" | "failed";
+export type NotifyKind = "decision" | "approval" | "stuck" | "routine" | "settled" | "failed";
 
 export const NOTIFY_KINDS: readonly NotifyKind[] = [
+  "decision",
   "approval",
   "stuck",
   "routine",
@@ -85,6 +86,7 @@ export const DEFAULT_PREFS: Prefs = Object.freeze({
   notify: Object.freeze({
     on: true,
     kinds: Object.freeze({
+      decision: true,
       approval: true,
       stuck: true,
       routine: true,

@@ -6,7 +6,7 @@ import { AgentMenu, type MenuTarget } from "./components/AgentMenu";
 import { Cafeteria } from "./components/Cafeteria";
 import { Calendar } from "./components/Calendar";
 import { ChannelView } from "./components/ChannelView";
-import { Desk } from "./components/Desk";
+import { ForYou } from "./components/ForYou";
 import { GroupEditor } from "./components/GroupEditor";
 import { Inspector } from "./components/Inspector";
 import { Search } from "./components/Search";
@@ -62,7 +62,10 @@ export default function App() {
       away: away(),
       // An announcement about no channel in particular is never held back for
       // being about the wrong one.
-      onScreen: said.channel === null || said.channel === state.selected,
+      onScreen:
+        event.type === "decisionReminder"
+          ? state.forYou
+          : said.channel === null || said.channel === state.selected,
       quiet: quiet(),
     });
     if (!warranted || burst(said.key)) return;
@@ -73,6 +76,8 @@ export default function App() {
   const [editing, setEditing] = useState<AgentCard | "new" | null>(null);
   const [editingGroup, setEditingGroup] = useState<Group | "new" | null>(null);
   const [menu, setMenu] = useState<MenuTarget | null>(null);
+  const forYou = useStore((state) => state.forYou);
+  const showForYou = useStore((state) => state.showForYou);
   const [showSettings, setShowSettings] = useState<Section | true | null>(null);
   const [searching, setSearching] = useState(false);
   const [ready, setReady] = useState(false);
@@ -152,6 +157,7 @@ export default function App() {
               "approvalSettled",
               "escalationRaised",
               "escalationCleared",
+              "decisionsChanged",
               "runSettled",
             ].includes(event.type)
           ) {
@@ -262,7 +268,8 @@ export default function App() {
         // Two destinations, and the crew is not a channel: `focusGroup` opens
         // the crew and picks nobody in it, because a click that was about the
         // crew must not put somebody's history on screen as a side effect.
-        if (target.kind === "crew") void focusGroup(target.id);
+        if (target.kind === "forYou") useStore.getState().showForYou(true);
+        else if (target.kind === "crew") void focusGroup(target.id);
         else void select(target.id);
       });
       if (canceled) {
@@ -403,7 +410,7 @@ export default function App() {
       {/* Outside `main` and after the panes, so nothing that scrolls can clip it
           and no view change can unmount it. Before the dialogs, because a dialog
           is modal and the one thing that should cover this. */}
-      {ready && <Desk />}
+      {ready && forYou && <ForYou onClose={() => showForYou(false)} />}
 
       {menu && (
         <AgentMenu

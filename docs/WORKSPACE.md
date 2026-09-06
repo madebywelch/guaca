@@ -401,7 +401,7 @@ sighted operator sees the box, with no ARIA holding the two together.
 **Five markers, two registers, two words.** `IMPORTANT`, `WARNING` and
 `CAUTION` draw the amber box; `NOTE` and `TIP` draw the quiet one. The amber is
 the app's one accent and it means here exactly what it means in the rail, on
-the desk and in the menu bar: a person has to do something. That is also why
+For you and in the menu bar: a person has to do something. That is also why
 the label is the app's word rather than the model's. An agent that writes
 `[!CAUTION]` and one that writes `[!WARNING]` mean the same thing, and drawing
 both of their words is an operator learning a vocabulary that decides nothing;

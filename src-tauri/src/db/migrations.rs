@@ -1427,6 +1427,30 @@ CREATE TABLE group_imports (
 );
 "#,
     ),
+    (
+        51,
+        r#"
+CREATE TABLE decisions (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+    group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
+    topic TEXT NOT NULL,
+    request TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('pending','answered','completed','withdrawn')),
+    answer TEXT,
+    outcome TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    due_at INTEGER,
+    remind_at INTEGER NOT NULL,
+    snoozed_until INTEGER,
+    delivery_run TEXT,
+    interrupted INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX decisions_topic ON decisions(agent_id,topic);
+CREATE INDEX decisions_reminder ON decisions(remind_at) WHERE status IN ('pending','answered');
+"#,
+    ),
 ];
 
 /// The group every agent starts in, and the one the UI keeps out of the way

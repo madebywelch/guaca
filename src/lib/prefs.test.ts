@@ -45,7 +45,14 @@ const DEFAULTS: Prefs = {
   surface: "light",
   notify: {
     on: true,
-    kinds: { approval: true, stuck: true, routine: true, settled: true, failed: true },
+    kinds: {
+      decision: true,
+      approval: true,
+      stuck: true,
+      routine: true,
+      settled: true,
+      failed: true,
+    },
   },
 };
 
@@ -99,7 +106,14 @@ describe("a blob that cannot be trusted", () => {
       surface: "light",
       notify: {
         on: false,
-        kinds: { approval: true, stuck: true, routine: false, settled: true, failed: true },
+        kinds: {
+          decision: true,
+          approval: true,
+          stuck: true,
+          routine: false,
+          settled: true,
+          failed: true,
+        },
       },
     });
   });
@@ -196,7 +210,14 @@ describe("a preference that outlives the window", () => {
       surface: "dark",
       notify: {
         on: false,
-        kinds: { approval: true, stuck: true, routine: false, settled: false, failed: true },
+        kinds: {
+          decision: true,
+          approval: true,
+          stuck: true,
+          routine: false,
+          settled: false,
+          failed: true,
+        },
       },
     };
     savePrefs(chosen);

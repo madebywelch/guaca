@@ -65,6 +65,10 @@ pub const CHANNEL: &str = "guac://event";
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum UiEvent {
+    DecisionsChanged,
+    DecisionReminder {
+        count: usize,
+    },
     /// The agent roster changed. The UI refetches rather than patching, because
     /// the roster is small and a diff protocol here would be pure ceremony.
     AgentsChanged,

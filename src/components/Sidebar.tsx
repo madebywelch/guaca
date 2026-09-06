@@ -73,6 +73,12 @@ export function Sidebar({
   const refreshRepoStatuses = useStore((s) => s.refreshRepoStatuses);
   const activity = useStore((s) => s.activity);
   const stuck = useStore((s) => s.stuck);
+  const decisions = useStore((s) => s.decisions);
+  const pending = useStore((s) => s.pending);
+  const showForYou = useStore((s) => s.showForYou);
+  const decisionCount = decisions.filter(
+    (item) => item.status === "pending" || (item.status === "answered" && item.interrupted),
+  ).length;
   /* The rail is the one surface that draws a whole crew at once, so it is the
      one that pays for the signals the quieter moods are read from. */
   const trail = useStore((s) => s.trail);
@@ -508,6 +514,11 @@ export function Sidebar({
           </span>
           <span className="rail__search-label">Search</span>
           <kbd className="rail__key">{FIND_KEY}</kbd>
+        </button>
+
+        <button type="button" className="rail__for-you" onClick={() => showForYou(true)}>
+          <span>For you</span>
+          <span>{decisionCount + pending.length + stuck.length}</span>
         </button>
 
         {/* The wire lives on this wrapper rather than on the scroll container, so

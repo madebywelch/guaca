@@ -9,6 +9,7 @@
 //! synchronous. Nothing holds a lock across an `.await`; the guard registry in
 //! particular is locked, consulted, and released before any inference starts.
 
+mod decisions;
 pub mod events;
 pub mod guard;
 pub mod prompt;
@@ -1484,6 +1485,12 @@ impl Runtime {
         } else {
             self.inner.store.append(&envelope)?;
         }
+        self.enqueue_delivery(envelope);
+        Ok(())
+    }
+
+    /// Enqueue a delivery whose persistence and run booking have committed.
+    fn enqueue_delivery(&self, envelope: Envelope) {
         self.inner.events.emit(UiEvent::MessageAppended { message: Box::new(envelope.clone()) });
 
         if let Participant::Agent { id } = envelope.to {
@@ -1528,10 +1535,15 @@ impl Runtime {
                 // The agent was stopped between whatever check found it and
                 // this send. Nobody will ever read this, so it stops counting
                 // now rather than holding the run open forever.
-                None => self.abandon(run, 1),
+                None => {
+                    if let Err(err) = self.inner.store.interrupt_decision_run(run) {
+                        tracing::error!(%err, %run, "could not mark undelivered decision follow-through");
+                    }
+                    self.emit(UiEvent::DecisionsChanged);
+                    self.abandon(run, 1);
+                }
             }
         }
-        Ok(())
     }
 
     pub fn files(&self) -> &FileStore {
@@ -1989,6 +2001,7 @@ impl Runtime {
         let runtime = self.clone();
         self.inner.handle.spawn(async move {
             loop {
+                runtime.sweep_decisions(now_ms());
                 runtime.sweep_schedule().await;
                 // Swept before the first wait rather than after it, so anything
                 // already overdue at launch runs now instead of sitting out a
@@ -3775,6 +3788,10 @@ impl Runtime {
         // After assembly, because what a file becomes depends on things the
         // prompt cannot reach: bytes on disk, a model that may not be able to
         // see one, and a machine that may have to be started to hold them.
+        match self.inner.store.decisions(Some(card.id)) {
+            Ok(decisions) => prompt::add_decisions(&mut messages, &decisions),
+            Err(err) => tracing::warn!(%err, "could not read the agent's decisions"),
+        }
         self.deliver_files(&card, &batch, modalities, &mut messages).await;
 
         // Where the finished message will land, and who it is for. Both are
@@ -4879,6 +4896,8 @@ impl Runtime {
                     ),
                 }
             }
+
+            ToolInvocation::Decision(action) => self.use_decision(card, action, arguments),
 
             ToolInvocation::Escalate { summary } => {
                 let (body, cut) = escalation::store_as(&summary);

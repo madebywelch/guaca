@@ -1,7 +1,6 @@
 # Attention
 
-Everything an agent stops to ask a person, and the one thing it raises without
-stopping. `docs/ATTENTION.md`, then `domain/approval.rs`,
+Live requests, operational blockers, and durable decisions that stop no turn. `docs/ATTENTION.md`, then `domain/approval.rs`,
 `domain/escalation.rs` and `Runtime::park`.
 
 - **An escalation is not an approval with the parking taken out, and folding
@@ -35,8 +34,7 @@ stopping. `docs/ATTENTION.md`, then `domain/approval.rs`,
   commands, two `ApprovalState`s. The line is what a yes does: a permission
   authorizes something the agent could not otherwise do, and a question hands
   back a value that authorizes nothing and passes through every guard the agent
-  already had. That is the whole reason a question may draw the model's own
-  words on a button, which happens nowhere else in this app. It is also why a
+  already had. That is why both live and durable questions may draw model-authored choices. It is also why a
   verdict on a question is refused before the row moves: `ask_question` reads
   the answer back off the row, so an Allow would settle it with nothing in it
   and the turn would resume having been told nothing at all. Underneath they
@@ -59,3 +57,17 @@ stopping. `docs/ATTENTION.md`, then `domain/approval.rs`,
   stale card looks exactly like a live one. Both events invalidate it and the
   answer comes back from `pending_approvals`. The consequence is the feature:
   nothing can appear on the desk that is not a row somewhere.
+
+- **Answer acceptance and delivery are one transaction.** A saved answer without
+  a transcript envelope and recovery point is lost work that looks accepted.
+  `Store::answer_decision` commits all three; the runtime books before enqueueing.
+- **Answered is not completed.** Only an explicit outcome moves follow-through
+  to history. A restart marks answered work interrupted and requires Resume;
+  silently replaying it could repeat an external effect.
+- **A stable topic stays used after completion.** A uniqueness rule limited to
+  open rows makes the next email scan recreate a question already settled.
+- **A rescan must not undo a snooze or change an answered question.** Pending
+  changes advance the version; accepting an answer checks the version shown.
+  Identical rescans preserve it. Concurrent answers have one winner.
+- **Activity is not coverage.** A model call finishing does not prove it checked
+  email. For you labels last activity accordingly and does not fabricate a check.

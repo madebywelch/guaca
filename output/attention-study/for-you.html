@@ -1,0 +1,160 @@
+<style>
+  #guaca-for-you {
+    --g-paper: light-dark(#ffffff, #202321);
+    --g-edge: light-dark(#f5f5f0, #282c28);
+    --g-ink: light-dark(#262d27, #ecede8);
+    --g-muted: light-dark(#61695f, #b6bdb1);
+    --g-line: light-dark(#dfe3db, #454c43);
+    --g-accent: light-dark(#365b3a, #b5d4a8);
+    --g-on-accent: light-dark(#ffffff, #1b301c);
+    --g-urgent: light-dark(#8a4513, #f2bc81);
+    --g-gap: 16px;
+    --g-pad: 24px;
+    --g-small: 12px;
+    --g-body: 14px;
+    --g-title: 26px;
+    --g-radius: 12px;
+    color: var(--g-ink); background: var(--g-paper);
+    font: var(--g-body)/1.5 "Inter Variable", -apple-system, BlinkMacSystemFont, sans-serif;
+    border: 1px solid var(--g-line); border-radius: var(--g-radius);
+    overflow: hidden; max-width: 760px; margin: auto;
+  }
+  #guaca-for-you * { box-sizing: border-box; }
+  #guaca-for-you [hidden] { display: none !important; }
+  #guaca-for-you header { background: var(--g-edge); padding: var(--g-pad); border-bottom: 1px solid var(--g-line); }
+  #guaca-for-you .g-top, #guaca-for-you .g-meta, #guaca-for-you .g-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  #guaca-for-you .g-top { justify-content: space-between; }
+  #guaca-for-you h2 { font-size: var(--g-title); font-weight: 550; letter-spacing: -.6px; margin: 0; }
+  #guaca-for-you p { margin: 8px 0 0; }
+  #guaca-for-you .g-muted { color: var(--g-muted); }
+  #guaca-for-you .g-kicker { font-size: var(--g-small); font-weight: 600; letter-spacing: .5px; text-transform: uppercase; }
+  #guaca-for-you .g-meta { color: var(--g-muted); font-size: var(--g-small); margin-bottom: 8px; }
+  #guaca-for-you .g-due { color: var(--g-urgent); font-weight: 600; margin-left: auto; }
+  #guaca-for-you article { padding: var(--g-pad); border-bottom: 1px solid var(--g-line); }
+  #guaca-for-you h3 { font-size: 17px; font-weight: 600; line-height: 1.4; margin: 0; }
+  #guaca-for-you button, #guaca-for-you input { font: inherit; }
+  #guaca-for-you button { border: 1px solid var(--g-line); border-radius: 7px; padding: 7px 11px; color: var(--g-ink); background: var(--g-paper); cursor: pointer; }
+  #guaca-for-you button:hover { border-color: var(--g-accent); }
+  #guaca-for-you button:focus-visible, #guaca-for-you input:focus-visible, #guaca-for-you summary:focus-visible { outline: 2px solid var(--g-accent); outline-offset: 3px; }
+  #guaca-for-you .g-primary { color: var(--g-on-accent); background: var(--g-accent); border-color: var(--g-accent); }
+  #guaca-for-you .g-quiet { border-color: transparent; background: transparent; color: var(--g-muted); }
+  #guaca-for-you .g-actions { margin-top: var(--g-gap); }
+  #guaca-for-you .g-source { margin-top: 12px; color: var(--g-muted); font-size: var(--g-small); }
+  #guaca-for-you summary { cursor: pointer; }
+  #guaca-for-you blockquote { border-left: 2px solid var(--g-line); margin: 10px 0; padding-left: 12px; font-size: var(--g-body); }
+  #guaca-for-you .g-result { color: var(--g-accent); padding: var(--g-pad); border-bottom: 1px solid var(--g-line); }
+  #guaca-for-you .g-result strong { display: block; }
+  #guaca-for-you footer { padding: var(--g-gap) var(--g-pad); background: var(--g-edge); color: var(--g-muted); font-size: var(--g-small); }
+  #guaca-for-you input { min-width: 0; flex: 1; padding: 8px; background: var(--g-paper); color: var(--g-ink); border: 1px solid var(--g-line); border-radius: 7px; }
+  #guaca-for-you form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  #guaca-for-you .g-later { padding: var(--g-gap) var(--g-pad); border-bottom: 1px solid var(--g-line); }
+  #guaca-for-you .g-later p { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+  @media(max-width: 440px) { #guaca-for-you { --g-pad: 18px; } #guaca-for-you .g-due { margin-left: 0; width: 100%; } }
+</style>
+<section id="guaca-for-you" aria-label="Guaca decision inbox concept">
+  <header>
+    <div class="g-top"><h2>For you <span id="g-count" class="g-muted">2</span></h2><span class="g-kicker">Guaca</span></div>
+    <p id="g-overview">Two decisions. One needs an answer today.</p>
+    <p class="g-muted" id="g-coverage">Executive assistant checked email at 9:12 AM.</p>
+  </header>
+  <div id="g-feedback" role="status" class="g-result" hidden></div>
+  <article data-item="meeting">
+    <div class="g-meta"><span>Executive assistant · Scheduling</span><span class="g-due">Reply by 3 PM today</span></div>
+    <h3>10 AM or 11 AM with Alex tomorrow?</h3>
+    <p>I recommend 11 AM. Both were free when I checked; 11 leaves a break after your morning call.</p>
+    <p class="g-muted">Alex is holding both times until 3 PM. I’m continuing with the rest of your email.</p>
+    <div class="g-actions">
+      <button class="g-primary" data-answer="11 AM">Choose 11 AM</button>
+      <button data-answer="10 AM">10 AM</button>
+      <button data-custom>Another time</button>
+      <button class="g-quiet" data-snooze="meeting">In one hour</button>
+    </div>
+    <form id="g-custom" hidden><input aria-label="Preferred meeting time" placeholder="Your preferred time" required><button type="button">Save answer</button></form>
+    <details class="g-source"><summary>Alex’s email · Today, 8:54 AM</summary><blockquote>Are you available tomorrow at 10 AM or 11 AM Eastern? I can hold both until 3 PM today.</blockquote><p>Calendar last checked at 9:12 AM. Availability will be checked again before scheduling.</p></details>
+  </article>
+  <article data-item="proposal">
+    <div class="g-meta"><span>Executive assistant · Business development</span><span>No deadline given</span></div>
+    <h3>Continue the conversation with Northstar?</h3>
+    <p>They asked whether you’re interested in a discovery call. I recommend continuing; their request fits your current work.</p>
+    <div class="g-actions">
+      <button data-proposal="Continue">Continue</button><button data-proposal="Pass">Pass</button><button class="g-quiet" data-snooze="proposal">Tomorrow morning</button>
+    </div>
+    <details class="g-source"><summary>Northstar’s email · Yesterday, 4:20 PM</summary><blockquote>Would you be interested in a short discovery call about our internal reporting workflow?</blockquote></details>
+  </article>
+  <div class="g-later" id="g-later" hidden><details open><summary>Set aside <span id="g-later-count"></span></summary><div id="g-later-items"></div></details></div>
+  <div class="g-later" id="g-answered" hidden><details open><summary>Answered <span id="g-answered-count"></span></summary><div id="g-answered-items"></div></details></div>
+  <footer>Next briefing at 4 PM · Today’s deadline gets an earlier reminder</footer>
+</section>
+<script>
+(() => {
+  const root = document.getElementById('guaca-for-you');
+  const entries = {
+    meeting: { status: 'open', title: 'Meeting with Alex', answer: '', reminder: '10:15 AM today' },
+    proposal: { status: 'open', title: 'Northstar discovery call', answer: '', reminder: '9 AM tomorrow' }
+  };
+  const design = { density: 'Comfortable', coverage: true };
+  const feedback = root.querySelector('#g-feedback');
+  function render() {
+    const active = Object.values(entries).filter(entry => entry.status === 'open');
+    root.querySelector('#g-count').textContent = active.length;
+    root.querySelector('#g-overview').textContent = active.length === 0
+      ? 'No decisions to review right now.'
+      : `${active.length} ${active.length === 1 ? 'decision' : 'decisions'} to review.${entries.meeting.status === 'open' ? ' One needs an answer today.' : ''}`;
+    root.style.setProperty('--g-pad', design.density === 'Compact' ? '16px' : '24px');
+    root.querySelector('#g-coverage').hidden = !design.coverage;
+    for (const [id, entry] of Object.entries(entries)) root.querySelector(`[data-item="${id}"]`).hidden = entry.status !== 'open';
+    for (const [status, section] of [['snoozed', 'later'], ['answered', 'answered']]) {
+      const items = Object.entries(entries).filter(([, entry]) => entry.status === status);
+      root.querySelector(`#g-${section}`).hidden = items.length === 0;
+      root.querySelector(`#g-${section}-count`).textContent = items.length;
+      const list = root.querySelector(`#g-${section}-items`);
+      list.replaceChildren();
+      for (const [id, entry] of items) {
+        const row = document.createElement('p');
+        const label = document.createElement('span');
+        label.textContent = status === 'snoozed' ? `${entry.title} · Returns ${entry.reminder}` : `${entry.title} · ${entry.answer} · Awaiting follow-through`;
+        row.append(label);
+        if (status === 'snoozed') {
+          const button = document.createElement('button');
+          button.textContent = 'Review now';
+          button.addEventListener('click', () => { entry.status = 'open'; feedback.hidden = true; render(); root.querySelector(`[data-item="${id}"] button`).focus(); });
+          row.append(button);
+        }
+        list.append(row);
+      }
+    }
+  }
+  function answer(id, value) {
+    entries[id].status = 'answered'; entries[id].answer = value;
+    feedback.textContent = id === 'meeting'
+      ? `${value} saved. Your assistant will recheck availability and prepare the reply.`
+      : `${value} saved. Your assistant has the decision and will follow through.`;
+    feedback.hidden = false; render();
+    const next = root.querySelector('article:not([hidden]) button');
+    if (next) next.focus();
+  }
+  root.querySelectorAll('[data-answer]').forEach(button => button.addEventListener('click', () => answer('meeting', button.dataset.answer)));
+  root.querySelectorAll('[data-proposal]').forEach(button => button.addEventListener('click', () => answer('proposal', button.dataset.proposal)));
+  root.querySelectorAll('[data-snooze]').forEach(button => button.addEventListener('click', () => {
+    const id = button.dataset.snooze; entries[id].status = 'snoozed';
+    feedback.textContent = `${entries[id].title} will return at ${entries[id].reminder}. It still needs your answer.`;
+    feedback.hidden = false; render(); root.querySelector('#g-later summary').focus();
+  }));
+  root.querySelector('[data-custom]').addEventListener('click', () => { root.querySelector('#g-custom').hidden = false; root.querySelector('#g-custom input').focus(); });
+  function saveCustom(event) {
+    event.preventDefault(); const value = root.querySelector('#g-custom input').value.trim();
+    if (value) answer('meeting', value);
+  }
+  root.querySelector('#g-custom button').addEventListener('click', saveCustom);
+  root.querySelector('#g-custom').addEventListener('submit', saveCustom);
+  root.querySelector('#g-custom input').addEventListener('keydown', event => {
+    if (event.key === 'Enter') saveCustom(event);
+  });
+  render();
+  if (globalThis.Tweak) {
+    const tweak = new globalThis.Tweak({ container: root, onChange: render });
+    tweak.addSelect(design, 'density', { options: ['Comfortable', 'Compact'], label: 'Row spacing' });
+    tweak.addToggle(design, 'coverage', { label: 'Show latest email check' });
+  }
+})();
+</script>

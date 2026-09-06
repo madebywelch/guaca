@@ -89,6 +89,8 @@ impl Outstanding {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error("{0}")]
+    Decision(String),
     #[error("database error: {0}")]
     Sqlite(#[from] rusqlite::Error),
     #[error("connection pool error: {0}")]
@@ -3279,7 +3281,10 @@ impl Store {
         Self::insert_message(&conn, envelope)
     }
 
-    fn insert_message(conn: &rusqlite::Connection, envelope: &Envelope) -> Result<(), StoreError> {
+    pub(super) fn insert_message(
+        conn: &rusqlite::Connection,
+        envelope: &Envelope,
+    ) -> Result<(), StoreError> {
         let (from_kind, from_agent) = participant_columns(envelope.from);
         let (to_kind, to_agent) = participant_columns(envelope.to);
         let parts = serde_json::to_string(&envelope.parts)
