@@ -515,6 +515,46 @@ async fn a_stored_file_is_reachable_by_its_digest() {
 }
 
 #[tokio::test]
+async fn desktop_downloads_backend_attachments_to_the_client_disk() {
+    let (addr, backend) = workspace().await;
+    let client = tempfile::tempdir().unwrap();
+    let downloads = client.path().join("Downloads");
+    let files = guac_lib::files::FileStore::new(backend.path().join("data/files"));
+    let origin = format!("http://{addr}");
+    let brief = files.put("brief.md", b"# The brief\n").unwrap();
+
+    for (token, digest, expected) in [
+        ("wrong", brief.digest.clone(), "access key"),
+        (TOKEN, "0".repeat(64), "no longer"),
+        (TOKEN, "../invalid".into(), "invalid content address"),
+    ] {
+        let error =
+            guac_lib::files::download(&origin, token, &digest, &brief.name, downloads.clone())
+                .await
+                .unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert!(!downloads.exists(), "a failed download must not create a file");
+    }
+
+    for (name, body) in [
+        ("brief.md", b"# The brief\n".as_slice()),
+        ("quarter report.pdf", b"%PDF-1.7\n".as_slice()),
+        ("bundle.zip", b"PK\x03\x04\x00\xff".as_slice()),
+    ] {
+        let stored = files.put(name, body).unwrap();
+        let save =
+            || guac_lib::files::download(&origin, TOKEN, &stored.digest, name, downloads.clone());
+        let (first, second) = tokio::join!(save(), save());
+        let first = first.unwrap();
+        let second = second.unwrap();
+        assert_ne!(first, second, "concurrent copies must keep separate names");
+        assert_eq!(first.parent(), Some(downloads.as_path()));
+        assert_eq!(std::fs::read(first).unwrap(), body);
+        assert_eq!(std::fs::read(second).unwrap(), body);
+    }
+}
+
+#[tokio::test]
 async fn the_desktop_can_preflight_a_command() {
     let (addr, _dir) = workspace().await;
     let response = reqwest::Client::new()
