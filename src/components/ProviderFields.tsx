@@ -9,7 +9,8 @@
  * drifted from the backend's offers a model the plan refuses by name.
  */
 
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useState } from "react";
+import { api } from "../lib/ipc";
 import { PROVIDERS, type Provider as Preset, providerFor, providerReady } from "../lib/providers";
 import { hosted } from "../lib/transport";
 
@@ -96,8 +97,7 @@ export function ProviderPresets({ baseUrl, active, keySet, loopback, onChoose }:
 
 interface ModelProps {
   value: string;
-  /** What the backend says it can run. Held by the backend rather than here so
-   *  the two cannot drift. */
+  /** Initial choices while the account catalog loads. */
   models: string[];
   onChange: (model: string) => void;
   /** Offered as the first row when a blank value means something: a group that
@@ -115,9 +115,26 @@ interface ModelProps {
  * than the control, so the label wraps its own input.
  */
 export function SubscriptionModel({ value, models, onChange, inherit, hint }: ModelProps) {
+  const [catalog, setCatalog] = useState<string[] | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  useEffect(() => {
+    let canceled = false;
+    void api.subscriptionModels().then(
+      (loaded) => {
+        if (!canceled) setCatalog(loaded);
+      },
+      () => {
+        if (!canceled) setUnavailable(true);
+      },
+    );
+    return () => {
+      canceled = true;
+    };
+  }, []);
+
   // Whatever is stored is listed even if it is not one of the known ones, so a
   // model chosen before this list changed is not silently swapped for another.
-  const offered = [...new Set([...models, value].filter(Boolean))];
+  const offered = [...new Set([...(catalog ?? models), value].filter(Boolean))];
   return (
     <label className="field" style={{ marginTop: "1.1rem" }}>
       <span className="field__label">Model</span>
@@ -134,6 +151,12 @@ export function SubscriptionModel({ value, models, onChange, inherit, hint }: Mo
         ))}
       </select>
       <span className="field__hint">{hint}</span>
+      {unavailable && (
+        <span className="field__hint" role="status">
+          Could not load current ChatGPT models. Showing saved and default choices. Reopen this
+          panel to retry.
+        </span>
+      )}
     </label>
   );
 }

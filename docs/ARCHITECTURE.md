@@ -434,6 +434,22 @@ boundaries did not change at all. That is the whole reason for translating rathe
 than teaching the runtime a second protocol. The cost is one file that has to be
 right about both shapes, which is what its tests are for.
 
+**The subscription model list comes from the signed-in account.** Opening the
+model selector calls `subscription_models`, which reads the Codex backend's
+`/models` catalog with Guaca's subscription credential. Picker-visible entries
+are ordered by the service's priority. The installed coding CLI is not involved;
+its image version cannot update a list compiled into Guaca. The catalog request
+names the protocol version it understands and retries one 401 through the same
+serialized token refresh used by model calls.
+
+The request runs separately from settings loading, with a ten-second ceiling.
+A failure leaves the default and saved choice selectable and says the catalog
+could not be loaded. A successful read replaces the initial offers, preserving
+the saved model even if it was retired. Nothing selects a model on the operator's
+behalf. Reopening the selector reads again, with no catalog cached across
+accounts. `tests/subscription_catalog.rs` checks this wire and its live half
+checks whether the service still publishes the shape Guaca reads.
+
 **What the Responses API disagrees with chat completions about.** Each of these
 was learned from a live call refusing one, and each has a test that fails without
 it:

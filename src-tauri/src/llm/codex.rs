@@ -77,14 +77,10 @@ pub const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 /// the software.
 const ORIGINATOR: &str = "codex_cli_rs";
 
-/// Models a subscription can actually run, most capable first.
-///
-/// Here so Settings can offer them and so a wrong one can be named in an error.
-/// Not a restriction: the model is still a text field, and the backend is the
-/// authority on what it will accept. It refuses an unknown model by name, which
-/// is a better error than anything this list could produce.
-pub const MODELS: &[&str] =
-    &["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
+/// The catalog protocol revision Guaca understands, independent of the coding
+/// harness installed in the image. The service requires a client version even
+/// though this request does not run the CLI.
+const CATALOG_CLIENT_VERSION: &str = "0.153.3";
 
 /// The model a fresh sign-in starts on.
 ///
@@ -92,6 +88,90 @@ pub const MODELS: &[&str] =
 /// has a quota measured in hours, and a crew of agents talking to each other
 /// will find the ceiling faster than one person typing.
 pub const DEFAULT_MODEL: &str = "gpt-5.6-luna";
+
+/// Ask the signed-in account's catalog whenever its selector opens. Keeping
+/// this out of settings loading means an unavailable catalog cannot hold up
+/// the workspace, and keeping no cache avoids carrying offers across accounts.
+pub async fn models(subscription: &Subscription) -> Result<Vec<String>, LlmError> {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut access = subscription.access().await.map_err(auth_error)?;
+        let url = format!("{}/models", subscription.backend().trim_end_matches('/'));
+        let http = reqwest::Client::builder()
+            .user_agent(concat!("guac/", env!("CARGO_PKG_VERSION")))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|source| LlmError::Transport { url: url.clone(), source })?;
+        let mut renewed = false;
+        loop {
+            let mut request = http
+                .get(&url)
+                .query(&[("client_version", CATALOG_CLIENT_VERSION)])
+                .bearer_auth(&access.token)
+                .header("originator", ORIGINATOR);
+            if !access.account_id.is_empty() {
+                request = request.header("ChatGPT-Account-Id", &access.account_id);
+            }
+            let response = request
+                .send()
+                .await
+                .map_err(|source| LlmError::Transport { url: url.clone(), source })?;
+            let status = response.status();
+            if status == reqwest::StatusCode::UNAUTHORIZED && !renewed {
+                renewed = true;
+                access = subscription.renew(&access.token).await.map_err(auth_error)?;
+                continue;
+            }
+            if !status.is_success() {
+                return Err(LlmError::Upstream {
+                    status: status.as_u16(),
+                    message: "Could not load ChatGPT models. Reopen the provider panel to retry."
+                        .into(),
+                });
+            }
+            let catalog = response
+                .json::<ModelCatalog>()
+                .await
+                .map_err(|err| LlmError::Decode(format!("ChatGPT model catalog: {err}")))?;
+            return catalog.visible();
+        }
+    })
+    .await
+    .map_err(|_| LlmError::Timeout { secs: 10 })?
+}
+
+#[derive(Deserialize)]
+struct ModelCatalog {
+    models: Vec<CatalogModel>,
+}
+
+#[derive(Deserialize)]
+struct CatalogModel {
+    slug: String,
+    visibility: String,
+    #[serde(default)]
+    priority: i64,
+}
+
+impl ModelCatalog {
+    fn visible(mut self) -> Result<Vec<String>, LlmError> {
+        self.models.sort_by_key(|model| model.priority);
+        let mut models = Vec::new();
+        for model in self.models {
+            if model.visibility == "list"
+                && !model.slug.trim().is_empty()
+                && !models.contains(&model.slug)
+            {
+                models.push(model.slug);
+            }
+        }
+        if models.is_empty() {
+            return Err(LlmError::Decode(
+                "ChatGPT returned no selectable models. Reopen the provider panel to retry.".into(),
+            ));
+        }
+        Ok(models)
+    }
+}
 
 // ---- request -------------------------------------------------------------
 

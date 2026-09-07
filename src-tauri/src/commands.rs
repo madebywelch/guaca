@@ -2949,6 +2949,14 @@ pub async fn subscription_status(state: &AppState) -> Reply<Status> {
     Ok(state.subscription.status())
 }
 
+/// The account's current picker-visible models. Credentials stay in Rust.
+pub async fn subscription_models(state: &AppState) -> Reply<Vec<String>> {
+    crate::llm::codex::models(&state.subscription).await.map_err(|err| {
+        tracing::warn!(%err, "could not load ChatGPT model catalog");
+        CommandError::new("subscriptionModels", err.to_string())
+    })
+}
+
 /// Asks for a code the operator carries to a browser.
 ///
 /// Two commands rather than one because the two halves take wildly different
@@ -3079,7 +3087,7 @@ pub async fn test_connection(state: &AppState, patch: Option<SettingsPatch>) -> 
 
 /// The models OpenRouter sees doing one kind of work, most capable first.
 ///
-/// The one command that reads a catalog rather than this install's own state,
+/// Reads a catalog rather than this install's own state,
 /// and it is still not the frontend performing network access: the host is a
 /// constant here and the use case is checked against a published set before a
 /// request is spent, so the webview names a use case rather than a URL.
