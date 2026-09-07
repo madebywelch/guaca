@@ -344,18 +344,14 @@ export function RepositoryList({ groupId, crew }: Props) {
     bench: "own",
   });
   const [editing, setEditing] = useState<RepositoryId | null>(null);
+  // Only these boxes wait for Save. Immediate choices render the saved row,
+  // so a failed write cannot leave a different harness looking selected.
   const [edit, setEdit] = useState<{
     name: string;
     note: string;
-    harness: Harness;
-    gate: Gate;
-    bench: Bench;
   }>({
     name: "",
     note: "",
-    harness: "pi",
-    gate: "open",
-    bench: "own",
   });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -505,9 +501,6 @@ export function RepositoryList({ groupId, crew }: Props) {
                 setEdit({
                   name: repository.name,
                   note: repository.note,
-                  harness: repository.harness,
-                  gate: repository.gate,
-                  bench: repository.bench,
                 });
               }}
             >
@@ -549,9 +542,9 @@ export function RepositoryList({ groupId, crew }: Props) {
                         repository.id,
                         edit.name,
                         edit.note,
-                        edit.harness,
-                        edit.gate,
-                        edit.bench,
+                        repository.harness,
+                        repository.gate,
+                        repository.bench,
                       ),
                     ).then((ok) => ok && setEditing(null))
                   }
@@ -560,14 +553,13 @@ export function RepositoryList({ groupId, crew }: Props) {
                 </button>
               </div>
               <HarnessChoice
-                chosen={edit.harness}
+                chosen={repository.harness}
                 machine={machine}
                 disabled={busy !== null}
                 onChoose={(harness) => {
                   // The stored name and note, not the boxes above. A half-typed
                   // rename is not a thing the operator asked to save, and this
                   // click is not the gesture that saves it.
-                  setEdit({ ...edit, harness });
                   void run(`${repository.id}-harness`, () =>
                     api.updateRepository(
                       repository.id,
@@ -575,46 +567,44 @@ export function RepositoryList({ groupId, crew }: Props) {
                       repository.note,
                       harness,
                       repository.gate,
-                      edit.bench,
+                      repository.bench,
                     ),
                   );
                 }}
               />
               <GateChoice
-                chosen={edit.gate}
-                harness={edit.harness}
+                chosen={repository.gate}
+                harness={repository.harness}
                 machine={machine}
                 disabled={busy !== null}
                 onChoose={(gate) => {
                   // The stored name and note, for the reason the harness above
                   // uses them: a half-typed rename is not what this click saves.
-                  setEdit({ ...edit, gate });
                   void run(`${repository.id}-gate`, () =>
                     api.updateRepository(
                       repository.id,
                       repository.name,
                       repository.note,
-                      edit.harness,
+                      repository.harness,
                       gate,
-                      edit.bench,
+                      repository.bench,
                     ),
                   );
                 }}
               />
               <BenchChoice
-                chosen={edit.bench}
+                chosen={repository.bench}
                 disabled={busy !== null}
                 onChoose={(bench) => {
                   // The stored name and note, for the reason the two above use
                   // them: a half-typed rename is not what this click saves.
-                  setEdit({ ...edit, bench });
                   void run(`${repository.id}-bench`, () =>
                     api.updateRepository(
                       repository.id,
                       repository.name,
                       repository.note,
-                      edit.harness,
-                      edit.gate,
+                      repository.harness,
+                      repository.gate,
                       bench,
                     ),
                   );

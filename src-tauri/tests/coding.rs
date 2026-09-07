@@ -681,6 +681,92 @@ async fn an_agent_is_told_what_the_harness_it_was_given_said() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_claude_login_failure_names_claude_and_the_next_job_uses_the_saved_switch() {
+    stand_ins();
+    let repo = a_repository("switch-after-login-failure");
+    std::fs::write(repo.join(SAY),
+        r#"{"type":"result","subtype":"success","is_error":true,"result":"Not logged in. Please run /login"}"#,
+    ).unwrap();
+    let start = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let kickoff = start.clone();
+    let stub = serve(move |_| {
+        if kickoff.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            Script::Code("inspect the repository".into())
+        } else {
+            Script::Say("Received the result.".into())
+        }
+    })
+    .await;
+    let h = harness(&stub, &["Content Marketer"], GuardLimits::default());
+    let agent = h.agent_named("Content Marketer").unwrap();
+    let linked = h
+        .runtime
+        .store()
+        .create_repository(&CleanRepository {
+            group_id: agent.group_id,
+            name: "site".into(),
+            path: repo.to_string_lossy().to_string(),
+            note: String::new(),
+            harness: Which::Claude,
+            gate: Gate::Open,
+            remote: None,
+            bench: Bench::Shared,
+        })
+        .unwrap();
+    h.runtime.store().set_agent_repository(agent.id, Some(linked.id)).unwrap();
+
+    let run = h.runtime.send_from_human(agent.id, "inspect the repository").unwrap();
+    h.settle(run).await;
+    h.wait_until("the failed job's reply settles", |h| {
+        h.channel_texts("Content Marketer").iter().any(|text| text.contains("could not finish"))
+    })
+    .await;
+    let reported = h
+        .runtime
+        .store()
+        .channel_messages(agent.id, 200)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.plain_text().contains("could not finish"))
+        .unwrap();
+    h.settle(reported.run_id).await;
+    let failure = h
+        .channel_texts("Content Marketer")
+        .into_iter()
+        .find(|text| text.contains("could not finish"))
+        .unwrap();
+    assert!(failure.contains("Claude Code"), "the agent must know which sign-in failed: {failure}");
+    assert!(failure.contains("/login"));
+
+    h.runtime
+        .store()
+        .update_repository(
+            linked.id,
+            &linked.name,
+            &linked.note,
+            Which::Codex,
+            linked.gate,
+            linked.bench,
+        )
+        .unwrap();
+    start.store(true, std::sync::atomic::Ordering::SeqCst);
+    let run = h.runtime.send_from_human(agent.id, "retry with the saved harness").unwrap();
+    h.settle(run).await;
+    h.wait_until("Codex finishes in the same runtime", |h| {
+        h.channel_texts("Content Marketer").iter().any(|text| text.contains("has finished"))
+    })
+    .await;
+    assert_eq!(argv_at(&repo)[0], "app-server");
+    let completion = h
+        .channel_texts("Content Marketer")
+        .into_iter()
+        .find(|text| text.contains("has finished"))
+        .unwrap();
+    assert!(completion.contains("Codex"), "{completion}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 /// The one announcement this app asks for, and the one thing that outlives the
 /// message announcing it.
 ///
