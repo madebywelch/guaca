@@ -11,6 +11,13 @@ src-tauri/gen/
 .env.*
 !.env.example
 
+# Apple signing keys and credential exports stay outside the public repository.
+*.p12
+*.pfx
+*.p8
+*.keychain
+*.keychain-db
+
 # Generated from scripts/make-icon.py
 scripts/icon-source.png
 
