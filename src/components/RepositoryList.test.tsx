@@ -247,7 +247,11 @@ describe("RepositoryList", () => {
     // Staged, it sits under a Save button an operator has every reason to press
     // before they reach it, and the change is lost with nothing saying so.
     groupRepositories.mockResolvedValue([repository({ note: "never touch migrations" })]);
-    updateRepository.mockResolvedValue(repository({ harness: "claude" }));
+    updateRepository.mockImplementationOnce(async () => {
+      const saved = repository({ harness: "claude", note: "never touch migrations" });
+      groupRepositories.mockResolvedValue([saved]);
+      return saved;
+    });
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
     fireEvent.click(await screen.findByText("Edit"));
@@ -263,6 +267,12 @@ describe("RepositoryList", () => {
         "own",
       ),
     );
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText("Coding harness: Claude Code").getAttribute("aria-pressed"),
+      ).toBe("true"),
+    );
+    expect(screen.getByText(/written by Claude Code/)).toBeTruthy();
   });
 
   it("does not save a half-typed rename along with the harness", async () => {
@@ -289,6 +299,45 @@ describe("RepositoryList", () => {
     render(<RepositoryList groupId={GROUP} crew={CREW} />);
 
     expect(await screen.findByText(/written by Claude Code/)).toBeTruthy();
+  });
+
+  it("keeps the saved harness selected when a switch fails, including a later name save", async () => {
+    groupRepositories.mockResolvedValue([repository({ harness: "claude" })]);
+    codingHarnesses.mockResolvedValue([
+      { harness: "claude", installed: true, version: "2.1.260", bridged: true, install: "" },
+      { harness: "codex", installed: true, version: "0.153.3", bridged: true, install: "" },
+    ]);
+    let reject!: (reason: Error) => void;
+    updateRepository.mockReturnValueOnce(
+      new Promise((_, fail) => {
+        reject = fail;
+      }),
+    );
+    render(<RepositoryList groupId={GROUP} crew={CREW} />);
+    fireEvent.click(await screen.findByText("Edit"));
+    fireEvent.change(screen.getByDisplayValue("guaca"), { target: { value: "renamed" } });
+    const codex = screen.getByRole("button", { name: "Coding harness: Codex" });
+    const claude = screen.getByRole("button", { name: "Coding harness: Claude Code" });
+    fireEvent.click(codex);
+
+    expect(claude.getAttribute("aria-pressed")).toBe("true");
+    expect(codex.getAttribute("aria-pressed")).toBe("false");
+    reject(new Error("The backend could not save the harness"));
+    await screen.findByText("The backend could not save the harness");
+    expect(claude.getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByDisplayValue("renamed")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(updateRepository).toHaveBeenLastCalledWith(
+        "r1",
+        "renamed",
+        "",
+        "claude",
+        "open",
+        "own",
+      ),
+    );
   });
 
   it("links a repository with the harness that was chosen", async () => {
