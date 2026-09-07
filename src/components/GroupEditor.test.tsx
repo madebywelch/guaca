@@ -99,6 +99,7 @@ vi.mock("../lib/ipc", () => ({
     clearGroup: (id: string) => clearGroup(id),
     testGroupConnection: (id: string | null, draft: GroupDraft) => testGroupConnection(id, draft),
     subscriptionStatus: () => subscriptionStatus(),
+    subscriptionModels: async () => ["gpt-5.6-luna", "gpt-5.4-mini"],
     groupConnectors: () => groupConnectors(),
     groupPlugins: () => groupPlugins(),
     pluginCatalog: () => pluginCatalog(),

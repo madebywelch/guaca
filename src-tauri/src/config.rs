@@ -393,9 +393,7 @@ pub struct RedactedConfig {
     pub api_key_hint: String,
     pub request_timeout_secs: u64,
     pub limits: GuardLimits,
-    /// The models a subscription can run, so Settings can offer them without
-    /// holding a second copy of the list that drifts from the one the transport
-    /// sends.
+    /// A safe initial choice while the account's live catalog is loading.
     pub subscription_models: Vec<String>,
 }
 
@@ -418,10 +416,7 @@ impl AppConfig {
             api_key_hint: hint_for(&self.inference.api_key),
             request_timeout_secs: self.inference.request_timeout_secs,
             limits: self.limits,
-            subscription_models: crate::llm::codex::MODELS
-                .iter()
-                .map(|model| (*model).to_string())
-                .collect(),
+            subscription_models: vec![crate::llm::codex::DEFAULT_MODEL.to_string()],
         }
     }
 }

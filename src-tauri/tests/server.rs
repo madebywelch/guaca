@@ -59,6 +59,15 @@ async fn call(addr: SocketAddr, name: &str, args: Value) -> (u16, Value) {
 }
 
 #[tokio::test]
+async fn subscription_catalog_reports_missing_signin_over_the_shared_surface() {
+    let (addr, _dir) = workspace().await;
+    let (status, body) = call(addr, "subscription_models", json!({})).await;
+    assert_eq!(status, 200);
+    assert_eq!(body["err"]["kind"], "subscriptionModels");
+    assert!(body["err"]["message"].as_str().unwrap().contains("sign in"));
+}
+
+#[tokio::test]
 async fn a_workspace_on_a_server_answers_the_same_commands_the_window_does() {
     let (addr, _dir) = workspace().await;
 

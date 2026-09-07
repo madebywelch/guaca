@@ -734,6 +734,8 @@ export const api = {
    */
   rankedModels: (category: string) => invoke<RankedModel[]>("ranked_models", { category }),
 
+  subscriptionModels: () => invoke<string[]>("subscription_models"),
+
   subscriptionStatus: () => invoke<SubscriptionStatus>("subscription_status"),
 
   /** Asks for a code to carry to a browser. Returns in one round trip. */

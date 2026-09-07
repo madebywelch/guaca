@@ -919,7 +919,7 @@ export interface Settings {
   apiKeyHint: string;
   requestTimeoutSecs: number;
   limits: GuardLimits;
-  /** What a subscription can run, as the backend spells them. */
+  /** Initial choices while the signed-in account's model catalog loads. */
   subscriptionModels: string[];
 }
 

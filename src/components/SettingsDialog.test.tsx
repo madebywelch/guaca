@@ -158,6 +158,7 @@ vi.mock("../lib/ipc", () => ({
     updateSettings: (patch: SettingsPatch) => updateSettings(patch),
     testConnection: (patch?: SettingsPatch) => testConnection(patch),
     subscriptionStatus: () => subscriptionStatus(),
+    subscriptionModels: async () => ["gpt-5.6-luna", "gpt-5.4-mini"],
     beginSubscriptionSignin: () => beginSubscriptionSignin(),
     completeSubscriptionSignin: (code: DeviceCode) => completeSubscriptionSignin(code),
     signOutSubscription: () => signOutSubscription(),
