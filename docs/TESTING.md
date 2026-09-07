@@ -40,6 +40,15 @@ failure worth catching is that belief going stale.
 ./scripts/subscription.sh    # a real call against your own ChatGPT plan
 ```
 
+`tests/subscription_catalog.rs` checks the authenticated model list, including
+hidden entries, priority, malformed responses and one refresh after a 401. Its
+live check reads the catalog without spending model quota:
+
+```sh
+GUAC_SUBSCRIPTION_JSON=/path/to/subscription.json cargo test \
+  --manifest-path src-tauri/Cargo.toml --test subscription_catalog -- --ignored --nocapture
+```
+
 `tests/account.rs` is the same shape again for the guaca.bot sign-in: a scripted
 authorization server, and the real `Account` driven through discovery, the
 loopback listener, the PKCE exchange and the first call the token is spent on.

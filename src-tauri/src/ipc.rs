@@ -290,6 +290,7 @@ surface! {
     account_connectors() -> crate::account::Connectors,
     sign_out_account() -> crate::account::Status,
     subscription_status() -> Status,
+    subscription_models() -> Vec<String>,
     begin_subscription_signin() -> DeviceCode,
     complete_subscription_signin(code: DeviceCode) -> Status,
     sign_out_subscription() -> RedactedConfig,
